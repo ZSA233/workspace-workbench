@@ -21,6 +21,22 @@ paseo plugin install /absolute/path/to/workspace-workbench/paseo-plugin --json
 paseo plugin reload workspace-workbench-paseo --json
 ```
 
+Paseo can also install a Git-managed copy directly. Replace `OWNER` with the
+GitHub repository owner:
+
+```sh
+paseo plugin install OWNER/workspace-workbench:paseo-plugin \
+  --ref stable \
+  --id workspace-workbench-paseo \
+  --json
+paseo plugin update workspace-workbench-paseo --json
+```
+
+Use `--ref main` for the edge channel. A Git update fetches the selected ref,
+installs the lockfile dependencies, typechecks the plugin and activates the
+new checkout only after validation. The `stable` branch is advanced by the
+GitHub Release workflow after a versioned release passes its checks.
+
 For a GitHub Release download the `workspace-workbench-paseo-*.tar.gz` asset,
 extract it, install the locked dependencies, and install the extracted package
 directory:
@@ -45,3 +61,7 @@ workspace-workbench serve --config /absolute/path/to/project.json
 ```
 
 The plugin never starts Python, reads a project registry, or receives secrets from the Paseo daemon. Those concerns belong to the service configuration and provider.
+
+The Git build commands run on the trusted Paseo daemon host. Install only from
+a repository you trust. For offline or fixed-version installs, use the
+matching GitHub Release archive instead.

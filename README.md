@@ -94,6 +94,25 @@ paseo plugin reload workspace-workbench-paseo --json
 The release also includes `SHA256SUMS`. Verify the downloaded files with
 `sha256sum -c SHA256SUMS` before installing them.
 
+### Git-managed Paseo installation
+
+Paseo v0.8 can install the plugin directly from the public Git repository. Replace
+`OWNER` with the repository owner:
+
+```sh
+paseo plugin install OWNER/workspace-workbench:paseo-plugin \
+  --ref stable \
+  --id workspace-workbench-paseo \
+  --json
+paseo plugin update workspace-workbench-paseo --json
+```
+
+`stable` follows tested releases. Developers can use `--ref main` for the edge
+channel. `paseo plugin update` is an explicit fetch/build/validate/activate
+operation; it does not silently update plugins in the background. See
+[`docs/releasing.md`](docs/releasing.md) for version bumps, tag releases,
+fixed-version installs and rollback guidance.
+
 ## Configuration
 
 See [`examples/project.json`](examples/project.json) and [`schemas/project.schema.json`](schemas/project.schema.json). Paths may be absolute or relative to the configuration file. Repository paths must resolve below `sourceRoot`.
@@ -181,9 +200,16 @@ The protocol is versioned independently from the Paseo package so a future Go se
 ## Development
 
 ```sh
+make version-check
 make check
 make package
 ```
+
+Use `make bump-patch`, `make bump-minor` or `make bump-major` to update the
+coordinated public version. These commands do not create Git commits or tags.
+The release workflow accepts tags whose name exactly matches `vVERSION`,
+publishes GitHub Release attachments, and advances the tested commit to the
+`stable` branch.
 
 `make check` runs the Python service tests, Paseo typecheck and Paseo plugin
 tests. `make package` builds Python distributions and the Paseo plugin package
@@ -191,8 +217,8 @@ under `dist/`; it requires the `build` Python package. Test fixtures create
 temporary Git repositories and never depend on a developer's source tree.
 
 The same checks run in GitHub Actions for every push and pull request. A tag
-such as `v0.1.0` builds the release attachments; the workflow does not publish
-to PyPI or npm.
+such as `v0.1.0` builds and publishes the release attachments; the workflow
+does not publish to PyPI or npm.
 
 Run the cache and refresh benchmark with `PYTHONPATH=src python3 tests/benchmark.py`. It creates ten
 temporary repositories, measures 100 warm reads, observes a new file, and reopens the SQLite cache.

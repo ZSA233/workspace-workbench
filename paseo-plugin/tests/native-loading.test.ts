@@ -27,6 +27,21 @@ test("initialization isolates UI imports, uses a built-in icon and preserves fai
     assert.equal(calls, 2);
   } finally { console.error = previous; }
 });
+
+test("Git-managed checkouts install locked dependencies before activation", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../paseo-plugin.json", import.meta.url), "utf8")) as {
+    build?: string[][];
+  };
+  assert.deepEqual(manifest.build, [
+    ["npm", "ci", "--include=dev", "--ignore-scripts", "--no-audit", "--no-fund"],
+    ["npm", "run", "typecheck"],
+  ]);
+  const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+    files?: string[];
+  };
+  assert.ok(packageJson.files?.includes("package-lock.json"));
+});
+
 function nativeGlobals() {
   return { window: { Prism: { manual: true } }, document: { currentScript: null, getElementsByTagName: () => [], addEventListener() {} }, Element: undefined, setTimeout() {}, module: { exports: {} } };
 }

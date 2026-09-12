@@ -1,8 +1,11 @@
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import WebSocket from "ws";
 
+const require = createRequire(import.meta.url);
+const packageMetadata = require("./package.json");
 const endpoint = process.env.WORKBENCH_PASEO_ENDPOINT;
 const projectConfig = process.env.WORKBENCH_PROJECT_CONFIG;
 const token = process.env.WORKBENCH_AGENT_TOKEN;
@@ -14,7 +17,7 @@ const schema = { type: "object", required: ["requestId", "handoff"], additionalP
 } };
 let client;
 async function handle(message) {
-  if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: "0.1.0" } };
+  if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version } };
   if (message.method === "ping") return {};
   if (message.method === "tools/list") return { tools: names.map((action) => ({ name: `workbench_workspace_${action}`, description: action === "execute" ? "Execute the approved isolated Workspace handoff; requires a non-planning coordinator. Retry with the identical request." : `${action} an isolated Workspace handoff without writes.`, inputSchema: schema, annotations: { readOnlyHint: action !== "execute", destructiveHint: false } })) };
   if (message.method !== "tools/call") throw new Error("method_not_found");

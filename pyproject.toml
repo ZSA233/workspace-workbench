@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "workspace-workbench"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A configurable multi-repository workspace and Git observability service."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,6 +17,9 @@ workspace-workbench = "workspace_workbench.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { file = ["VERSION"] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -13,6 +13,7 @@ import threading
 import time
 from typing import Any, Callable, Mapping
 
+from .. import __version__
 from .cache import ObservationCache
 from .config import ProjectConfig, discover_git_repositories
 from .errors import WorkbenchError
@@ -169,7 +170,7 @@ class ObserverService:
         return {
             "schemaVersion": PROTOCOL_VERSION,
             "service": "workspace-workbench",
-            "version": "0.1.0",
+            "version": __version__,
             "project": {"id": self.config.project_id, "displayName": self.config.display_name},
             "capabilities": {
                 **capabilities,

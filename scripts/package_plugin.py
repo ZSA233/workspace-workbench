@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 import tarfile
 
+from version import check, read_version
+
 
 PLUGIN_FILES = (
     "client",
@@ -25,9 +27,12 @@ PLUGIN_FILES = (
 
 
 def build_archive(root: Path, output_dir: Path) -> Path:
+    errors = check(root)
+    if errors:
+        raise ValueError("version metadata is inconsistent:\n" + "\n".join(errors))
     plugin = root / "paseo-plugin"
     metadata = json.loads((plugin / "package.json").read_text(encoding="utf-8"))
-    version = metadata["version"]
+    version = read_version(root)
     output_dir.mkdir(parents=True, exist_ok=True)
     archive = output_dir / f"workspace-workbench-paseo-{version}.tar.gz"
     with tarfile.open(archive, "w:gz") as bundle:

@@ -1,0 +1,25 @@
+from __future__ import annotations
+
+from typing import Any, Mapping, Protocol
+
+from ..core.config import ProjectConfig
+
+
+class WorkspaceProvider(Protocol):
+    """Contract consumed by the generic observation service."""
+
+    config: ProjectConfig
+
+    def list(self) -> list[dict[str, Any]]: ...
+
+    def get(self, workspace_id: str) -> dict[str, Any]: ...
+
+    def identify(self, directory: str) -> dict[str, Any]: ...
+
+    def repository(self, workspace_id: str, repository_id: str) -> dict[str, Any]: ...
+
+    def create(self, params: Mapping[str, Any]) -> dict[str, Any]: ...
+
+    def cleanup(self, workspace_id: str, *, confirm: bool = False) -> dict[str, Any]: ...
+
+    def capabilities(self) -> dict[str, bool]: ...

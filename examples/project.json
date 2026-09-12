@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "sample-project",
+    "displayName": "Sample Project"
+  },
+  "sourceRoot": "~/src/sample-project",
+  "workspaceRoot": "~/.local/share/workspace-workbench/sample-project/workspaces",
+  "stateRoot": "~/.local/state/workspace-workbench/sample-project",
+  "socketPath": "~/.local/state/workspace-workbench/sample-project/observer.sock",
+  "discovery": {
+    "mode": "hybrid",
+    "roots": ["~/src/sample-project"],
+    "maxDepth": 3,
+    "exclude": [".git", "node_modules", "vendor", ".venv", "dist", "build"],
+    "followSymlinks": false
+  },
+  "repositories": [
+    {
+      "id": "api",
+      "path": "services/api",
+      "displayName": "API",
+      "enabled": true,
+      "role": "service"
+    },
+    {
+      "id": "web",
+      "path": "apps/web",
+      "displayName": "Web",
+      "enabled": true,
+      "role": "frontend"
+    }
+  ],
+  "mainWorkspace": {
+    "displayName": "Main workspace"
+  }
+}

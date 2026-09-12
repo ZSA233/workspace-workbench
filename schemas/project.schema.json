@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://workspace-workbench.dev/schemas/project.schema.json",
+  "title": "Workspace Workbench project configuration",
+  "type": "object",
+  "required": ["schemaVersion", "project", "sourceRoot", "repositories"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "project": {
+      "type": "object",
+      "required": ["id", "displayName"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "displayName": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "sourceRoot": { "type": "string", "minLength": 1 },
+    "workspaceRoot": { "type": "string", "minLength": 1 },
+    "stateRoot": { "type": "string", "minLength": 1 },
+    "socketPath": { "type": "string", "minLength": 1 },
+    "repositories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "path"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "displayName": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "role": { "type": "string" },
+          "defaultBase": { "type": "string" },
+          "metadata": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["manual", "auto", "hybrid"] },
+        "roots": { "type": "array", "items": { "type": "string" } },
+        "maxDepth": { "type": "integer", "minimum": 0, "maximum": 12 },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "followSymlinks": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "mainWorkspace": {
+      "type": "object",
+      "properties": { "displayName": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "agent": {"type": "object", "properties": {"provider": {"enum": ["paseo"]}}, "required": ["provider"], "additionalProperties": false},
+    "toolchain": {"type": "object", "properties": {"manager": {"const": "mise"}, "repositories": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+){0,2}$"}}}}, "required": ["manager", "repositories"], "additionalProperties": false},
+    "management": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } },
+      "additionalProperties": false
+    },
+    "adapter": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "managedWorkspaces": { "type": "boolean" },
+        "readOnly": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "limits": { "type": "object" }
+  },
+  "additionalProperties": false
+}

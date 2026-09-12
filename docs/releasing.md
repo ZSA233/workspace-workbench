@@ -38,11 +38,10 @@ Release workflow 会检出指定 tag，运行完整测试和构建流程，发�
 
 ## 安装和更新 Paseo 插件
 
-将 `OWNER` 替换为公开仓库所属的 GitHub 账号或组织。Paseo v0.8 支持 Git 管理的
-插件来源：
+Paseo v0.8 支持从本公开仓库直接安装 Git 管理的插件：
 
 ```sh
-paseo plugin install OWNER/workspace-workbench:paseo-plugin \
+paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
   --ref stable \
   --id workspace-workbench-paseo \
   --json
@@ -52,7 +51,7 @@ paseo plugin update workspace-workbench-paseo --json
 `stable` 跟随最近一次通过验证的发布版本。开发分支使用 `main`：
 
 ```sh
-paseo plugin install OWNER/workspace-workbench:paseo-plugin \
+paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
   --ref main \
   --id workspace-workbench-paseo \
   --json

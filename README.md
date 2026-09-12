@@ -28,10 +28,10 @@ workspace-workbench serve --config /path/to/project/workbench.json
 
 ## 安装 Paseo 插件
 
-将 `OWNER` 替换为此 GitHub 仓库的所有者：
+直接从 GitHub 安装：
 
 ```sh
-paseo plugin install OWNER/workspace-workbench:paseo-plugin \
+paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
   --ref stable \
   --id workspace-workbench-paseo \
   --json

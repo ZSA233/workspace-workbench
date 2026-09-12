@@ -5,10 +5,10 @@
 
 ## Git 安装
 
-将 `OWNER` 替换为 GitHub 仓库所有者：
+直接从 GitHub 安装：
 
 ```sh
-paseo plugin install OWNER/workspace-workbench:paseo-plugin \
+paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
   --ref stable \
   --id workspace-workbench-paseo \
   --json

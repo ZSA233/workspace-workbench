@@ -203,7 +203,11 @@ export const copy = {
   createSearch: "搜索仓库",
   createBase: "设置起点（默认源码 HEAD）",
   createMissing: "源码不可用",
-  createCatalogFailed: "仓库列表暂不可用，请重新打开重试"
+  createCatalogFailed: "仓库列表暂不可用，请重新打开重试",
+  createResize: "调整 Workspace 创建窗口内容高度",
+  agentContextUnavailable: "当前会话未接入 Workbench 工具，请新建主控会话",
+  agentContextLoading: "正在确认 Workbench 工具状态…",
+  agentContextReady: "Workbench 工具已接入",
 } as const;
 
 export function formatCopy(key: keyof typeof copy, values: unknown[]): string {

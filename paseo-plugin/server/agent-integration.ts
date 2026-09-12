@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { registeredProjects, resolveProject, withProject } from "./projects.ts";
 import { readState, writeState, digest } from "./orchestration-state.ts";
+import { agentContextQuery } from "../shared/handoff.ts";
 import { orchestrationRpc } from "../shared/orchestration.ts";
 import { orchestrate } from "./orchestrator.ts";
 import { allAgentBindings, getAgentBinding, putAgentBinding, type AgentBinding } from "./agent-store.ts";
@@ -22,11 +23,10 @@ function bridgeConfig(configPath: string) {
 }
 const instructions = [
   "WORKBENCH_ORCHESTRATION_V1",
-  "Only when the user explicitly requests an isolated Workspace, use workbench_workspace_preview before editing.",
-  "Plan mode: preview only, with no worktree, runtime or Agent writes. After approval and leaving plan mode, call workbench_workspace_execute.",
-  "Direct execution: call execute before the first target file mutation. Pass selected repositories, starting refs and the approved structured handoff.",
-  "Keep requestId and the complete request unchanged on retries. Use status to inspect uncertain results; never create a replacement manually.",
-  "After handoff stay the coordinator; the child owns edits. Do not ask the user to click the panel. On failure report the blocker, do not edit the source checkout instead.",
+  "Only when the user explicitly requests an isolated Workspace: preview before edits; in plan mode preview only, then execute after approval and leaving plan mode.",
+  "For direct execution, execute before the first target-file mutation and include repositories, base refs and the approved handoff.",
+  "Retry the identical requestId and payload; use status for uncertainty and never create a replacement manually.",
+  "After handoff, coordinate only; the child owns edits. Do not ask the user to click the panel or edit the source checkout directly.",
 ].join("\n");
 
 export function registerAgentIntegration(server: PluginServerContext): () => void {
@@ -71,6 +71,15 @@ export function registerAgentIntegration(server: PluginServerContext): () => voi
     const parent = (await context.paseo.agents.ref(identity.agentId).refresh())?.agent;
     if (!parent || parent.archivedAt || parent.cwd !== identity.cwd) throw new Error("agent_context_changed");
     return orchestrate(input.action, input.request, identity.agentId, context);
+  }));
+  server.handle(agentContextQuery, (input) => withProject(input, () => {
+    const session = readState<{ token: string }>(`session:${input.agentId}`);
+    if (!session) return { ok: true, available: false as const, reason: "not_injected" as const };
+    const identity = readState<AgentIdentity>(`context:${session.token}`);
+    if (!identity) return { ok: true, available: false as const, reason: "mismatched" as const };
+    if (identity.revoked) return { ok: true, available: false as const, reason: "revoked" as const };
+    if (identity.agentId !== input.agentId) return { ok: true, available: false as const, reason: "mismatched" as const };
+    return { ok: true, available: true as const, reason: "ready" as const };
   }));
   // Persist state before notification, and acknowledge only after send succeeds.
   const notificationFlights = new Set<string>();

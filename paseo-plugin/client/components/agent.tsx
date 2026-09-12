@@ -58,6 +58,7 @@ export function ExecutionBindingCard({
   refreshing,
   error,
   canDelegate,
+  agentContextState,
   delegating,
   onDelegate,
   onOpenAgent,
@@ -71,6 +72,7 @@ export function ExecutionBindingCard({
   refreshing: boolean;
   error: string | null;
   canDelegate: boolean;
+  agentContextState?: "ready" | "loading" | "unavailable" | "missing";
   delegating: boolean;
   onDelegate: () => void;
   onOpenAgent?: () => void;
@@ -82,8 +84,18 @@ export function ExecutionBindingCard({
   const status = bindingStatus && ["completed", "blocked", "permission", "error", "archived"].includes(bindingStatus)
     ? bindingStatus
     : agent?.status || bindingStatus || "not-started";
-  const statusColor = error && !loading ? theme.colors.statusWarning : executionStatusColor(status, theme);
-  const statusText = loading ? copy.text_b21b631cd5 : error && !binding && !agent ? copy.text_95abdc4ebd : !canDelegate && !binding ? copy.agentCoordinatorRequired : executionStatusLabel(status);
+  const statusColor = error && !loading || agentContextState === "unavailable" ? theme.colors.statusWarning : executionStatusColor(status, theme);
+  const statusText = loading
+    ? copy.text_b21b631cd5
+    : agentContextState === "loading"
+      ? copy.agentContextLoading
+      : agentContextState === "unavailable" && !binding
+        ? copy.agentContextUnavailable
+        : error && !binding && !agent
+          ? copy.text_95abdc4ebd
+          : !canDelegate && !binding
+            ? copy.agentCoordinatorRequired
+            : executionStatusLabel(status);
   const recoverable = canDelegate && ["error", "blocked", "closed"].includes(status);
   return (
     <View style={styles.executionBar} accessibilityLabel={formatCopy("text_f41a05dfe8", [statusText])}>

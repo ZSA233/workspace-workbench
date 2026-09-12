@@ -1,28 +1,11 @@
-# Workspace Workbench Paseo plugin
+# Workspace Workbench Paseo 插件
 
-This is the Paseo v0.8 integration for Workspace Workbench. It keeps the primary view in the Explorer side panel and leaves the Agent conversation in Paseo's main area.
+插件将 Workbench 放在 Paseo 的 Explorer 中，Agent 对话仍保留在主区域。
+对应的 Python 服务需要单独运行。
 
-The plugin contains three deliberately separate capabilities:
+## Git 安装
 
-- Observer: Workspace selector, repository branch matrix, commit graph, changed files and service freshness state.
-- Workspace management: creates a multi-repository worktree through the configured provider. It does not fetch, merge, push or switch branches.
-- Agent provider: reads and creates/reuses a child Agent through Paseo, using a generic structured handoff and project-neutral labels.
-
-The service socket is selected in this order:
-
-1. `WORKSPACE_WORKBENCH_SOCKET`
-2. `socketPath` in `WORKSPACE_WORKBENCH_CONFIG`
-3. `~/.config/workspace-workbench/observer.sock`
-
-Install from a checked-out copy with:
-
-```sh
-paseo plugin install /absolute/path/to/workspace-workbench/paseo-plugin --json
-paseo plugin reload workspace-workbench-paseo --json
-```
-
-Paseo can also install a Git-managed copy directly. Replace `OWNER` with the
-GitHub repository owner:
+将 `OWNER` 替换为 GitHub 仓库所有者：
 
 ```sh
 paseo plugin install OWNER/workspace-workbench:paseo-plugin \
@@ -32,36 +15,24 @@ paseo plugin install OWNER/workspace-workbench:paseo-plugin \
 paseo plugin update workspace-workbench-paseo --json
 ```
 
-Use `--ref main` for the edge channel. A Git update fetches the selected ref,
-installs the lockfile dependencies, typechecks the plugin and activates the
-new checkout only after validation. The `stable` branch is advanced by the
-GitHub Release workflow after a versioned release passes its checks.
+开发分支使用 `--ref main`。Paseo 会先拉取代码、安装锁定的依赖、执行类型检查，
+验证通过后才激活新版本。
 
-For a GitHub Release download the `workspace-workbench-paseo-*.tar.gz` asset,
-extract it, install the locked dependencies, and install the extracted package
-directory:
+## 本地安装
 
 ```sh
-mkdir -p workspace-workbench-paseo
-tar -xzf workspace-workbench-paseo-*.tar.gz -C workspace-workbench-paseo
-cd workspace-workbench-paseo
-npm ci
-paseo plugin install "$PWD" --json
+paseo plugin install /path/to/workspace-workbench/paseo-plugin --json
 paseo plugin reload workspace-workbench-paseo --json
 ```
 
-The package does not contain project configuration, observer caches, sockets,
-Agent bindings or secrets. Configure and start the matching Workbench service
-separately before opening the plugin.
-
-The service must be started separately:
+打开插件前，先使用项目配置启动服务：
 
 ```sh
-workspace-workbench serve --config /absolute/path/to/project.json
+workspace-workbench serve --config /path/to/project/workbench.json
 ```
 
-The plugin never starts Python, reads a project registry, or receives secrets from the Paseo daemon. Those concerns belong to the service configuration and provider.
+如需 Agent 交接，请按[根目录 README](../README.md) 配置 `agent.provider` 和
+`agent.bridge`，然后新建 coordinator Agent。已经存在的 Agent 会话不会被静默修改。
 
-The Git build commands run on the trusted Paseo daemon host. Install only from
-a repository you trust. For offline or fixed-version installs, use the
-matching GitHub Release archive instead.
+发布压缩包适合固定版本或离线安装。压缩包不包含项目配置、缓存、Socket、Agent
+绑定或 secret。

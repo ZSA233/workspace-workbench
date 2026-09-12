@@ -1,53 +1,44 @@
-# Workbench validation
+# Workbench 验证说明
 
-The integration remains in parallel validation. Existing integrations must not be retired until
-their owner accepts the public plugin in the actual Paseo client.
+当前公共插件处于并行验证阶段。在实际 Paseo 客户端确认公共版可用前，不停用已有的
+其他集成。
 
-## Implemented boundaries
+## 已实现的边界
 
-| Area | Implementation and evidence |
+| 区域 | 实现与证据 |
 | --- | --- |
-| Navigation | Global surface, Explorer workspace/Agent panels, workspace header button and subscription cleanup |
-| Selection | Saved selection before identify, managed paths before live root, independent filters, settings conflict retry and in-process preference notifications |
-| Layout | Separate navigation, repositories, graph, changes, review and Agent components; two resize handles; bottom changes section has no resize handle |
-| Git | Root/merge commit Diff, renames, untracked files, refs and graph pagination; isolated Git regression fixtures |
-| Review | Real target relations, counts, overlaps, issue propagation and per-repository brief; fixture UI selection and expansion |
-| Files | Workspace/scope-aware tab identities, active-neighbor closing, Split/Unified, syntax highlighting, overview rail and hunk navigation |
-| Cache | Bounded L1 and SQLite snapshots, bounded background workers, partial merging, durable invalidation, corruption fallback and restart tests |
-| Lifecycle | Request identity, process lock, creation journal, rollback evidence, cleanup preview, dirty/identity rejection and retained history |
-| Runtimes | Optional mise provider, explicit prepare, direct runtime version verification and fail-closed runtime lookup |
-| Agent | Optional capability, persisted handoff, placement verification, concurrent request coalescing and guarded reuse |
+| 导航 | 全局 surface、Explorer workspace/Agent 面板、workspace header 按钮和订阅清理 |
+| 选择 | 保存的选择优先于 identify、managed 路径优先于 live root、筛选隔离、设置冲突重试和偏好通知 |
+| 布局 | 导航、仓库、提交图、变化、Review 和 Agent 组件分离；两个可拖拽区域；底部变化区域没有拖拽条 |
+| Git | root/merge 提交 Diff、重命名、未跟踪文件、refs 和提交图分页；使用隔离 Git fixture 回归 |
+| Review | 真实目标关系、提交数量、重叠文件、问题传递和按仓库说明；覆盖 fixture 勾选与展开 |
+| 文件审查 | 带 Workspace/scope 的页签身份、活动页签切换、Split/Unified、语法高亮、overview rail 和 hunk 导航 |
+| 缓存 | 有界 L1 和 SQLite 快照、后台任务限制、partial 合并、持久化失效、损坏降级和重启恢复 |
+| 生命周期 | 请求身份、进程锁、创建日志、回滚证据、cleanup 预览、dirty/身份拒绝和历史保留 |
+| 运行时 | 可选 mise provider、显式 prepare、实际运行时版本校验和 fail-closed 查询 |
+| Agent | 可选 capability、持久化 handoff、目录校验、并发请求合并和受保护复用 |
 
-## Repeatable checks
+## 可重复检查
 
 ```sh
-PYTHONPATH=src python3 -m unittest discover -s tests
-PYTHONPATH=src python3 tests/benchmark.py
-cd paseo-plugin
-npm run typecheck
-npm test
+make check
+make package
+PYTHONPATH=/path/to/go python3 -m unittest \
+  compose.workspace.tests.test_workbench_public
 ```
 
-The validation run passed 15 Python tests, 7 plugin tests and TypeScript checking. The consumer
-adapter passed its two configuration tests. Git operations in fixtures affect temporary repositories only.
+当前公共仓库自动化检查通过 23 项 Python 测试、28 项 Paseo 插件测试和 TypeScript
+类型检查；Compose 适配器通过 2 项配置测试。fixture 中的 Git 操作只影响临时仓库。
 
-The ten-repository benchmark performed 100 warm detail reads: approximately 369 ms for cold detail,
-1.03 ms median / 1.06 ms P95 for warm reads, 123 ms to observe a new untracked file, and 1.33 ms to
-restore a snapshot after reopening the service. This benchmark uses a 0.5-second TTL; the production
-default is 3 seconds. UI polling adds its own delay. These are local fixture measurements, not a latency SLA.
+## 渲染证据与待验收内容
 
-## Rendering evidence and remaining acceptance
+公共组件已经使用固定数据覆盖 420、480、720 和 1440 像素，以及亮色和暗色主题。
+已覆盖 Review 选择/说明展开、区域折叠、文件打开、窄面板 Unified 布局和鼠标中键关闭
+页签。
 
-Actual panel components were rendered with fixed data in a React Native Web harness at 420, 480,
-720 and 1440 pixels in light and dark themes, alongside the reference implementation. Host icons,
-settings and RPC were substituted by fixture adapters. Review selection/brief expansion, section
-collapse, file opening, narrow Unified layout and middle-click tab closing were exercised.
+这些检查不能替代真实客户端验收。实际 Paseo Explorer 位置、会话切换、Android 原生
+渲染、剪贴板、拖拽手势、弹窗宿主高度和客户端重启后的偏好持久化，仍需在真实客户端
+确认。Paseo 当前版本没有外层 Modal 尺寸控制 API，因此插件只能调整内容区高度。
 
-This does not establish pixel equivalence or native-client acceptance. The original design sketch
-and the actual Paseo Explorer placement, conversation switching, native rendering, clipboard,
-drag gestures and persistence across a real client restart still require client-side acceptance.
-Live Agent creation and real runtime installation were not performed during fixture verification.
-
-The consumer preview deliberately enables live-source observation only. New managed manifests,
-runtime preparation and Agent delegation are separate capabilities; existing consumer records are
-not imported automatically. Runtime fixtures verify their contracts without changing existing workspaces.
+隔离 Agent smoke 已验证新建主控 Agent 能获得 Workbench MCP，并实际调用
+`workbench_workspace_preview`。没有在现有业务 Workspace 中执行写入或安装真实项目运行时。

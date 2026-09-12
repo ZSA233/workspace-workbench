@@ -17,7 +17,8 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
   process.env.WORKSPACE_WORKBENCH_CONFIG = config;
   const hooks = new Map<string, (input: unknown) => unknown>();
   const events = new Map<string, (event: unknown, context: unknown) => Promise<void>>();
-  const server = { before: (name: string, handler: (input: unknown) => unknown) => { hooks.set(name, handler); return () => {}; }, on: (name: string, handler: (event: unknown, context: unknown) => Promise<void>) => { events.set(name, handler); return () => {}; }, handle: () => {} } as unknown as PluginServerContext;
+  const rpcHandlers = new Map<string, (input: unknown) => unknown>();
+  const server = { before: (name: string, handler: (input: unknown) => unknown) => { hooks.set(name, handler); return () => {}; }, on: (name: string, handler: (event: unknown, context: unknown) => Promise<void>) => { events.set(name, handler); return () => {}; }, handle: (contract: { name: string }, handler: (input: unknown) => unknown) => { rpcHandlers.set(contract.name, handler); } } as unknown as PluginServerContext;
   const cleanup = registerAgentIntegration(server);
   try {
     const request: PluginBeforeRequests["agent.create"] = { config: { provider: "codex", cwd: root, modeId: "auto", toolPolicy: { preapproved: [] } } };
@@ -25,10 +26,15 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
     assert.deepEqual(injected.config.toolPolicy, request.config.toolPolicy);
     const bridge = injected.config.mcpServers?.["workspace-workbench"];
     assert.equal(bridge?.type, "stdio");
+    assert.equal(bridge?.alwaysLoad, true);
     if (bridge?.type !== "stdio") throw new Error("missing bridge");
     assert.equal(bridge.env?.WORKBENCH_AGENT_TOKEN, injected.env?.WORKBENCH_AGENT_TOKEN);
     const open = { agentId: "parent", cwd: root, purpose: "interactive", env: injected.env };
     hooks.get("agent.session_open")!({ request: open });
+    const contextRpc = rpcHandlers.get("workspace.workbench.agent_context");
+    assert.ok(contextRpc);
+    assert.deepEqual(await contextRpc!({ projectConfig: config, agentId: "parent" }), { ok: true, available: true, reason: "ready" });
+    assert.deepEqual(await contextRpc!({ projectConfig: config, agentId: "not-injected" }), { ok: true, available: false, reason: "not_injected" });
     const saved = withProject({ projectConfig: config }, () => readState<{ agentId: string }>(`context:${injected.env!.WORKBENCH_AGENT_TOKEN}`));
     assert.equal(saved?.agentId, "parent");
     assert.throws(() => hooks.get("agent.session_open")!({ request: { ...open, agentId: "another" } }), /context_changed/);

@@ -9,19 +9,46 @@ const packageMetadata = require("./package.json");
 const endpoint = process.env.WORKBENCH_PASEO_ENDPOINT;
 const projectConfig = process.env.WORKBENCH_PROJECT_CONFIG;
 const token = process.env.WORKBENCH_AGENT_TOKEN;
-const names = ["preview", "execute", "status"];
-const schema = { type: "object", required: ["requestId", "handoff"], additionalProperties: false, properties: {
-  requestId: { type: "string" }, workspaceId: { type: "string" }, name: { type: "string" }, repositories: { type: "array", items: { type: "string" } },
-  baseRefs: { type: "object", additionalProperties: { type: "string" } },
-  handoff: { type: "object", required: ["goal"], properties: { goal: { type: "string" }, startMode: { enum: ["adaptive", "plan-first"] }, ...Object.fromEntries(["decisions", "inScope", "outOfScope", "steps", "acceptance", "constraints", "ambiguities"].map((key) => [key, { type: "array", items: { type: "string" } }])) } },
-} };
+const tools = [
+  { name: "workbench_workspace_preview", description: "Preview an isolated Workspace handoff (read-only)." },
+  { name: "workbench_workspace_execute", description: "Execute an approved isolated Workspace handoff." },
+  { name: "workbench_workspace_status", description: "Read isolated Workspace handoff status." },
+];
+const schema = {
+  type: "object",
+  required: ["requestId", "handoff"],
+  additionalProperties: false,
+  properties: {
+    requestId: { type: "string", minLength: 1 },
+    workspaceId: { type: "string", minLength: 1 },
+    name: { type: "string", minLength: 1 },
+    repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    baseRefs: { type: "object", additionalProperties: { type: "string" } },
+    handoff: {
+      type: "object",
+      required: ["goal"],
+      properties: {
+        goal: { type: "string", minLength: 1 },
+        startMode: { enum: ["adaptive", "plan-first"] },
+        decisions: { type: "array", items: { type: "string" } },
+        inScope: { type: "array", items: { type: "string" } },
+        outOfScope: { type: "array", items: { type: "string" } },
+        steps: { type: "array", items: { type: "string" } },
+        acceptance: { type: "array", items: { type: "string" } },
+        constraints: { type: "array", items: { type: "string" } },
+        ambiguities: { type: "array", items: { type: "string" } },
+      },
+    },
+  },
+};
 let client;
 async function handle(message) {
   if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version } };
   if (message.method === "ping") return {};
-  if (message.method === "tools/list") return { tools: names.map((action) => ({ name: `workbench_workspace_${action}`, description: action === "execute" ? "Execute the approved isolated Workspace handoff; requires a non-planning coordinator. Retry with the identical request." : `${action} an isolated Workspace handoff without writes.`, inputSchema: schema, annotations: { readOnlyHint: action !== "execute", destructiveHint: false } })) };
+  if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: schema, annotations: { readOnlyHint: tool.name !== "workbench_workspace_execute", destructiveHint: false } })) };
   if (message.method !== "tools/call") throw new Error("method_not_found");
-  const action = names.find((value) => message.params?.name === `workbench_workspace_${value}`);
+  const tool = tools.find((value) => message.params?.name === value.name);
+  const action = tool?.name.replace("workbench_workspace_", "");
   if (!action || !endpoint || !projectConfig || !token) throw new Error("workbench_context_unavailable");
   {
     client = new DaemonClient({ url: endpoint, clientId: `workbench-mcp-${randomUUID()}`, clientType: "mcp", reconnect: { enabled: false },

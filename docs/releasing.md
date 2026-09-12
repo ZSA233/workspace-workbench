@@ -1,26 +1,24 @@
-# Releasing Workspace Workbench
+# Workspace Workbench 发布说明
 
-Workspace Workbench uses stable `MAJOR.MINOR.PATCH` versions. The root
-`VERSION` file is the source of truth; the Python package, Paseo package and
-lockfile are checked against it.
+Workspace Workbench 使用 `MAJOR.MINOR.PATCH` 版本号。根目录的 `VERSION` 是唯一版本
+来源，Python 包、Paseo 包和锁文件都必须与它一致。
 
-## Bump and verify
+## 升级并检查版本
 
-Choose the smallest change that describes the public compatibility impact:
+按照公开兼容性影响选择最小升级范围：
 
 ```sh
-make bump-patch   # bug fix, no intended API break
-make bump-minor   # compatible feature
-make bump-major   # breaking public contract
+make bump-patch   # bug 修复，不改变预期的公开 API
+make bump-minor   # 向后兼容的新功能
+make bump-major   # 不兼容的公开契约变化
 make check
 make release-check TAG=v0.1.1
 ```
 
-The bump commands only edit version metadata. They do not create commits,
-tags, releases or remote changes. Review the diff and update release notes
-before committing.
+升级命令只修改版本元数据，不会创建 commit、tag、Release 或远端变更。提交前请
+检查 diff，并补充发布说明。
 
-## Publish a release
+## 发布版本
 
 ```sh
 git add VERSION pyproject.toml src/workspace_workbench/__init__.py \
@@ -30,19 +28,18 @@ git tag -a v0.1.1 -m "Release v0.1.1"
 git push origin main v0.1.1
 ```
 
-The release workflow checks out the tag, runs the full test/build pipeline,
-publishes Python and Paseo attachments with `SHA256SUMS`, and then advances
-the `stable` branch to the tested tag commit. It never publishes to PyPI or
-npm. A manually dispatched release must name an existing tag and must pass the
-same version check.
+Release workflow 会检出指定 tag，运行完整测试和构建流程，发布带有
+`SHA256SUMS` 的 Python 与 Paseo 附件，然后将通过验证的同一个 commit 推进到
+`stable` 分支。它不会发布到 PyPI 或 npm。手动触发 workflow 时也必须指定已经
+存在的 tag，并通过同样的版本检查。
 
-Do not reuse a published version. If a release fails after the tag exists,
-fix the source in a new version and create a new tag.
+已发布的版本号不能重复使用。如果某次发布在 tag 创建后失败，应修复代码并使用
+新的版本号重新发布。
 
-## Install and update the Paseo plugin
+## 安装和更新 Paseo 插件
 
-Replace `OWNER` with the GitHub account or organization that owns the public
-repository. Paseo v0.8 supports Git-managed plugin sources:
+将 `OWNER` 替换为公开仓库所属的 GitHub 账号或组织。Paseo v0.8 支持 Git 管理的
+插件来源：
 
 ```sh
 paseo plugin install OWNER/workspace-workbench:paseo-plugin \
@@ -52,8 +49,7 @@ paseo plugin install OWNER/workspace-workbench:paseo-plugin \
 paseo plugin update workspace-workbench-paseo --json
 ```
 
-The `stable` channel follows the latest tested release. The `edge` channel
-follows the default development branch:
+`stable` 跟随最近一次通过验证的发布版本。开发分支使用 `main`：
 
 ```sh
 paseo plugin install OWNER/workspace-workbench:paseo-plugin \
@@ -63,27 +59,22 @@ paseo plugin install OWNER/workspace-workbench:paseo-plugin \
 paseo plugin update workspace-workbench-paseo --json
 ```
 
-`paseo plugin update` is an explicit fetch/build/validate/activate operation;
-it is not a background updater. The plugin listing shows its Git source, ref
-and commit:
+`paseo plugin update` 是显式的拉取、构建、验证和激活流程，不会在后台自动更新。
+查看插件的 Git 来源、ref 和 commit：
 
 ```sh
 paseo plugin ls workspace-workbench-paseo --json
 ```
 
-The plugin manifest runs `npm ci` with the committed lockfile and then
-typechecks the checkout before Paseo activates it. This is a trusted plugin
-operation: Paseo runs plugin build commands on the daemon host, so install only
-from a repository you trust.
+插件 manifest 会使用提交的 lockfile 执行 `npm ci`，然后在 Paseo 激活前运行类型
+检查。插件构建命令会在 Paseo daemon 主机上执行，请只安装信任的仓库。
 
-For a fixed version, use the `vX.Y.Z` ref or the matching GitHub Release
-archive. A fixed tag is intentionally immutable and does not advance through
-`paseo plugin update`; switch it explicitly when upgrading.
+固定版本可以使用 `vX.Y.Z` ref 或对应的 GitHub Release 压缩包。固定 tag 不会通过
+`paseo plugin update` 自动跳到下一个版本，升级时需要显式切换 ref。
 
-## Release assets
+## Release 附件
 
-The GitHub Release also contains a Python wheel, source distribution, a
-`workspace-workbench-paseo-VERSION.tar.gz` archive and checksums. Use these
-assets for offline installation, reviewable artifact pinning or environments
-where Git access is unavailable. The archive does not contain project JSON,
-SQLite data, sockets, Agent bindings or secrets.
+GitHub Release 会包含 Python wheel、源码包、
+`workspace-workbench-paseo-VERSION.tar.gz` 和校验文件。Git 不可用、需要离线安装
+或需要固定附件审计时，可以使用这些文件。压缩包不包含项目 JSON、SQLite 数据、
+Socket、Agent 绑定或 secret。

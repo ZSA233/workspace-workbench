@@ -100,8 +100,19 @@ export const workspaceDelegate = defineRpc({
   }),
 });
 
+export const agentContextQuery = defineRpc({
+  name: "workspace.workbench.agent_context",
+  input: z.object({ projectConfig: z.string().trim().min(1), agentId: z.string().trim().min(1) }),
+  output: z.object({
+    ok: z.boolean(),
+    available: z.boolean(),
+    reason: z.enum(["ready", "not_injected", "revoked", "mismatched"]).optional(),
+  }),
+});
+
 export type Handoff = z.infer<typeof handoffSchema>;
 export type WorkspaceBinding = z.infer<typeof workspaceBindingSchema>;
 export type WorkspaceBindingResponse = z.infer<typeof workspaceBindingQuery.output>;
 export type WorkspaceDelegateInput = z.infer<typeof workspaceDelegate.input>;
 export type WorkspaceDelegateResponse = z.infer<typeof workspaceDelegate.output>;
+export type AgentContextResponse = z.infer<typeof agentContextQuery.output>;

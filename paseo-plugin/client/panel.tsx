@@ -13,8 +13,10 @@ import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,Vie
 import { copy } from "../shared/copy";
 
 import {
+agentContextQuery,
 workspaceBindingQuery,
 workspaceDelegate,
+type AgentContextResponse,
 type WorkspaceBindingResponse,
 type WorkspaceDelegateResponse,
 } from "../shared/handoff";
@@ -219,6 +221,26 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const selectedWorkspaceIsMain = isMainWorkspace(selectedWorkspace);
   const agentId = "agentId" in props ? props.agentId : undefined;
   const parentAgentId = agentId || null;
+  const rawAgentContextRpc = useRpc(agentContextQuery);
+  const agentContextRpc = (input: Parameters<typeof rawAgentContextRpc>[0]) => rawAgentContextRpc(input);
+  const agentContextQueryState = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "agent-context", parentAgentId],
+    queryFn: () => agentContextRpc({ projectConfig, agentId: parentAgentId! }),
+    enabled: Boolean(parentAgentId && listReady),
+    refetchInterval: 10_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 5_000,
+  });
+  const agentContext = agentContextQueryState.data as AgentContextResponse | undefined;
+  const agentContextAvailable = Boolean(agentContext?.ok && agentContext.available);
+  const agentContextState: "ready" | "loading" | "unavailable" | "missing" = !parentAgentId
+    ? "missing"
+    : agentContextQueryState.isPending
+      ? "loading"
+      : agentContextAvailable
+        ? "ready"
+        : "unavailable";
   const bindingQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "execution-binding", selectedWorkspaceId],
     queryFn: () => bindingRpc({ workspaceId: selectedWorkspaceId }),
@@ -634,7 +656,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       />
       {!selectedWorkspaceIsMain && listResult?.capabilities?.agent ? (
         <View>
-        {parentAgentId && !binding?.agentId ? <View style={styles.targetRow}>
+        {parentAgentId && agentContextAvailable && !binding?.agentId ? <View style={styles.targetRow}>
           <TextInput value={handoffGoal} onChangeText={setHandoffGoal} placeholder={copy.text_1b37d56f7a} style={styles.targetInput} />
           <Pressable disabled={delegating || !handoffGoal.trim()} onPress={delegateSelectedWorkspace} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.text_99ad8551f2}</Text></Pressable>
         </View> : null}
@@ -645,7 +667,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           loading={Boolean(selectedWorkspaceId && bindingQuery.isFetching && !bindingQuery.data)}
           refreshing={manualRefreshing && bindingQuery.isFetching}
           error={bindingFailure}
-          canDelegate={Boolean(parentAgentId)}
+          canDelegate={Boolean(parentAgentId && agentContextAvailable)}
+          agentContextState={agentContextState}
           delegating={delegating}
           onDelegate={delegateSelectedWorkspace}
           onOpenAgent={boundAgent?.id && props.navigation ? () => props.navigation?.openAgent({ agentId: boundAgent.id }) : undefined}

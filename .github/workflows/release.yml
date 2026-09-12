@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing or new release tag
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python build tooling
+        run: python -m pip install build
+      - name: Build Python distributions
+        run: python -m build --outdir dist
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: paseo-plugin/package-lock.json
+      - name: Install plugin dependencies
+        run: npm ci
+        working-directory: paseo-plugin
+      - name: Verify plugin
+        run: |
+          npm run typecheck
+          npm test
+        working-directory: paseo-plugin
+      - name: Package Paseo plugin
+        run: python scripts/package_plugin.py --output-dir dist
+      - name: Create checksums
+        run: sha256sum dist/* > dist/SHA256SUMS
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$RELEASE_TAG" dist/* --title "$RELEASE_TAG" --generate-notes

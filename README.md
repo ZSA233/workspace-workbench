@@ -77,6 +77,23 @@ printf '%s\n' '{"id":1,"method":"observer.health","params":{}}' \
   | workspace-workbench serve --config examples/project.json --stdio
 ```
 
+To install a released service and Paseo plugin, download the Python wheel and
+the `workspace-workbench-paseo-*.tar.gz` asset from the GitHub Release. Install the
+wheel with `python -m pip install workspace_workbench-*.whl`. Extract the plugin
+package, install its locked dependencies, and register the extracted directory:
+
+```sh
+mkdir -p workspace-workbench-paseo
+tar -xzf workspace-workbench-paseo-*.tar.gz -C workspace-workbench-paseo
+cd workspace-workbench-paseo
+npm ci
+paseo plugin install "$PWD" --json
+paseo plugin reload workspace-workbench-paseo --json
+```
+
+The release also includes `SHA256SUMS`. Verify the downloaded files with
+`sha256sum -c SHA256SUMS` before installing them.
+
 ## Configuration
 
 See [`examples/project.json`](examples/project.json) and [`schemas/project.schema.json`](schemas/project.schema.json). Paths may be absolute or relative to the configuration file. Repository paths must resolve below `sourceRoot`.
@@ -164,10 +181,18 @@ The protocol is versioned independently from the Paseo package so a future Go se
 ## Development
 
 ```sh
-python -m unittest discover -s tests
+make check
+make package
 ```
 
-The Paseo package has its own `npm run typecheck`. Test fixtures create temporary Git repositories and never depend on a developer's source tree.
+`make check` runs the Python service tests, Paseo typecheck and Paseo plugin
+tests. `make package` builds Python distributions and the Paseo plugin package
+under `dist/`; it requires the `build` Python package. Test fixtures create
+temporary Git repositories and never depend on a developer's source tree.
+
+The same checks run in GitHub Actions for every push and pull request. A tag
+such as `v0.1.0` builds the release attachments; the workflow does not publish
+to PyPI or npm.
 
 Run the cache and refresh benchmark with `PYTHONPATH=src python3 tests/benchmark.py`. It creates ten
 temporary repositories, measures 100 warm reads, observes a new file, and reopens the SQLite cache.

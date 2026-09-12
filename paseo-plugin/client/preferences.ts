@@ -30,6 +30,7 @@ function emptySettingsValues(): ObserverSettingsValues {
     selectedWorkspaceByPaseoWorkspace: {},
     sectionLayoutByPaseoWorkspace: {},
     lastProjectByHost: {},
+    reviewModeByPaseoWorkspace: {},
   };
 }
 

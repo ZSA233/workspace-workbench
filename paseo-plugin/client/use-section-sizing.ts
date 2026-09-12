@@ -9,6 +9,7 @@ export function useSectionSizing(height: number, width: number, identity: string
   const [preview, setPreview] = useState<ReturnType<typeof allocateSections> | null>(null);
   const session = useRef<ReturnType<typeof beginResize>>(null);
   const frame = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
+  const pendingDy = useRef(0);
   const latest = useRef({ height, width, identity, layout, commit, chrome, content });
   latest.current = { height, width, identity, layout, commit, chrome, content };
   const controller = useRef<{
@@ -21,24 +22,27 @@ export function useSectionSizing(height: number, width: number, identity: string
         const v = latest.current;
         session.current = beginResize(id, v.height, v.chrome, v.layout, v.content);
         if (!session.current) return false;
+        pendingDy.current = 0;
         setPreview(session.current.initial);
         return true;
       },
       move(dy) {
-        clearFrame();
+        pendingDy.current = dy;
+        if (frame.current !== null) return;
         frame.current = requestAnimationFrame(() => {
           frame.current = null;
-          if (session.current) setPreview(session.current.update(dy).allocation);
+          if (session.current) setPreview(session.current.update(pendingDy.current).allocation);
         });
       },
       finish(dy) {
         clearFrame();
+        pendingDy.current = dy;
         const active = session.current;
         session.current = null;
         if (active) latest.current.commit(active.update(dy).allocation.sizes);
         setPreview(null);
       },
-      cancel() { clearFrame(); session.current = null; setPreview(null); },
+      cancel() { clearFrame(); pendingDy.current = 0; session.current = null; setPreview(null); },
     };
   }
   useEffect(() => { controller.current!.cancel(); }, [height, width, identity, layout.repositories.collapsed, layout.graph.collapsed, layout.changes.collapsed]);

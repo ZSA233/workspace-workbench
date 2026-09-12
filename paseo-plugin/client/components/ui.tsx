@@ -456,6 +456,7 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     selectorListHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginTop: 11, paddingBottom: 4 },
     selectorListLabel: { color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "500" },
     selectorListCount: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 10 },
+    workspaceOptionList: { flexGrow: 0, flexShrink: 1, maxHeight: 320, minHeight: 0 },
     workspaceOption: { alignItems: "center", borderTopColor: theme.colors.border, borderTopWidth: 1, flexDirection: "row", gap: 7, minHeight: 42, paddingVertical: 6 },
     workspaceOptionActive: { backgroundColor: theme.colors.surface2, borderLeftColor: accent, borderLeftWidth: 2, marginHorizontal: -5, paddingHorizontal: 5 },
     workspaceStatusDot: { borderRadius: 4, height: 7, width: 7 },

@@ -2,7 +2,7 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { FlatList, Icon } from "@getpaseo/plugin/client/react-native";
 import { useEffect, type ReactNode } from "react";
 import { BackHandler,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { copy, formatCopy } from "../../shared/copy";
@@ -21,6 +21,7 @@ type ObserverPanelContentProps = PanelProps & {
   paseoWorkspace: { directory: string; name: string } | null;
 };
 type ChangeTreeMode = "tree" | "files";
+const WORKSPACE_OPTION_HEIGHT = 42;
 
 const PREFERENCE_SCOPE_FALLBACK = "global";
 
@@ -205,46 +206,73 @@ export function WorkspaceSelector({
             <Text style={styles.selectorListLabel}>{copy.text_205b4561ed}</Text>
             <Text style={styles.selectorListCount}>{visibleWorkspaces.length}{copy.text_42099b4af0}{workspaces.length}</Text>
           </View>
-          {visibleWorkspaces.map((workspace) => {
-            const selected = workspace.id === selectedWorkspaceId;
-            const status = isMainWorkspace(workspace)
-              ? ""
-              : workspace.dirty
-              ? "dirty"
-              : workspace.unpushed
-                ? "unpushed"
-                : workspace.blockerCount > 0
-                  ? "needs review"
-                  : workspace.state !== "active"
-                    ? workspace.state
-                    : "";
-            const statusTone = isMainWorkspace(workspace)
-              ? observerAccent(theme)
-              : workspace.dirty || workspace.unpushed || workspace.blockerCount > 0
-              ? theme.colors.statusWarning
-              : workspace.observationStale || workspace.dirty === null
-              ? theme.colors.foregroundMuted
-              : theme.colors.statusSuccess;
-            return (
-              <Pressable
-                key={workspace.id}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                onPress={() => onSelect(workspace.id)}
-                style={[styles.workspaceOption, selected && styles.workspaceOptionActive]}
-              >
-                <View style={[styles.workspaceStatusDot, { backgroundColor: statusTone }]} />
-                <View style={styles.workspaceOptionCopy}>
-                  <Text numberOfLines={1} style={styles.workspaceOptionTitle}>{workspaceDisplayName(workspace)}</Text>
-                  <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{repositoryCountLabel(workspace.repositoryCount)}</Text>
-                </View>
-                {status && status !== "active" ? <Text style={[styles.workspaceOptionState, { color: statusTone }]}>{status}</Text> : null}
-              </Pressable>
-            );
-          })}
-          {!loading && visibleWorkspaces.length === 0 ? <Text style={styles.emptyText}>{copy.text_daa32fe25c}</Text> : null}
+          <FlatList
+            data={visibleWorkspaces}
+            getItemLayout={(_, index) => ({ length: WORKSPACE_OPTION_HEIGHT, offset: WORKSPACE_OPTION_HEIGHT * index, index })}
+            keyExtractor={(workspace) => workspace.id}
+            initialNumToRender={12}
+            keyboardShouldPersistTaps="handled"
+            maxToRenderPerBatch={20}
+            nestedScrollEnabled
+            removeClippedSubviews
+            renderItem={({ item: workspace }) => (
+              <WorkspaceOption
+                onSelect={onSelect}
+                selected={workspace.id === selectedWorkspaceId}
+                styles={styles}
+                theme={theme}
+                workspace={workspace}
+              />
+            )}
+            showsVerticalScrollIndicator={visibleWorkspaces.length > 7}
+            style={styles.workspaceOptionList}
+            windowSize={7}
+            ListEmptyComponent={!loading ? <Text style={styles.emptyText}>{copy.text_daa32fe25c}</Text> : null}
+          />
         </View>
       ) : null}
     </View>
+  );
+}
+
+function WorkspaceOption({ workspace, selected, onSelect, theme, styles }: {
+  workspace: WorkspaceSummary;
+  selected: boolean;
+  onSelect: (id: string) => void;
+  theme: PanelProps["theme"];
+  styles: ReturnType<typeof makeStyles>;
+}) {
+  const status = isMainWorkspace(workspace)
+    ? ""
+    : workspace.dirty
+    ? "dirty"
+    : workspace.unpushed
+      ? "unpushed"
+      : workspace.blockerCount > 0
+        ? "needs review"
+        : workspace.state !== "active"
+          ? workspace.state
+          : "";
+  const statusTone = isMainWorkspace(workspace)
+    ? observerAccent(theme)
+    : workspace.dirty || workspace.unpushed || workspace.blockerCount > 0
+    ? theme.colors.statusWarning
+    : workspace.observationStale || workspace.dirty === null
+    ? theme.colors.foregroundMuted
+    : theme.colors.statusSuccess;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={() => onSelect(workspace.id)}
+      style={[styles.workspaceOption, selected && styles.workspaceOptionActive]}
+    >
+      <View style={[styles.workspaceStatusDot, { backgroundColor: statusTone }]} />
+      <View style={styles.workspaceOptionCopy}>
+        <Text numberOfLines={1} style={styles.workspaceOptionTitle}>{workspaceDisplayName(workspace)}</Text>
+        <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{repositoryCountLabel(workspace.repositoryCount)}</Text>
+      </View>
+      {status && status !== "active" ? <Text style={[styles.workspaceOptionState, { color: statusTone }]}>{status}</Text> : null}
+    </Pressable>
   );
 }

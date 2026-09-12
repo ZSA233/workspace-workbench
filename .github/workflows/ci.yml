@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package
+        run: python -m pip install --editable .
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -v
+
+  paseo:
+    name: Paseo plugin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python for archive checks
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: paseo-plugin/package-lock.json
+      - name: Install plugin dependencies
+        run: npm ci
+        working-directory: paseo-plugin
+      - name: Typecheck plugin
+        run: npm run typecheck
+        working-directory: paseo-plugin
+      - name: Test plugin
+        run: npm test
+        working-directory: paseo-plugin
+      - name: Check plugin package contents
+        run: npm pack --dry-run --json
+        working-directory: paseo-plugin
+      - name: Build release-shaped plugin archive
+        run: |
+          python scripts/package_plugin.py --output-dir "$RUNNER_TEMP/plugin-package"
+          tar -tzf "$RUNNER_TEMP/plugin-package"/workspace-workbench-paseo-*.tar.gz >/dev/null

@@ -2,8 +2,7 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { useContext,useEffect,useState } from "react";
-import { SectionAllocationContext } from "./ui";
+import { memo,useEffect,useState } from "react";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { copy } from "../../shared/copy";
 
@@ -42,7 +41,7 @@ import { CommitGraph } from "./graph";
 
 import { ChangedTree } from "./changes";
 
-export function WorkspaceView({
+export const WorkspaceView = memo(function WorkspaceView({
   detail,
   unavailable,
   detailLoading,
@@ -63,6 +62,7 @@ export function WorkspaceView({
   selectedFile,
   changeScope,
   selectedRepository,
+  onContentLayout,
   repositoryDetailsOpen,
   onToggleRepositoryDetails,
   onCommit,
@@ -104,6 +104,7 @@ export function WorkspaceView({
   selectedFile: string;
   changeScope: Exclude<ChangeScope, "commit">;
   selectedRepository: RepositorySummary | undefined;
+  onContentLayout: (height: number) => void;
   repositoryDetailsOpen: boolean;
   onToggleRepositoryDetails: () => void;
   onCommit: (sha: string) => void;
@@ -125,7 +126,6 @@ export function WorkspaceView({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
-  const allocation = useContext(SectionAllocationContext);
   const [repositoryDetailTop, setRepositoryDetailTop] = useState<number | null>(null);
   const [changesRelativeTop, setChangesRelativeTop] = useState<number | null>(null);
 
@@ -155,12 +155,7 @@ export function WorkspaceView({
     ? sectionRemainingHeight(availableHeight, repositoryDetailTop + changesRelativeTop, 12)
     : availableHeight;
   return (
-    <View onLayout={(event) => {
-      if (allocation && !allocation.outerScroll && selectedRepository) {
-        const used = Object.values(allocation.sizes).reduce((sum, height) => sum + height, 0);
-        allocation.measureChrome?.(Math.max(0, event.nativeEvent.layout.height - used) + 24);
-      }
-    }}>
+    <View onLayout={(event) => onContentLayout(event.nativeEvent.layout.height)}>
       {detailError ? <Text style={styles.warningText}>{detailError}</Text> : null}
       {toolchain && toolchain.status !== "ready" && toolchain.status !== "not_applicable" ? (
         <ToolchainNotice toolchain={toolchain} repositoryCount={repositories.length} styles={styles} />
@@ -277,7 +272,7 @@ export function WorkspaceView({
       ) : null}
     </View>
   );
-}
+});
 
 export function ToolchainNotice({
   toolchain,

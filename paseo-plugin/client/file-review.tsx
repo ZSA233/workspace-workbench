@@ -5,7 +5,7 @@ import {
   type PluginWorkspacePanelProps,
   useRpc,
 } from "@getpaseo/plugin/client";
-import { FlatList, ScrollView } from "@getpaseo/plugin/client/react-native";
+import { FlatList, Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 
 import { observerQuery, type ObserverResponse } from "../shared/observer";
@@ -30,12 +30,15 @@ import {
   useFileReviews,
 } from "./file-review-store";
 import { useLastSuccessfulResponse } from "./observation";
+import { IconButton } from "./components/icon-button";
+import { useReviewModePreference } from "./review-preferences";
+import type { ReviewMode } from "./review-mode";
 import { HighlightedCode } from "./syntax";
 import { Svg, Rect } from "./graph/svg-web";
 import { observerAccent } from "./theme";
 
 type FilePanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
-type ReviewMode = "split" | "unified";
+const MIN_SPLIT_PANEL_WIDTH = 860;
 
 function resultOf<T>(response: ObserverResponse | undefined): T | null {
   if (!response?.ok) return null;
@@ -74,10 +77,10 @@ export function FileReviewPanel(props: FilePanelProps) {
   const selections = useFileReviews(hostWorkspaceId);
   const { theme, layout } = props;
   const [panelWidth, setPanelWidth] = useState(0);
-  const narrow = layout.compact || (panelWidth > 0 && panelWidth < 760);
+  const narrow = layout.compact || (panelWidth > 0 && panelWidth < MIN_SPLIT_PANEL_WIDTH);
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const activeKey = useActiveFileReviewKey(hostWorkspaceId);
-  const [mode, setMode] = useState<ReviewMode>(narrow ? "unified" : "split");
+  const { mode, setMode } = useReviewModePreference(hostWorkspaceId, narrow);
   const activeSelection = selections.find((item) => selectionKey(item) === activeKey) || selections.at(-1);
   const rpc = useRpc(observerQuery);
 
@@ -90,10 +93,6 @@ export function FileReviewPanel(props: FilePanelProps) {
       setActiveFileReview(hostWorkspaceId, nextKey);
     }
   }, [activeKey, activeSelection, hostWorkspaceId]);
-
-  useEffect(() => {
-    if (narrow) setMode("unified");
-  }, [narrow]);
 
   const diffQuery = useQuery({
     queryKey: [
@@ -142,17 +141,23 @@ export function FileReviewPanel(props: FilePanelProps) {
     <View style={styles.screen} accessibilityLabel="Workspace Changes" onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
       <View style={styles.header}>
         <View style={styles.headerCopy}>
-          <Text style={styles.eyebrow}>{copy.text_eb8343b3df}</Text>
-          <Text style={styles.title}>{copy.text_01970ba582}</Text>
+          <Text numberOfLines={1} style={styles.title}>
+            {activeSelection?.path || copy.text_01970ba582}
+          </Text>
           <Text style={styles.subtitle} numberOfLines={1}>
-            {copy.text_45300063e6}{activeSelection?.repoPath || copy.text_6298371965}
+            {activeSelection ? `${activeSelection.repoPath} · ${scopeLabel(activeSelection.scope)} · ${activeSelection.statusLabel}` : copy.text_6298371965}
           </Text>
         </View>
         <View style={styles.headerActions}>
-          <ModeButton label="Split" active={mode === "split"} disabled={narrow} onPress={() => setMode("split")} styles={styles} />
-          <ModeButton label="Unified" active={mode === "unified"} onPress={() => setMode("unified")} styles={styles} />
-          <View style={styles.readOnlyBadge}>
-            <Text style={styles.readOnlyText}>{copy.text_9af2506454}</Text>
+          <IconButton
+            label={mode === "split" ? copy.switchToUnified : copy.switchToSplit}
+            icon={mode === "split" ? "Columns2" : "Rows3"}
+            active={!narrow && mode === "split"}
+            color={narrow ? theme.colors.foregroundMuted : observerAccent(theme)}
+            onPress={() => { if (!narrow) setMode(mode === "split" ? "unified" : "split"); }}
+          />
+          <View accessibilityLabel={copy.readOnlyBadge} style={styles.readOnlyBadge}>
+            <Icon name="Lock" size={13} color={theme.colors.foregroundMuted} />
           </View>
         </View>
       </View>
@@ -241,32 +246,6 @@ export function FileReviewPanel(props: FilePanelProps) {
         </View>
       )}
     </View>
-  );
-}
-
-function ModeButton({
-  label,
-  active,
-  disabled,
-  onPress,
-  styles,
-}: {
-  label: string;
-  active: boolean;
-  disabled?: boolean;
-  onPress: () => void;
-  styles: ReturnType<typeof makeStyles>;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected: active, disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={[styles.modeButton, active && styles.modeButtonActive, disabled && styles.modeButtonDisabled]}
-    >
-      <Text style={[styles.modeButtonText, active && styles.modeButtonTextActive]}>{label}</Text>
-    </Pressable>
   );
 }
 
@@ -718,21 +697,15 @@ function makeStyles(theme: FilePanelProps["theme"]) {
   const accent = observerAccent(theme);
   return StyleSheet.create({
     screen: { backgroundColor: theme.colors.surface0, flex: 1 },
-    header: { alignItems: "flex-start", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 18, paddingBottom: 12 },
+    header: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 42, paddingHorizontal: 12, paddingVertical: 5 },
     headerCopy: { flex: 1, minWidth: 0 },
-    eyebrow: { color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "700", letterSpacing: 1.2 },
-    title: { color: theme.colors.foreground, fontSize: 23, fontWeight: "800", marginTop: 4 },
-    subtitle: { color: theme.colors.foregroundMuted, fontSize: 13, marginTop: 3 },
-    headerActions: { alignItems: "center", flexDirection: "row", gap: 5, marginLeft: 10 },
-    readOnlyBadge: { borderColor: theme.colors.border, borderRadius: 12, borderWidth: 1, marginLeft: 5, paddingHorizontal: 8, paddingVertical: 4 },
-    readOnlyText: { color: theme.colors.foregroundMuted, fontSize: 10, fontWeight: "700" },
-    modeButton: { borderColor: theme.colors.border, borderRadius: 6, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 5 },
-    modeButtonActive: { backgroundColor: accent, borderColor: accent },
-    modeButtonDisabled: { opacity: 0.45 },
-    modeButtonText: { color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "700" },
-    modeButtonTextActive: { color: theme.colors.accentForeground },
-    tabsScroll: { flexGrow: 0, flexShrink: 0, height: 44 },
-    tabs: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, minHeight: 44, paddingHorizontal: 14, gap: 5 },
+    title: { color: theme.colors.foreground, flexShrink: 1, fontFamily: "monospace", fontSize: 13, fontWeight: "700" },
+    subtitle: { color: theme.colors.foregroundMuted, fontSize: 10, marginTop: 1 },
+    headerActions: { alignItems: "center", flexDirection: "row", gap: 1, marginLeft: 6 },
+    readOnlyBadge: { alignItems: "center", borderColor: theme.colors.border, borderRadius: 4, borderWidth: 1, height: 24, justifyContent: "center", marginLeft: 1, width: 24 },
+    readOnlyIcon: { color: theme.colors.foregroundMuted, fontSize: 8, fontWeight: "700" },
+    tabsScroll: { flexGrow: 0, flexShrink: 0, height: 34 },
+    tabs: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, minHeight: 34, paddingHorizontal: 10, gap: 4 },
     fileTab: { alignItems: "center", borderColor: "transparent", borderRadius: 6, borderWidth: 1, flexDirection: "row", maxWidth: 230 },
     fileTabActive: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.border },
     fileTabButton: { alignItems: "center", flexDirection: "row", gap: 5, minWidth: 0, paddingHorizontal: 8, paddingVertical: 6 },
@@ -742,25 +715,25 @@ function makeStyles(theme: FilePanelProps["theme"]) {
     closeTab: { paddingHorizontal: 7, paddingVertical: 6 },
     closeTabText: { color: theme.colors.foregroundMuted, fontSize: 15, lineHeight: 15 },
     body: { flex: 1, minHeight: 0 },
-    fileHeader: { alignItems: "flex-end", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 10 },
+    fileHeader: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 5 },
     fileHeaderCopy: { flex: 1, minWidth: 0 },
-    filePath: { color: theme.colors.foreground, fontFamily: "monospace", fontSize: 14, fontWeight: "700" },
-    metaText: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 11, marginTop: 3 },
-    errorText: { color: theme.colors.statusDanger, fontSize: 13, paddingHorizontal: 20, paddingTop: 10 },
-    staleText: { color: theme.colors.foregroundMuted, fontSize: 11, paddingHorizontal: 20, paddingTop: 7 },
-    emptyState: { alignItems: "center", flex: 1, justifyContent: "center", padding: 24 },
-    emptyTitle: { color: theme.colors.foreground, fontSize: 15, fontWeight: "700" },
-    emptyText: { color: theme.colors.foregroundMuted, fontSize: 13, lineHeight: 19, marginTop: 6 },
+    filePath: { color: theme.colors.foreground, fontFamily: "monospace", fontSize: 12, fontWeight: "700" },
+    metaText: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 10, marginTop: 2 },
+    errorText: { color: theme.colors.statusDanger, fontSize: 11, paddingHorizontal: 12, paddingTop: 6 },
+    staleText: { color: theme.colors.foregroundMuted, fontSize: 10, paddingHorizontal: 12, paddingTop: 5 },
+    emptyState: { alignItems: "center", flex: 1, justifyContent: "center", padding: 12 },
+    emptyTitle: { color: theme.colors.foreground, fontSize: 13, fontWeight: "700" },
+    emptyText: { color: theme.colors.foregroundMuted, fontSize: 11, lineHeight: 16, marginTop: 4 },
     diffShell: { backgroundColor: theme.colors.surface1, flex: 1, minHeight: 0 },
-    diffToolbar: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 40, paddingHorizontal: 12 },
-    diffToolbarCompact: { alignItems: "stretch", flexDirection: "column", gap: 5, justifyContent: "center", minHeight: 68, paddingVertical: 6 },
+    diffToolbar: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 32, paddingHorizontal: 10 },
+    diffToolbarCompact: { minHeight: 30, paddingHorizontal: 8 },
     diffRefGroup: { alignItems: "center", flexDirection: "row", flexShrink: 1, gap: 6, minWidth: 0 },
-    diffRefGroupCompact: { width: "100%" },
+    diffRefGroupCompact: { flex: 1, width: undefined },
     diffRefLabel: { color: theme.colors.foregroundMuted, flexShrink: 1, fontFamily: "monospace", fontSize: 11, fontWeight: "700" },
     diffRefValue: { color: theme.colors.foreground, flexShrink: 1, fontFamily: "monospace", fontSize: 11, maxWidth: 180 },
     diffRefArrow: { color: theme.colors.foregroundMuted, fontSize: 12, marginHorizontal: 2 },
     diffToolbarActions: { alignItems: "center", flexDirection: "row", gap: 8, marginLeft: 8 },
-    diffToolbarActionsCompact: { justifyContent: "flex-end", marginLeft: 0, width: "100%" },
+    diffToolbarActionsCompact: { flexShrink: 0, justifyContent: "flex-end", marginLeft: 3, width: undefined },
     diffLegendAdded: { color: theme.colors.statusSuccess, fontFamily: "monospace", fontSize: 11 },
     diffLegendModified: { color: accent, fontFamily: "monospace", fontSize: 11 },
     diffLegendRemoved: { color: theme.colors.statusDanger, fontFamily: "monospace", fontSize: 11 },

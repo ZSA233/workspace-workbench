@@ -8,8 +8,8 @@ type PluginWorkspacePanelProps,
 } from "@getpaseo/plugin/client";
 import { copyText,Modal,ScrollView,TextInput,useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect,useMemo,useRef,useState } from "react";
-import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
+import { useCallback,useEffect,useMemo,useRef,useState } from "react";
+import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,View,type ViewStyle } from "react-native";
 import { copy } from "../shared/copy";
 
 import {
@@ -49,6 +49,7 @@ type ObserverPanelContentProps = PanelProps & {
 type ChangeTreeMode = "tree" | "files";
 
 const PREFERENCE_SCOPE_FALLBACK = "global";
+const noSectionDragState = () => {};
 
 // React Native's shared cursor type only exposes `auto` and `pointer`, while
 // the web renderer forwards the full CSS cursor value. Keep the native style
@@ -129,12 +130,19 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const preferenceScopeKey = `project:${projectConfig}:paseo-workspace:${hostWorkspaceId || PREFERENCE_SCOPE_FALLBACK}`;
   const [panelWidth, setPanelWidth] = useState(0);
   const [panelHeight, setPanelHeight] = useState(0);
+  const [reduceMotion, setReduceMotion] = useState(false);
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
-  function openLayoutMenu() { setStatusMenuOpen(false); setLayoutMenuOpen(true); }
+  const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(true); }, []);
   const compact = layout.compact || (panelWidth > 0 && panelWidth < 480);
   const styles = useMemo(() => makeStyles(theme, compact), [theme, compact]);
   const preferences = useObserverPreferences(preferenceScopeKey);
+  useEffect(() => {
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => { if (mounted) setReduceMotion(enabled); }).catch(() => {});
+    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduceMotion);
+    return () => { mounted = false; subscription.remove(); };
+  }, []);
   const rawRpc = useRpc(observerQuery);
   const rpc = (input: Parameters<typeof rawRpc>[0]) => rawRpc({ ...input, projectConfig });
   const rawBindingRpc = useRpc(workspaceBindingQuery);
@@ -209,7 +217,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   // and trigger an unwanted fallback.
   const selectedWorkspace = observedWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId);
   const selectedWorkspaceIsMain = isMainWorkspace(selectedWorkspace);
-  const parentAgentId = "agentId" in props ? props.agentId : null;
+  const agentId = "agentId" in props ? props.agentId : undefined;
+  const parentAgentId = agentId || null;
   const bindingQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "execution-binding", selectedWorkspaceId],
     queryFn: () => bindingRpc({ workspaceId: selectedWorkspaceId }),
@@ -505,7 +514,53 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     setTab("workspace");
   }
 
-  function openChangedFile(file: FileChange): void {
+  function toggleReview(id: string): void {
+    setReviewIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  }
+
+  function copyBrief(text: string): void {
+    void copyText(text)
+      .then(() => toast.show(copy.text_2fb0b81c28, { variant: "success" }))
+      .catch(() => toast.show(copy.text_514f0cbbf2, { variant: "warning" }));
+  }
+
+  const allocation = useSectionSizing(panelHeight, panelWidth, `${selectedWorkspaceId}:${selectedRepoPath}:${tab}`, preferences.sectionLayout, preferences.commitResize);
+  const sectionDragging = allocation.dragging;
+  const allocationRef = useRef(allocation);
+  allocationRef.current = allocation;
+  const onWorkspaceContentLayout = useCallback((contentHeight: number) => {
+    const current = allocationRef.current;
+    if (current.outerScroll || !selectedRepository) return;
+    const used = Object.values(current.sizes).reduce((sum, height) => sum + height, 0);
+    current.measureChrome?.(Math.max(0, contentHeight - used) + 24);
+  }, [selectedRepository]);
+  const animateSectionLayout = useCallback(() => {
+    if (reduceMotion || Platform.OS === "web") return;
+    try {
+      if (Platform.OS === "android") {
+        (UIManager as unknown as { setLayoutAnimationEnabledExperimental?: (enabled: boolean) => void }).setLayoutAnimationEnabledExperimental?.(true);
+      }
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    } catch {
+      // Unsupported hosts use the same correct immediate layout update.
+    }
+  }, [reduceMotion]);
+  const onToggleRepositoryDetails = useCallback(() => setRepositoryDetailsOpen((current) => !current), []);
+  const onCommit = useCallback((sha: string) => {
+    setSelectedCommit(sha);
+    setSelectedFile("");
+  }, []);
+  const onGraphBase = useCallback(() => setGraphView((current) => ({ ...current, historyMode: "full", maxCommits: 50 })), []);
+  const graphRefetch = graphQuery.refetch;
+  const graphFetching = graphQuery.isFetching;
+  const graphLoadedCount = graph?.loadedCount || 50;
+  const onGraphMore = useCallback(() => {
+    if (graphFetching) return;
+    const next = Math.min(graphLoadedCount + 50, 200);
+    if (next <= graphView.maxCommits) { void graphRefetch(); return; }
+    setGraphView((current) => ({ ...current, maxCommits: next }));
+  }, [graphFetching, graphLoadedCount, graphRefetch, graphView.maxCommits]);
+  const onOpenChangedFile = useCallback((file: FileChange) => {
     if (!selectedRepository || !selectedWorkspace) return;
     setSelectedFile(file.path);
     openFileReview(
@@ -526,24 +581,24 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       {
         hostWorkspaceId,
         directory: selectedWorkspace.treePath || selectedWorkspace.sourceRoot,
-        panelId: "agentId" in props ? "workspace-workbench-file-agent" : "workspace-workbench-file",
-        agentId: "agentId" in props ? props.agentId : undefined,
+        panelId: agentId ? "workspace-workbench-file-agent" : "workspace-workbench-file",
+        agentId,
       },
     );
-  }
-
-  function toggleReview(id: string): void {
-    setReviewIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
-  }
-
-  function copyBrief(text: string): void {
-    void copyText(text)
-      .then(() => toast.show(copy.text_2fb0b81c28, { variant: "success" }))
-      .catch(() => toast.show(copy.text_514f0cbbf2, { variant: "warning" }));
-  }
-
-  const allocation = useSectionSizing(panelHeight, panelWidth, `${selectedWorkspaceId}:${selectedRepoPath}:${tab}`, preferences.sectionLayout, preferences.commitResize);
-  const sectionDragging = allocation.dragging;
+  }, [agentId, changesScope, hostWorkspaceId, projectConfig, selectedCommit, selectedRepository, selectedWorkspace]);
+  const onRepo = useCallback((repoPath: string) => {
+    setSelectedRepoPath(repoPath);
+    setSelectedFile("");
+    setRepositoryDetailsOpen(false);
+  }, []);
+  const onSectionToggle = useCallback((id: "repositories" | "graph" | "changes", collapsed: boolean) => {
+    animateSectionLayout();
+    preferences.updateSection(id, { collapsed });
+  }, [animateSectionLayout, preferences.updateSection]);
+  const noHeightCommit = useCallback((_id: "repositories" | "graph" | "changes", _height: number | null) => {}, []);
+  const collapseAll = useCallback(() => { animateSectionLayout(); preferences.setAllSectionsCollapsed(true); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.setAllSectionsCollapsed]);
+  const expandAll = useCallback(() => { animateSectionLayout(); preferences.setAllSectionsCollapsed(false); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.setAllSectionsCollapsed]);
+  const resetLayout = useCallback(() => { animateSectionLayout(); preferences.resetLayout(); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.resetLayout]);
   const BodyContainer = tab === "review" || allocation.outerScroll ? ScrollView : View;
   return (
     <View
@@ -573,7 +628,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         failure={listFailure}
         onOpen={() => setSelectorOpen((current) => !current)}
         onFilter={setWorkspaceFilter}
-        onSelect={selectWorkspace}
+        onSelect={(id) => { selectWorkspace(id); setSelectorOpen(false); }}
         theme={theme}
         styles={styles}
       />
@@ -641,33 +696,22 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               changeScope={changeScope}
               selectedRepository={selectedRepository}
               repositoryDetailsOpen={repositoryDetailsOpen}
-              onToggleRepositoryDetails={() => setRepositoryDetailsOpen((current) => !current)}
-              onCommit={(sha) => {
-                setSelectedCommit(sha);
-                setSelectedFile("");
-              }}
-              onGraphBase={() => setGraphView((current) => ({ ...current, historyMode: "full", maxCommits: 50 }))}
-              onGraphMore={() => {
-                if (graphQuery.isFetching) return;
-                const next = Math.min((graph?.loadedCount || 50) + 50, 200);
-                if (next <= graphView.maxCommits) { void graphQuery.refetch(); return; }
-                setGraphView((current) => ({ ...current, maxCommits: next }));
-              }}
+              onToggleRepositoryDetails={onToggleRepositoryDetails}
+              onCommit={onCommit}
+              onGraphBase={onGraphBase}
+              onGraphMore={onGraphMore}
               graphIdentity={`${hostWorkspaceId}:${selectedWorkspaceId}:${selectedRepoPath}`}
               graphLoadingMore={graphQuery.isFetching && Boolean(graph) && (graph?.loadedCount || 0) < graphView.maxCommits}
               onScope={setChangeScope}
-              onFile={openChangedFile}
-              onRepo={(repoPath) => {
-                setSelectedRepoPath(repoPath);
-                setSelectedFile("");
-                setRepositoryDetailsOpen(false);
-              }}
+              onFile={onOpenChangedFile}
+              onRepo={onRepo}
               sectionLayout={preferences.sectionLayout}
               availableHeight={panelHeight}
               sectionDragging={sectionDragging}
-              onSectionToggle={(id, collapsed) => preferences.updateSection(id, { collapsed })}
-              onSectionHeightCommit={(id, height) => preferences.updateSection(id, { height })}
-              onSectionDragState={() => {}}
+              onContentLayout={onWorkspaceContentLayout}
+              onSectionToggle={onSectionToggle}
+              onSectionHeightCommit={noHeightCommit}
+              onSectionDragState={noSectionDragState}
               onOpenLayoutMenu={openLayoutMenu}
               graphPlatform={layout.platform}
               theme={theme}
@@ -703,18 +747,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         onCreate={listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setCreateOpen(true); } : undefined}
         open={layoutMenuOpen}
         onClose={() => setLayoutMenuOpen(false)}
-        onCollapseAll={() => {
-          preferences.setAllSectionsCollapsed(true);
-          setLayoutMenuOpen(false);
-        }}
-        onExpandAll={() => {
-          preferences.setAllSectionsCollapsed(false);
-          setLayoutMenuOpen(false);
-        }}
-        onReset={() => {
-          preferences.resetLayout();
-          setLayoutMenuOpen(false);
-        }}
+        onCollapseAll={collapseAll}
+        onExpandAll={expandAll}
+        onReset={resetLayout}
         theme={theme}
         styles={styles}
       />

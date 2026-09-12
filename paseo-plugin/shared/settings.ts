@@ -12,16 +12,29 @@ const sectionLayout = z.object({
   changes: sectionPreference,
 });
 
+const reviewMode = z.enum(["split", "unified"]);
+
 /** Host-scoped UI preferences; no repository paths or observation data live here. */
 export const observerSettings = defineSettings({
   id: "workspace-workbench",
   scope: "host",
-  version: 1,
+  version: 2,
   schema: z.object({
     selectedWorkspaceByPaseoWorkspace: z.record(z.string(), z.string()).default({}),
     sectionLayoutByPaseoWorkspace: z.record(z.string(), sectionLayout).default({}),
     lastProjectByHost: z.record(z.string(), z.string()).default({}),
+    reviewModeByPaseoWorkspace: z.record(z.string(), reviewMode).default({}),
   }),
+  migrate: (values) => {
+    const previous = values && typeof values === "object" ? values as Record<string, unknown> : {};
+    return {
+      ...previous,
+      selectedWorkspaceByPaseoWorkspace: previous.selectedWorkspaceByPaseoWorkspace || {},
+      sectionLayoutByPaseoWorkspace: previous.sectionLayoutByPaseoWorkspace || {},
+      lastProjectByHost: previous.lastProjectByHost || {},
+      reviewModeByPaseoWorkspace: previous.reviewModeByPaseoWorkspace || {},
+    };
+  },
 });
 
 export const observerSettingsRpc = settingsRpc(observerSettings.id);

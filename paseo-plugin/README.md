@@ -21,6 +21,23 @@ paseo plugin install /absolute/path/to/workspace-workbench/paseo-plugin --json
 paseo plugin reload workspace-workbench-paseo --json
 ```
 
+For a GitHub Release download the `workspace-workbench-paseo-*.tar.gz` asset,
+extract it, install the locked dependencies, and install the extracted package
+directory:
+
+```sh
+mkdir -p workspace-workbench-paseo
+tar -xzf workspace-workbench-paseo-*.tar.gz -C workspace-workbench-paseo
+cd workspace-workbench-paseo
+npm ci
+paseo plugin install "$PWD" --json
+paseo plugin reload workspace-workbench-paseo --json
+```
+
+The package does not contain project configuration, observer caches, sockets,
+Agent bindings or secrets. Configure and start the matching Workbench service
+separately before opening the plugin.
+
 The service must be started separately:
 
 ```sh

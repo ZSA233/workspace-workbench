@@ -51,12 +51,17 @@ test("full Prism reproduces native prototype crash; core and grammars load witho
   assert.throws(() => vm.runInNewContext(read("prismjs/prism.js"), nativeGlobals()), /prototype/);
   const context = vm.createContext(nativeGlobals());
   vm.runInContext(read("prismjs/components/prism-core.js"), context);
-  for (const language of ["markup", "clike", "javascript", "bash", "go", "json", "markdown", "python", "sql", "typescript", "yaml"]) {
+  for (const language of ["markup", "clike", "javascript", "typescript", "jsx", "tsx", "bash", "go", "json", "json5", "markdown", "python", "sql", "yaml", "toml", "css"]) {
     vm.runInContext(read(`prismjs/components/prism-${language}.js`), context);
   }
   assert.equal(vm.runInContext('Prism.tokenize("const x = 1", Prism.languages.javascript)[0].type', context), "keyword");
+  assert.equal(vm.runInContext('Prism.tokenize("const view = <Button />", Prism.languages.tsx)[0].type', context), "keyword");
+  assert.equal(vm.runInContext('Prism.tokenize("name = \\\"fixture\\\"", Prism.languages.toml)[0].type', context), "key");
   const source = readFileSync(new URL("../client/syntax.tsx", import.meta.url), "utf8");
   assert.ok(!source.includes('from "prismjs/prism.js"'));
+  for (const language of ["jsx", "tsx", "json5", "toml", "css"]) {
+    assert.ok(source.includes(`prismjs/components/prism-${language}`));
+  }
 });
 
 test("desktop opens Explorer; native surfaces keep workspace and Agent identities", () => {

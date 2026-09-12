@@ -5,7 +5,9 @@ import {
   buildDiffOverviewMarkers,
   buildTreeRows,
   defaultTreeMode,
+  formatDiffReferences,
   layoutGraph,
+  languageForPath,
   matchesWorkspaceFilter,
   parseUnifiedPatch,
   pairDiffLines,
@@ -71,4 +73,47 @@ test("diff parser creates split pairs and overview markers", () => {
   assert.equal(pairDiffLines(parsed.hunks[0].lines)[0].left?.content, "old");
   assert.equal(pairDiffLines(parsed.hunks[0].lines)[0].right?.content, "new");
   assert.deepEqual(buildDiffOverviewMarkers(parsed).map((marker) => marker.kind), ["modified", "removed"]);
+});
+
+test("language mapping covers the bundled editor grammars and keeps unknown files plain", () => {
+  const cases = [
+    ["component.tsx", "tsx"],
+    ["component.jsx", "jsx"],
+    ["module.mts", "typescript"],
+    ["module.mjs", "javascript"],
+    ["config.jsonc", "json5"],
+    ["config.toml", "toml"],
+    ["page.html", "markup"],
+    ["styles.css", "css"],
+    ["notes.txt", "plain"],
+  ] as const;
+  for (const [path, language] of cases) assert.equal(languageForPath(path), language);
+});
+
+test("diff parser hides standard Git file headers from the compact viewer", () => {
+  const parsed = parseUnifiedPatch([
+    "diff --git a/app.tsx b/app.tsx",
+    "index 123..456 100644",
+    "--- a/app.tsx",
+    "+++ b/app.tsx",
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+  ].join("\n"));
+  assert.deepEqual(parsed.prelude, []);
+});
+
+test("diff references stay compact and describe the actual comparison", () => {
+  assert.deepEqual(
+    formatDiffReferences({ scope: "working", head: "1234567890abcdef" }),
+    { from: "HEAD 12345678", to: "working tree" },
+  );
+  assert.deepEqual(
+    formatDiffReferences({ scope: "branch", baseSha: "abcdef123456", branch: "feature" }),
+    { from: "base abcdef12", to: "branch feature" },
+  );
+  assert.deepEqual(
+    formatDiffReferences({ scope: "commit", baseSha: "111111111111", commitSha: "222222222222" }),
+    { from: "parent 11111111", to: "commit 22222222" },
+  );
 });

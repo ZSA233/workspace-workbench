@@ -6,7 +6,7 @@ import {
   useRpc,
 } from "@getpaseo/plugin/client";
 import { FlatList, Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
-import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { observerQuery, type ObserverResponse } from "../shared/observer";
 import {
@@ -16,6 +16,7 @@ import {
   type DiffOverviewMarker,
   type DiffResult,
   type ParsedPatch,
+  formatDiffReferences,
   isTransientIssueCode,
   issueDisplayLabel,
   pairDiffLines,
@@ -33,7 +34,7 @@ import { useLastSuccessfulResponse } from "./observation";
 import { IconButton } from "./components/icon-button";
 import { useReviewModePreference } from "./review-preferences";
 import type { ReviewMode } from "./review-mode";
-import { HighlightedCode } from "./syntax";
+import { editorCodeFontFamily, HighlightedCode } from "./syntax";
 import { Svg, Rect } from "./graph/svg-web";
 import { observerAccent } from "./theme";
 
@@ -141,12 +142,7 @@ export function FileReviewPanel(props: FilePanelProps) {
     <View style={styles.screen} accessibilityLabel="Workspace Changes" onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
       <View style={styles.header}>
         <View style={styles.headerCopy}>
-          <Text numberOfLines={1} style={styles.title}>
-            {activeSelection?.path || copy.text_01970ba582}
-          </Text>
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {activeSelection ? `${activeSelection.repoPath} · ${scopeLabel(activeSelection.scope)} · ${activeSelection.statusLabel}` : copy.text_6298371965}
-          </Text>
+          <Text numberOfLines={1} style={styles.title}>{copy.text_01970ba582}</Text>
         </View>
         <View style={styles.headerActions}>
           <IconButton
@@ -218,9 +214,6 @@ export function FileReviewPanel(props: FilePanelProps) {
                 {activeSelection.branch || "detached"} · {scopeLabel(activeSelection.scope)} · {activeSelection.statusLabel}
               </Text>
             </View>
-            <Text style={styles.metaText}>
-              {copy.text_1405df66cb}{activeSelection.baseSha ? activeSelection.baseSha.slice(0, 8) : "—"} {copy.text_e80b21bb56}{activeSelection.head ? activeSelection.head.slice(0, 8) : "—"}
-            </Text>
           </View>
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           {diffState.expired ? <Text style={styles.staleText}>{copy.text_6d6e071a12}</Text> : null}
@@ -230,9 +223,8 @@ export function FileReviewPanel(props: FilePanelProps) {
               diff={diff}
               mode={mode}
               path={activeSelection.path}
+              selection={activeSelection}
               compact={narrow}
-              baseLabel={activeSelection.baseSha ? activeSelection.baseSha.slice(0, 8) : "base"}
-              branchLabel={activeSelection.scope === "working" ? "working tree" : activeSelection.branch || "branch"}
               platform={layout.platform}
               theme={theme}
               styles={styles}
@@ -253,9 +245,8 @@ function DiffViewer({
   diff,
   mode,
   path,
+  selection,
   compact,
-  baseLabel,
-  branchLabel,
   platform,
   theme,
   styles,
@@ -263,15 +254,21 @@ function DiffViewer({
   diff: DiffResult;
   mode: ReviewMode;
   path: string;
+  selection: FileReviewSelection;
   compact: boolean;
-  baseLabel: string;
-  branchLabel: string;
   platform: FilePanelProps["layout"]["platform"];
   theme: FilePanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
   const parsed = useMemo(() => parseUnifiedPatch(diff.patch), [diff.patch]);
   const rows = useMemo(() => displayRows(parsed, mode), [mode, parsed]);
+  const references = useMemo(() => formatDiffReferences({
+    scope: selection.scope,
+    baseSha: diff.baseSha || selection.baseSha,
+    head: diff.head || selection.head,
+    commitSha: selection.commitSha,
+    branch: selection.branch,
+  }), [diff, selection]);
   const overviewMarkers = useMemo(() => buildDiffOverviewMarkers(parsed), [parsed]);
   const hunkRowIndexes = useMemo(
     () => rows.flatMap((item, index) => (item.kind === "hunk" ? [index] : [])),
@@ -346,12 +343,13 @@ function DiffViewer({
         </View>
       ) : null}
       <View style={[styles.diffToolbar, compact && styles.diffToolbarCompact]}>
-        <View style={[styles.diffRefGroup, compact && styles.diffRefGroupCompact]}>
-          <Text numberOfLines={1} style={styles.diffRefLabel}>{copy.text_1405df66cb}</Text>
-          <Text numberOfLines={1} style={styles.diffRefValue}>{baseLabel}</Text>
+        <View
+          accessibilityLabel={`${references.from} → ${references.to}`}
+          style={[styles.diffRefGroup, compact && styles.diffRefGroupCompact]}
+        >
+          <Text numberOfLines={1} style={styles.diffRefValue}>{references.from}</Text>
           <Text style={styles.diffRefArrow}>→</Text>
-          <Text numberOfLines={1} style={styles.diffRefLabel}>{compact ? (mode === "split" ? "branch" : "working tree") : mode === "split" ? "branch" : "branch / working tree"}</Text>
-          <Text numberOfLines={1} style={styles.diffRefValue}>{branchLabel}</Text>
+          <Text numberOfLines={1} style={styles.diffRefValue}>{references.to}</Text>
         </View>
         <View style={[styles.diffToolbarActions, compact && styles.diffToolbarActionsCompact]}>
           {!compact ? <Text style={styles.diffLegendAdded}>{copy.text_dd4a011844}</Text> : null}
@@ -407,8 +405,6 @@ function DiffViewer({
                   <HunkRow
                     active={item.hunkIndex === currentHunk}
                     hunk={item.hunk}
-                    hunkIndex={item.hunkIndex}
-                    hunkCount={hunkRowIndexes.length}
                     onPress={() => jumpToHunk(item.hunkIndex)}
                     styles={styles}
                   />
@@ -469,15 +465,11 @@ function displayRows(parsed: ParsedPatch, mode: ReviewMode): DiffListItem[] {
 function HunkRow({
   active,
   hunk,
-  hunkIndex,
-  hunkCount,
   onPress,
   styles,
 }: {
   active: boolean;
   hunk: DiffHunk;
-  hunkIndex: number;
-  hunkCount: number;
   onPress: () => void;
   styles: ReturnType<typeof makeStyles>;
 }) {
@@ -489,7 +481,6 @@ function HunkRow({
       style={[styles.hunkRow, active && styles.hunkRowActive]}
     >
       <Text numberOfLines={1} style={styles.hunkText}>{hunk.header}</Text>
-      <Text style={styles.hunkIndex}>{hunkIndex + 1} {copy.text_42099b4af0}{hunkCount}</Text>
     </Pressable>
   );
 }
@@ -635,8 +626,8 @@ function UnifiedRow({
       <Text style={styles.lineNumber}>{line.oldLine ?? ""}</Text>
       <Text style={styles.lineNumber}>{line.newLine ?? ""}</Text>
       <Text style={[styles.diffMarker, marker]}>{line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " "}</Text>
-      <Text style={styles.codeText} selectable>
-        <HighlightedCode code={line.content || " "} path={path} theme={theme} />
+      <Text selectable style={styles.codeText}>
+        <HighlightedCode code={line.content || " "} path={path} theme={theme} style={styles.codeSyntaxText} />
       </Text>
     </View>
   );
@@ -686,8 +677,8 @@ function DiffCell({
       <View style={[styles.changeGutter, gutter]} />
       <Text style={styles.lineNumber}>{side === "left" ? line.oldLine ?? "" : line.newLine ?? ""}</Text>
       <Text style={[styles.diffMarker, marker]}>{line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " "}</Text>
-      <Text style={styles.codeText} selectable>
-        <HighlightedCode code={line.content || " "} path={path} theme={theme} />
+      <Text selectable style={styles.codeText}>
+        <HighlightedCode code={line.content || " "} path={path} theme={theme} style={styles.codeSyntaxText} />
       </Text>
     </View>
   );
@@ -699,8 +690,7 @@ function makeStyles(theme: FilePanelProps["theme"]) {
     screen: { backgroundColor: theme.colors.surface0, flex: 1 },
     header: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 42, paddingHorizontal: 12, paddingVertical: 5 },
     headerCopy: { flex: 1, minWidth: 0 },
-    title: { color: theme.colors.foreground, flexShrink: 1, fontFamily: "monospace", fontSize: 13, fontWeight: "700" },
-    subtitle: { color: theme.colors.foregroundMuted, fontSize: 10, marginTop: 1 },
+    title: { color: theme.colors.foreground, flexShrink: 1, fontSize: 13, fontWeight: "700" },
     headerActions: { alignItems: "center", flexDirection: "row", gap: 1, marginLeft: 6 },
     readOnlyBadge: { alignItems: "center", borderColor: theme.colors.border, borderRadius: 4, borderWidth: 1, height: 24, justifyContent: "center", marginLeft: 1, width: 24 },
     readOnlyIcon: { color: theme.colors.foregroundMuted, fontSize: 8, fontWeight: "700" },
@@ -709,38 +699,37 @@ function makeStyles(theme: FilePanelProps["theme"]) {
     fileTab: { alignItems: "center", borderColor: "transparent", borderRadius: 6, borderWidth: 1, flexDirection: "row", maxWidth: 230 },
     fileTabActive: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.border },
     fileTabButton: { alignItems: "center", flexDirection: "row", gap: 5, minWidth: 0, paddingHorizontal: 8, paddingVertical: 6 },
-    fileTabStatus: { fontFamily: "monospace", fontSize: 12, fontWeight: "800" },
+    fileTabStatus: { fontSize: 12, fontWeight: "800" },
     fileTabStale: { color: theme.colors.statusWarning, fontSize: 14, fontWeight: "800" },
-    fileTabText: { color: theme.colors.foreground, fontFamily: "monospace", fontSize: 12, maxWidth: 155 },
+    fileTabText: { color: theme.colors.foreground, fontSize: 12, maxWidth: 155 },
     closeTab: { paddingHorizontal: 7, paddingVertical: 6 },
     closeTabText: { color: theme.colors.foregroundMuted, fontSize: 15, lineHeight: 15 },
     body: { flex: 1, minHeight: 0 },
-    fileHeader: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 5 },
+    fileHeader: { alignItems: "center", backgroundColor: theme.colors.surface1, borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", paddingHorizontal: 12, paddingVertical: 7 },
     fileHeaderCopy: { flex: 1, minWidth: 0 },
-    filePath: { color: theme.colors.foreground, fontFamily: "monospace", fontSize: 12, fontWeight: "700" },
-    metaText: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 10, marginTop: 2 },
+    filePath: { color: theme.colors.foreground, fontSize: 12, fontWeight: "700" },
+    metaText: { color: theme.colors.foregroundMuted, fontSize: 10, marginTop: 2 },
     errorText: { color: theme.colors.statusDanger, fontSize: 11, paddingHorizontal: 12, paddingTop: 6 },
     staleText: { color: theme.colors.foregroundMuted, fontSize: 10, paddingHorizontal: 12, paddingTop: 5 },
     emptyState: { alignItems: "center", flex: 1, justifyContent: "center", padding: 12 },
     emptyTitle: { color: theme.colors.foreground, fontSize: 13, fontWeight: "700" },
     emptyText: { color: theme.colors.foregroundMuted, fontSize: 11, lineHeight: 16, marginTop: 4 },
-    diffShell: { backgroundColor: theme.colors.surface1, flex: 1, minHeight: 0 },
-    diffToolbar: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 32, paddingHorizontal: 10 },
+    diffShell: { backgroundColor: theme.colors.surface0, flex: 1, minHeight: 0 },
+    diffToolbar: { alignItems: "center", backgroundColor: theme.colors.surface1, borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 32, paddingHorizontal: 10 },
     diffToolbarCompact: { minHeight: 30, paddingHorizontal: 8 },
-    diffRefGroup: { alignItems: "center", flexDirection: "row", flexShrink: 1, gap: 6, minWidth: 0 },
+    diffRefGroup: { alignItems: "center", flexDirection: "row", flexShrink: 1, gap: 8, minWidth: 0 },
     diffRefGroupCompact: { flex: 1, width: undefined },
-    diffRefLabel: { color: theme.colors.foregroundMuted, flexShrink: 1, fontFamily: "monospace", fontSize: 11, fontWeight: "700" },
-    diffRefValue: { color: theme.colors.foreground, flexShrink: 1, fontFamily: "monospace", fontSize: 11, maxWidth: 180 },
+    diffRefValue: { color: theme.colors.foreground, flexShrink: 1, fontSize: 11, fontWeight: "600", maxWidth: 180 },
     diffRefArrow: { color: theme.colors.foregroundMuted, fontSize: 12, marginHorizontal: 2 },
     diffToolbarActions: { alignItems: "center", flexDirection: "row", gap: 8, marginLeft: 8 },
     diffToolbarActionsCompact: { flexShrink: 0, justifyContent: "flex-end", marginLeft: 3, width: undefined },
-    diffLegendAdded: { color: theme.colors.statusSuccess, fontFamily: "monospace", fontSize: 11 },
-    diffLegendModified: { color: accent, fontFamily: "monospace", fontSize: 11 },
-    diffLegendRemoved: { color: theme.colors.statusDanger, fontFamily: "monospace", fontSize: 11 },
+    diffLegendAdded: { color: theme.colors.statusSuccess, fontSize: 11 },
+    diffLegendModified: { color: accent, fontSize: 11 },
+    diffLegendRemoved: { color: theme.colors.statusDanger, fontSize: 11 },
     hunkNavigator: { alignItems: "center", borderColor: theme.colors.border, borderRadius: 5, borderWidth: 1, flexDirection: "row", marginLeft: 4 },
     hunkButton: { alignItems: "center", height: 24, justifyContent: "center", width: 24 },
     hunkButtonText: { color: theme.colors.foreground, fontSize: 17, lineHeight: 18 },
-    hunkCount: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 11, minWidth: 38, textAlign: "center" },
+    hunkCount: { color: theme.colors.foregroundMuted, fontSize: 11, minWidth: 38, textAlign: "center" },
     diffViewport: { flex: 1, minHeight: 0, overflow: "hidden", position: "relative" },
     diffHorizontal: { flex: 1, minHeight: 0 },
     diffScrollContent: { flexGrow: 1, minHeight: "100%", minWidth: "100%", paddingRight: 14 },
@@ -753,26 +742,26 @@ function makeStyles(theme: FilePanelProps["theme"]) {
     hunkRow: { alignItems: "center", backgroundColor: theme.colors.surface2, borderBottomColor: theme.colors.border, borderBottomWidth: 1, borderTopColor: theme.colors.border, borderTopWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 27, paddingHorizontal: 10 },
     hunkRowActive: { backgroundColor: `${theme.colors.statusWarning}18`, borderLeftColor: theme.colors.statusWarning, borderLeftWidth: 2 },
     hunkText: { color: accent, flex: 1, fontFamily: "monospace", fontSize: 11 },
-    hunkIndex: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 10, marginLeft: 8 },
     warningText: { backgroundColor: theme.colors.surface2, color: theme.colors.statusWarning, fontSize: 11, paddingHorizontal: 12, paddingVertical: 6 },
-    diffRow: { alignItems: "stretch", flexDirection: "row", minHeight: 22 },
-    splitRow: { alignItems: "stretch", flexDirection: "row", minHeight: 22 },
-    diffCell: { alignItems: "stretch", flexDirection: "row", minWidth: 419, paddingVertical: 2, width: "50%" },
+    diffRow: { alignItems: "stretch", borderBottomColor: `${theme.colors.border}38`, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", minHeight: 22 },
+    splitRow: { alignItems: "stretch", borderBottomColor: `${theme.colors.border}38`, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", minHeight: 22 },
+    diffCell: { alignItems: "stretch", flexDirection: "row", minWidth: 419, paddingVertical: 0, width: "50%" },
     emptyDiffCell: { backgroundColor: theme.colors.surface2, minWidth: 419, width: "50%" },
     splitDivider: { backgroundColor: theme.colors.border, width: 1 },
-    contextRow: { backgroundColor: theme.colors.surface1 },
-    addedRow: { backgroundColor: `${theme.colors.statusSuccess}2c` },
-    removedRow: { backgroundColor: `${theme.colors.statusDanger}32` },
+    contextRow: { backgroundColor: theme.colors.surface0 },
+    addedRow: { backgroundColor: `${theme.colors.statusSuccess}1f` },
+    removedRow: { backgroundColor: `${theme.colors.statusDanger}1f` },
     changeGutter: { minHeight: "100%", width: 3 },
     contextGutter: { backgroundColor: "transparent" },
     addedGutter: { backgroundColor: theme.colors.statusSuccess },
     removedGutter: { backgroundColor: theme.colors.statusDanger },
-    lineNumber: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 11, minWidth: 42, paddingHorizontal: 5, textAlign: "right" },
-    diffMarker: { fontFamily: "monospace", fontSize: 12, width: 16 },
+    lineNumber: { backgroundColor: theme.colors.surface1, color: theme.colors.foregroundMuted, fontFamily: editorCodeFontFamily, fontSize: 11, minWidth: 42, paddingHorizontal: 5, textAlign: "right" },
+    diffMarker: { backgroundColor: theme.colors.surface1, fontFamily: editorCodeFontFamily, fontSize: 12, textAlign: "center", width: 18 },
     contextMarker: { color: theme.colors.foregroundMuted },
     addedMarker: { color: theme.colors.statusSuccess, fontWeight: "700" },
     removedMarker: { color: theme.colors.statusDanger, fontWeight: "700" },
-    codeText: { color: theme.colors.foreground, flexShrink: 0, fontFamily: "monospace", fontSize: 12, lineHeight: 20, paddingLeft: 5, paddingRight: 16 },
+    codeText: { color: theme.colors.foreground, flexShrink: 0, fontFamily: editorCodeFontFamily, fontSize: 12, lineHeight: 20, paddingLeft: 8, paddingRight: 16 },
+    codeSyntaxText: { color: theme.colors.foreground, flexShrink: 0, fontFamily: editorCodeFontFamily, fontSize: 12, lineHeight: 20 },
     overviewRail: { backgroundColor: theme.colors.surface2, borderLeftColor: theme.colors.border, borderLeftWidth: 1, bottom: 0, position: "absolute", right: 0, top: 0, width: 14, zIndex: 5 },
     overviewSvg: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
     overviewBackground: { left: 0, position: "absolute", top: 0, width: 12 },

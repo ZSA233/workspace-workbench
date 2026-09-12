@@ -748,7 +748,13 @@ export function parseUnifiedPatch(patch: string): ParsedPatch {
       continue;
     }
     if (!current) {
-      if (rawLine && !rawLine.startsWith("diff --git") && !rawLine.startsWith("index ")) {
+      if (
+        rawLine &&
+        !rawLine.startsWith("diff --git") &&
+        !rawLine.startsWith("index ") &&
+        !rawLine.startsWith("--- ") &&
+        !rawLine.startsWith("+++ ")
+      ) {
         prelude.push(rawLine);
       }
       continue;
@@ -853,17 +859,56 @@ export function languageForPath(path: string): string {
   const lower = path.toLowerCase();
   if (lower.endsWith(".go")) return "go";
   if (lower.endsWith(".tsx")) return "tsx";
-  if (lower.endsWith(".ts")) return "typescript";
+  if (lower.endsWith(".ts") || lower.endsWith(".mts") || lower.endsWith(".cts")) return "typescript";
   if (lower.endsWith(".jsx")) return "jsx";
-  if (lower.endsWith(".js")) return "javascript";
-  if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return "json";
+  if (lower.endsWith(".js") || lower.endsWith(".mjs") || lower.endsWith(".cjs")) return "javascript";
+  if (lower.endsWith(".jsonc")) return "json5";
+  if (lower.endsWith(".json")) return "json";
   if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
   if (lower.endsWith(".py")) return "python";
   if (lower.endsWith(".sql")) return "sql";
-  if (lower.endsWith(".sh") || lower.endsWith(".bash")) return "bash";
+  if (lower.endsWith(".sh") || lower.endsWith(".bash") || lower.endsWith(".zsh")) return "bash";
   if (lower.endsWith(".md") || lower.endsWith(".mdx")) return "markdown";
+  if (lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xml") || lower.endsWith(".svg")) return "markup";
+  if (lower.endsWith(".css") || lower.endsWith(".scss") || lower.endsWith(".less")) return "css";
   if (lower.endsWith(".toml")) return "toml";
   return "plain";
+}
+
+export type DiffReferenceInput = {
+  scope: "working" | "branch" | "commit";
+  baseSha?: string | null;
+  head?: string | null;
+  commitSha?: string | null;
+  branch?: string | null;
+};
+
+function shortReference(value: string | null | undefined): string | null {
+  return value ? value.slice(0, 8) : null;
+}
+
+function namedReference(label: string, value: string | null | undefined): string {
+  const short = shortReference(value);
+  return short ? `${label} ${short}` : label;
+}
+
+export function formatDiffReferences(input: DiffReferenceInput): { from: string; to: string } {
+  if (input.scope === "working") {
+    return {
+      from: namedReference("HEAD", input.head),
+      to: "working tree",
+    };
+  }
+  if (input.scope === "commit") {
+    return {
+      from: namedReference("parent", input.baseSha),
+      to: namedReference("commit", input.commitSha || input.head),
+    };
+  }
+  return {
+    from: namedReference("base", input.baseSha),
+    to: namedReference("branch", input.branch),
+  };
 }
 
 export function shortSha(sha: string | null | undefined): string {

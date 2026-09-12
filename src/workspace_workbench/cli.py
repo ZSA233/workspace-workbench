@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -28,6 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
     accept.add_argument("--repository", required=True, help="candidate id or path")
     health = subparsers.add_parser("health", help="print service health for a project")
     health.add_argument("--config", required=True)
+    execute = subparsers.add_parser("exec", help="explicit local command using prepared repository runtimes")
+    execute.add_argument("--config", required=True)
+    execute.add_argument("--workspace", required=True)
+    execute.add_argument("--repo", required=True)
+    execute.add_argument("argv", nargs=argparse.REMAINDER)
     init = subparsers.add_parser("init", help="write a starter project configuration")
     init.add_argument("--root", required=True)
     init.add_argument("--output", required=True)
@@ -44,13 +50,13 @@ def _init(args: argparse.Namespace) -> int:
     value = {
         "schemaVersion": 1,
         "project": {"id": project_id, "displayName": display_name},
-        "sourceRoot": str(root),
-        "workspaceRoot": str(root / ".workspace-workbench" / "workspaces"),
-        "stateRoot": str(root / ".workspace-workbench"),
-        "socketPath": str(root / ".workspace-workbench" / "observer.sock"),
+        "sourceRoot": os.path.relpath(root, output.parent),
+        "workspaceRoot": os.path.relpath(root / ".workspace-workbench" / "workspaces", output.parent),
+        "stateRoot": os.path.relpath(root / ".workspace-workbench", output.parent),
+        "socketPath": "auto",
         "discovery": {
             "mode": "hybrid",
-            "roots": [str(root)],
+            "roots": ["."],
             "maxDepth": 3,
             "exclude": [".git", "node_modules", "vendor", ".venv", "dist", "build"],
             "followSymlinks": False,
@@ -105,6 +111,13 @@ def main(argv: list[str] | None = None) -> int:
             _print({"project": config.project_id, "candidates": [repository.__dict__ for repository in discover_git_repositories(config)]})
             return 0
         service = ObserverService(config)
+        if args.command == "exec":
+            from .providers.execution import execute
+            try:
+                command = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+                return execute(service, args.workspace, args.repo, command)
+            finally:
+                service.close()
         if args.command == "health":
             _print(service.health())
             service.close()

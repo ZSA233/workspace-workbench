@@ -1,24 +1,82 @@
-import type { PluginClientContext } from "@getpaseo/plugin/client";
+import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
+import { Platform, Text, View } from "react-native";
+import { useEffect, useSyncExternalStore } from "react";
+import { contextSurfacePrefix, createOpenGuard, workbenchDestination } from "./client/open-workbench";
 
 import { clearFileReviews, configureFileReviewOpener, openFileReview } from "./client/file-review-store";
 import { copy } from "./shared/copy";
-import { FileReviewPanel } from "./client/file-review";
-import { WorkbenchPanel, WorkbenchSurfacePanel } from "./client/panel";
+import { FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel } from "./client/entry-panels";
+import { atInitializationStage, INITIALIZATION_REVISION } from "./client/initialization";
 
 const observerSurfaceId = "workspace-workbench-surface";
 
 export default function contribute(client: PluginClientContext) {
-  const surfaceCleanup = client.addSurface(observerSurfaceId, WorkbenchSurfacePanel);
-  const sidebarCleanup = client.addSidebarItem({
+  return atInitializationStage("registration", () => contributeClient(client));
+}
+
+function contributeClient(client: PluginClientContext) {
+  function registerPanel(panel: Parameters<PluginClientContext["addWorkspacePanel"]>[0]) {
+    return atInitializationStage(`panel:${panel.id}`, () => client.addWorkspacePanel(panel));
+  }
+  function registerCommand(command: Parameters<PluginClientContext["addCommandCenterItem"]>[0]) {
+    return atInitializationStage(`command:${command.id}`, () => client.addCommandCenterItem(command));
+  }
+  const platform: string = atInitializationStage("platform", () => Platform.OS);
+  const openGuard = createOpenGuard();
+  const contextSurfaces = new Map<string, () => void>();
+  let surfaceContext: { workspaceId: string; agentId?: string; key: string } | null = null;
+  const surfaceListeners = new Set<() => void>();
+  let surfaceMounts = 0;
+  function ContextualSurface(props: PluginSurfaceProps) {
+    const context = useSyncExternalStore((listener) => { surfaceListeners.add(listener); return () => { surfaceListeners.delete(listener); }; }, () => surfaceContext, () => surfaceContext);
+    useEffect(() => {
+      surfaceMounts++;
+      return () => {
+        surfaceMounts--;
+        void Promise.resolve().then(() => { if (surfaceMounts === 0) surfaceContext = null; });
+      };
+    }, []);
+    if (!context) return <WorkbenchSurfacePanel {...props} />;
+    return context.agentId
+      ? <WorkbenchPanel key={context.key} {...props} context="agent" workspaceId={context.workspaceId} agentId={context.agentId} />
+      : <WorkbenchPanel key={context.key} {...props} context="workspace" workspaceId={context.workspaceId} />;
+  }
+  function openWorkbench(workspaceId: string, agentId?: string) {
+    const destination = workbenchDestination(platform, workspaceId, agentId);
+    if (!openGuard.allow(`${destination.kind}:${destination.id}:${workspaceId}`)) return;
+    try {
+      if (destination.kind === "panel") client.openPanel(destination.id, destination.options);
+      else {
+        if (surfaceContext?.key !== destination.id) {
+          surfaceContext = { workspaceId, agentId, key: destination.id };
+          surfaceListeners.forEach((listener) => listener());
+        }
+        // The host obtains the sheet title from the sidebar registration.
+        // Reuse its named surface while keeping selection in a separate store.
+        client.openSurface(observerSurfaceId);
+      }
+    } catch (error) {
+      console.error("workbench_open_failed", error);
+      // The global surface remains an explicit recovery entry.
+      client.openSurface("workspace-workbench-open-failed");
+    }
+  }
+  function FailureSurface(props: PluginSurfaceProps) {
+    return <View style={{ flex: 1 }}><Text style={{ padding: 12, color: props.theme.colors.statusWarning }}>{copy.openFailed}</Text><WorkbenchSurfacePanel {...props} /></View>;
+  }
+  const surfaceCleanup = atInitializationStage("surface", () => client.addSurface(observerSurfaceId, ContextualSurface));
+  const failureCleanup = atInitializationStage("failure-surface", () => client.addSurface("workspace-workbench-open-failed", FailureSurface));
+  const sidebarCleanup = atInitializationStage("sidebar", () => client.addSidebarItem({
     id: "workspace-workbench-sidebar",
     title: "Workspace Workbench",
     icon: "GitBranch",
     surface: observerSurfaceId,
-  });
+  }));
   const panelCleanups = [
     surfaceCleanup,
+    failureCleanup,
     sidebarCleanup,
-    client.addWorkspacePanel({
+    registerPanel({
       id: "workspace-workbench-workspace",
       title: "Workspace Workbench",
       icon: "GitBranch",
@@ -26,7 +84,7 @@ export default function contribute(client: PluginClientContext) {
       locations: ["explorer"],
       Component: WorkbenchPanel,
     }),
-    client.addWorkspacePanel({
+    registerPanel({
       id: "workspace-workbench-agent",
       title: "Workspace Workbench",
       icon: "GitBranch",
@@ -34,7 +92,7 @@ export default function contribute(client: PluginClientContext) {
       locations: ["explorer"],
       Component: WorkbenchPanel,
     }),
-    client.addWorkspacePanel({
+    registerPanel({
       id: "workspace-workbench-file",
       title: "Workspace Changes",
       icon: "FileDiff",
@@ -42,7 +100,7 @@ export default function contribute(client: PluginClientContext) {
       locations: ["workspace"],
       Component: FileReviewPanel,
     }),
-    client.addWorkspacePanel({
+    registerPanel({
       id: "workspace-workbench-file-agent",
       title: "Workspace Changes",
       icon: "FileDiff",
@@ -77,6 +135,10 @@ export default function contribute(client: PluginClientContext) {
   let disposed = false;
 
   const removeHeaderButton = (workspaceId: string) => {
+    if (surfaceContext?.workspaceId === workspaceId) { surfaceContext = null; surfaceListeners.forEach((listener) => listener()); }
+    for (const [id, cleanup] of contextSurfaces) {
+      if (id.startsWith(contextSurfacePrefix(workspaceId))) { cleanup(); contextSurfaces.delete(id); }
+    }
     const registration = headerButtons.get(workspaceId);
     if (!registration) return;
     registration.remove();
@@ -87,7 +149,7 @@ export default function contribute(client: PluginClientContext) {
     if (disposed || headerButtons.has(workspaceId)) return;
     headerButtons.set(
       workspaceId,
-      client.addHeaderButton({
+      atInitializationStage("header", () => client.addHeaderButton({
         id: "workspace-workbench",
         workspaceId,
         button: {
@@ -97,25 +159,22 @@ export default function contribute(client: PluginClientContext) {
           behavior: {
             kind: "action",
             onPress() {
-              client.openPanel("workspace-workbench-workspace", {
-                workspaceId,
-                location: "explorer",
-              });
+              openWorkbench(workspaceId);
             },
           },
         },
-      }),
+      })),
     );
   };
 
-  const unsubscribeWorkspaces = client.paseo.workspaces.subscribe((update) => {
+  const unsubscribeWorkspaces = atInitializationStage("workspace-subscription", () => client.paseo.workspaces.subscribe((update) => {
     if (update.kind === "upsert") {
       addHeaderButton(update.workspace.id);
     } else {
       removeHeaderButton(update.id);
       clearFileReviews(update.id);
     }
-  });
+  }));
 
   void client.paseo.workspaces
     .list({ subscribe: {} })
@@ -128,30 +187,35 @@ export default function contribute(client: PluginClientContext) {
     });
 
   const commandCleanups = [
-    client.addCommandCenterItem({
+    registerCommand({
       id: "open-workspace-workbench",
       title: "Open Workspace Workbench",
       icon: "GitBranch",
       keywords: ["workspace", "git", "branch", "review", "changes"],
       context: "workspace",
-      onSelect({ openPanel }) {
-        openPanel("workspace-workbench-workspace", { location: "explorer" });
+      onSelect({ workspace }) {
+        openWorkbench(workspace.id);
       },
     }),
-    client.addCommandCenterItem({
+    registerCommand({
       id: "open-workspace-workbench-agent",
       title: "Open Workspace Workbench",
       icon: "GitBranch",
       keywords: ["workspace", "git", "branch", "review", "changes"],
       context: "agent",
-      onSelect({ openPanel }) {
-        openPanel("workspace-workbench-agent", { location: "explorer" });
+      onSelect({ workspace, agent }) {
+        openWorkbench(workspace.id, agent.id);
       },
     }),
   ];
 
+  console.info(`[workbench/${INITIALIZATION_REVISION}] registered`, platform);
   return () => {
     disposed = true;
+    surfaceContext = null;
+    surfaceListeners.clear();
+    for (const cleanup of contextSurfaces.values()) cleanup();
+    contextSurfaces.clear();
     removeFileReviewOpener();
     for (const cleanup of panelCleanups) cleanup();
     for (const cleanup of commandCleanups) cleanup();

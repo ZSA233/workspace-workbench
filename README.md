@@ -1,5 +1,46 @@
 # Workspace Workbench
 
+## Agent orchestration
+
+The optional Paseo bridge is configured per project, alongside the existing
+`agent.provider` setting:
+
+```json
+{"agent":{"provider":"paseo","bridge":{"script":"../workspace-workbench/paseo-plugin/mcp.mjs","endpoint":"auto"}}}
+```
+
+`script` is relative to the project JSON. `endpoint: "auto"` reads the local
+Paseo service registration; an explicit Unix socket or loopback `host:port` is
+also supported. This does not expose an unauthenticated remote command service.
+Install the plugin's production Node dependencies before enabling this bridge.
+
+New coordinator Agents receive `workbench_workspace_preview`,
+`workbench_workspace_execute`, and `workbench_workspace_status`. Existing
+sessions are not restarted or silently reconfigured. Session-bound context is
+stored under the project's local `stateRoot/orchestration/`; never commit it.
+MCP calls and the panel delegate entry use the same server orchestrator.
+
+Preview does not create worktrees, prepare runtimes, or create children. Execute
+requires a verified non-planning coordinator and explicit repository selection
+for a new Workspace. Codex permission presets and its separate `plan_mode`
+feature are checked independently. Other providers currently fail closed until
+their execution-mode semantics have an adapter and tests. Child Agents retain
+normal sandbox approvals; full-access is not inherited automatically. MCP
+execute approvals remain owned by Paseo/Codex and may need user confirmation.
+Workers do not receive coordinator tools or recursively delegate.
+
+Keep `requestId` and the full request unchanged when retrying. The journal tracks
+creation, preparation and handoff independently. An unknown create/delivery
+result, an archived worker, conflicting handoff, or mismatched identity blocks
+automatic replacement; inspect the saved state and existing Agent first. A
+successful handoff is not task acceptance. Parent notifications use steering,
+not interruption, and failed delivery remains in the local outbox for retry.
+
+The create dialog only creates the selected worktrees; it does not start an
+Agent. It defaults to the selected repository at source `HEAD`. Repository and
+ref validation occurs before Git mutation. Graph/Repositories/Changes use a
+shared height budget; only very short panels use a single outer scroller.
+
 Workspace Workbench is a configurable, read-first control surface for projects that contain multiple Git repositories and isolated workspaces. It presents branch history, merge topology, working-tree changes and Agent state in one Paseo panel, while keeping project-specific rules behind providers.
 
 The repository is intentionally independent from any one application. A project supplies a JSON configuration and may add a provider for its own workspace lifecycle or Agent host.
@@ -22,9 +63,9 @@ python -m venv .venv
 . .venv/bin/activate
 pip install -e .
 
-workspace-workbench init --root ~/src/my-project --output ~/.config/workspace-workbench/my-project.json
-workspace-workbench discover --config ~/.config/workspace-workbench/my-project.json
-workspace-workbench serve --config ~/.config/workspace-workbench/my-project.json
+workspace-workbench init --root ~/src/my-project --output ~/src/my-project/workbench.json
+workspace-workbench discover --config ~/src/my-project/workbench.json
+workspace-workbench serve --config ~/src/my-project/workbench.json
 ```
 
 Discovery only prints candidates. In `hybrid` mode, add accepted repositories to the configuration before they become observed targets.
@@ -41,6 +82,25 @@ printf '%s\n' '{"id":1,"method":"observer.health","params":{}}' \
 See [`examples/project.json`](examples/project.json) and [`schemas/project.schema.json`](schemas/project.schema.json). Paths may be absolute or relative to the configuration file. Repository paths must resolve below `sourceRoot`.
 
 Each service instance is scoped to one project configuration. This keeps SQLite snapshots, workspace IDs and discovery results isolated. The default state path is project-local; a deployment may set a dedicated state directory and Unix Socket path.
+
+Commit the project JSON with relative paths. Keep `stateRoot`, workspace records,
+Agent bindings and SQLite files ignored. `recordsRoot` and `treesRoot` can be set
+separately to adopt existing worktrees without relocating code. Records remain
+JSON authority; SQLite contains only rebuildable observations, not configuration.
+`socketPath: "auto"` uses a short, per-config-path socket under the user's runtime
+configuration directory, avoiding Unix Socket path-length limits.
+
+The Paseo plugin discovers explicitly registered configs from
+`~/.config/workspace-workbench/projects.json` (`{"configs":["/path/to/workbench.json"]}`),
+or an explicit `WORKSPACE_WORKBENCH_CONFIG`. This machine-local file holds only
+config locations. Workspace panels match their directory to a registered project;
+the global surface offers project selection. Requests, file tabs and Agent stores
+are project-scoped. Unknown projects do not fall back to another project's socket.
+
+The Graph loads another 50 commits when scrolling near its bottom, at most once
+per observed page automatically. The footer remains a manual retry/accessibility
+fallback. The current history window is capped at 200 commits. Native and Web
+renderers share curve geometry; Android device verification remains necessary.
 
 Projects that only need a live read-only view can set `management.enabled` to `false`. The service
 then advertises no workspace create/cleanup capability, rejects those methods, and the Paseo panel
@@ -64,6 +124,12 @@ Only Go, Python and Node version selectors are accepted. `workspace.prepare` req
 repository ID and installs the declared runtime through mise. `workspace.runtime` rejects an
 unprepared managed workspace with `toolchain_not_ready`; live checkouts are not prepared or managed.
 No shell configuration is changed.
+
+For explicit local commands use `workspace-workbench exec --config workbench.json
+--workspace WORKSPACE_ID --repo api -- go version`. This validates the selected
+repository's prepared binaries before building its PATH; it never exposes an
+arbitrary command through the observer RPC. Missing or mismatched runtimes fail
+with `toolchain_not_ready` instead of using a system version.
 
 Set `agent: {"provider":"paseo"}` to enable execution Agent controls. Agent delegation persists a
 structured handoff, validates the existing Agent's placement, and reuses it when available. A failed

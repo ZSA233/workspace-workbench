@@ -17,6 +17,8 @@
     },
     "sourceRoot": { "type": "string", "minLength": 1 },
     "workspaceRoot": { "type": "string", "minLength": 1 },
+    "recordsRoot": { "type": "string", "minLength": 1 },
+    "treesRoot": { "type": "string", "minLength": 1 },
     "stateRoot": { "type": "string", "minLength": 1 },
     "socketPath": { "type": "string", "minLength": 1 },
     "repositories": {
@@ -52,7 +54,7 @@
       "properties": { "displayName": { "type": "string" } },
       "additionalProperties": false
     },
-    "agent": {"type": "object", "properties": {"provider": {"enum": ["paseo"]}}, "required": ["provider"], "additionalProperties": false},
+    "agent": {"type": "object", "properties": {"provider": {"enum": ["paseo"]}, "bridge": {"type": "object", "required": ["script", "endpoint"], "properties": {"script": {"type": "string"}, "endpoint": {"type": "string"}}, "additionalProperties": false}}, "required": ["provider"], "additionalProperties": false},
     "toolchain": {"type": "object", "properties": {"manager": {"const": "mise"}, "repositories": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+){0,2}$"}}}}, "required": ["manager", "repositories"], "additionalProperties": false},
     "management": {
       "type": "object",

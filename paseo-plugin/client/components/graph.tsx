@@ -2,9 +2,11 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
+import { createHistoryLoadGate } from "../graph/pagination";
 import { ActivityIndicator,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { copy, formatCopy } from "../../shared/copy";
+import { IconButton } from "./icon-button";
 
 import { GraphCanvas } from "../graph/canvas";
 import { GRAPH_LANE_WIDTH,GRAPH_ROW_HEIGHT } from "../graph/constants";
@@ -44,6 +46,7 @@ export function CommitGraph({
   onCommit,
   onGraphBase,
   onGraphMore,
+  graphIdentity,
   loadingMore,
   changeScope,
   onScope,
@@ -68,6 +71,7 @@ export function CommitGraph({
   onCommit: (sha: string) => void;
   onGraphBase: () => void;
   onGraphMore: () => void;
+  graphIdentity: string;
   loadingMore: boolean;
   changeScope: Exclude<ChangeScope, "commit">;
   onScope: (scope: Exclude<ChangeScope, "commit">) => void;
@@ -85,6 +89,8 @@ export function CommitGraph({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const historyGate = useRef<ReturnType<typeof createHistoryLoadGate> | null>(null);
+  if (historyGate.current === null) historyGate.current = createHistoryLoadGate();
   const rows = useMemo(() => layoutGraph(graph?.nodes || []), [graph?.nodes]);
   const laneCount = Math.max(1, ...rows.map((row) => row.laneCount));
   const railWidth = laneCount * GRAPH_LANE_WIDTH + 8;
@@ -108,7 +114,7 @@ export function CommitGraph({
         <View style={styles.sectionTitleRow}>
           <SectionDisclosureButton
             expanded={!sectionLayout.collapsed}
-            label={`${repository.name} · ${selectedCommit ? copy.text_b5d0217a47 : copy.text_eac4c5d4a1}`}
+            label={copy.text_eac4c5d4a1}
             onLongPress={onOpenLayoutMenu}
             onPress={() => onSectionToggle(!sectionLayout.collapsed)}
             theme={theme}
@@ -117,17 +123,14 @@ export function CommitGraph({
           <InlineRefresh visible={refreshing} theme={theme} styles={styles} />
         </View>
         <View style={styles.graphHeaderActions}>
-          <Text style={styles.graphScope}>{graphScope}</Text>
           {!selectedCommit ? (
             <View style={styles.changeScopeRow}>
               {showWorktree ? <ScopeButton label={formatCopy("text_22c7a14625", [workingFileCount])} active={changeScope === "working"} onPress={() => onScope("working")} styles={styles} /> : null}
               {branchScopeAvailable ? <ScopeButton label={formatCopy("text_46b798f402", [repository.changes.files])} active={changeScope === "branch"} onPress={() => onScope("branch")} styles={styles} /> : null}
             </View>
-          ) : <Pressable accessibilityRole="button" onPress={() => onCommit("")} style={styles.scopeButton}><Text style={styles.scopeButtonText}>{copy.text_62b4069970}</Text></Pressable>}
-          <Pressable accessibilityRole="button" accessibilityState={{ expanded: detailsOpen }} onPress={onToggleDetails} style={styles.scopeButton}>
-            <Text style={styles.scopeButtonText}>{detailsOpen ? copy.text_a86af73bae : copy.text_4f55ee1e68}</Text>
-          </Pressable>
-          {graph?.truncated ? <MiniTag label="TRUNCATED" color={theme.colors.statusWarning} styles={styles} /> : null}
+          ) : <IconButton label={copy.text_62b4069970} icon="Undo2" color={theme.colors.foregroundMuted} onPress={() => onCommit("")} />}
+          <IconButton label={copy.text_4f55ee1e68} icon="Info" active={detailsOpen} color={theme.colors.foregroundMuted} onPress={onToggleDetails} />
+          {graph?.hasOlder && graphViewLimit(graph) >= 200 ? <IconButton label={copy.text_f9d6d6a329} icon="Ellipsis" color={theme.colors.statusWarning} onPress={onToggleDetails} /> : null}
         </View>
       </View>
       {!sectionLayout.collapsed ? (
@@ -139,6 +142,11 @@ export function CommitGraph({
           onHeightCommit={onHeightCommit}
           theme={theme}
           styles={styles}
+          onScroll={(event) => {
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            const identity = `${graphIdentity}:${repository.head}:${graph?.historyMode}`;
+            if (historyGate.current?.allow(identity, graph?.loadedCount || 0, contentOffset.y, layoutMeasurement.height, contentSize.height, loadingMore, Boolean(hasOlder && graph?.historyMode === "full"))) onGraphMore();
+          }}
         >
           {detailsOpen ? (
             <View style={styles.repositoryDisclosure}>
@@ -182,7 +190,7 @@ export function CommitGraph({
           {graph?.historyMode === "full" && hasOlder ? (
             <Pressable accessibilityRole="button" disabled={loadingMore} onPress={onGraphMore} style={[styles.historyButton, loadingMore && styles.historyButtonDisabled]}>
               {loadingMore ? <ActivityIndicator color={observerAccent(theme)} size="small" /> : null}
-              <Text style={styles.historyButtonText}>{loadingMore ? copy.text_76c6f5f575 : formatCopy("text_f69ff23be4", [graph.loadedCount || rows.filter((row) => !row.node.isBase).length])}</Text>
+              <Text style={styles.historyButtonText}>{loadingMore ? copy.text_76c6f5f575 : formatCopy("historyScroll", [graph.loadedCount || rows.filter((row) => !row.node.isBase).length])}</Text>
             </Pressable>
           ) : graph?.historyMode === "full" && graph.loadedCount ? (
             <Text style={styles.historyEndText}>{graph.hasOlder ? copy.text_f9d6d6a329 : copy.text_5731f87e8f} {copy.text_c9b020caa5}{graph.loadedCount}</Text>

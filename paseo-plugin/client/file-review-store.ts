@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 export type FileReviewSelection = {
+  projectConfig?: string;
   workspaceId: string;
   repoPath: string;
   path: string;
@@ -31,8 +32,8 @@ const emptySelections: FileReviewSelection[] = [];
 const emptyActiveKey = "";
 let opener: FileReviewOpener | null = null;
 
-export function selectionKey(selection: Pick<FileReviewSelection, "workspaceId" | "repoPath" | "path" | "scope" | "commitSha">): string {
-  return JSON.stringify([selection.workspaceId, selection.repoPath, selection.path, selection.scope, selection.commitSha || ""]);
+export function selectionKey(selection: Pick<FileReviewSelection, "projectConfig" | "workspaceId" | "repoPath" | "path" | "scope" | "commitSha">): string {
+  return JSON.stringify([selection.projectConfig || "", selection.workspaceId, selection.repoPath, selection.path, selection.scope, selection.commitSha || ""]);
 }
 
 function notify(): void {

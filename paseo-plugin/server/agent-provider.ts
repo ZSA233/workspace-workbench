@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { currentProject } from "./projects.ts";
+import { digest, readState, writeState } from "./orchestration-state.ts";
+import { childExecutionConfig } from "./execution-policy.ts";
+import { copy } from "../shared/copy.ts";
 import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 
@@ -24,9 +28,11 @@ type RuntimeResult = {
   managed: boolean;
   treePath: string | null;
   capabilities?: { agent?: boolean };
+  repositories?: Array<{ id: string; worktreePath: string; branch: string; baseSha?: string }>;
+  toolchain?: unknown;
 };
 
-type AgentContext = { paseo: PaseoApi; query?: typeof queryObserver };
+export type AgentContext = { paseo: PaseoApi; query?: typeof queryObserver };
 
 function compactAgent(agent: PaseoAgent | null, binding: AgentBinding | null) {
   if (!agent) return null;
@@ -75,7 +81,8 @@ export async function handleWorkspaceBinding(
     agentId: saved.agentId,
     parentAgentId: saved.parentAgentId,
     providerModel: saved.provider,
-    status: agent ? bindingStatus(agent.status) : "error",
+    status: agent?.pendingPermissions?.length ? "permission" : agent ? bindingStatus(agent.status) : "error",
+    lastOutcome: saved.status,
     updatedAt: saved.updatedAt,
   };
   return {
@@ -128,12 +135,16 @@ function providerFromAgent(agent: PaseoAgent): string | null {
   return model ? `${provider}/${model}` : provider;
 }
 
-function handoffPrompt(workspaceId: string, handoff: Handoff): string {
+function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeResult): string {
   const section = (title: string, values: readonly string[]) => values.length ? [`${title}:`, ...values.map((value) => `- ${value}`), ""] : [];
   return [
     "Workspace Workbench Agent handoff",
+    "You are the execution child, not the coordinator. The Workspace has already been created and prepared. Execute this approved task; do not create or delegate another Workspace or Agent, and do not repeat planning unless start mode is plan-first.",
     "",
     `Workspace: ${workspaceId}`,
+    `Assigned directory: ${runtime.treePath}`,
+    `Verified worktrees: ${JSON.stringify(runtime.repositories || [])}`,
+    `Prepared runtimes: ${JSON.stringify(runtime.toolchain || null)}`,
     "Before editing, confirm the current Workspace and working directory.",
     "If the target is ambiguous, stop and report the mismatch.",
     "",
@@ -150,7 +161,7 @@ function handoffPrompt(workspaceId: string, handoff: Handoff): string {
     ...section("Expected branches", Object.entries(handoff.expected.branchByRepository).map(([repo, branch]) => `${repo}: ${branch}`)),
     ...section("Expected bases", Object.entries(handoff.expected.baseByRepository).map(([repo, base]) => `${repo}: ${base}`)),
     `Start mode: ${handoff.startMode}`,
-    "The workspace root is a multi-repository container. Read .workspace/manifest.json and inspect the declared worktrees.",
+    "The workspace root is a multi-repository container. Verify the supplied worktree paths and Git branches before editing. The coordinator already completed the runtime preflight; do not delegate or call execute again.",
     "Respect the host permission and sandbox policy. Verify configured runtimes before executing build commands.",
   ].join("\n");
 }
@@ -158,14 +169,15 @@ function handoffPrompt(workspaceId: string, handoff: Handoff): string {
 const delegates = new Map<string, { identity: string; promise: Promise<Awaited<ReturnType<typeof delegateAgent>>> }>();
 
 export async function handleAgentDelegate(input: AgentDelegateInput, context: AgentContext) {
-  const active = delegates.get(input.workspaceId);
+  const projectKey = `${currentProject()?.configPath || ""}:${input.workspaceId}`;
+  const active = delegates.get(projectKey);
   const identity = JSON.stringify(input);
   if (active) {
     if (active.identity === identity) return active.promise;
     return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_in_progress", message: "Another handoff is in progress" } };
   }
-  const pending = delegateAgent(input, context).finally(() => delegates.delete(input.workspaceId));
-  delegates.set(input.workspaceId, { identity, promise: pending });
+  const pending = delegateAgent(input, context).finally(() => delegates.delete(projectKey));
+  delegates.set(projectKey, { identity, promise: pending });
   return pending;
 }
 
@@ -173,6 +185,7 @@ async function delegateAgent(
   input: AgentDelegateInput,
   context: AgentContext,
 ) {
+  const handoffHash = digest(input.handoff);
   const runtimeResponse = await (context.query || queryObserver)({ method: "workspace.runtime", params: { workspaceId: input.workspaceId } });
   const runtime = runtimeResponse.ok ? runtimeResponse.result as RuntimeResult : null;
   if (!runtime?.treePath) {
@@ -194,26 +207,64 @@ async function delegateAgent(
   if (!parentSnapshot?.agent) {
     return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: "parent_agent_missing", message: "Parent Agent is unavailable" } };
   }
+  let childConfig;
+  try { childConfig = childExecutionConfig(parentSnapshot.agent, input.handoff.startMode === "plan-first"); }
+  catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: String((error as Error).message), message: copy.agentModeUnconfirmed } }; }
   const selectedProvider = input.provider || providerFromAgent(parentSnapshot.agent);
   if (!selectedProvider) {
     return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: "agent_provider_missing", message: "No Agent provider was resolved" } };
   }
-  const saved = getAgentBinding(input.workspaceId);
+  if (selectedProvider !== childConfig.provider) return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_provider_mismatch", message: "Selected provider does not match the verified coordinator" } };
+  let saved = getAgentBinding(input.workspaceId);
+  const project = currentProject();
+  const creationKey = `agent-create:${input.workspaceId}`;
+  // Recover a created worker before considering another create. Listing failure
+  // or an incomplete page is not evidence that no worker exists.
+  if (!saved && project) {
+    try {
+      const candidates: PaseoAgent[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 10; page++) {
+        const result = await context.paseo.agents.list({ filter: { labels: { "workspace-workbench.project": digest(project.configPath), "workspace-workbench.workspace-id": input.workspaceId, "workspace-workbench.role": "workspace-worker" }, includeArchived: true }, page: { limit: 100, ...(cursor ? { cursor } : {}) } });
+        candidates.push(...result.entries.map((entry) => entry.agent));
+        if (!result.pageInfo.hasMore) break;
+        if (!result.pageInfo.nextCursor || page === 9) throw new Error("agent_listing_incomplete");
+        cursor = result.pageInfo.nextCursor;
+      }
+      if (candidates.length > 1) throw new Error("agent_candidates_ambiguous");
+      const recovered = candidates[0];
+      if (recovered) {
+        if (recovered.cwd !== runtime.treePath || recovered.labels["workspace-workbench.parent"] !== input.parentAgentId || recovered.labels["workspace-workbench.handoff"] !== handoffHash) throw new Error("agent_identity_changed");
+        const now = new Date().toISOString();
+        saved = { workspaceId: input.workspaceId, agentId: recovered.id, parentAgentId: input.parentAgentId, paseoWorkspaceId: recovered.workspaceId || "", cwd: recovered.cwd, provider: selectedProvider, createdAt: now, updatedAt: now, handoff: input.handoff, handoffHash, delivery: "sent" };
+        putAgentBinding(saved);
+      } else if (readState(creationKey)) throw new Error("agent_creation_uncertain");
+    } catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_recovery_required", message: (error as Error).message } }; }
+  }
   if (saved) {
     try {
       const current = await context.paseo.agents.ref(saved.agentId).refresh();
       if (current?.agent && current.agent.status !== "closed" && !current.agent.archivedAt) {
-        if (current.agent.cwd !== runtime.treePath || current.agent.labels?.["workspace-workbench.workspace-id"] !== input.workspaceId) {
+        if (saved.parentAgentId !== input.parentAgentId || current.agent.id !== saved.agentId || current.agent.cwd !== runtime.treePath || saved.cwd !== runtime.treePath || saved.workspaceId !== input.workspaceId) {
           return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_identity_changed", message: "Agent placement does not match the workspace" } };
         }
+        if (saved.delivery === "pending") throw new Error("handoff_delivery_uncertain");
+        const mode = current.agent.features?.find((feature) => feature.id === "plan_mode");
+        if (providerFromAgent(current.agent) !== selectedProvider || !mode || mode.type !== "toggle" || mode.value !== (input.handoff.startMode === "plan-first")) {
+          return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_mode_mismatch", message: copy.agentModeUnconfirmed } };
+        }
         if (current.agent.status === "running" || current.agent.status === "initializing") {
+          if (saved.handoffHash !== handoffHash) return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_busy_different_task", message: copy.agentBusyOtherTask } };
           return { ok: true, action: "already-running" as const, workspaceId: input.workspaceId, agentId: current.agent.id, status: current.agent.status };
         }
-        await context.paseo.agents.ref(saved.agentId).send(handoffPrompt(input.workspaceId, input.handoff));
-        putAgentBinding({ ...saved, handoff: input.handoff, updatedAt: new Date().toISOString() });
+        if (saved.handoffHash === handoffHash) return { ok: true, action: "reused" as const, workspaceId: input.workspaceId, agentId: current.agent.id, status: current.agent.status };
+        putAgentBinding({ ...saved, handoff: input.handoff, handoffHash, delivery: "pending", updatedAt: new Date().toISOString() });
+        await context.paseo.agents.ref(saved.agentId).send(handoffPrompt(input.workspaceId, input.handoff, runtime), { messageId: handoffHash });
+        putAgentBinding({ ...saved, handoff: input.handoff, handoffHash, delivery: "sent", updatedAt: new Date().toISOString() });
         return { ok: true, action: "reused" as const, workspaceId: input.workspaceId, agentId: current.agent.id, status: current.agent.status || "idle" };
       }
       if (!current?.agent) throw new Error("agent unavailable");
+      return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_closed", message: copy.agentClosedRecovery } };
     } catch {
       return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: "agent_refresh_failed", message: "Cannot confirm the existing Agent; retry later" } };
     }
@@ -221,14 +272,20 @@ async function delegateAgent(
   let paseoWorkspace;
   try {
     paseoWorkspace = await context.paseo.workspaces.open(runtime.treePath);
+    if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, stage: "creating" });
     const created = await paseoWorkspace.agents.create({
       parent: input.parentAgentId,
+      env: { WORKBENCH_WORKER_WORKSPACE: input.workspaceId },
       title: input.title || `${input.workspaceId} worker`,
-      config: { provider: selectedProvider },
-      prompt: handoffPrompt(input.workspaceId, input.handoff),
+      config: { ...childConfig, provider: selectedProvider },
+      clientMessageId: handoffHash,
+      prompt: handoffPrompt(input.workspaceId, input.handoff, runtime),
       labels: {
         "workspace-workbench.role": "workspace-worker",
         "workspace-workbench.workspace-id": input.workspaceId,
+        "workspace-workbench.project": digest(project?.configPath || ""),
+        "workspace-workbench.parent": input.parentAgentId,
+        "workspace-workbench.handoff": handoffHash,
       },
     });
     const now = new Date().toISOString();
@@ -242,6 +299,8 @@ async function delegateAgent(
       createdAt: now,
       updatedAt: now,
       handoff: input.handoff,
+      handoffHash,
+      delivery: "sent",
     };
     putAgentBinding(binding);
     return { ok: true, action: "created" as const, workspaceId: input.workspaceId, agentId: created.id, status: created.current()?.status || "initializing" };

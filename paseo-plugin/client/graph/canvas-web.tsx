@@ -1,6 +1,8 @@
 import { GRAPH_LANE_WIDTH, GRAPH_ROW_HEIGHT } from "./constants";
 import { graphLanePalette } from "./palette";
 import type { GraphCanvasProps } from "./types";
+import { curvePath } from "./geometry";
+import { Svg, Circle, Path } from "./svg-web";
 
 const WEB_STROKE_WIDTH = 1.5;
 const WEB_NODE_RADIUS = 5;
@@ -14,12 +16,6 @@ export function GraphCanvasWeb({
   worktreeSelected,
   theme,
 }: GraphCanvasProps) {
-  // Keep this require inside the Web renderer. Android does not evaluate this
-  // DOM-backed SVG entry point, so the native renderer remains dependency-safe.
-  const svgElements = require("react-native-svg/lib/module/elements.web.js");
-  const Svg = svgElements.default;
-  const Circle = svgElements.Circle;
-  const Path = svgElements.Path;
   const palette = graphLanePalette(theme);
   const rowOffset = showWorktree ? 1 : 0;
   const worktreeX = 8;
@@ -37,7 +33,7 @@ export function GraphCanvasWeb({
         <>
           {rows.length ? (
             <Path
-              d={`M ${worktreeX} ${worktreeCenter} C ${worktreeX} ${worktreeCenter + 8}, ${headX} ${headCenter - 8}, ${headX} ${headCenter}`}
+              d={curvePath({ x: worktreeX, y: worktreeCenter }, { x: headX, y: headCenter })}
               fill="none"
               stroke={theme.colors.statusWarning}
               strokeDasharray="3 3"
@@ -103,7 +99,7 @@ export function GraphCanvasWeb({
           return (
             <Path
               key={`curve-${row.node.sha}-${transition.sha}-${transitionIndex}`}
-              d={`M ${fromX} ${center} C ${fromX} ${center + 8}, ${toX} ${bottom - 8}, ${toX} ${bottom}`}
+              d={curvePath({ x: fromX, y: center }, { x: toX, y: bottom })}
               fill="none"
               stroke={transitionColor}
               strokeDasharray={transition.terminal ? "3 3" : undefined}

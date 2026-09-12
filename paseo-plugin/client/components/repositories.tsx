@@ -2,7 +2,8 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { useEffect,useState } from "react";
+import { useContext,useEffect,useState } from "react";
+import { SectionAllocationContext } from "./ui";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { copy } from "../../shared/copy";
 
@@ -67,6 +68,7 @@ export function WorkspaceView({
   onCommit,
   onGraphBase,
   onGraphMore,
+  graphIdentity,
   graphLoadingMore,
   onScope,
   onFile,
@@ -107,6 +109,7 @@ export function WorkspaceView({
   onCommit: (sha: string) => void;
   onGraphBase: () => void;
   onGraphMore: () => void;
+  graphIdentity: string;
   graphLoadingMore: boolean;
   onScope: (scope: Exclude<ChangeScope, "commit">) => void;
   onFile: (file: FileChange) => void;
@@ -122,6 +125,7 @@ export function WorkspaceView({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const allocation = useContext(SectionAllocationContext);
   const [repositoryDetailTop, setRepositoryDetailTop] = useState<number | null>(null);
   const [changesRelativeTop, setChangesRelativeTop] = useState<number | null>(null);
 
@@ -151,7 +155,12 @@ export function WorkspaceView({
     ? sectionRemainingHeight(availableHeight, repositoryDetailTop + changesRelativeTop, 12)
     : availableHeight;
   return (
-    <View>
+    <View onLayout={(event) => {
+      if (allocation && !allocation.outerScroll && selectedRepository) {
+        const used = Object.values(allocation.sizes).reduce((sum, height) => sum + height, 0);
+        allocation.measureChrome?.(Math.max(0, event.nativeEvent.layout.height - used) + 24);
+      }
+    }}>
       {detailError ? <Text style={styles.warningText}>{detailError}</Text> : null}
       {toolchain && toolchain.status !== "ready" && toolchain.status !== "not_applicable" ? (
         <ToolchainNotice toolchain={toolchain} repositoryCount={repositories.length} styles={styles} />
@@ -214,6 +223,7 @@ export function WorkspaceView({
             <Text key={`detail-${issue.code}-${issue.path || ""}`} selectable style={styles.repositoryIssueDetail}>{issueDetail(issue)}</Text>
           )) : null}
           <CommitGraph
+            graphIdentity={graphIdentity}
             graph={graph}
             loading={graphLoading}
             error={graphError}

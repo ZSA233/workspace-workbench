@@ -1,5 +1,11 @@
+import "./prism-environment";
 import { Highlight } from "prism-react-renderer/dist/index.mjs";
-import Prism from "prismjs/prism.js";
+// The full prism.js entry includes prism-file-highlight, which touches
+// Element.prototype in native hosts that expose only a partial document shim.
+import Prism from "./prism-core";
+import "prismjs/components/prism-markup";
+import "prismjs/components/prism-clike";
+import "prismjs/components/prism-javascript";
 import "prismjs/components/prism-bash";
 import "prismjs/components/prism-go";
 import "prismjs/components/prism-javascript";

@@ -2,8 +2,9 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { Icon,Modal } from "@getpaseo/plugin/client/react-native";
-import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
+import { Icon } from "@getpaseo/plugin/client/react-native";
+import { useEffect, type ReactNode } from "react";
+import { BackHandler,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { copy, formatCopy } from "../../shared/copy";
 
 import {
@@ -69,6 +70,7 @@ export function LayoutMenu({
   onCollapseAll,
   onExpandAll,
   onReset,
+  onCreate,
   theme,
   styles,
 }: {
@@ -77,28 +79,38 @@ export function LayoutMenu({
   onCollapseAll: () => void;
   onExpandAll: () => void;
   onReset: () => void;
+  onCreate?: () => void;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  return <AnchoredMenu open={open} onClose={onClose} theme={theme}>
+    {onCreate ? <LayoutMenuItem label={copy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
+    <LayoutMenuItem label={copy.text_5f6a1bf190} onPress={onCollapseAll} styles={styles} />
+    <LayoutMenuItem label={copy.text_66c98ab6d8} onPress={onExpandAll} styles={styles} />
+    <LayoutMenuItem label={copy.text_e003f209ca} onPress={onReset} styles={styles} />
+  </AnchoredMenu>;
+}
+
+export function AnchoredMenu({ open, onClose, theme, children }: { open: boolean; onClose(): void; theme: PanelProps["theme"]; children: ReactNode }) {
+  useEffect(() => {
+    if (!open) return;
+    const subscription = BackHandler?.addEventListener?.("hardwareBackPress", () => { onClose(); return true; });
+    const web = globalThis as unknown as { document?: { addEventListener(type: string, fn: (e: { key: string }) => void): void; removeEventListener(type: string, fn: (e: { key: string }) => void): void } };
+    const keydown = (event: { key: string }) => { if (event.key === "Escape") onClose(); };
+    if (Platform.OS === "web") web.document?.addEventListener("keydown", keydown);
+    return () => {
+      subscription?.remove();
+      if (Platform.OS === "web") web.document?.removeEventListener("keydown", keydown);
+    };
+  }, [open, onClose]);
+  if (!open) return null;
   return (
-    <Modal
-      icon={<Icon name="GitBranch" size={15} color={observerAccent(theme)} />}
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen) onClose();
-      }}
-      title={copy.text_88b31c6b96}
-    >
-      <Modal.Content contentContainerStyle={styles.layoutMenuContent} scrollable={false}>
-        <Text style={styles.layoutMenuHint}>{copy.text_07333899fd}</Text>
-        <LayoutMenuItem label={copy.text_5f6a1bf190} onPress={onCollapseAll} styles={styles} />
-        <LayoutMenuItem label={copy.text_66c98ab6d8} onPress={onExpandAll} styles={styles} />
-        <LayoutMenuItem label={copy.text_e003f209ca} onPress={onReset} styles={styles} />
-        <Pressable accessibilityRole="button" onPress={onClose} style={styles.layoutMenuCancel}>
-          <Text style={styles.layoutMenuCancelText}>{copy.text_4d0b4688c7}</Text>
-        </Pressable>
-      </Modal.Content>
-    </Modal>
+    <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 100, elevation: 20 }}>
+      <Pressable accessibilityLabel={copy.text_4d0b4688c7} onPress={onClose} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
+      <View accessibilityRole="menu" style={{ position: "absolute", top: 40, right: 12, width: 190, padding: 6, borderRadius: 6, backgroundColor: theme.colors.surface1, borderColor: theme.colors.border, borderWidth: 1 }}>
+        {children}
+      </View>
+    </View>
   );
 }
 
@@ -116,6 +128,8 @@ export function WorkspaceSelector({
   onOpen,
   onFilter,
   onSelect,
+  onOpenLayoutMenu,
+  statusControl,
   theme,
   styles,
 }: {
@@ -132,6 +146,8 @@ export function WorkspaceSelector({
   onOpen: () => void;
   onFilter: (filter: WorkspaceFilter) => void;
   onSelect: (id: string) => void;
+  onOpenLayoutMenu?: () => void;
+  statusControl?: ReactNode;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
@@ -145,7 +161,8 @@ export function WorkspaceSelector({
   ];
   return (
     <View style={styles.selector}>
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={onOpen} style={styles.selectorButton}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={onOpen} style={[styles.selectorButton, { flex: 1 }]}>
         <View style={styles.selectorCopy}>
           <View style={styles.selectorValueRow}>
             <Text numberOfLines={1} style={styles.selectorValue}>{workspaceDisplayName(selectedWorkspace)}</Text>
@@ -162,6 +179,9 @@ export function WorkspaceSelector({
           <Icon name={open ? "ChevronUp" : "ChevronDown"} size={15} color={theme.colors.foregroundMuted} />
         </View>
       </Pressable>
+      {statusControl}
+      {onOpenLayoutMenu ? <Pressable accessibilityRole="button" accessibilityLabel={copy.text_1744b62533} onPress={onOpenLayoutMenu} style={[styles.layoutMenuButton, { width: 36, height: 36 }]}><Icon name="Ellipsis" size={18} color={theme.colors.foregroundMuted} /></Pressable> : null}
+      </View>
       {open ? (
         <View style={styles.selectorExpanded}>
           <View style={styles.filterRow}>
@@ -199,6 +219,8 @@ export function WorkspaceSelector({
               ? observerAccent(theme)
               : workspace.dirty || workspace.unpushed || workspace.blockerCount > 0
               ? theme.colors.statusWarning
+              : workspace.observationStale || workspace.dirty === null
+              ? theme.colors.foregroundMuted
               : theme.colors.statusSuccess;
             return (
               <Pressable
@@ -211,7 +233,7 @@ export function WorkspaceSelector({
                 <View style={[styles.workspaceStatusDot, { backgroundColor: statusTone }]} />
                 <View style={styles.workspaceOptionCopy}>
                   <Text numberOfLines={1} style={styles.workspaceOptionTitle}>{workspaceDisplayName(workspace)}</Text>
-                  <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{isMainWorkspace(workspace) ? copy.text_4f91d2c9ad : repositoryCountLabel(workspace.repositoryCount)}</Text>
+                  <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{repositoryCountLabel(workspace.repositoryCount)}</Text>
                 </View>
                 {status && status !== "active" ? <Text style={[styles.workspaceOptionState, { color: statusTone }]}>{status}</Text> : null}
               </Pressable>

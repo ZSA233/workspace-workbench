@@ -10,3 +10,7 @@ declare module "prismjs/prism.js" {
 
   export default Prism;
 }
+declare module "prismjs/components/prism-core" {
+  import Prism from "prismjs";
+  export default Prism;
+}

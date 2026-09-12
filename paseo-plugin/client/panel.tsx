@@ -18,6 +18,7 @@ type WorkspaceBindingResponse,
 type WorkspaceDelegateResponse,
 } from "../shared/handoff";
 import { observerQuery } from "../shared/observer";
+import { projectsQuery } from "../shared/projects";
 import { isMainWorkspace,isRecoverableObserverFailure,makeStyles,mergeDetailResponse,queryErrorMessage,queryFailureForDisplay,resultOf,TabButton,workspaceIdFromProps } from "./components/ui";
 import { openFileReview } from "./file-review-store";
 import {
@@ -54,7 +55,12 @@ const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
   ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
   : null;
 
-import { LayoutMenu,PanelHeader,WorkspaceSelector } from "./components/navigation";
+import { AnchoredMenu,LayoutMenu,WorkspaceSelector } from "./components/navigation";
+import { IconButton } from "./components/icon-button";
+import { stableScrollbarStyle } from "./components/ui";
+import { SectionAllocationContext } from "./components/ui";
+import { allocateSections } from "./section-allocation";
+import { CreateWorkspace } from "./components/create-workspace";
 
 import { ExecutionBindingCard } from "./components/agent";
 
@@ -76,18 +82,44 @@ export function WorkbenchSurfacePanel(props: PluginSurfaceProps) {
 }
 
 export function ObserverPanelContent(props: ObserverPanelContentProps) {
+  const getProjects = useRpc(projectsQuery);
+  const projects = useQuery({ queryKey: ["workbench-projects"], queryFn: () => getProjects({}), refetchOnWindowFocus: false, retry: false });
+  const [chosen, setChosen] = useState("");
+  const directory = props.paseoWorkspace?.directory;
+  const detected = directory ? projects.data?.filter((p) => [p.sourceRoot, p.workspaceRoot].some((root) => directory === root || directory.startsWith(root + "/"))).sort((a, b) => b.sourceRoot.length - a.sourceRoot.length)[0] : undefined;
+  const active = projects.data?.find((p) => p.configPath === chosen) || detected || (!directory && projects.data?.length === 1 ? projects.data[0] : undefined);
+  if (!active) return <View style={{ padding: 12, gap: 8 }}>
+    <Text style={{ color: props.theme.colors.foreground }}>{projects.isPending ? copy.projectLoading : projects.isError ? copy.projectLoadFailed : !projects.data?.length ? copy.noRegisteredProjects : copy.selectProject}</Text>
+    {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => setChosen(p.configPath)}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
+  </View>;
+  return <View style={{ flex: 1 }}>
+    {!directory && (projects.data?.length || 0) > 1 ? <Pressable onPress={() => setChosen("")}><Text style={{ color: props.theme.colors.foregroundMuted }}>{active.displayName}</Text></Pressable> : null}
+    <ProjectPanel key={active.configPath} {...props} projectConfig={active.configPath} />
+  </View>;
+}
+
+function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string }) {
+  const { projectConfig } = props;
   const { hostWorkspaceId, paseoWorkspace } = props;
   const { theme, layout } = props;
-  const preferenceScopeKey = `paseo-workspace:${hostWorkspaceId || PREFERENCE_SCOPE_FALLBACK}`;
+  const preferenceScopeKey = `project:${projectConfig}:paseo-workspace:${hostWorkspaceId || PREFERENCE_SCOPE_FALLBACK}`;
   const [panelWidth, setPanelWidth] = useState(0);
   const [panelHeight, setPanelHeight] = useState(0);
+  const [chromeHeight, setChromeHeight] = useState(132);
+  const [contentHeights, setContentHeights] = useState<Record<string, number>>({});
+  const [liveResize, setLiveResize] = useState<{ id: "repositories" | "graph" | "changes"; height: number } | null>(null);
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
+  function openLayoutMenu() { setStatusMenuOpen(false); setLayoutMenuOpen(true); }
   const compact = layout.compact || (panelWidth > 0 && panelWidth < 480);
   const styles = useMemo(() => makeStyles(theme, compact), [theme, compact]);
   const preferences = useObserverPreferences(preferenceScopeKey);
-  const rpc = useRpc(observerQuery);
-  const bindingRpc = useRpc(workspaceBindingQuery);
-  const delegateRpc = useRpc(workspaceDelegate);
+  const rawRpc = useRpc(observerQuery);
+  const rpc = (input: Parameters<typeof rawRpc>[0]) => rawRpc({ ...input, projectConfig });
+  const rawBindingRpc = useRpc(workspaceBindingQuery);
+  const bindingRpc = (input: Parameters<typeof rawBindingRpc>[0]) => rawBindingRpc({ ...input, projectConfig });
+  const rawDelegateRpc = useRpc(workspaceDelegate);
+  const delegateRpc = (input: Parameters<typeof rawDelegateRpc>[0]) => rawDelegateRpc({ ...input, projectConfig });
   const toast = useToast();
   const selectedWorkspaceId = preferences.selectedWorkspaceId;
   const [selectionResolved, setSelectionResolved] = useState(false);
@@ -106,8 +138,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   const [targetOverrides, setTargetOverrides] = useState<Record<string, string>>({});
   const [handoffGoal, setHandoffGoal] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const [createName, setCreateName] = useState("");
-  const [creating, setCreating] = useState(false);
+  const newlyCreatedWorkspace = useRef<string | null>(null);
   const [delegating, setDelegating] = useState(false);
   const [sectionDragging, setSectionDragging] = useState(false);
 
@@ -120,7 +151,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }, [preferenceScopeKey]);
 
   const listQuery = useQuery({
-    queryKey: ["workspace-workbench", "workspace-list"],
+    queryKey: ["workspace-workbench", projectConfig, "workspace-list"],
     queryFn: () => rpc({ method: "workspace.list", params: { includeRemoved: true } }),
     refetchInterval: 30_000,
     refetchOnWindowFocus: false,
@@ -159,7 +190,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   const selectedWorkspaceIsMain = isMainWorkspace(selectedWorkspace);
   const parentAgentId = "agentId" in props ? props.agentId : null;
   const bindingQuery = useQuery({
-    queryKey: ["workspace-workbench", "execution-binding", selectedWorkspaceId],
+    queryKey: ["workspace-workbench", projectConfig, "execution-binding", selectedWorkspaceId],
     queryFn: () => bindingRpc({ workspaceId: selectedWorkspaceId }),
     enabled: Boolean(selectedWorkspaceId && listReady && !selectedWorkspaceIsMain && listResult?.capabilities?.agent),
     refetchInterval: 10_000,
@@ -172,7 +203,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   const boundAgent = (bindingQuery.data?.agent || null) as WorkspaceBindingResponse["agent"];
   const bindingFailure = bindingQuery.data?.error?.message || queryErrorMessage(bindingQuery.error);
   const identifyQuery = useQuery({
-    queryKey: ["workspace-workbench", "identify", workspaceDirectory],
+    queryKey: ["workspace-workbench", projectConfig, "identify", workspaceDirectory],
     queryFn: () => rpc({ method: "workspace.identify", params: { directory: workspaceDirectory } }),
     enabled: Boolean(workspaceDirectory && preferences.hydrated && !selectionResolved && listReady),
     refetchInterval: 30_000,
@@ -219,7 +250,10 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
 
   useEffect(() => {
     if (!listReady || !preferences.hydrated || !selectionResolved || !selectedWorkspaceId) return;
-    if (observedWorkspaces.some((workspace) => workspace.id === selectedWorkspaceId)) return;
+    if (observedWorkspaces.some((workspace) => workspace.id === selectedWorkspaceId)) { newlyCreatedWorkspace.current = null; return; }
+    // A successful create can precede the last-good roster's React update.
+    // Its absence from that older snapshot is not evidence of deletion.
+    if (newlyCreatedWorkspace.current === selectedWorkspaceId) return;
     setSelectionResolved(false);
     setSelectedRepoPath("");
     setSelectedCommit("");
@@ -228,7 +262,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }, [listReady, observedWorkspaces, preferences.hydrated, selectedWorkspaceId, selectionResolved]);
 
   const detailQuery = useQuery({
-    queryKey: ["workspace-workbench", "workspace-detail", selectedWorkspaceId],
+    queryKey: ["workspace-workbench", projectConfig, "workspace-detail", selectedWorkspaceId],
     queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, mode: "summary", refreshToolchain: false } }),
     enabled: Boolean(selectedWorkspaceId && selectedWorkspace && listReady),
     refetchInterval: 30_000,
@@ -259,7 +293,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }, [displayDetail, selectedRepoPath, selectedRepository, selectedWorkspaceId]);
 
   const graphQuery = useQuery({
-    queryKey: ["workspace-workbench", "repository-graph", selectedWorkspaceId, selectedRepoPath, graphView.historyMode, graphView.maxCommits],
+    queryKey: ["workspace-workbench", projectConfig, "repository-graph", selectedWorkspaceId, selectedRepoPath, graphView.historyMode, graphView.maxCommits],
     queryFn: () => rpc({
       method: "repository.graph",
       params: {
@@ -280,7 +314,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error);
   const changesScope: ChangeScope = selectedCommit ? "commit" : changeScope;
   const changesQuery = useQuery({
-    queryKey: ["workspace-workbench", "repository-changes", selectedWorkspaceId, selectedRepoPath, changesScope, selectedCommit],
+    queryKey: ["workspace-workbench", projectConfig, "repository-changes", selectedWorkspaceId, selectedRepoPath, changesScope, selectedCommit],
     queryFn: () => rpc({
       method: "repository.changes",
       params: {
@@ -327,7 +361,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }, [repositoryIdentity, selectedRepoPath, selectedRepository, selectedWorkspace]);
 
   const reviewQuery = useQuery({
-    queryKey: ["workspace-workbench", "review", reviewIds, targetOverrides],
+    queryKey: ["workspace-workbench", projectConfig, "review", reviewIds, targetOverrides],
     queryFn: () => rpc({
       method: "review-set.brief",
       params: {
@@ -442,6 +476,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }
 
   function selectWorkspace(id: string): void {
+    if (newlyCreatedWorkspace.current !== id) newlyCreatedWorkspace.current = null;
     preferences.selectWorkspace(id);
     setSelectionResolved(true);
     setSelectedRepoPath("");
@@ -454,6 +489,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     setSelectedFile(file.path);
     openFileReview(
       {
+        projectConfig,
         workspaceId: selectedWorkspace.id,
         repoPath: selectedRepository.repoPath,
         path: file.path,
@@ -485,6 +521,9 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
       .catch(() => toast.show(copy.text_514f0cbbf2, { variant: "warning" }));
   }
 
+  const allocatedLayout = liveResize ? { ...preferences.sectionLayout, [liveResize.id]: { ...preferences.sectionLayout[liveResize.id], height: liveResize.height } } : preferences.sectionLayout;
+  const allocation = allocateSections(panelHeight, allocatedLayout, chromeHeight, contentHeights);
+  const BodyContainer = tab === "review" || allocation.outerScroll ? ScrollView : View;
   return (
     <View
       style={styles.screen}
@@ -494,26 +533,13 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
         if (Math.abs(width - panelWidth) > 1) setPanelWidth(width);
       }}
     >
-      <PanelHeader agentEnabled={listResult?.capabilities?.agent} onOpenLayoutMenu={() => setLayoutMenuOpen(true)} theme={theme} styles={styles} />
-      {listResult?.capabilities?.create ? <Pressable onPress={() => setCreateOpen(true)} style={styles.footerButton}><Text style={styles.footerButtonText}>{copy.text_1623afda9e}</Text></Pressable> : null}
-      <Modal open={createOpen} onOpenChange={setCreateOpen} title={copy.text_1623afda9e}>
-        <Modal.Content scrollable={false}>
-        <TextInput value={createName} onChangeText={setCreateName} placeholder={copy.text_76848596cb} style={styles.targetInput} />
-        <Pressable disabled={creating || !createName.trim()} onPress={async () => {
-          setCreating(true);
-          try {
-            const response = await rpc({ method: "workspace.create", params: { name: createName.trim() } });
-            if (!response.ok) throw new Error(response.error?.message || copy.text_deb3990191);
-            await listQuery.refetch();
-            const result = response.result as { id: string };
-            selectWorkspace(result.id);
-            setCreateOpen(false);
-          } catch (error) { toast.show(error instanceof Error ? error.message : copy.text_deb3990191, { variant: "error" }); }
-          finally { setCreating(false); }
-        }} style={styles.copyButton}><Text style={styles.copyButtonText}>{creating ? copy.text_1680b04bf6 : copy.text_fcbd093292}</Text></Pressable>
-        </Modal.Content>
-      </Modal>
+      {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await listQuery.refetch(); newlyCreatedWorkspace.current = id; selectWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
       <WorkspaceSelector
+        onOpenLayoutMenu={openLayoutMenu}
+        statusControl={<IconButton label={observerError ? copy.observationUnavailable : observationExpired ? copy.observationStale : copy.observationStatus} icon={observerError || observationExpired ? "CircleAlert" : "RefreshCw"}
+          busy={manualRefreshing || listQuery.isFetching || detailQuery.isFetching || graphQuery.isFetching || changesQuery.isFetching}
+          color={observerError ? theme.colors.statusDanger : observationExpired ? theme.colors.statusWarning : theme.colors.foregroundMuted}
+          onPress={() => { setLayoutMenuOpen(false); setStatusMenuOpen((open) => !open); }} />}
         workspaces={allWorkspaces}
         historyWorkspaces={historyWorkspaces}
         visibleWorkspaces={visibleWorkspaces}
@@ -563,7 +589,8 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
           if (Math.abs(height - panelHeight) > 1) setPanelHeight(height);
         }}
       >
-        <ScrollView scrollEnabled={!sectionDragging} style={styles.body} contentContainerStyle={styles.bodyContent}>
+        <SectionAllocationContext.Provider value={{ ...allocation, measureContent: (id, height) => setContentHeights((current) => current[id] === height ? current : { ...current, [id]: height }), measureChrome: (height) => setChromeHeight((previous) => Math.abs(previous - height) > 1 ? height : previous), resize: (id, height) => setLiveResize(height === null ? null : { id, height }) }}>
+        <BodyContainer {...(tab === "review" || allocation.outerScroll ? { scrollEnabled: !sectionDragging, contentContainerStyle: styles.bodyContent } : {})} style={[styles.body, tab === "workspace" && !allocation.outerScroll && styles.bodyContent, stableScrollbarStyle]}>
           {observerError ? (
             <View style={styles.warningCard}>
               <Text style={styles.warningTitle}>{copy.text_ddb6624fda}</Text>
@@ -599,7 +626,13 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
                 setSelectedFile("");
               }}
               onGraphBase={() => setGraphView((current) => ({ ...current, historyMode: "full", maxCommits: 50 }))}
-              onGraphMore={() => setGraphView((current) => ({ ...current, maxCommits: Math.min(current.maxCommits + 50, 200) }))}
+              onGraphMore={() => {
+                if (graphQuery.isFetching) return;
+                const next = Math.min((graph?.loadedCount || 50) + 50, 200);
+                if (next <= graphView.maxCommits) { void graphQuery.refetch(); return; }
+                setGraphView((current) => ({ ...current, maxCommits: next }));
+              }}
+              graphIdentity={`${hostWorkspaceId}:${selectedWorkspaceId}:${selectedRepoPath}`}
               graphLoadingMore={graphQuery.isFetching && Boolean(graph) && (graph?.loadedCount || 0) < graphView.maxCommits}
               onScope={setChangeScope}
               onFile={openChangedFile}
@@ -614,7 +647,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
               onSectionToggle={(id, collapsed) => preferences.updateSection(id, { collapsed })}
               onSectionHeightCommit={(id, height) => preferences.updateSection(id, { height })}
               onSectionDragState={setSectionDragging}
-              onOpenLayoutMenu={() => setLayoutMenuOpen(true)}
+              onOpenLayoutMenu={openLayoutMenu}
               graphPlatform={layout.platform}
               theme={theme}
               styles={styles}
@@ -635,18 +668,17 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
               styles={styles}
             />
           )}
-        </ScrollView>
+        </BodyContainer>
+        </SectionAllocationContext.Provider>
       </View>
-      <View style={styles.footer}>
-        <Pressable accessibilityRole="button" disabled={manualRefreshing} onPress={refreshAll} style={styles.footerButton}>
-          <Text style={styles.footerButtonText}>{copy.text_d019a92a84}</Text>
-        </Pressable>
-        <Text style={[styles.footerTime, observationExpired && styles.footerStaleTime]}>
-          {observationExpired ? copy.text_0334dc4b93 : copy.text_a6625c543c}
-          {formatObservedTime(lastSuccessfulAt)}
-        </Text>
-      </View>
+      <AnchoredMenu open={statusMenuOpen} onClose={() => setStatusMenuOpen(false)} theme={theme}>
+        <Text style={styles.layoutMenuHint}>{observationExpired ? copy.observationStale : copy.observationStatus}</Text>
+        <Text style={styles.layoutMenuHint}>{copy.text_a6625c543c}{formatObservedTime(lastSuccessfulAt)}</Text>
+        {[listState.expired && copy.statusWorkspaceList, detailState.expired && copy.statusRepositories, graphState.expired && copy.statusGraph, changesState.expired && copy.statusChanges, tab === "review" && reviewState.expired && "Review set"].filter(Boolean).map((area) => <Text key={String(area)} style={styles.warningText}>{area}</Text>)}
+        <Pressable accessibilityRole="button" accessibilityLabel={copy.refreshNow} disabled={manualRefreshing} onPress={() => { void refreshAll(); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{copy.refreshNow}</Text></Pressable>
+      </AnchoredMenu>
       <LayoutMenu
+        onCreate={listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setCreateOpen(true); } : undefined}
         open={layoutMenuOpen}
         onClose={() => setLayoutMenuOpen(false)}
         onCollapseAll={() => {

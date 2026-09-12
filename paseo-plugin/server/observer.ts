@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
+import { currentProject, withProject } from "./projects.ts";
 
 import {
   observerMethods,
@@ -11,6 +12,8 @@ import {
 } from "../shared/observer.ts";
 
 type QueryInput = {
+  projectConfig?: string;
+  directory?: string;
   method: (typeof observerMethods)[number];
   params: Record<string, unknown>;
 };
@@ -36,6 +39,8 @@ class BridgeError extends Error {
 }
 
 function configuredSocketPath(): string {
+  const project = currentProject();
+  if (project) return project.socketPath;
   const override = process.env.WORKSPACE_WORKBENCH_SOCKET?.trim();
   if (override) return resolve(override);
   const configPath = process.env.WORKSPACE_WORKBENCH_CONFIG?.trim();
@@ -117,7 +122,8 @@ class ObserverBridge {
     if (!allowedMethods.has(input.method)) {
       return { ok: false, error: { code: "method_not_allowed", message: "observer method is not allowed" } };
     }
-    const key = `${input.method}:${JSON.stringify(input.params || {})}`;
+    const key = `${configuredSocketPath()}:${input.method}:${JSON.stringify(input.params || {})}`;
+    const projectPrefix = `${configuredSocketPath()}:`;
     const cached = this.cache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.response;
     this.cache.delete(key);
@@ -126,7 +132,12 @@ class ObserverBridge {
     const request: SocketRequest = { id: String(++this.sequence), method: input.method, params: input.params || {} };
     const pending = this.request(request)
       .then((response) => {
-        if (cacheable(response)) this.cache.set(key, { response, expiresAt: Date.now() + responseCacheTtlMs });
+        if (response.ok && ["workspace.create", "workspace.prepare", "workspace.cleanup"].includes(input.method)) {
+          for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
+        }
+        if (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.prepare", "workspace.cleanup", "workspace.runtime"].includes(input.method)) {
+          if (cacheable(response)) this.cache.set(key, { response, expiresAt: Date.now() + responseCacheTtlMs });
+        }
         return response;
       })
       .finally(() => this.inFlight.delete(key));
@@ -144,7 +155,7 @@ const bridge = new ObserverBridge();
 
 export async function handleObserver(input: QueryInput): Promise<ObserverResponse> {
   try {
-    return await bridge.call(input);
+    return await (currentProject() ? bridge.call(input) : withProject(input, () => bridge.call(input)));
   } catch (error) {
     const code = error instanceof BridgeError ? error.code : "observer_unavailable";
     const message = code === "observer_timeout"

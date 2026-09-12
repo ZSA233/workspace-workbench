@@ -83,7 +83,7 @@ export function ExecutionBindingCard({
     ? bindingStatus
     : agent?.status || bindingStatus || "not-started";
   const statusColor = error && !loading ? theme.colors.statusWarning : executionStatusColor(status, theme);
-  const statusText = loading ? copy.text_b21b631cd5 : error && !binding && !agent ? copy.text_95abdc4ebd : executionStatusLabel(status);
+  const statusText = loading ? copy.text_b21b631cd5 : error && !binding && !agent ? copy.text_95abdc4ebd : !canDelegate && !binding ? copy.agentCoordinatorRequired : executionStatusLabel(status);
   const recoverable = canDelegate && ["error", "blocked", "closed"].includes(status);
   return (
     <View style={styles.executionBar} accessibilityLabel={formatCopy("text_f41a05dfe8", [statusText])}>

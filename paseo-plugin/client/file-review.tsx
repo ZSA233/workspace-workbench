@@ -31,6 +31,7 @@ import {
 } from "./file-review-store";
 import { useLastSuccessfulResponse } from "./observation";
 import { HighlightedCode } from "./syntax";
+import { Svg, Rect } from "./graph/svg-web";
 import { observerAccent } from "./theme";
 
 type FilePanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
@@ -98,6 +99,7 @@ export function FileReviewPanel(props: FilePanelProps) {
     queryKey: [
       "workspace-workbench",
       "file-review",
+      activeSelection?.projectConfig,
       hostWorkspaceId,
       activeSelection?.workspaceId,
       activeSelection?.repoPath,
@@ -108,6 +110,7 @@ export function FileReviewPanel(props: FilePanelProps) {
     queryFn: () =>
       rpc({
         method: "repository.diff",
+        projectConfig: activeSelection?.projectConfig,
         params: {
           workspaceId: activeSelection?.workspaceId,
           repoPath: activeSelection?.repoPath,
@@ -601,11 +604,6 @@ function OverviewRailWeb({
   styles,
 }: OverviewRailProps) {
   if (!height) return null;
-  // Keep the SVG entry point inside the Web-only renderer so Android does not
-  // evaluate DOM-backed components while loading the file review panel.
-  const svgElements = require("react-native-svg/lib/module/elements.web.js");
-  const Svg = svgElements.default;
-  const Rect = svgElements.Rect;
   const { thumbHeight, thumbTop } = overviewRailMetrics(contentHeight, height, scrollOffset);
   return (
     <View accessibilityLabel="Diff overview" style={styles.overviewRail}>

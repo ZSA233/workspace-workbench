@@ -3,8 +3,8 @@ type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { Icon,ScrollView } from "@getpaseo/plugin/client/react-native";
-import { useEffect,useMemo,useRef,useState,type ReactNode } from "react";
-import { ActivityIndicator,PanResponder,Platform,Pressable,StyleSheet,Text,View,type ViewStyle } from "react-native";
+import { createContext,useContext,useEffect,useMemo,useRef,useState,type ReactNode } from "react";
+import { ActivityIndicator,PanResponder,Platform,Pressable,StyleSheet,Text,View,type ViewStyle,type ScrollViewProps } from "react-native";
 import { copy, formatCopy } from "../../shared/copy";
 
 import { type ObserverResponse } from "../../shared/observer";
@@ -41,6 +41,7 @@ const PREFERENCE_SCOPE_FALLBACK = "global";
 const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
   ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
   : null;
+export const stableScrollbarStyle = Platform.OS === "web" ? { scrollbarGutter: "stable" } as unknown as ViewStyle : null;
 export function resultOf<T>(response: ObserverResponse | undefined): T | null {
   if (!response?.ok) return null;
   return response.result as T;
@@ -124,7 +125,7 @@ export function workspaceDisplayName(workspace: WorkspaceSummary | undefined): s
 
 export function workspaceSignals(workspace: WorkspaceSummary): string[] {
   const signals: string[] = [];
-  if (workspace.dirtyRepositoryCount > 0) signals.push(`${workspace.dirtyRepositoryCount} dirty`);
+  if ((workspace.dirtyRepositoryCount || 0) > 0) signals.push(`${workspace.dirtyRepositoryCount} dirty`);
   if (workspace.unpushed) signals.push("unpushed");
   if (workspace.blockerCount > 0) signals.push("needs review");
   if (workspace.toolchain?.status && workspace.toolchain.status !== "ready") {
@@ -135,7 +136,7 @@ export function workspaceSignals(workspace: WorkspaceSummary): string[] {
 
 export function workspaceMeta(workspace: WorkspaceSummary): string {
   const parts: string[] = [];
-  if (isMainWorkspace(workspace)) return copy.text_4f91d2c9ad;
+  if (isMainWorkspace(workspace)) return workspaceSignals(workspace).join(" · ");
   if (workspace.state && workspace.state !== "active") parts.push(workspace.state);
   if (workspace.repositoryCount > 1) parts.push(`${workspace.repositoryCount} repos`);
   parts.push(...workspaceSignals(workspace));
@@ -263,7 +264,15 @@ export function SectionDisclosureButton({
   );
 }
 
+export const SectionAllocationContext = createContext<{
+  sizes: Record<ObserverSectionId, number>; outerScroll: boolean;
+  resize(id: ObserverSectionId, height: number | null): void;
+  measureChrome?(height: number): void;
+  measureContent?(id: ObserverSectionId, height: number): void;
+} | null>(null);
+
 export function SectionViewport({
+  onScroll,
   id,
   layout,
   availableHeight,
@@ -274,6 +283,7 @@ export function SectionViewport({
   styles,
   children,
 }: {
+  onScroll?: ScrollViewProps["onScroll"];
   id: ObserverSectionId;
   layout: SectionLayoutPreference;
   availableHeight: number;
@@ -284,7 +294,11 @@ export function SectionViewport({
   styles: ReturnType<typeof makeStyles>;
   children: ReactNode;
 }) {
+  const allocation = useContext(SectionAllocationContext);
   const measuredHeight = useRef(0);
+  const dragCallback = useRef(onDragStateChange);
+  dragCallback.current = onDragStateChange;
+  useEffect(() => () => dragCallback.current?.(false), []);
   const [contentHeight, setContentHeight] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const dragStartHeight = useRef(0);
@@ -314,13 +328,14 @@ export function SectionViewport({
     ),
     onPanResponderTerminationRequest: () => false,
     onPanResponderGrant: () => {
-      dragStartHeight.current = savedHeight || measuredHeight.current || autoMaxHeight;
+      dragStartHeight.current = measuredHeight.current || savedHeight || autoMaxHeight;
       setDragging(true);
       onDragStateChange?.(true);
     },
     onPanResponderMove: (_, gestureState) => {
       const next = clampSectionHeight(dragStartHeight.current + gestureState.dy, availableHeight, fillAvailable);
       if (next !== null) setDragHeight(next);
+      allocation?.resize(id, next);
     },
     onPanResponderRelease: (_, gestureState) => {
       const next = clampSectionHeight(dragStartHeight.current + gestureState.dy, availableHeight, fillAvailable);
@@ -328,6 +343,7 @@ export function SectionViewport({
       setDragging(false);
       onDragStateChange?.(false);
       if (next !== null) onHeightCommit(next);
+      allocation?.resize(id, null);
     },
     onPanResponderTerminate: () => {
       const next = clampSectionHeight(dragStartHeight.current, availableHeight, fillAvailable);
@@ -335,18 +351,22 @@ export function SectionViewport({
       setDragging(false);
       onDragStateChange?.(false);
       if (next !== null) onHeightCommit(next);
+      allocation?.resize(id, null);
     },
-  }), [autoMaxHeight, availableHeight, fillAvailable, onDragStateChange, onHeightCommit, savedHeight]);
+  }), [autoMaxHeight, availableHeight, fillAvailable, onDragStateChange, onHeightCommit, savedHeight, allocation, id]);
 
   const viewportStyle = effectiveHeight === null
     ? { maxHeight: autoMaxHeight, minHeight: MIN_SECTION_HEIGHT }
     : { height: effectiveHeight };
+  const boundedStyle = allocation ? allocation.outerScroll ? { maxHeight: undefined, minHeight: 0 } : { height: allocation.sizes[id], minHeight: 0, maxHeight: allocation.sizes[id] } : viewportStyle;
   return (
     <View style={[styles.sectionViewportFrame, !resizable && { minHeight: MIN_SECTION_HEIGHT }]}>
       <ScrollView
+        onScroll={onScroll}
+        scrollEventThrottle={32}
         nestedScrollEnabled
-        scrollEnabled={!dragging}
-        onContentSizeChange={(_, height) => setContentHeight(height)}
+        scrollEnabled={!dragging && !allocation?.outerScroll}
+        onContentSizeChange={(_, height) => { setContentHeight(height); allocation?.measureContent?.(id, height + (resizable ? 6 : 0)); }}
         onLayout={(event) => {
           const height = event.nativeEvent.layout.height;
           measuredHeight.current = height;
@@ -354,11 +374,11 @@ export function SectionViewport({
         }}
         contentContainerStyle={[styles.sectionViewportContent, !resizable && styles.sectionViewportContentNoResize]}
         showsVerticalScrollIndicator={contentHeight > viewportHeight + 1}
-        style={[styles.sectionViewport, viewportStyle]}
+        style={[styles.sectionViewport, boundedStyle, stableScrollbarStyle]}
       >
         {children}
       </ScrollView>
-      {resizable ? (
+      {resizable && !allocation?.outerScroll ? (
         <View
           {...panResponder.panHandlers}
           accessibilityLabel={formatCopy("text_39e5b16a6b", [id])}
@@ -372,7 +392,7 @@ export function SectionViewport({
           <View style={styles.sectionResizeGrip}>
             <Icon
               name="ChevronsUpDown"
-              size={14}
+              size={10}
               color={dragging ? observerAccent(theme) : theme.colors.foregroundMuted}
             />
           </View>
@@ -461,7 +481,7 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     layoutMenuItemText: { color: theme.colors.foreground, fontSize: 12 },
     layoutMenuCancel: { alignItems: "center", minHeight: 30, justifyContent: "center", marginTop: 2 },
     layoutMenuCancelText: { color: theme.colors.foregroundMuted, fontSize: 11 },
-    selector: { backgroundColor: theme.colors.surface1, borderBottomColor: theme.colors.border, borderBottomWidth: 1, paddingHorizontal: compact ? 13 : 15, paddingVertical: 12 },
+    selector: { backgroundColor: theme.colors.surface1, borderBottomColor: theme.colors.border, borderBottomWidth: 1, paddingHorizontal: compact ? 13 : 15, paddingVertical: 6 },
     selectorButton: { alignItems: "center", flexDirection: "row", gap: 8 },
     selectorCopy: { flex: 1, minWidth: 0 },
     selectorValueRow: { alignItems: "center", flexDirection: "row", gap: 6 },
@@ -513,7 +533,7 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     toolchainCount: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 10 },
     toolchainText: { color: theme.colors.foregroundMuted, fontSize: 10, lineHeight: 14, marginTop: 3 },
     section: { marginTop: 0 },
-    sectionHeader: { alignItems: "center", flexDirection: "row", gap: 8, justifyContent: "space-between" },
+    sectionHeader: { alignItems: "center", flexDirection: "row", gap: 4, justifyContent: "space-between", minHeight: Platform.OS === "web" ? 28 : 32 },
     sectionHeaderRight: { alignItems: "center", flexDirection: "row", gap: 6 },
     sectionDisclosureButton: { alignItems: "center", flex: 1, flexDirection: "row", gap: 4, minWidth: 0 },
     sectionTitleRow: { alignItems: "center", flex: 1, flexDirection: "row", gap: 6, minWidth: 0 },
@@ -542,8 +562,8 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     sectionViewport: { flexGrow: 0, flexShrink: 1, minHeight: 0 },
     sectionViewportContent: { paddingBottom: 6 },
     sectionViewportContentNoResize: { paddingBottom: 0 },
-    sectionResizeHandle: { alignItems: "center", backgroundColor: theme.colors.surface2, borderTopColor: theme.colors.border, borderTopWidth: 1, bottom: 0, elevation: 4, height: 12, justifyContent: "center", left: 0, position: "absolute", right: 0, zIndex: 3 },
-    sectionResizeGrip: { alignItems: "center", height: 12, justifyContent: "center", width: 40 },
+    sectionResizeHandle: { alignItems: "center", backgroundColor: theme.colors.surface2, borderTopColor: theme.colors.border, borderTopWidth: 1, bottom: 0, elevation: 4, height: 6, justifyContent: "center", left: 0, position: "absolute", right: 0, zIndex: 3 },
+    sectionResizeGrip: { alignItems: "center", height: 6, justifyContent: "center", width: 40 },
     statusPill: { borderRadius: 999, borderWidth: 1, paddingHorizontal: 7, paddingVertical: 3 },
     statusPillText: { fontSize: 10, fontWeight: "700" },
     graphSection: { marginTop: 10 },

@@ -18,6 +18,9 @@ class ToolchainProvider(Protocol):
 
 
 class MiseToolchainProvider:
+    def prepared_repository(self, workspace: Mapping[str, Any], repository_id: str) -> dict[str, Any]:
+        return dict(self._load(workspace).get(repository_id, {}))
+
     def __init__(self, config: Mapping[str, Any], state_root: Path) -> None:
         self.requirements = dict(config.get("repositories") or {})
         self.root = state_root / "toolchains"
@@ -64,7 +67,7 @@ class MiseToolchainProvider:
         status = "ready" if all(item in {"ready", "not_applicable"} for item in states) else "partial" if "ready" in states else "prepare_failed" if "prepare_failed" in states else "needs_prepare"
         return {"manager": "mise", "status": status, "requirements": requirements, "preparedRepositories": repositories, "issues": [issue for item in repositories.values() for issue in item["issues"]]}
 
-    def prepare(self, workspace: Mapping[str, Any], repository_id: str) -> dict[str, Any]:
+    def prepare(self, workspace: Mapping[str, Any], repository_id: str, *, verify_only: bool = False) -> dict[str, Any]:
         if not workspace.get("managed"):
             raise WorkbenchError("live workspace is read only", code="workspace_not_managed")
         repository = next((item for item in workspace.get("repositories", []) if repository_id in {item["id"], item["repoPath"]}), None)
@@ -79,7 +82,8 @@ class MiseToolchainProvider:
             try:
                 for tool, version in requested.items():
                     spec = f"{tool}@{version}"
-                    subprocess.run([executable, "install", spec, "--yes"], cwd=self.root, capture_output=True, check=True, timeout=300)
+                    if not verify_only:
+                        subprocess.run([executable, "install", spec, "--yes"], cwd=self.root, capture_output=True, check=True, timeout=300)
                     path = subprocess.run([executable, "where", spec], cwd=self.root, capture_output=True, check=True, text=True, timeout=10).stdout.strip()
                     if not Path(path).is_dir():
                         raise WorkbenchError("runtime install missing", code="toolchain_not_ready")

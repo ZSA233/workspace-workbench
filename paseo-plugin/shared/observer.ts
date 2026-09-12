@@ -27,7 +27,7 @@ export const observerResponse = z.object({
 
 export const observerQuery = defineRpc({
   name: "workspace.workbench.query",
-  input: z.object({ method: observerMethod, params: z.record(z.string(), z.unknown()).default({}) }),
+  input: z.object({ method: observerMethod, params: z.record(z.string(), z.unknown()).default({}), projectConfig: z.string().optional(), directory: z.string().optional() }),
   output: observerResponse,
 });
 

@@ -80,6 +80,17 @@ export function useLastSuccessfulResponse(
       markFailure(entry);
       if (state === "partial" && entry.response && options.mergePartial) {
         entry.response = options.mergePartial(entry.response, response);
+      } else if (state === "partial" && response.ok && Array.isArray((response.result as { workspaces?: unknown })?.workspaces)) {
+        // Registry identities are authoritative even before Git observations
+        // finish. Do not advance the last-success timestamp for this roster.
+        type Row = { id: string; observationStale?: boolean; issues?: { code: string }[] };
+        const result = response.result as { workspaces: Row[] };
+        const previous = new Map(((entry.response?.result as { workspaces?: Row[] })?.workspaces || []).map((row) => [row.id, row]));
+        const workspaces = result.workspaces.map((row) => {
+          const transient = row.observationStale || row.issues?.some((issue) => ["git_timeout", "observation_timeout", "observer_busy"].includes(issue.code));
+          return transient && previous.has(row.id) ? { ...previous.get(row.id)!, observationStale: true } : row;
+        });
+        entry.response = { ...response, result: { ...result, workspaces } };
       } else if (state === "error" && response.ok) {
         // Structured durable issues (for example worktree_missing) are real
         // observations. Keep that response visible, but do not advance the

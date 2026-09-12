@@ -1,5 +1,19 @@
 /** Central default UI copy; stable keys survive component moves. */
 export const copy = {
+  observationStatus: "观察状态",
+  observationStale: "观察数据可能已过期",
+  observationUnavailable: "观察暂不可用",
+  refreshNow: "立即刷新",
+  statusWorkspaceList: "工作区列表",
+  statusRepositories: "仓库状态",
+  statusGraph: "提交图",
+  statusChanges: "变化列表",
+  openFailed: "面板未能打开，请从全局入口重试",
+  projectLoading: "正在读取项目配置…",
+  projectLoadFailed: "项目配置暂不可用",
+  selectProject: "选择项目",
+  noRegisteredProjects: "尚未登记项目配置，请先安装项目服务",
+  historyScroll: "已显示 {0} 条 · 向下滚动继续加载",
   "productName": "Workspace Workbench",
   "changesTitle": "Workspace Changes",
   "openWorkbench": "打开 Workspace Workbench",
@@ -167,7 +181,7 @@ export const copy = {
   "text_f30d1e7faf": "分支变化",
   "text_eac4c5d4a1": "提交图",
   "text_22c7a14625": "未提交 {0}",
-  "text_46b798f402": "分支提交 {0}",
+  "text_46b798f402": "分支变化 {0}",
   "text_f69ff23be4": "加载更多提交 · 已显示 {0}",
   "text_29e918bbdd": "  未提交 · {0}",
   "text_2e046dd497": "{0} 个 workspace",
@@ -175,7 +189,15 @@ export const copy = {
   "text_8fae4f2a02": "无变化",
   "text_e50d9d028a": "目标分支",
   "text_a5b4c3b08d": "请选择目标分支",
-  "text_39e5b16a6b": "调整 {0} 区域高度"
+  "text_39e5b16a6b": "调整 {0} 区域高度",
+  agentCoordinatorRequired: "请从主控会话交接",
+  agentModeUnconfirmed: "无法确认执行模式或权限，请在主控会话检查后重试",
+  agentBusyOtherTask: "Agent 正在处理其他交接任务",
+  agentClosedRecovery: "已有 Agent 已关闭，需要显式恢复，未创建重复 Agent",
+  createSearch: "搜索仓库",
+  createBase: "设置起点（默认源码 HEAD）",
+  createMissing: "源码不可用",
+  createCatalogFailed: "仓库列表暂不可用，请重新打开重试"
 } as const;
 
 export function formatCopy(key: keyof typeof copy, values: unknown[]): string {

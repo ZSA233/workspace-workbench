@@ -118,9 +118,9 @@ export type WorkspaceSummary = {
   updatedAt?: string | null;
   observedAt?: string | null;
   repositoryCount: number;
-  dirtyRepositoryCount: number;
-  dirty: boolean;
-  unpushed: boolean;
+  dirtyRepositoryCount: number | null;
+  dirty: boolean | null;
+  unpushed: boolean | null;
   attentionReasons?: string[];
   claim: { agent?: string; owner?: string; label?: string } | null;
   blockerCount: number;
@@ -473,8 +473,8 @@ export function matchesWorkspaceFilter(
   if (filter === "history") return workspace.state === "removed";
   if (workspace.state === "removed") return false;
   if (filter === "all") return true;
-  if (filter === "dirty") return workspace.dirty;
-  if (filter === "unpushed") return workspace.unpushed;
+  if (filter === "dirty") return workspace.dirty === true;
+  if (filter === "unpushed") return workspace.unpushed === true;
   return Boolean(
     workspace.dirty ||
       workspace.unpushed ||

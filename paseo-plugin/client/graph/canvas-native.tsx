@@ -3,8 +3,9 @@ import { View } from "react-native";
 import { GRAPH_LANE_WIDTH, GRAPH_ROW_HEIGHT } from "./constants";
 import { graphLanePalette } from "./palette";
 import type { GraphCanvasProps } from "./types";
+import { sampleCurve } from "./geometry";
 
-const NATIVE_STROKE_WIDTH = 3;
+const NATIVE_STROKE_WIDTH = 1.5;
 const NATIVE_NODE_SIZE = 12;
 const NATIVE_JOIN_OVERLAP = 1;
 
@@ -40,7 +41,7 @@ export function GraphCanvasNative({
       {rows.flatMap((row, rowIndex) => {
         const top = (rowIndex + rowOffset) * GRAPH_ROW_HEIGHT;
         const center = top + GRAPH_ROW_HEIGHT / 2;
-        const bottom = top + GRAPH_ROW_HEIGHT + NATIVE_JOIN_OVERLAP;
+        const bottom = top + GRAPH_ROW_HEIGHT;
         const incoming = Array.from({ length: row.lanesBefore.length }, (_, lane) => {
           const x = lane * GRAPH_LANE_WIDTH + 8;
           const incomingColor = row.node.isBase
@@ -125,6 +126,14 @@ function GraphSegment({
   x2: number;
   y2: number;
 }) {
+  const points = sampleCurve({ x: x1, y: y1 }, { x: x2, y: y2 });
+  return <View pointerEvents="none" style={{ position: "absolute", left: 0, top: 0, opacity }}>
+    {points.slice(1).map((point, index) => <StraightSegment key={index} color={color} x1={points[index].x} y1={points[index].y} x2={point.x} y2={point.y} />)}
+    {points.map((point, index) => <View key={`join-${index}`} style={{ position: "absolute", left: point.x - NATIVE_STROKE_WIDTH / 2, top: point.y - NATIVE_STROKE_WIDTH / 2, width: NATIVE_STROKE_WIDTH, height: NATIVE_STROKE_WIDTH, borderRadius: NATIVE_STROKE_WIDTH, backgroundColor: color }} />)}
+  </View>;
+}
+
+function StraightSegment({ color, x1, y1, x2, y2 }: { color: string; x1: number; y1: number; x2: number; y2: number }) {
   const dx = x2 - x1;
   const dy = y2 - y1;
   const length = Math.sqrt(dx * dx + dy * dy);
@@ -137,12 +146,11 @@ function GraphSegment({
         backgroundColor: color,
         borderRadius: NATIVE_STROKE_WIDTH / 2,
         height: NATIVE_STROKE_WIDTH,
-        left: (x1 + x2) / 2 - length / 2,
-        opacity,
+        left: (x1 + x2) / 2 - (length + NATIVE_JOIN_OVERLAP) / 2,
         position: "absolute",
         top: (y1 + y2) / 2 - NATIVE_STROKE_WIDTH / 2,
         transform: [{ rotate: `${angle}deg` }],
-        width: length,
+        width: length + NATIVE_JOIN_OVERLAP,
       }}
     />
   );

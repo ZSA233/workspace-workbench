@@ -112,6 +112,7 @@ class ObserverService:
         self.started_at = time.time()
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="workbench")
         self._repository_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="repository")
+        self._list_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="list-summary")
         self._detail_slots = threading.BoundedSemaphore(2)
         self._closed = False
 
@@ -121,6 +122,7 @@ class ObserverService:
         self._closed = True
         self._executor.shutdown(wait=False, cancel_futures=True)
         self.cache.close()
+        self._list_executor.shutdown(wait=True, cancel_futures=True)
         self._repository_executor.shutdown(wait=True)
 
     def handle(self, method: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -489,7 +491,8 @@ class ObserverService:
 
         def produce() -> dict[str, Any]:
             started = time.monotonic()
-            workspaces = [self._summary(workspace, summary_only=True) for workspace in self.provider.list() if params.get("includeRemoved") or workspace.get("state") != "removed"]
+            targets = [workspace for workspace in self.provider.list() if params.get("includeRemoved") or workspace.get("state") != "removed"]
+            workspaces = list(self._list_executor.map(lambda workspace: self._summary(workspace, summary_only=True), targets))
             candidates = discover_git_repositories(self.config) if self.config.discovery.mode in {"auto", "hybrid"} else []
             return {
                 "schemaVersion": PROTOCOL_VERSION,
@@ -500,7 +503,17 @@ class ObserverService:
                 "observation": {"state": "partial" if _partial(workspaces) else "ready", "observedAt": _now(), "durationMs": round((time.monotonic() - started) * 1000)},
             }
 
-        return self.cache.read(key, fingerprint, produce)
+        def roster() -> dict[str, Any]:
+            workspaces = []
+            for workspace in self.provider.list():
+                if not params.get("includeRemoved") and workspace.get("state") == "removed":
+                    continue
+                summary = self._summary(workspace, observed=[], summary_only=True)
+                summary.update(repositoryCount=len(workspace.get("repositories", [])), dirty=None, dirtyRepositoryCount=None, unpushed=None, observationStale=True, observedAt=None)
+                workspaces.append(summary)
+            return {"schemaVersion": PROTOCOL_VERSION, "project": {"id": self.config.project_id, "displayName": self.config.display_name}, "workspaces": workspaces, "capabilities": self.provider.capabilities(), "discoveredCandidates": [], "observation": {"state": "partial", "cacheState": "refreshing", "refreshing": True, "observedAt": None, "lastSuccessfulAt": None, "issues": [{"code": "observation_pending"}]}}
+
+        return self.cache.read(key, fingerprint, produce, cold_fallback=roster)
 
     def workspace_detail(self, params: Mapping[str, Any]) -> dict[str, Any]:
         workspace_id = str(params.get("workspaceId") or "")
@@ -542,6 +555,13 @@ class ObserverService:
         workspace = self._workspace(str(params.get("workspaceId") or ""))
         if not workspace.get("managed"):
             raise WorkbenchError("live workspace is not managed", code="workspace_not_managed")
+        for repository in workspace.get("repositories", []):
+            path = Path(str(repository.get("worktreePath") or "")).resolve()
+            if not path.is_dir():
+                raise WorkbenchError("worktree is unavailable", code="worktree_missing")
+            git = self._git(repository)
+            if git.root() != path or git.branch() != repository.get("branch"):
+                raise WorkbenchError("worktree Git identity changed", code="worktree_identity_changed")
         toolchain = self.toolchain.summary(workspace) if self.toolchain else None
         if toolchain and toolchain["status"] != "ready":
             raise WorkbenchError("prepare runtimes before execution", code="toolchain_not_ready", details=toolchain)
@@ -552,7 +572,7 @@ class ObserverService:
             "treePath": workspace.get("treePath"),
             "sourceRoot": workspace.get("sourceRoot"),
             "repositories": [
-                {"id": item.get("id"), "repoPath": item.get("repoPath"), "worktreePath": item.get("worktreePath"), "branch": item.get("branch")}
+                {"id": item.get("id"), "repoPath": item.get("repoPath"), "worktreePath": item.get("worktreePath"), "branch": item.get("branch"), "baseSha": item.get("baseSha")}
                 for item in workspace.get("repositories", []) if isinstance(item, Mapping)
             ],
             "capabilities": self.provider.capabilities(),

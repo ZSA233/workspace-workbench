@@ -67,7 +67,7 @@ const agentShape = z.object({
 
 export const workspaceBindingQuery = defineRpc({
   name: "workspace.workbench.binding",
-  input: z.object({ workspaceId: z.string().trim().min(1) }),
+  input: z.object({ workspaceId: z.string().trim().min(1), projectConfig: z.string().optional() }),
   output: z.object({
     ok: z.boolean(),
     binding: workspaceBindingSchema.nullable().optional(),
@@ -80,6 +80,7 @@ export const workspaceBindingQuery = defineRpc({
 export const workspaceDelegate = defineRpc({
   name: "workspace.workbench.delegate",
   input: z.object({
+    projectConfig: z.string().optional(),
     workspaceId: z.string().trim().min(1),
     parentAgentId: z.string().trim().min(1),
     handoff: handoffSchema,

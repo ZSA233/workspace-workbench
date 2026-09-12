@@ -7,7 +7,7 @@ export { handoffSchema } from "./handoff.ts";
 
 export const agentStatusQuery = defineRpc({
   name: "workspace.workbench.agent.status",
-  input: z.object({ workspaceId: z.string().trim().min(1) }),
+  input: z.object({ workspaceId: z.string().trim().min(1), projectConfig: z.string().optional() }),
   output: z.object({
     ok: z.boolean(),
     agent: z.object({
@@ -26,6 +26,7 @@ export const agentStatusQuery = defineRpc({
 export const agentDelegate = defineRpc({
   name: "workspace.workbench.agent.delegate",
   input: z.object({
+    projectConfig: z.string().optional(),
     workspaceId: z.string().trim().min(1),
     parentAgentId: z.string().trim().min(1),
     title: z.string().trim().min(1).optional(),

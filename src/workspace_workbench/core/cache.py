@@ -257,7 +257,7 @@ class ObservationCache:
         payload["observation"] = observation
         return payload
 
-    def read(self, key: str, fingerprint: str, producer: Callable[[], Mapping[str, object]]) -> dict[str, object]:
+    def read(self, key: str, fingerprint: str, producer: Callable[[], Mapping[str, object]], *, cold_fallback: Callable[[], Mapping[str, object]] | None = None) -> dict[str, object]:
         memory = self.memory.get(key, fingerprint=fingerprint)
         if memory is not None and time.time() - memory.updated_at <= self.ttl_seconds:
             return self._with_metadata(memory, state="fresh")
@@ -269,6 +269,9 @@ class ObservationCache:
         if latest is not None:
             self._schedule_refresh(key, fingerprint, producer)
             return self._with_metadata(latest, state="refreshing", refreshing=True)
+        if cold_fallback is not None:
+            self._schedule_refresh(key, fingerprint, producer)
+            return dict(cold_fallback())
         with self._key_lock(key):
             memory = self.memory.get(key, fingerprint=fingerprint)
             if memory is not None and time.time() - memory.updated_at <= self.ttl_seconds:
@@ -300,6 +303,10 @@ class ObservationCache:
                     merged[field] = rows
                 merged["observation"] = {**observation, "lastSuccessfulAt": (previous.payload.get("observation") or {}).get("observedAt")}
                 self.memory.put(key, merged, fingerprint=fingerprint, updated_at=previous.updated_at)
+            elif not previous and observation.get("state") == "partial":
+                # Retain partial observations in L1 only; never claim a success
+                # timestamp or persist them as the last successful snapshot.
+                self.memory.put(key, value, fingerprint=fingerprint, updated_at=0)
             return
         self.memory.put(key, value, fingerprint=fingerprint, updated_at=now)
         self.sqlite.put(key, value, fingerprint=fingerprint, updated_at=now)

@@ -43,8 +43,10 @@ class GitWorktreeProvider:
 
     def __init__(self, config: ProjectConfig) -> None:
         self.config = config
-        self.records_root = (config.workspace_root / "records").resolve()
-        self.trees_root = (config.workspace_root / "trees").resolve()
+        self.records_root = (config.records_root or config.workspace_root / "records").resolve()
+        self.trees_root = (config.trees_root or config.workspace_root / "trees").resolve()
+        if self.records_root == self.trees_root or _inside(self.records_root, self.trees_root) or _inside(self.trees_root, self.records_root):
+            raise WorkbenchError("record and tree directories must be separate", code="config_invalid")
         self.records_root.mkdir(parents=True, exist_ok=True)
         self.trees_root.mkdir(parents=True, exist_ok=True)
         self._mutation_lock = threading.RLock()
@@ -61,7 +63,7 @@ class GitWorktreeProvider:
     @contextmanager
     def _mutation(self):
         with self._mutation_lock:
-            with (self.records_root / ".mutation.lock").open("a") as stream:
+            with (self.config.workspace_root / ".workspace.lock").open("a") as stream:
                 os.chmod(stream.name, 0o600)
                 fcntl.flock(stream, fcntl.LOCK_EX)
                 try:
@@ -203,9 +205,24 @@ class GitWorktreeProvider:
         requested_ids = {str(value) for value in requested_repositories} if isinstance(requested_repositories, list) else None
         branch_template = str(params.get("branchTemplate") or "obs/{workspace}/{repository}")
         bases = params.get("baseRefs") if isinstance(params.get("baseRefs"), Mapping) else {}
+        if "baseRefs" in params and not isinstance(params["baseRefs"], Mapping):
+            raise WorkbenchError("baseRefs must be an object", code="request_invalid")
         selected = [repository for repository in self._enabled_repositories() if requested_ids is None or repository.id in requested_ids or repository.path in requested_ids]
+        known = {value for repository in selected for value in (repository.id, repository.path)}
+        if requested_ids is not None and requested_ids - known:
+            raise WorkbenchError("unknown or disabled repositories", code="repository_invalid", details=sorted(requested_ids - known))
+        if set(bases) - known or any(not isinstance(value, str) or not value.strip() for value in bases.values()):
+            raise WorkbenchError("baseRefs must reference selected repositories with non-empty refs", code="request_invalid")
         if not selected:
             raise WorkbenchError("workspace must contain at least one configured repository", code="repositories_empty")
+        # Resolve every starting point before creating any directories or branches.
+        resolved_bases: dict[str, tuple[str, str]] = {}
+        for repository in selected:
+            git = GitClient(self.config.repository_path(repository), timeout=self.config.git_timeout_seconds)
+            if not git.is_repository():
+                raise WorkbenchError(f"configured repository is not a Git checkout: {repository.id}", code="repository_invalid")
+            ref = str(bases.get(repository.id) or bases.get(repository.path) or repository.default_base or git.branch() or "HEAD")
+            resolved_bases[repository.id] = (ref, git.resolve_commit(ref))
         tree_root = (self.trees_root / workspace_id).resolve()
         if not _inside(tree_root, self.trees_root):
             raise WorkbenchError("workspace tree path is invalid", code="path_invalid")
@@ -225,8 +242,7 @@ class GitWorktreeProvider:
                 git = GitClient(source, timeout=self.config.git_timeout_seconds)
                 if not git.is_repository():
                     raise WorkbenchError(f"configured repository is not a Git checkout: {repository.id}", code="repository_invalid")
-                base_ref = str(bases.get(repository.id) or repository.default_base or git.branch() or "HEAD")
-                base_sha = git.resolve_commit(base_ref)
+                base_ref, base_sha = resolved_bases[repository.id]
                 try:
                     branch = branch_template.format(workspace=workspace_id, repository=repository.id)
                 except (KeyError, ValueError) as exc:

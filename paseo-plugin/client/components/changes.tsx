@@ -6,6 +6,8 @@ import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useEffect,useState } from "react";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { copy } from "../../shared/copy";
+import { IconButton } from "./icon-button";
+import { observerAccent } from "../theme";
 
 import {
 ancestorPaths,
@@ -111,11 +113,12 @@ export function ChangedTree({
             styles={styles}
           />
           <InlineRefresh visible={refreshing} theme={theme} styles={styles} />
+          {stale ? <View accessibilityLabel={copy.observationStale} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.statusWarning }} /> : null}
         </View>
         <View style={styles.treeHeaderRight}>
           <Text style={styles.sectionCount}>{loading ? "…" : `${files.length} files`}</Text>
-          <SmallToggle label={copy.text_41e5243e2d} active={mode === "tree"} onPress={() => onMode("tree")} theme={theme} styles={styles} />
-          <SmallToggle label={copy.text_49deaf7da2} active={mode === "files"} onPress={() => onMode("files")} theme={theme} styles={styles} />
+          <IconButton label={copy.text_41e5243e2d} icon="FolderTree" active={mode === "tree"} color={mode === "tree" ? theme.colors.accentForeground : theme.colors.foregroundMuted} background={mode === "tree" ? observerAccent(theme) : undefined} onPress={() => onMode("tree")} />
+          <IconButton label={copy.text_49deaf7da2} icon="List" active={mode === "files"} color={mode === "files" ? theme.colors.accentForeground : theme.colors.foregroundMuted} background={mode === "files" ? observerAccent(theme) : undefined} onPress={() => onMode("files")} />
         </View>
       </View>
       {!sectionLayout.collapsed ? (
@@ -129,7 +132,6 @@ export function ChangedTree({
           styles={styles}
         >
           {error ? <Text style={styles.warningText}>{error}</Text> : null}
-          {stale ? <Text style={styles.staleNotice}>{copy.text_95c0f75473}</Text> : null}
           {rows.map((row) => row.kind === "directory" ? (
             <DirectoryRow
               key={row.path}

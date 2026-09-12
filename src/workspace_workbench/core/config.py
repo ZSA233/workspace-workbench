@@ -46,6 +46,8 @@ class ProjectConfig:
     cache_max_bytes: int = 32 * 1024 * 1024
     sqlite_max_entries: int = 5000
     cache_ttl_seconds: float = 3.0
+    records_root: Path | None = None
+    trees_root: Path | None = None
 
     @property
     def digest(self) -> str:
@@ -53,6 +55,8 @@ class ProjectConfig:
             "projectId": self.project_id,
             "sourceRoot": str(self.source_root),
             "workspaceRoot": str(self.workspace_root),
+            "recordsRoot": str(self.records_root),
+            "treesRoot": str(self.trees_root),
             "repositories": [repository.__dict__ for repository in self.repositories],
             "managementEnabled": self.management_enabled,
             "toolchain": self.toolchain,
@@ -191,7 +195,11 @@ def load_config(config_path: str | Path) -> ProjectConfig:
     source_root = _path(raw.get("sourceRoot"), base=base, field_name="sourceRoot", default=base)
     workspace_root = _path(raw.get("workspaceRoot"), base=base, field_name="workspaceRoot", default=source_root / ".workspace-workbench" / "workspaces")
     state_root = _path(raw.get("stateRoot"), base=base, field_name="stateRoot", default=source_root / ".workspace-workbench")
-    socket_path = _path(raw.get("socketPath"), base=base, field_name="socketPath", default=state_root / "observer.sock")
+    socket_value = raw.get("socketPath")
+    if socket_value == "auto":
+        socket_value = Path.home() / ".config" / "workspace-workbench" / (hashlib.sha256(str(path).encode()).hexdigest()[:12] + ".sock")
+        socket_value = str(socket_value)
+    socket_path = _path(socket_value, base=base, field_name="socketPath", default=state_root / "observer.sock")
     discovery_raw = raw.get("discovery") if isinstance(raw.get("discovery"), Mapping) else {}
     mode = _string(discovery_raw.get("mode"), field_name="discovery.mode", default="hybrid") or "hybrid"
     if mode not in {"manual", "auto", "hybrid"}:
@@ -251,6 +259,8 @@ def load_config(config_path: str | Path) -> ProjectConfig:
         config_path=path,
         source_root=source_root,
         workspace_root=workspace_root,
+        records_root=_path(raw.get("recordsRoot"), base=base, field_name="recordsRoot", default=workspace_root / "records"),
+        trees_root=_path(raw.get("treesRoot"), base=base, field_name="treesRoot", default=workspace_root / "trees"),
         state_root=state_root,
         socket_path=socket_path,
         repositories=tuple(repositories),

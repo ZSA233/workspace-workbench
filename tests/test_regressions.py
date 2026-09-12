@@ -22,17 +22,40 @@ class Regressions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo = make_repository(root, "api")
+            other = make_repository(root, "other")
             config = root / "project.json"
-            write_config(config, root, [{"id": "api", "path": "api"}, {"id": "missing", "path": "missing"}])
+            write_config(config, root, [{"id": "api", "path": "api"}, {"id": "other", "path": "other"}])
             service = ObserverService(load_config(config))
             try:
-                with self.assertRaises(WorkbenchError) as error:
+                original = GitClient.run
+                def fail_second(git, args, *positional, **keywords):
+                    if git.repository == other.resolve() and args[:2] == ["worktree", "add"]:
+                        raise WorkbenchError("fixture add failure", code="git_failed")
+                    return original(git, args, *positional, **keywords)
+                with patch.object(GitClient, "run", fail_second), self.assertRaises(WorkbenchError) as error:
                     service.handle("workspace.create", {"name": "partial"})
                 self.assertEqual(error.exception.code, "create_failed")
                 record = service.provider.get("partial")
                 self.assertEqual(record["state"], "create_failed")
                 self.assertFalse(Path(record["treePath"]).exists())
                 self.assertNotIn("obs/partial/api", run_git(repo, "branch", "--list"))
+            finally:
+                service.close()
+
+    def test_creation_preflight_rejects_unknown_missing_and_bad_refs_without_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = make_repository(root, "api")
+            config = root / "project.json"
+            write_config(config, root, [{"id": "api", "path": "api"}, {"id": "missing", "path": "missing"}])
+            service = ObserverService(load_config(config))
+            try:
+                for params in [{"repositories": ["api", "unknown"]}, {"repositories": ["api", "missing"]}, {"repositories": ["api"], "baseRefs": {"api": "no-such-ref"}}]:
+                    with self.assertRaises(WorkbenchError):
+                        service.handle("workspace.create", {"name": "preflight", **params})
+                    self.assertEqual(list(service.provider.records_root.glob("*.json")), [])
+                    self.assertFalse((service.provider.trees_root / "preflight").exists())
+                    self.assertNotIn("obs/preflight/api", run_git(repo, "branch", "--list"))
             finally:
                 service.close()
 

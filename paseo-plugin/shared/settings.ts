@@ -20,6 +20,7 @@ export const observerSettings = defineSettings({
   schema: z.object({
     selectedWorkspaceByPaseoWorkspace: z.record(z.string(), z.string()).default({}),
     sectionLayoutByPaseoWorkspace: z.record(z.string(), sectionLayout).default({}),
+    lastProjectByHost: z.record(z.string(), z.string()).default({}),
   }),
 });
 

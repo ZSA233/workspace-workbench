@@ -18,7 +18,8 @@ type PreferenceEvent =
   | { scope: string; kind: "selection"; id: string }
   | { scope: string; kind: "section"; id: ObserverSectionId; patch: Partial<SectionLayoutPreference> }
   | { scope: string; kind: "collapse"; collapsed: boolean }
-  | { scope: string; kind: "reset" };
+  | { scope: string; kind: "reset" }
+  | { scope: string; kind: "resize"; layout: ObserverSectionLayout };
 const preferenceListeners = new Set<(event: PreferenceEvent) => void>();
 function publishPreference(event: PreferenceEvent): void {
   for (const listener of preferenceListeners) listener(event);
@@ -28,6 +29,7 @@ function emptySettingsValues(): ObserverSettingsValues {
   return {
     selectedWorkspaceByPaseoWorkspace: {},
     sectionLayoutByPaseoWorkspace: {},
+    lastProjectByHost: {},
   };
 }
 
@@ -62,6 +64,7 @@ export type ObserverPreferences = {
   sectionLayout: ObserverSectionLayout;
   selectWorkspace(id: string): void;
   updateSection(id: ObserverSectionId, patch: Partial<SectionLayoutPreference>): void;
+  commitResize(sizes: Record<ObserverSectionId, number>): void;
   setAllSectionsCollapsed(collapsed: boolean): void;
   resetLayout(): void;
 };
@@ -91,6 +94,8 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
         setSavedWorkspaceId(event.id);
       } else if (event.kind === "section") {
         setSectionLayout((current) => ({ ...current, [event.id]: { ...current[event.id], ...event.patch } }));
+      } else if (event.kind === "resize") {
+        setSectionLayout(event.layout);
       } else if (event.kind === "reset") {
         setSectionLayout(defaultObserverSectionLayout());
       } else {
@@ -222,6 +227,18 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
     });
   }, [persist, scopeKey]);
 
+  const commitResize = useCallback((sizes: Record<ObserverSectionId, number>) => {
+    const apply = (current: ObserverSectionLayout): ObserverSectionLayout => ({
+      ...current,
+      repositories: { ...current.repositories, height: current.repositories.collapsed ? current.repositories.height : Math.round(Math.min(600, Math.max(72, sizes.repositories))) },
+      graph: { ...current.graph, height: current.graph.collapsed ? current.graph.height : Math.round(Math.min(600, Math.max(72, sizes.graph))) },
+    });
+    const next = apply(sectionLayout);
+    setSectionLayout(next);
+    publishPreference({ scope: scopeKey, kind: "resize", layout: next });
+    persist((values) => ({ ...values, sectionLayoutByPaseoWorkspace: { ...values.sectionLayoutByPaseoWorkspace, [scopeKey]: storedLayout(apply(normalizeObserverSectionLayout(values.sectionLayoutByPaseoWorkspace[scopeKey]))) } }));
+  }, [sectionLayout, scopeKey, persist]);
+
   const setAllSectionsCollapsed = useCallback((collapsed: boolean): void => {
     publishPreference({ scope: scopeKey, kind: "collapse", collapsed });
     setSectionLayout((current) => ({
@@ -267,6 +284,7 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
     sectionLayout,
     selectWorkspace,
     updateSection,
+    commitResize,
     setAllSectionsCollapsed,
     resetLayout,
   };

@@ -8,7 +8,7 @@ import { copy } from "./shared/copy";
 import { FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel } from "./client/entry-panels";
 import { atInitializationStage, INITIALIZATION_REVISION } from "./client/initialization";
 
-const observerSurfaceId = "workspace-workbench-surface";
+const observerSurfaceId = "workbench";
 
 export default function contribute(client: PluginClientContext) {
   return atInitializationStage("registration", () => contributeClient(client));
@@ -37,9 +37,7 @@ function contributeClient(client: PluginClientContext) {
       };
     }, []);
     if (!context) return <WorkbenchSurfacePanel {...props} />;
-    return context.agentId
-      ? <WorkbenchPanel key={context.key} {...props} context="agent" workspaceId={context.workspaceId} agentId={context.agentId} />
-      : <WorkbenchPanel key={context.key} {...props} context="workspace" workspaceId={context.workspaceId} />;
+    return <WorkbenchSurfacePanel key={context.key} {...props} target={{ workspaceId: context.workspaceId, agentId: context.agentId }} />;
   }
   function openWorkbench(workspaceId: string, agentId?: string) {
     const destination = workbenchDestination(platform, workspaceId, agentId);

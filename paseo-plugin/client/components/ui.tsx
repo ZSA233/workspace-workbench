@@ -266,7 +266,11 @@ export function SectionDisclosureButton({
 
 export const SectionAllocationContext = createContext<{
   sizes: Record<ObserverSectionId, number>; outerScroll: boolean;
-  resize(id: ObserverSectionId, height: number | null): void;
+  dragging: boolean;
+  begin(id: ObserverSectionId): boolean;
+  move(dy: number): void;
+  finish(dy: number): void;
+  cancel(): void;
   measureChrome?(height: number): void;
   measureContent?(id: ObserverSectionId, height: number): void;
 } | null>(null);
@@ -295,69 +299,25 @@ export function SectionViewport({
   children: ReactNode;
 }) {
   const allocation = useContext(SectionAllocationContext);
-  const measuredHeight = useRef(0);
-  const dragCallback = useRef(onDragStateChange);
-  dragCallback.current = onDragStateChange;
-  useEffect(() => () => dragCallback.current?.(false), []);
   const [contentHeight, setContentHeight] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
-  const dragStartHeight = useRef(0);
-  const [dragHeight, setDragHeight] = useState<number | null>(null);
-  const [dragging, setDragging] = useState(false);
-  const fillAvailable = id === "changes";
-  const savedHeight = resizable ? clampSectionHeight(layout.height, availableHeight, fillAvailable) : null;
-  const effectiveHeight = !resizable
-    ? null
-    : dragHeight === null
-    ? savedHeight
-    : clampSectionHeight(dragHeight, availableHeight, fillAvailable);
-  const autoMaxHeight = sectionAutoMaxHeight(id, availableHeight, fillAvailable);
-
-  useEffect(() => {
-    setDragHeight(null);
-  }, [layout.height]);
-
-  const panResponder = useMemo(() => PanResponder.create({
+  const latest = useRef(allocation);
+  latest.current = allocation;
+  const active = useRef(false);
+  const responder = useRef<ReturnType<typeof PanResponder.create> | null>(null);
+  if (!responder.current) responder.current = PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onStartShouldSetPanResponderCapture: () => true,
-    onMoveShouldSetPanResponder: (_, gestureState) => (
-      Math.abs(gestureState.dy) > 2 && Math.abs(gestureState.dy) >= Math.abs(gestureState.dx)
-    ),
-    onMoveShouldSetPanResponderCapture: (_, gestureState) => (
-      Math.abs(gestureState.dy) > 2 && Math.abs(gestureState.dy) >= Math.abs(gestureState.dx)
-    ),
+    onMoveShouldSetPanResponder: () => true,
     onPanResponderTerminationRequest: () => false,
-    onPanResponderGrant: () => {
-      dragStartHeight.current = measuredHeight.current || savedHeight || autoMaxHeight;
-      setDragging(true);
-      onDragStateChange?.(true);
-    },
-    onPanResponderMove: (_, gestureState) => {
-      const next = clampSectionHeight(dragStartHeight.current + gestureState.dy, availableHeight, fillAvailable);
-      if (next !== null) setDragHeight(next);
-      allocation?.resize(id, next);
-    },
-    onPanResponderRelease: (_, gestureState) => {
-      const next = clampSectionHeight(dragStartHeight.current + gestureState.dy, availableHeight, fillAvailable);
-      setDragHeight(null);
-      setDragging(false);
-      onDragStateChange?.(false);
-      if (next !== null) onHeightCommit(next);
-      allocation?.resize(id, null);
-    },
-    onPanResponderTerminate: () => {
-      const next = clampSectionHeight(dragStartHeight.current, availableHeight, fillAvailable);
-      setDragHeight(null);
-      setDragging(false);
-      onDragStateChange?.(false);
-      if (next !== null) onHeightCommit(next);
-      allocation?.resize(id, null);
-    },
-  }), [autoMaxHeight, availableHeight, fillAvailable, onDragStateChange, onHeightCommit, savedHeight, allocation, id]);
-
-  const viewportStyle = effectiveHeight === null
-    ? { maxHeight: autoMaxHeight, minHeight: MIN_SECTION_HEIGHT }
-    : { height: effectiveHeight };
+    onPanResponderGrant: () => { active.current = latest.current?.begin(id) || false; },
+    onPanResponderMove: (_, gesture) => { if (active.current) latest.current?.move(gesture.dy); },
+    onPanResponderRelease: (_, gesture) => { if (active.current) latest.current?.finish(gesture.dy); active.current = false; },
+    onPanResponderTerminate: () => { if (active.current) latest.current?.cancel(); active.current = false; },
+  });
+  useEffect(() => () => { if (active.current) latest.current?.cancel(); }, []);
+  const dragging = Boolean(allocation?.dragging);
+  const viewportStyle = { maxHeight: sectionAutoMaxHeight(id, availableHeight, id === "changes"), minHeight: MIN_SECTION_HEIGHT };
   const boundedStyle = allocation ? allocation.outerScroll ? { maxHeight: undefined, minHeight: 0 } : { height: allocation.sizes[id], minHeight: 0, maxHeight: allocation.sizes[id] } : viewportStyle;
   return (
     <View style={[styles.sectionViewportFrame, !resizable && { minHeight: MIN_SECTION_HEIGHT }]}>
@@ -369,7 +329,6 @@ export function SectionViewport({
         onContentSizeChange={(_, height) => { setContentHeight(height); allocation?.measureContent?.(id, height + (resizable ? 6 : 0)); }}
         onLayout={(event) => {
           const height = event.nativeEvent.layout.height;
-          measuredHeight.current = height;
           setViewportHeight(height);
         }}
         contentContainerStyle={[styles.sectionViewportContent, !resizable && styles.sectionViewportContentNoResize]}
@@ -380,13 +339,10 @@ export function SectionViewport({
       </ScrollView>
       {resizable && !allocation?.outerScroll ? (
         <View
-          {...panResponder.panHandlers}
+          {...responder.current.panHandlers}
           accessibilityLabel={formatCopy("text_39e5b16a6b", [id])}
           accessibilityRole="button"
           hitSlop={{ bottom: 10, top: 10 }}
-          onTouchCancel={() => onDragStateChange?.(false)}
-          onTouchEnd={() => onDragStateChange?.(false)}
-          onTouchStart={() => onDragStateChange?.(true)}
           style={[styles.sectionResizeHandle, verticalResizeCursorStyle]}
         >
           <View style={styles.sectionResizeGrip}>

@@ -1,5 +1,6 @@
 import {
 useRpc,
+usePaseo,
 useWorkspace,
 type PluginAgentPanelProps,
 type PluginSurfaceProps,
@@ -38,6 +39,7 @@ type WorkspaceFilter
 } from "./model";
 import { useLastSuccessfulResponse } from "./observation";
 import { useObserverPreferences } from "./preferences";
+import { readSurfaceWorkspace, type WorkbenchSurfaceProps } from "./surface-context";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -60,6 +62,8 @@ import { IconButton } from "./components/icon-button";
 import { stableScrollbarStyle } from "./components/ui";
 import { SectionAllocationContext } from "./components/ui";
 import { allocateSections } from "./section-allocation";
+import { useSectionSizing } from "./use-section-sizing";
+import { chooseProject, useProjectMemory } from "./project-memory";
 import { CreateWorkspace } from "./components/create-workspace";
 
 import { ExecutionBindingCard } from "./components/agent";
@@ -77,37 +81,54 @@ export function WorkbenchPanel(props: PanelProps) {
   return <ObserverPanelContent {...props} hostWorkspaceId={hostWorkspaceId} paseoWorkspace={paseoWorkspace} />;
 }
 
-export function WorkbenchSurfacePanel(props: PluginSurfaceProps) {
-  return <ObserverPanelContent {...props} context="workspace" workspaceId="" hostWorkspaceId="" paseoWorkspace={null} />;
+export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
+  const paseo = usePaseo();
+  const workspaceId = props.target?.workspaceId || "";
+  const workspace = useQuery({
+    queryKey: ["workbench-surface-workspace", props.host.id, workspaceId],
+    queryFn: () => readSurfaceWorkspace(paseo, workspaceId),
+    enabled: Boolean(workspaceId), retry: false, refetchOnWindowFocus: false,
+  });
+  useEffect(() => {
+    if (!workspaceId) return;
+    return paseo.workspaces.ref(workspaceId).subscribe(() => { void workspace.refetch(); });
+  }, [paseo, workspaceId, workspace.refetch]);
+  if (workspaceId && !workspace.data) return <View style={{ padding: 12, gap: 8 }}>
+    <Text style={{ color: props.theme.colors.foregroundMuted }}>{workspace.isPending ? copy.hostWorkspaceLoading : copy.hostWorkspaceUnavailable}</Text>
+    {workspace.isError ? <Pressable accessibilityRole="button" onPress={() => { void workspace.refetch(); }}><Text style={{ color: props.theme.colors.foreground }}>{copy.refreshNow}</Text></Pressable> : null}
+  </View>;
+  const context = props.target?.agentId
+    ? { context: "agent" as const, workspaceId, agentId: props.target.agentId }
+    : { context: "workspace" as const, workspaceId };
+  return <ObserverPanelContent {...props} {...context} hostWorkspaceId={workspaceId} paseoWorkspace={workspace.data || null} />;
 }
 
 export function ObserverPanelContent(props: ObserverPanelContentProps) {
   const getProjects = useRpc(projectsQuery);
-  const projects = useQuery({ queryKey: ["workbench-projects"], queryFn: () => getProjects({}), refetchOnWindowFocus: false, retry: false });
+  const projects = useQuery({ queryKey: ["workbench-projects", props.host.id], queryFn: () => getProjects({}), refetchOnWindowFocus: false, retry: false });
+  const memory = useProjectMemory(props.host.id);
+  const [pickingProject, setPickingProject] = useState(false);
   const [chosen, setChosen] = useState("");
   const directory = props.paseoWorkspace?.directory;
   const detected = directory ? projects.data?.filter((p) => [p.sourceRoot, p.workspaceRoot].some((root) => directory === root || directory.startsWith(root + "/"))).sort((a, b) => b.sourceRoot.length - a.sourceRoot.length)[0] : undefined;
-  const active = projects.data?.find((p) => p.configPath === chosen) || detected || (!directory && projects.data?.length === 1 ? projects.data[0] : undefined);
-  if (!active) return <View style={{ padding: 12, gap: 8 }}>
+  const active = chooseProject(projects.data || [], detected, chosen, memory.saved, Boolean(directory));
+  if (!directory && !memory.ready) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{copy.projectLoading}</Text>;
+  if (!active || pickingProject) return <View style={{ padding: 12, gap: 8 }}>
     <Text style={{ color: props.theme.colors.foreground }}>{projects.isPending ? copy.projectLoading : projects.isError ? copy.projectLoadFailed : !projects.data?.length ? copy.noRegisteredProjects : copy.selectProject}</Text>
-    {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => setChosen(p.configPath)}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
+    {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => { setChosen(p.configPath); setPickingProject(false); }}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
   </View>;
   return <View style={{ flex: 1 }}>
-    {!directory && (projects.data?.length || 0) > 1 ? <Pressable onPress={() => setChosen("")}><Text style={{ color: props.theme.colors.foregroundMuted }}>{active.displayName}</Text></Pressable> : null}
-    <ProjectPanel key={active.configPath} {...props} projectConfig={active.configPath} />
+    <ProjectPanel key={active.configPath} {...props} projectConfig={active.configPath} onProjectReady={() => memory.remember(active.configPath)} onSwitchProject={!directory && (projects.data?.length || 0) > 1 ? () => setPickingProject(true) : undefined} />
   </View>;
 }
 
-function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string }) {
+function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string; onProjectReady?: () => void; onSwitchProject?: () => void }) {
   const { projectConfig } = props;
   const { hostWorkspaceId, paseoWorkspace } = props;
   const { theme, layout } = props;
   const preferenceScopeKey = `project:${projectConfig}:paseo-workspace:${hostWorkspaceId || PREFERENCE_SCOPE_FALLBACK}`;
   const [panelWidth, setPanelWidth] = useState(0);
   const [panelHeight, setPanelHeight] = useState(0);
-  const [chromeHeight, setChromeHeight] = useState(132);
-  const [contentHeights, setContentHeights] = useState<Record<string, number>>({});
-  const [liveResize, setLiveResize] = useState<{ id: "repositories" | "graph" | "changes"; height: number } | null>(null);
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   function openLayoutMenu() { setStatusMenuOpen(false); setLayoutMenuOpen(true); }
@@ -140,7 +161,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [createOpen, setCreateOpen] = useState(false);
   const newlyCreatedWorkspace = useRef<string | null>(null);
   const [delegating, setDelegating] = useState(false);
-  const [sectionDragging, setSectionDragging] = useState(false);
 
   useEffect(() => {
     setSelectionResolved(false);
@@ -162,6 +182,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listResult = resultOf<ListResult>(listState.response);
   const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error);
   const listReady = Boolean(listResult);
+  useEffect(() => { if (listReady) props.onProjectReady?.(); }, [listReady, props.onProjectReady]);
   const listUnavailable = !listReady
     && listState.initialFailure
     && !isRecoverableObserverFailure(listQuery.data, listQuery.error);
@@ -521,8 +542,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       .catch(() => toast.show(copy.text_514f0cbbf2, { variant: "warning" }));
   }
 
-  const allocatedLayout = liveResize ? { ...preferences.sectionLayout, [liveResize.id]: { ...preferences.sectionLayout[liveResize.id], height: liveResize.height } } : preferences.sectionLayout;
-  const allocation = allocateSections(panelHeight, allocatedLayout, chromeHeight, contentHeights);
+  const allocation = useSectionSizing(panelHeight, panelWidth, `${selectedWorkspaceId}:${selectedRepoPath}:${tab}`, preferences.sectionLayout, preferences.commitResize);
+  const sectionDragging = allocation.dragging;
   const BodyContainer = tab === "review" || allocation.outerScroll ? ScrollView : View;
   return (
     <View
@@ -589,7 +610,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           if (Math.abs(height - panelHeight) > 1) setPanelHeight(height);
         }}
       >
-        <SectionAllocationContext.Provider value={{ ...allocation, measureContent: (id, height) => setContentHeights((current) => current[id] === height ? current : { ...current, [id]: height }), measureChrome: (height) => setChromeHeight((previous) => Math.abs(previous - height) > 1 ? height : previous), resize: (id, height) => setLiveResize(height === null ? null : { id, height }) }}>
+        <SectionAllocationContext.Provider value={allocation}>
         <BodyContainer {...(tab === "review" || allocation.outerScroll ? { scrollEnabled: !sectionDragging, contentContainerStyle: styles.bodyContent } : {})} style={[styles.body, tab === "workspace" && !allocation.outerScroll && styles.bodyContent, stableScrollbarStyle]}>
           {observerError ? (
             <View style={styles.warningCard}>
@@ -646,7 +667,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               sectionDragging={sectionDragging}
               onSectionToggle={(id, collapsed) => preferences.updateSection(id, { collapsed })}
               onSectionHeightCommit={(id, height) => preferences.updateSection(id, { height })}
-              onSectionDragState={setSectionDragging}
+              onSectionDragState={() => {}}
               onOpenLayoutMenu={openLayoutMenu}
               graphPlatform={layout.platform}
               theme={theme}
@@ -678,6 +699,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <Pressable accessibilityRole="button" accessibilityLabel={copy.refreshNow} disabled={manualRefreshing} onPress={() => { void refreshAll(); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{copy.refreshNow}</Text></Pressable>
       </AnchoredMenu>
       <LayoutMenu
+        onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}
         onCreate={listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setCreateOpen(true); } : undefined}
         open={layoutMenuOpen}
         onClose={() => setLayoutMenuOpen(false)}

@@ -71,6 +71,7 @@ export function LayoutMenu({
   onExpandAll,
   onReset,
   onCreate,
+  onSwitchProject,
   theme,
   styles,
 }: {
@@ -80,11 +81,13 @@ export function LayoutMenu({
   onExpandAll: () => void;
   onReset: () => void;
   onCreate?: () => void;
+  onSwitchProject?: () => void;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
   return <AnchoredMenu open={open} onClose={onClose} theme={theme}>
     {onCreate ? <LayoutMenuItem label={copy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
+    {onSwitchProject ? <LayoutMenuItem label={copy.switchProject} onPress={onSwitchProject} styles={styles} /> : null}
     <LayoutMenuItem label={copy.text_5f6a1bf190} onPress={onCollapseAll} styles={styles} />
     <LayoutMenuItem label={copy.text_66c98ab6d8} onPress={onExpandAll} styles={styles} />
     <LayoutMenuItem label={copy.text_e003f209ca} onPress={onReset} styles={styles} />

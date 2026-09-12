@@ -1,5 +1,6 @@
 import type { PluginAgentPanelProps, PluginWorkspacePanelProps, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { atInitializationStage } from "./initialization";
+import type { WorkbenchSurfaceProps } from "./surface-context";
 
 // Register lightweight function components, not an eagerly evaluated UI graph.
 // A failed module load is reported with its phase and is never cached as success.
@@ -13,7 +14,7 @@ export function WorkbenchPanel(props: PanelProps) {
   const Component = loadPanels().WorkbenchPanel;
   return <Component {...props} />;
 }
-export function WorkbenchSurfacePanel(props: PluginSurfaceProps) {
+export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   const Component = loadPanels().WorkbenchSurfacePanel;
   return <Component {...props} />;
 }

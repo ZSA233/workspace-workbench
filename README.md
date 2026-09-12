@@ -44,6 +44,8 @@ paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
 paseo plugin update workspace-workbench-paseo --json
 ```
 
+首次使用请在 Paseo 的“设置 → 插件”中打开“启用插件”全局开关；如果插件显示为已启用但尚未运行，再执行一次 `paseo plugin reload workspace-workbench-paseo --json`。
+
 `stable` 跟随已经验证过的发布版本。固定 tag（例如 `v0.1.0`）不会自动升级，
 需要手动切换到新的 tag。离线或需要审计的安装方式见
 [`docs/releasing.md`](docs/releasing.md)。

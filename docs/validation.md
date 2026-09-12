@@ -23,12 +23,11 @@
 ```sh
 make check
 make package
-PYTHONPATH=/path/to/go python3 -m unittest \
-  compose.workspace.tests.test_workbench_public
+PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
 当前公共仓库自动化检查通过 23 项 Python 测试、28 项 Paseo 插件测试和 TypeScript
-类型检查；Compose 适配器通过 2 项配置测试。fixture 中的 Git 操作只影响临时仓库。
+类型检查。fixture 中的 Git 操作只影响临时仓库。
 
 ## 渲染证据与待验收内容
 

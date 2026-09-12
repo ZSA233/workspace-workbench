@@ -18,6 +18,8 @@ paseo plugin update workspace-workbench-paseo --json
 开发分支使用 `--ref main`。Paseo 会先拉取代码、安装锁定的依赖、执行类型检查，
 验证通过后才激活新版本。
 
+首次使用请在 Paseo 的“设置 → 插件”中打开“启用插件”全局开关；如果插件显示为已启用但尚未运行，再执行一次 `paseo plugin reload workspace-workbench-paseo --json`。
+
 ## 本地安装
 
 ```sh

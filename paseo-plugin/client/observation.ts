@@ -1,10 +1,13 @@
 import { useRef } from "react";
 
-import type { ObserverResponse } from "../shared/observer";
-import { responseObservationState } from "./model";
+import type { ObserverResponse } from "../shared/observer.ts";
+import { responseObservationState } from "./model.ts";
 
 const STALE_FAILURE_LIMIT = 3;
 const STALE_AFTER_MS = 60_000;
+
+export type ObservationStatus = "loading" | "fresh" | "refreshing" | "degraded" | "expired" | "unavailable";
+export type ObservationResponseClass = "ready" | "refreshing" | "degraded" | "unavailable";
 
 type SnapshotEntry = {
   response?: ObserverResponse;
@@ -13,11 +16,14 @@ type SnapshotEntry = {
   lastSuccessfulAt: string | null;
   failureCount: number;
   firstFailureAt: number | null;
+  refreshing: boolean;
+  lastErrorCode: string | null;
 };
 
 type SnapshotOptions = {
   error?: unknown;
   mergePartial?: (previous: ObserverResponse, next: ObserverResponse) => ObserverResponse;
+  staleAfterMs?: number;
 };
 
 export type ObserverSnapshot = {
@@ -28,7 +34,36 @@ export type ObserverSnapshot = {
   initialFailure: boolean;
   failureCount: number;
   lastSuccessfulAt: string | null;
+  status: ObservationStatus;
+  refreshing: boolean;
+  lastErrorCode: string | null;
 };
+
+function observationMetadata(response: ObserverResponse | undefined): { refreshing: boolean; lastErrorCode: string | null } {
+  if (!response) return { refreshing: false, lastErrorCode: null };
+  if (!response.ok) return { refreshing: false, lastErrorCode: response.error?.code || null };
+  const result = response.result;
+  if (!result || typeof result !== "object") return { refreshing: false, lastErrorCode: null };
+  const observation = (result as { observation?: { refreshing?: unknown; cacheState?: unknown; issues?: unknown } }).observation;
+  const issues = (result as { issues?: unknown }).issues;
+  const issue = Array.isArray(issues)
+    ? issues.find((item) => item && typeof item === "object" && typeof (item as { code?: unknown }).code === "string")
+    : Array.isArray(observation?.issues)
+      ? observation.issues.find((item) => item && typeof item === "object" && typeof (item as { code?: unknown }).code === "string")
+      : undefined;
+  return {
+    refreshing: observation?.refreshing === true || observation?.cacheState === "refreshing",
+    lastErrorCode: issue && typeof issue === "object" ? String((issue as { code?: unknown }).code || "") || null : null,
+  };
+}
+
+export function classifyObservationResponse(response: ObserverResponse | undefined): ObservationResponseClass | null {
+  if (!response) return null;
+  const metadata = observationMetadata(response);
+  if (metadata.refreshing) return "refreshing";
+  const state = responseObservationState(response);
+  return state === "ready" ? "ready" : state === "partial" ? "degraded" : "unavailable";
+}
 
 function observedAt(response: ObserverResponse): string {
   const result = response.result;
@@ -51,6 +86,7 @@ function markFailure(entry: SnapshotEntry): void {
 function clearFailures(entry: SnapshotEntry): void {
   entry.failureCount = 0;
   entry.firstFailureAt = null;
+  entry.lastErrorCode = null;
 }
 
 export function useLastSuccessfulResponse(
@@ -65,6 +101,8 @@ export function useLastSuccessfulResponse(
       lastSuccessfulAt: null,
       failureCount: 0,
       firstFailureAt: null,
+      refreshing: false,
+      lastErrorCode: null,
     };
     cache.current.set(key, entry);
   }
@@ -72,12 +110,16 @@ export function useLastSuccessfulResponse(
   if (response !== entry.lastResponse) {
     entry.lastResponse = response;
     const state = responseObservationState(response);
-    if (response && state === "ready") {
+    const responseClass = classifyObservationResponse(response);
+    const metadata = observationMetadata(response);
+    entry.refreshing = metadata.refreshing;
+    entry.lastErrorCode = metadata.lastErrorCode;
+    if (response && responseClass === "ready") {
       entry.response = response;
       entry.lastSuccessfulAt = observedAt(response);
       clearFailures(entry);
     } else if (response) {
-      markFailure(entry);
+      if (responseClass !== "refreshing") markFailure(entry);
       if (state === "partial" && entry.response && options.mergePartial) {
         entry.response = options.mergePartial(entry.response, response);
       } else if (state === "partial" && response.ok && Array.isArray((response.result as { workspaces?: unknown })?.workspaces)) {
@@ -104,6 +146,8 @@ export function useLastSuccessfulResponse(
     const previousError = entry.lastError;
     entry.lastError = options.error;
     if (options.error) {
+      entry.refreshing = false;
+      entry.lastErrorCode = entry.lastErrorCode || "observer_request_failed";
       markFailure(entry);
     } else if (previousError && responseObservationState(response) === "ready") {
       clearFailures(entry);
@@ -117,7 +161,17 @@ export function useLastSuccessfulResponse(
   const failureAge = Number.isFinite(lastSuccessTimestamp)
     ? Math.max(0, Date.now() - lastSuccessTimestamp)
     : 0;
-  const expired = Boolean(displayResponse && (entry.failureCount >= STALE_FAILURE_LIMIT || failureAge >= STALE_AFTER_MS));
+  const staleAfterMs = Math.max(1_000, options.staleAfterMs || STALE_AFTER_MS);
+  const expired = Boolean(displayResponse && (entry.failureCount >= STALE_FAILURE_LIMIT || failureAge >= staleAfterMs));
+  const status: ObservationStatus = !displayResponse
+    ? failed ? "unavailable" : "loading"
+    : expired
+      ? "expired"
+      : entry.refreshing
+        ? "refreshing"
+        : failed
+          ? "degraded"
+          : "fresh";
 
   return {
     response: displayResponse,
@@ -127,5 +181,8 @@ export function useLastSuccessfulResponse(
     initialFailure: !entry.response && failed,
     failureCount: entry.failureCount,
     lastSuccessfulAt: entry.lastSuccessfulAt,
+    status,
+    refreshing: entry.refreshing,
+    lastErrorCode: entry.lastErrorCode,
   };
 }

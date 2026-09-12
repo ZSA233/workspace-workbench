@@ -21,7 +21,8 @@ type WorkspaceBindingResponse,
 type WorkspaceDelegateResponse,
 } from "../shared/handoff";
 import { observerQuery } from "../shared/observer";
-import { projectsQuery } from "../shared/projects";
+import { projectsQuery, type ProjectInfo } from "../shared/projects";
+import { projectBackendStart, projectStorageQuery } from "../shared/setup";
 import { isMainWorkspace,isRecoverableObserverFailure,makeStyles,mergeDetailResponse,queryErrorMessage,queryFailureForDisplay,resultOf,TabButton,workspaceIdFromProps } from "./components/ui";
 import { openFileReview } from "./file-review-store";
 import {
@@ -39,7 +40,8 @@ type ListResult,
 type ReviewResult,
 type WorkspaceFilter
 } from "./model";
-import { useLastSuccessfulResponse } from "./observation";
+import { useLastSuccessfulResponse, type ObserverSnapshot } from "./observation";
+import { useRefreshOnForeground } from "./foreground-refresh";
 import { useObserverPreferences } from "./preferences";
 import { readSurfaceWorkspace, type WorkbenchSurfaceProps } from "./surface-context";
 
@@ -50,8 +52,84 @@ type ObserverPanelContentProps = PanelProps & {
 };
 type ChangeTreeMode = "tree" | "files";
 
+const REFRESH_INTERVALS = {
+  list: 30_000,
+  detail: 30_000,
+  repository: 45_000,
+  review: 60_000,
+} as const;
+
+const STALE_WINDOWS = {
+  list: 90_000,
+  detail: 90_000,
+  repository: 120_000,
+  review: 150_000,
+} as const;
+
+const REFRESH_REQUEST_TIMEOUT = 12_000;
+
+function boundedRefresh<T>(request: Promise<T>): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), REFRESH_REQUEST_TIMEOUT);
+    request.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      () => { clearTimeout(timer); resolve(undefined); },
+    );
+  });
+}
+
+function responseIsRefreshing(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const response = value as { ok?: unknown; result?: unknown };
+  if (response.ok !== true || !response.result || typeof response.result !== "object") return false;
+  const observation = (response.result as { observation?: { cacheState?: unknown; refreshing?: unknown } }).observation;
+  return observation?.refreshing === true || observation?.cacheState === "refreshing";
+}
+
+function observationInterval(interval: number): (query: { state: { data: unknown } }) => number {
+  return (query) => responseIsRefreshing(query.state.data) ? 1_000 : interval;
+}
+
+type ObservationArea = {
+  label: string;
+  snapshot: ObserverSnapshot;
+  fetching: boolean;
+};
+
+function observationStatusLabel(status: ObserverSnapshot["status"]): string {
+  if (status === "loading") return copy.text_fcabadb2a7;
+  if (status === "refreshing") return copy.observationRefreshing;
+  if (status === "degraded") return copy.observationDegraded;
+  if (status === "expired") return copy.observationStale;
+  if (status === "unavailable") return copy.observationUnavailable;
+  return copy.observationStatus;
+}
+
+function observationAreaDetail(area: ObservationArea): string {
+  const status = area.snapshot.status === "expired"
+    ? "expired"
+    : area.fetching || area.snapshot.refreshing
+      ? "refreshing"
+      : area.snapshot.status;
+  const timestamp = area.snapshot.lastSuccessfulAt ? ` · ${formatObservedTime(area.snapshot.lastSuccessfulAt)}` : "";
+  return `${area.label}：${observationStatusLabel(status)}${timestamp}`;
+}
+
 const PREFERENCE_SCOPE_FALLBACK = "global";
 const noSectionDragState = () => {};
+
+function comparablePath(value: string): string {
+  const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "") || "/";
+  // macOS may expose the same checkout through a symlink in the host surface
+  // and as a real path after the server resolves it.
+  return normalized.startsWith("/private/") ? normalized.slice("/private".length) : normalized;
+}
+
+function pathContains(root: string, directory: string): boolean {
+  const base = comparablePath(root);
+  const current = comparablePath(directory);
+  return current === base || current.startsWith(`${base}/`);
+}
 
 // React Native's shared cursor type only exposes `auto` and `pointer`, while
 // the web renderer forwards the full CSS cursor value. Keep the native style
@@ -68,6 +146,8 @@ import { allocateSections } from "./section-allocation";
 import { useSectionSizing } from "./use-section-sizing";
 import { chooseProject, useProjectMemory } from "./project-memory";
 import { CreateWorkspace } from "./components/create-workspace";
+import { ProjectSetup } from "./components/project-setup";
+import { ProjectStorageMenu } from "./components/project-storage";
 
 import { ExecutionBindingCard } from "./components/agent";
 
@@ -108,17 +188,31 @@ export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
 
 export function ObserverPanelContent(props: ObserverPanelContentProps) {
   const getProjects = useRpc(projectsQuery);
-  const projects = useQuery({ queryKey: ["workbench-projects", props.host.id], queryFn: () => getProjects({}), refetchOnWindowFocus: false, retry: false });
+  const directory = props.paseoWorkspace?.directory || "";
+  const projects = useQuery({ queryKey: ["workbench-projects", props.host.id, directory], queryFn: () => getProjects({ directory: directory || undefined }), refetchOnWindowFocus: false, retry: false });
   const memory = useProjectMemory(props.host.id);
   const [pickingProject, setPickingProject] = useState(false);
   const [chosen, setChosen] = useState("");
-  const directory = props.paseoWorkspace?.directory;
-  const detected = directory ? projects.data?.filter((p) => [p.sourceRoot, p.workspaceRoot].some((root) => directory === root || directory.startsWith(root + "/"))).sort((a, b) => b.sourceRoot.length - a.sourceRoot.length)[0] : undefined;
-  const active = chooseProject(projects.data || [], detected, chosen, memory.saved, Boolean(directory));
+  const [setupProject, setSetupProject] = useState<ProjectInfo | null>(null);
+  const detected = directory ? projects.data?.filter((p) => [p.sourceRoot, p.workspaceRoot].some((root) => pathContains(root, directory))).sort((a, b) => b.sourceRoot.length - a.sourceRoot.length)[0] : undefined;
+  const active = setupProject || chooseProject(projects.data || [], detected, chosen, memory.saved, Boolean(directory));
+  useEffect(() => {
+    setSetupProject(null);
+    setChosen("");
+  }, [directory]);
   if (!directory && !memory.ready) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{copy.projectLoading}</Text>;
+  if (directory && !active) return <ProjectSetup
+    directory={directory}
+    theme={props.theme}
+    onSaved={(project) => {
+      setSetupProject(project);
+      setChosen(project.configPath);
+      void projects.refetch();
+    }}
+  />;
   if (!active || pickingProject) return <View style={{ padding: 12, gap: 8 }}>
     <Text style={{ color: props.theme.colors.foreground }}>{projects.isPending ? copy.projectLoading : projects.isError ? copy.projectLoadFailed : !projects.data?.length ? copy.noRegisteredProjects : copy.selectProject}</Text>
-    {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => { setChosen(p.configPath); setPickingProject(false); }}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
+    {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => { setChosen(p.configPath); setSetupProject(null); setPickingProject(false); }}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
   </View>;
   return <View style={{ flex: 1 }}>
     <ProjectPanel key={active.configPath} {...props} projectConfig={active.configPath} onProjectReady={() => memory.remember(active.configPath)} onSwitchProject={!directory && (projects.data?.length || 0) > 1 ? () => setPickingProject(true) : undefined} />
@@ -135,7 +229,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [reduceMotion, setReduceMotion] = useState(false);
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
-  const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(true); }, []);
+  const [storageMenuOpen, setStorageMenuOpen] = useState(false);
+  const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setStorageMenuOpen(false); setLayoutMenuOpen(true); }, []);
+  const openStorageMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setStorageMenuOpen(true); }, []);
   const compact = layout.compact || (panelWidth > 0 && panelWidth < 480);
   const styles = useMemo(() => makeStyles(theme, compact), [theme, compact]);
   const preferences = useObserverPreferences(preferenceScopeKey);
@@ -147,6 +243,24 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, []);
   const rawRpc = useRpc(observerQuery);
   const rpc = (input: Parameters<typeof rawRpc>[0]) => rawRpc({ ...input, projectConfig });
+  const getStorage = useRpc(projectStorageQuery);
+  const storageQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "project-storage"],
+    queryFn: () => getStorage({ projectConfig }),
+    enabled: Boolean(projectConfig),
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const startBackend = useRpc(projectBackendStart);
+  const backendQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "backend-start"],
+    queryFn: () => startBackend({ projectConfig }),
+    enabled: Boolean(projectConfig),
+    retry: false,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
   const rawBindingRpc = useRpc(workspaceBindingQuery);
   const bindingRpc = (input: Parameters<typeof rawBindingRpc>[0]) => rawBindingRpc({ ...input, projectConfig });
   const rawDelegateRpc = useRpc(workspaceDelegate);
@@ -183,15 +297,20 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "workspace-list"],
     queryFn: () => rpc({ method: "workspace.list", params: { includeRemoved: true } }),
-    refetchInterval: 30_000,
+    refetchInterval: observationInterval(REFRESH_INTERVALS.list),
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: 1_500,
   });
-  const listState = useLastSuccessfulResponse("workspace-list", listQuery.data, { error: listQuery.error });
+  const listState = useLastSuccessfulResponse("workspace-list", listQuery.data, { error: listQuery.error, staleAfterMs: STALE_WINDOWS.list });
   const listResult = resultOf<ListResult>(listState.response);
   const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error);
   const listReady = Boolean(listResult);
+  useEffect(() => {
+    if (backendQuery.data?.state !== "ready" || listReady) return;
+    void listQuery.refetch();
+  }, [backendQuery.data?.state, listReady, listQuery.refetch]);
   useEffect(() => { if (listReady) props.onProjectReady?.(); }, [listReady, props.onProjectReady]);
   const listUnavailable = !listReady
     && listState.initialFailure
@@ -228,6 +347,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryFn: () => agentContextRpc({ projectConfig, agentId: parentAgentId! }),
     enabled: Boolean(parentAgentId && listReady),
     refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: 5_000,
@@ -246,6 +366,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryFn: () => bindingRpc({ workspaceId: selectedWorkspaceId }),
     enabled: Boolean(selectedWorkspaceId && listReady && !selectedWorkspaceIsMain && listResult?.capabilities?.agent),
     refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: 1_000,
@@ -258,7 +379,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "identify", workspaceDirectory],
     queryFn: () => rpc({ method: "workspace.identify", params: { directory: workspaceDirectory } }),
     enabled: Boolean(workspaceDirectory && preferences.hydrated && !selectionResolved && listReady),
-    refetchInterval: 30_000,
+    refetchInterval: REFRESH_INTERVALS.list,
+    refetchIntervalInBackground: false,
     retry: false,
     staleTime: 1_500,
     refetchOnWindowFocus: false,
@@ -317,7 +439,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "workspace-detail", selectedWorkspaceId],
     queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, mode: "summary", refreshToolchain: false } }),
     enabled: Boolean(selectedWorkspaceId && selectedWorkspace && listReady),
-    refetchInterval: 30_000,
+    refetchInterval: observationInterval(REFRESH_INTERVALS.detail),
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: 1_500,
@@ -325,6 +448,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const detailState = useLastSuccessfulResponse(`workspace-detail:${selectedWorkspaceId}`, detailQuery.data, {
     error: detailQuery.error,
     mergePartial: mergeDetailResponse,
+    staleAfterMs: STALE_WINDOWS.detail,
   });
   const detail = resultOf<DetailResult>(detailState.response);
   const detailFailure = queryFailureForDisplay(detailState, detailQuery.data, detailQuery.error);
@@ -356,12 +480,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady),
-    refetchInterval: 45_000,
+    refetchInterval: observationInterval(REFRESH_INTERVALS.repository),
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: 1_500,
   });
-  const graphState = useLastSuccessfulResponse(`repository-graph:${selectedWorkspaceId}:${selectedRepoPath}`, graphQuery.data, { error: graphQuery.error });
+  const graphState = useLastSuccessfulResponse(`repository-graph:${selectedWorkspaceId}:${selectedRepoPath}`, graphQuery.data, { error: graphQuery.error, staleAfterMs: STALE_WINDOWS.repository });
   const graph = resultOf<GraphResult>(graphState.response);
   const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error);
   const changesScope: ChangeScope = selectedCommit ? "commit" : changeScope;
@@ -377,7 +502,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady),
-    refetchInterval: 45_000,
+    refetchInterval: observationInterval(REFRESH_INTERVALS.repository),
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: 1_500,
@@ -385,7 +511,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const changesState = useLastSuccessfulResponse(
     `repository-changes:${selectedWorkspaceId}:${selectedRepoPath}:${changesScope}:${selectedCommit}`,
     changesQuery.data,
-    { error: changesQuery.error },
+    { error: changesQuery.error, staleAfterMs: STALE_WINDOWS.repository },
   );
   const changes = resultOf<ChangesResult>(changesState.response);
   const changesFailure = queryFailureForDisplay(changesState, changesQuery.data, changesQuery.error);
@@ -424,15 +550,25 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: tab === "review" && reviewIds.length > 0 && listReady,
-    refetchInterval: 60_000,
+    refetchInterval: observationInterval(REFRESH_INTERVALS.review),
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: 1_500,
   });
-  const reviewState = useLastSuccessfulResponse(`review:${reviewIds.join("|")}:${JSON.stringify(targetOverrides)}`, reviewQuery.data, { error: reviewQuery.error });
+  const reviewState = useLastSuccessfulResponse(`review:${reviewIds.join("|")}:${JSON.stringify(targetOverrides)}`, reviewQuery.data, { error: reviewQuery.error, staleAfterMs: STALE_WINDOWS.review });
   const review = resultOf<ReviewResult>(reviewState.response);
   const reviewFailure = queryFailureForDisplay(reviewState, reviewQuery.data, reviewQuery.error);
-  const observerError = listUnavailable ? listFailure : null;
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const observationAreas: ObservationArea[] = [
+    { label: copy.observationAreaList, snapshot: listState, fetching: listQuery.isFetching },
+    { label: copy.observationAreaDetail, snapshot: detailState, fetching: detailQuery.isFetching },
+    { label: copy.observationAreaGraph, snapshot: graphState, fetching: graphQuery.isFetching },
+    { label: copy.observationAreaChanges, snapshot: changesState, fetching: changesQuery.isFetching },
+    ...(tab === "review" ? [{ label: "Review set", snapshot: reviewState, fetching: reviewQuery.isFetching }] : []),
+  ];
+  const unavailableArea = observationAreas.find((area) => area.snapshot.status === "unavailable");
+  const observerError = listUnavailable ? listFailure : unavailableArea ? copy.observationUnavailable : null;
   const observationExpired = Boolean(
     listState.expired ||
       detailState.expired ||
@@ -440,26 +576,55 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       changesState.expired ||
       (tab === "review" && reviewState.expired),
   );
-  const lastSuccessfulAt = listState.lastSuccessfulAt || detailState.lastSuccessfulAt;
+  const observationRefreshing = manualRefreshing || observationAreas.some((area) => area.fetching || area.snapshot.refreshing);
+  const observationDegraded = observationAreas.some((area) => area.snapshot.status === "degraded");
+  const lastSuccessfulAt = observationAreas.reduce<string | null>((latest, area) => {
+    const candidate = area.snapshot.lastSuccessfulAt;
+    if (!candidate) return latest;
+    if (!latest || (Date.parse(candidate) > Date.parse(latest))) return candidate;
+    return latest;
+  }, null);
+  const refreshFlight = useRef<Promise<void> | null>(null);
 
-  const [manualRefreshing, setManualRefreshing] = useState(false);
-
-  async function refreshAll(): Promise<void> {
+  const refreshAll = useCallback((): Promise<void> => {
+    if (refreshFlight.current) return refreshFlight.current;
     setManualRefreshing(true);
-    try {
-      await listQuery.refetch().catch(() => undefined);
-      if (workspaceDirectory && !selectionResolved) await identifyQuery.refetch().catch(() => undefined);
-      if (selectedWorkspaceId) await detailQuery.refetch().catch(() => undefined);
-      if (selectedWorkspaceId && selectedRepoPath) {
-        await graphQuery.refetch().catch(() => undefined);
-        await changesQuery.refetch().catch(() => undefined);
-      }
-      if (tab === "review" && reviewIds.length) await reviewQuery.refetch().catch(() => undefined);
-      if (selectedWorkspaceId) await bindingQuery.refetch().catch(() => undefined);
-    } finally {
+    const requests: Array<Promise<unknown>> = [
+      boundedRefresh(backendQuery.refetch()),
+      boundedRefresh(listQuery.refetch()),
+      ...(workspaceDirectory && !selectionResolved ? [boundedRefresh(identifyQuery.refetch())] : []),
+      ...(selectedWorkspaceId ? [boundedRefresh(detailQuery.refetch())] : []),
+      ...(selectedWorkspaceId && selectedRepoPath ? [boundedRefresh(graphQuery.refetch()), boundedRefresh(changesQuery.refetch())] : []),
+      ...(tab === "review" && reviewIds.length ? [boundedRefresh(reviewQuery.refetch())] : []),
+      ...(selectedWorkspaceId && selectedWorkspace && !selectedWorkspaceIsMain && listResult?.capabilities?.agent
+        ? [boundedRefresh(bindingQuery.refetch())]
+        : []),
+    ];
+    const flight = Promise.allSettled(requests).then(() => undefined).finally(() => {
+      refreshFlight.current = null;
       setManualRefreshing(false);
-    }
-  }
+    });
+    refreshFlight.current = flight;
+    return flight;
+  }, [backendQuery.refetch, bindingQuery.refetch, changesQuery.refetch, detailQuery.refetch, graphQuery.refetch, identifyQuery.refetch, listQuery.refetch, listResult?.capabilities?.agent, reviewIds.length, reviewQuery.refetch, selectedRepoPath, selectedWorkspace, selectedWorkspaceId, selectedWorkspaceIsMain, selectionResolved, tab, workspaceDirectory]);
+
+  useRefreshOnForeground(Boolean(projectConfig), refreshAll);
+
+  const observationLabel = observerError
+    ? copy.observationUnavailable
+    : observationExpired
+      ? copy.observationStale
+      : observationRefreshing
+        ? copy.observationRefreshing
+        : observationDegraded
+          ? copy.observationDegraded
+          : copy.observationStatus;
+  const observationIcon = observerError || observationExpired ? "CircleAlert" : "RefreshCw";
+  const observationColor = observerError
+    ? theme.colors.statusDanger
+    : observationExpired || observationDegraded
+      ? theme.colors.statusWarning
+      : theme.colors.foregroundMuted;
 
   async function delegateSelectedWorkspace(): Promise<void> {
     if (selectedWorkspaceIsMain) {
@@ -634,9 +799,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await listQuery.refetch(); newlyCreatedWorkspace.current = id; selectWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
       <WorkspaceSelector
         onOpenLayoutMenu={openLayoutMenu}
-        statusControl={<IconButton label={observerError ? copy.observationUnavailable : observationExpired ? copy.observationStale : copy.observationStatus} icon={observerError || observationExpired ? "CircleAlert" : "RefreshCw"}
-          busy={manualRefreshing || listQuery.isFetching || detailQuery.isFetching || graphQuery.isFetching || changesQuery.isFetching}
-          color={observerError ? theme.colors.statusDanger : observationExpired ? theme.colors.statusWarning : theme.colors.foregroundMuted}
+        statusControl={<IconButton label={observationLabel} icon={observationIcon}
+          busy={observationRefreshing}
+          color={observationColor}
           onPress={() => { setLayoutMenuOpen(false); setStatusMenuOpen((open) => !open); }} />}
         workspaces={allWorkspaces}
         historyWorkspaces={historyWorkspaces}
@@ -690,6 +855,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       >
         <SectionAllocationContext.Provider value={allocation}>
         <BodyContainer {...(tab === "review" || allocation.outerScroll ? { scrollEnabled: !sectionDragging, contentContainerStyle: styles.bodyContent } : {})} style={[styles.body, tab === "workspace" && !allocation.outerScroll && styles.bodyContent, stableScrollbarStyle]}>
+          {backendQuery.data && backendQuery.data.state !== "ready" ? (
+            <View style={styles.warningCard}>
+              <Text style={styles.warningTitle}>{copy.setupBackendTitle}</Text>
+              <Text style={styles.warningText}>{backendQuery.data.message || (backendQuery.data.state === "starting" ? copy.setupBackendStarting : copy.setupBackendFailed)}</Text>
+              <Pressable accessibilityRole="button" disabled={backendQuery.isFetching} onPress={() => { void backendQuery.refetch(); }} style={{ marginTop: 7 }}><Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "600" }}>{backendQuery.isFetching ? copy.setupBackendStarting : copy.setupRetry}</Text></Pressable>
+            </View>
+          ) : null}
           {observerError ? (
             <View style={styles.warningCard}>
               <Text style={styles.warningTitle}>{copy.text_ddb6624fda}</Text>
@@ -760,14 +932,25 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         </SectionAllocationContext.Provider>
       </View>
       <AnchoredMenu open={statusMenuOpen} onClose={() => setStatusMenuOpen(false)} theme={theme}>
-        <Text style={styles.layoutMenuHint}>{observationExpired ? copy.observationStale : copy.observationStatus}</Text>
+        <Text style={styles.layoutMenuHint}>{observationLabel}</Text>
         <Text style={styles.layoutMenuHint}>{copy.text_a6625c543c}{formatObservedTime(lastSuccessfulAt)}</Text>
-        {[listState.expired && copy.statusWorkspaceList, detailState.expired && copy.statusRepositories, graphState.expired && copy.statusGraph, changesState.expired && copy.statusChanges, tab === "review" && reviewState.expired && "Review set"].filter(Boolean).map((area) => <Text key={String(area)} style={styles.warningText}>{area}</Text>)}
+        {observationAreas.filter((area) => area.fetching || (area.snapshot.status !== "fresh" && area.snapshot.status !== "loading")).map((area) => <Text key={area.label} style={area.snapshot.status === "expired" ? styles.warningText : styles.layoutMenuHint}>{observationAreaDetail(area)}</Text>)}
         <Pressable accessibilityRole="button" accessibilityLabel={copy.refreshNow} disabled={manualRefreshing} onPress={() => { void refreshAll(); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{copy.refreshNow}</Text></Pressable>
       </AnchoredMenu>
+      <ProjectStorageMenu
+        open={storageMenuOpen}
+        onClose={() => setStorageMenuOpen(false)}
+        storage={storageQuery.data}
+        loading={storageQuery.isPending}
+        error={Boolean(storageQuery.isError)}
+        onRetry={() => { void storageQuery.refetch(); }}
+        compact={compact}
+        theme={theme}
+      />
       <LayoutMenu
         onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}
         onCreate={listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setCreateOpen(true); } : undefined}
+        onOpenStorage={openStorageMenu}
         open={layoutMenuOpen}
         onClose={() => setLayoutMenuOpen(false)}
         onCollapseAll={collapseAll}

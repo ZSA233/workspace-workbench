@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { currentProject, withProject } from "./projects.ts";
+import { startBackend } from "./backend-manager.ts";
 
 import {
   observerMethods,
@@ -155,7 +156,19 @@ const bridge = new ObserverBridge();
 
 export async function handleObserver(input: QueryInput): Promise<ObserverResponse> {
   try {
-    return await (currentProject() ? bridge.call(input) : withProject(input, () => bridge.call(input)));
+    const callWithRecovery = async (): Promise<ObserverResponse> => {
+      try {
+        return await bridge.call(input);
+      } catch (error) {
+        const code = error instanceof BridgeError ? error.code : "";
+        const project = currentProject();
+        if (!project || !["observer_connection_refused", "observer_unavailable"].includes(code)) throw error;
+        const backend = await startBackend(project.configPath);
+        if (backend.state !== "ready") throw error;
+        return bridge.call(input);
+      }
+    };
+    return await (currentProject() ? callWithRecovery() : withProject(input, callWithRecovery));
   } catch (error) {
     const code = error instanceof BridgeError ? error.code : "observer_unavailable";
     const message = code === "observer_timeout"

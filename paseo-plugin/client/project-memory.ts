@@ -3,6 +3,9 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { observerSettings, observerSettingsRpc } from "../shared/settings.ts";
 
 export function chooseProject<T extends { configPath: string }>(projects: T[], contextual: T | undefined, chosen: string, saved: string, hasContext: boolean) {
+  // A workspace directory is authoritative. If it has no matching project,
+  // keep the caller in setup instead of silently showing a project remembered
+  // from another directory.
   if (hasContext) return contextual;
   return projects.find((project) => project.configPath === chosen)
     || projects.find((project) => project.configPath === saved)

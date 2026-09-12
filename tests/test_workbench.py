@@ -61,6 +61,32 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual([candidate.display_name for candidate in candidates], ["api"])
             self.assertEqual(json.loads(config_path.read_text(encoding="utf-8"))["repositories"], [])
 
+    def test_root_git_checkout_can_be_discovered_and_observed_as_dot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_git(root, "init", "-q")
+            run_git(root, "config", "user.email", "test@example.invalid")
+            run_git(root, "config", "user.name", "Test User")
+            (root / "README.md").write_text("root\n", encoding="utf-8")
+            run_git(root, "add", "README.md")
+            run_git(root, "commit", "-qm", "initial")
+            config_path = root / "observer.json"
+            write_config(config_path, root, [])
+            config = load_config(config_path)
+            candidates = discover_git_repositories(config)
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(Path(candidates[0].path).resolve(), root.resolve())
+            value = json.loads(config_path.read_text(encoding="utf-8"))
+            value["repositories"] = [{"id": "root", "path": ".", "enabled": True}]
+            config_path.write_text(json.dumps(value), encoding="utf-8")
+            service = ObserverService(load_config(config_path))
+            try:
+                detail = service.handle("workspace.detail", {"workspaceId": "main"})
+                self.assertEqual([repository["repoPath"] for repository in detail["repositories"]], ["."])
+                self.assertEqual(detail["repositories"][0]["status"], "dirty")
+            finally:
+                service.close()
+
     def test_accept_explicitly_promotes_a_discovered_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

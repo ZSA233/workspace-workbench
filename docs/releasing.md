@@ -75,7 +75,8 @@ paseo plugin ls workspace-workbench-paseo --json
 
 ## Release 附件
 
-GitHub Release 会包含 Python wheel、源码包、
+GitHub Release 会包含 Python wheel、源码包、匹配 macOS arm64/x64 与 Linux arm64/x64
+平台的独立后端 worker、
 `workspace-workbench-paseo-VERSION.tar.gz` 和校验文件。Git 不可用、需要离线安装
 或需要固定附件审计时，可以使用这些文件。压缩包不包含项目 JSON、SQLite 数据、
 Socket、Agent 绑定或 secret。

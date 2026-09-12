@@ -14,7 +14,11 @@ python -m venv .venv
 python -m pip install -e .
 ```
 
-创建项目配置并登记仓库：
+普通用户无需手动创建配置。安装并启用 Paseo 插件后，第一次在 Git 项目中打开
+Workbench，插件会扫描当前目录并展示初始化向导；确认后会自动生成项目配置、登记项目
+并启动观察服务。
+
+开发者或无 Paseo 环境时，仍可使用 CLI 创建配置并登记仓库：
 
 ```sh
 workspace-workbench init --root /path/to/project --output /path/to/project/workbench.json
@@ -25,6 +29,16 @@ workspace-workbench serve --config /path/to/project/workbench.json
 
 `discover` 只显示候选仓库。使用 `accept` 逐个确认，或直接编辑 JSON 配置。
 配置中的路径可以相对于配置文件填写。
+
+向导默认将当前 Git 根目录作为一个仓库（配置路径为 `.`），配置保存在项目内的
+`.workspace-workbench/project.json`。隔离 Git worktree 默认放在
+`.workspace-workbench/worktrees/`，运行状态和记录放在 `.workspace-workbench/state/`。
+配置默认通过 Git 的本地 `info/exclude` 忽略；运行状态、Socket、缓存和隔离 worktree
+不会进入提交。三个点菜单中的“项目存储位置”可以随时查看当前项目的实际路径。
+需要团队共享时，可以在向导的高级设置中打开“共享项目配置”，然后由用户自行提交配置文件。
+
+已有配置中的 `workspaceRoot`、`treesRoot`、`recordsRoot` 和 `stateRoot` 会继续按原路径使用，
+不会自动移动已有的 worktree。
 
 ## 安装 Paseo 插件
 
@@ -37,7 +51,7 @@ paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
   --json
 ```
 
-启动对应的 Workbench 服务后，在 Paseo 中打开插件。开发版本可以使用
+普通用户打开插件后即可开始使用。开发版本可以使用
 `--ref main`。更新 Git 管理的插件：
 
 ```sh

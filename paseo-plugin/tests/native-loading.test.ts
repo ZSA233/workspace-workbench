@@ -40,6 +40,7 @@ test("Git-managed checkouts install locked dependencies before activation", () =
     files?: string[];
   };
   assert.ok(packageJson.files?.includes("package-lock.json"));
+  assert.ok(packageJson.files?.includes("backend"));
 });
 
 function nativeGlobals() {

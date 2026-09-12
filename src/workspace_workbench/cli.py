@@ -51,8 +51,10 @@ def _init(args: argparse.Namespace) -> int:
         "schemaVersion": 1,
         "project": {"id": project_id, "displayName": display_name},
         "sourceRoot": os.path.relpath(root, output.parent),
-        "workspaceRoot": os.path.relpath(root / ".workspace-workbench" / "workspaces", output.parent),
-        "stateRoot": os.path.relpath(root / ".workspace-workbench", output.parent),
+        "workspaceRoot": os.path.relpath(root / ".workspace-workbench", output.parent),
+        "recordsRoot": os.path.relpath(root / ".workspace-workbench" / "state" / "records", output.parent),
+        "treesRoot": os.path.relpath(root / ".workspace-workbench" / "worktrees", output.parent),
+        "stateRoot": os.path.relpath(root / ".workspace-workbench" / "state", output.parent),
         "socketPath": "auto",
         "discovery": {
             "mode": "hybrid",

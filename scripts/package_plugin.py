@@ -15,6 +15,7 @@ PLUGIN_FILES = (
     "client",
     "server",
     "shared",
+    "backend",
     "index.client.tsx",
     "index.server.ts",
     "mcp.mjs",

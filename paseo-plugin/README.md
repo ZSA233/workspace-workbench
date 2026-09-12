@@ -1,7 +1,7 @@
 # Workspace Workbench Paseo 插件
 
-插件将 Workbench 放在 Paseo 的 Explorer 中，Agent 对话仍保留在主区域。
-对应的 Python 服务需要单独运行。
+插件将 Workbench 放在 Paseo 的 Explorer 中，Agent 对话仍保留在主区域。普通用户无需
+单独启动 Python 服务，插件会自动使用内置或本机可用的 Workbench 后端。
 
 ## Git 安装
 
@@ -27,14 +27,26 @@ paseo plugin install /path/to/workspace-workbench/paseo-plugin --json
 paseo plugin reload workspace-workbench-paseo --json
 ```
 
-打开插件前，先使用项目配置启动服务：
+打开一个没有配置的 Git 项目时，插件会自动扫描当前目录并打开初始化向导。确认仓库
+范围后，它会在项目内生成 `.workspace-workbench/project.json`，自动登记并启动后端；
+用户不需要编辑 JSON 或手动维护 `projects.json`。
+
+如果需要手动启动后端（例如服务器或调试环境），可以使用项目配置启动服务：
 
 ```sh
 workspace-workbench serve --config /path/to/project/workbench.json
 ```
 
+项目根目录本身是 Git 仓库时，向导默认使用 `path: "."`；子仓库只在用户展开并选择
+后才会加入。新项目的配置、隔离 worktree 和状态分别位于
+`.workspace-workbench/project.json`、`.workspace-workbench/worktrees/` 和
+`.workspace-workbench/state/`。默认配置使用 Git 的本地 `info/exclude` 忽略，运行状态和
+隔离 worktree 不会写入提交；三个点菜单中的“项目存储位置”可查看实际路径。
+
+已有配置会继续使用其中声明的存储路径，不会自动迁移。
+
 如需 Agent 交接，请按[根目录 README](../README.md) 配置 `agent.provider` 和
 `agent.bridge`，然后新建 coordinator Agent。已经存在的 Agent 会话不会被静默修改。
 
-发布压缩包适合固定版本或离线安装。压缩包不包含项目配置、缓存、Socket、Agent
-绑定或 secret。
+发布压缩包适合固定版本或离线安装，包含匹配平台的后端 worker。压缩包不包含项目
+配置、缓存、Socket、Agent 绑定或 secret。

@@ -10,11 +10,22 @@ import { atInitializationStage, INITIALIZATION_REVISION } from "./client/initial
 
 const observerSurfaceId = "workbench";
 
+// Paseo 0.8 exposes workspace actions on the injected API. Older desktop
+// shells can still evaluate a plugin bundle before they enforce the manifest
+// requirement, so keep the optional integration isolated and let Explorer
+// panels continue to work when that API is absent.
+type WorkspaceApiCompatibility = {
+  open?: (directory: string) => Promise<{ id: string }>;
+  subscribe?: (handler: (update: { kind: string; id: string; workspace?: { id: string } }) => void) => () => void;
+  list?: (options?: { subscribe?: Record<string, never> }) => Promise<{ entries: Array<{ id: string }> }>;
+};
+
 export default function contribute(client: PluginClientContext) {
   return atInitializationStage("registration", () => contributeClient(client));
 }
 
 function contributeClient(client: PluginClientContext) {
+  const workspaceApi = ((client as unknown as { paseo?: { workspaces?: WorkspaceApiCompatibility } }).paseo)?.workspaces;
   function registerPanel(panel: Parameters<PluginClientContext["addWorkspacePanel"]>[0]) {
     return atInitializationStage(`panel:${panel.id}`, () => client.addWorkspacePanel(panel));
   }
@@ -111,7 +122,11 @@ function contributeClient(client: PluginClientContext) {
   const removeFileReviewOpener = configureFileReviewOpener((request) => {
     if (!request.hostWorkspaceId && request.directory && request.selection) {
       const selection = request.selection;
-      void client.paseo.workspaces.open(request.directory).then((workspace) => {
+      if (!workspaceApi?.open) {
+        console.error("file_panel_open_failed", "workspace_api_unavailable");
+        return;
+      }
+      void workspaceApi.open(request.directory).then((workspace) => {
         if (disposed) return;
         openFileReview(selection, { ...request, hostWorkspaceId: workspace.id });
       }).catch((error) => console.error("file_panel_open_failed", error));
@@ -165,24 +180,29 @@ function contributeClient(client: PluginClientContext) {
     );
   };
 
-  const unsubscribeWorkspaces = atInitializationStage("workspace-subscription", () => client.paseo.workspaces.subscribe((update) => {
-    if (update.kind === "upsert") {
-      addHeaderButton(update.workspace.id);
-    } else {
-      removeHeaderButton(update.id);
-      clearFileReviews(update.id);
-    }
-  }));
+  let unsubscribeWorkspaces = () => {};
+  if (workspaceApi?.subscribe) {
+    unsubscribeWorkspaces = atInitializationStage("workspace-subscription", () => workspaceApi.subscribe!((update) => {
+      if (update.kind === "upsert" && update.workspace) {
+        addHeaderButton(update.workspace.id);
+      } else {
+        removeHeaderButton(update.id);
+        clearFileReviews(update.id);
+      }
+    }));
+  }
 
-  void client.paseo.workspaces
-    .list({ subscribe: {} })
-    .then(({ entries }) => {
-      for (const workspace of entries) addHeaderButton(workspace.id);
-    })
-    .catch(() => {
-      // The Command Center and Explorer tab menu remain available if the
-      // workspace directory is temporarily unavailable during app startup.
-    });
+  if (workspaceApi?.list) {
+    void workspaceApi
+      .list({ subscribe: {} })
+      .then(({ entries }) => {
+        for (const workspace of entries) addHeaderButton(workspace.id);
+      })
+      .catch(() => {
+        // The Command Center and Explorer tab menu remain available if the
+        // workspace directory is temporarily unavailable during app startup.
+      });
+  }
 
   const commandCleanups = [
     registerCommand({

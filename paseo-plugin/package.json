@@ -1,6 +1,6 @@
 {
   "name": "workspace-workbench-paseo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Paseo plugin for Workspace Workbench multi-repository observation.",
   "type": "module",
   "private": false,
@@ -8,6 +8,7 @@
     "client",
     "server",
     "shared",
+    "backend",
     "index.client.tsx",
     "index.server.ts",
     "mcp.mjs",

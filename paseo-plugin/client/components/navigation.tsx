@@ -73,6 +73,7 @@ export function LayoutMenu({
   onReset,
   onCreate,
   onSwitchProject,
+  onOpenStorage,
   theme,
   styles,
 }: {
@@ -83,19 +84,21 @@ export function LayoutMenu({
   onReset: () => void;
   onCreate?: () => void;
   onSwitchProject?: () => void;
+  onOpenStorage?: () => void;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
   return <AnchoredMenu open={open} onClose={onClose} theme={theme}>
     {onCreate ? <LayoutMenuItem label={copy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
     {onSwitchProject ? <LayoutMenuItem label={copy.switchProject} onPress={onSwitchProject} styles={styles} /> : null}
+    {onOpenStorage ? <LayoutMenuItem label={copy.storageMenu} onPress={onOpenStorage} styles={styles} /> : null}
     <LayoutMenuItem label={copy.text_5f6a1bf190} onPress={onCollapseAll} styles={styles} />
     <LayoutMenuItem label={copy.text_66c98ab6d8} onPress={onExpandAll} styles={styles} />
     <LayoutMenuItem label={copy.text_e003f209ca} onPress={onReset} styles={styles} />
   </AnchoredMenu>;
 }
 
-export function AnchoredMenu({ open, onClose, theme, children }: { open: boolean; onClose(): void; theme: PanelProps["theme"]; children: ReactNode }) {
+export function AnchoredMenu({ open, onClose, theme, children, width = 190 }: { open: boolean; onClose(): void; theme: PanelProps["theme"]; children: ReactNode; width?: number }) {
   useEffect(() => {
     if (!open) return;
     const subscription = BackHandler?.addEventListener?.("hardwareBackPress", () => { onClose(); return true; });
@@ -111,7 +114,7 @@ export function AnchoredMenu({ open, onClose, theme, children }: { open: boolean
   return (
     <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 100, elevation: 20 }}>
       <Pressable accessibilityLabel={copy.text_4d0b4688c7} onPress={onClose} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
-      <View accessibilityRole="menu" style={{ position: "absolute", top: 40, right: 12, width: 190, padding: 6, borderRadius: 6, backgroundColor: theme.colors.surface1, borderColor: theme.colors.border, borderWidth: 1 }}>
+      <View accessibilityRole="menu" style={{ position: "absolute", top: 40, right: 12, width, padding: 6, borderRadius: 6, backgroundColor: theme.colors.surface1, borderColor: theme.colors.border, borderWidth: 1 }}>
         {children}
       </View>
     </View>

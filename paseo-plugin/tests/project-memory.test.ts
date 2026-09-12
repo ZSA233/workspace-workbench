@@ -4,7 +4,7 @@ import { chooseProject } from "../client/project-memory.ts";
 import { observerSettings } from "../shared/settings.ts";
 import { readFileSync } from "node:fs";
 
-test("context precedes global memory; removed projects fall back only to an unambiguous choice", () => {
+test("context precedes global memory; unmatched contexts stay in setup", () => {
   const one = { configPath: "one" }, two = { configPath: "two" };
   assert.equal(chooseProject([one, two], one, "two", "two", true), one);
   assert.equal(chooseProject([one, two], undefined, "", "two", false), two);

@@ -1,4 +1,4 @@
-.PHONY: test typecheck plugin-test plugin-typecheck package plugin-package check \
+.PHONY: test typecheck plugin-test plugin-typecheck backend package plugin-package check \
 	version-check bump-patch bump-minor bump-major release-check
 
 version-check:
@@ -24,6 +24,9 @@ plugin-typecheck:
 
 plugin-test:
 	npm --prefix paseo-plugin test
+
+backend:
+	python scripts/build_backend.py
 
 plugin-package: version-check
 	mkdir -p dist

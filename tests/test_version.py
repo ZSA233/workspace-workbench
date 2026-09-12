@@ -35,7 +35,8 @@ class VersionManagementTests(unittest.TestCase):
     def test_check_accepts_coordinated_metadata_and_matching_tag(self) -> None:
         root = self.make_fixture()
         try:
-            result = self.run_version(root, "--check", "--tag", "v0.1.0")
+            version = (root / "VERSION").read_text().strip()
+            result = self.run_version(root, "--check", "--tag", f"v{version}")
             self.assertEqual(result.returncode, 0, result.stderr)
         finally:
             shutil.rmtree(root)
@@ -43,21 +44,23 @@ class VersionManagementTests(unittest.TestCase):
     def test_bumps_all_package_roots_without_touching_dependencies(self) -> None:
         root = self.make_fixture()
         try:
+            major, minor, patch = (int(part) for part in (root / "VERSION").read_text().strip().split("."))
+            expected = f"{major}.{minor}.{patch + 1}"
             original_lock = json.loads((root / "paseo-plugin/package-lock.json").read_text())
             result = self.run_version(root, "--bump", "patch")
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((root / "VERSION").read_text().strip(), "0.1.1")
-            self.assertIn('__version__ = "0.1.1"', (root / "src/workspace_workbench/__init__.py").read_text())
+            self.assertEqual((root / "VERSION").read_text().strip(), expected)
+            self.assertIn(f'__version__ = "{expected}"', (root / "src/workspace_workbench/__init__.py").read_text())
             package = json.loads((root / "paseo-plugin/package.json").read_text())
             lock = json.loads((root / "paseo-plugin/package-lock.json").read_text())
-            self.assertEqual(package["version"], "0.1.1")
-            self.assertEqual(lock["version"], "0.1.1")
-            self.assertEqual(lock["packages"][""]["version"], "0.1.1")
+            self.assertEqual(package["version"], expected)
+            self.assertEqual(lock["version"], expected)
+            self.assertEqual(lock["packages"][""]["version"], expected)
             self.assertEqual(
                 lock["packages"]["node_modules/@getpaseo/client"]["version"],
                 original_lock["packages"]["node_modules/@getpaseo/client"]["version"],
             )
-            self.assertEqual(self.run_version(root, "--check", "--tag", "v0.1.1").returncode, 0)
+            self.assertEqual(self.run_version(root, "--check", "--tag", f"v{expected}").returncode, 0)
         finally:
             shutil.rmtree(root)
 

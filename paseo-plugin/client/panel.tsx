@@ -154,6 +154,8 @@ import { ExecutionBindingCard } from "./components/agent";
 import { WorkspaceView } from "./components/repositories";
 
 import { ReviewView } from "./components/review";
+import { AgentReviewView } from "./components/agent-review";
+import { reviewModels, reviewSessionControl, reviewSessionList, reviewSessionQuery, reviewSessionStart, reviewSettingsGet, reviewSettingsUpdate, type ReviewModelOverride, type ReviewPreferencePatch, type ReviewSession } from "../shared/agent-review";
 
 export function WorkbenchPanel(props: PanelProps) {
   const hostWorkspaceId = workspaceIdFromProps(props);
@@ -230,6 +232,20 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const [storageMenuOpen, setStorageMenuOpen] = useState(false);
+  const [reviewSettingsOpen, setReviewSettingsOpen] = useState(false);
+  const [reviewSettingsScope, setReviewSettingsScope] = useState<"project" | "global">("project");
+  const [reviewMode, setReviewMode] = useState<"off" | "manual" | "automatic">("manual");
+  const [autoFix, setAutoFix] = useState(true);
+  const [maxRounds, setMaxRounds] = useState("3");
+  const [reviewerTimeoutMinutes, setReviewerTimeoutMinutes] = useState("15");
+  const [repairTimeoutMinutes, setRepairTimeoutMinutes] = useState("30");
+  const [reviewerRole, setReviewerRole] = useState("Code reviewer");
+  const [reviewInstructions, setReviewInstructions] = useState("");
+  const [reviewerSession, setReviewerSession] = useState<"reuse" | "new_per_round">("reuse");
+  const [executionModel, setExecutionModel] = useState("");
+  const [reviewerModel, setReviewerModel] = useState("");
+  const reviewDirtyFields = useRef(new Set<string>());
+  const markReviewField = useCallback((field: string) => { reviewDirtyFields.current.add(field); }, []);
   const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setStorageMenuOpen(false); setLayoutMenuOpen(true); }, []);
   const openStorageMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setStorageMenuOpen(true); }, []);
   const compact = layout.compact || (panelWidth > 0 && panelWidth < 480);
@@ -271,6 +287,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [selectedRepoPath, setSelectedRepoPath] = useState("");
   const [tab, setTab] = useState<"workspace" | "review">("workspace");
+  const [reviewTab, setReviewTab] = useState<"set" | "agent">("set");
+  const [reviewSessionId, setReviewSessionId] = useState("");
   const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>("all");
   const [selectedCommit, setSelectedCommit] = useState("");
   const [selectedFile, setSelectedFile] = useState("");
@@ -291,6 +309,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     setSelectedRepoPath("");
     setSelectedCommit("");
     setSelectedFile("");
+    setReviewSessionId("");
     scopeRepositoryIdentity.current = "";
   }, [preferenceScopeKey]);
 
@@ -559,6 +578,135 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const reviewState = useLastSuccessfulResponse(`review:${reviewIds.join("|")}:${JSON.stringify(targetOverrides)}`, reviewQuery.data, { error: reviewQuery.error, staleAfterMs: STALE_WINDOWS.review });
   const review = resultOf<ReviewResult>(reviewState.response);
   const reviewFailure = queryFailureForDisplay(reviewState, reviewQuery.data, reviewQuery.error);
+  const reviewSessionRpc = useRpc(reviewSessionQuery);
+  const reviewSessionListRpc = useRpc(reviewSessionList);
+  const reviewStartRpc = useRpc(reviewSessionStart);
+  const reviewControlRpc = useRpc(reviewSessionControl);
+  const reviewSettingsGetRpc = useRpc(reviewSettingsGet);
+  const reviewSettingsUpdateRpc = useRpc(reviewSettingsUpdate);
+  const reviewModelsRpc = useRpc(reviewModels);
+  const agentReviewQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "agent-review", selectedWorkspaceId, reviewSessionId],
+    queryFn: () => reviewSessionRpc({ projectConfig, workspaceId: selectedWorkspaceId, ...(reviewSessionId ? { sessionId: reviewSessionId } : {}) }),
+    enabled: Boolean(selectedWorkspaceId && listReady), refetchInterval: 2_000, refetchOnWindowFocus: false, retry: false,
+  });
+  const agentReviewHistoryQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "agent-review-history", selectedWorkspaceId],
+    queryFn: () => reviewSessionListRpc({ projectConfig, workspaceId: selectedWorkspaceId }),
+    enabled: Boolean(selectedWorkspaceId && listReady), refetchInterval: 15_000, refetchOnWindowFocus: false, retry: false,
+  });
+  const reviewSettingsQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "agent-review-settings"],
+    queryFn: () => reviewSettingsGetRpc({ projectConfig }),
+    enabled: Boolean(projectConfig), refetchOnWindowFocus: false, retry: false,
+  });
+  const reviewModelsQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "agent-review-models", selectedWorkspaceId],
+    queryFn: () => reviewModelsRpc({ projectConfig, workspaceId: selectedWorkspaceId }),
+    enabled: Boolean(projectConfig && selectedWorkspaceId && listReady), staleTime: 5 * 60_000, refetchOnWindowFocus: false, retry: false,
+  });
+  const agentReview = (agentReviewQuery.data?.session || null) as ReviewSession | null;
+  const reviewPreferences = reviewSettingsQuery.data?.effective;
+  const syncReviewEditor = useCallback(() => {
+    if (!reviewPreferences) return;
+    reviewDirtyFields.current.clear();
+    setReviewMode(reviewPreferences.mode);
+    setAutoFix(reviewPreferences.autoFix);
+    setMaxRounds(String(reviewPreferences.maxRounds));
+    setReviewerTimeoutMinutes(String(Math.max(1, Math.round(reviewPreferences.reviewerTimeoutMs / 60_000))));
+    setRepairTimeoutMinutes(String(Math.max(1, Math.round(reviewPreferences.repairTimeoutMs / 60_000))));
+    setReviewerRole(reviewPreferences.reviewerRole);
+    setReviewInstructions(reviewPreferences.instructions);
+    setReviewerSession(reviewPreferences.reviewerSession);
+    setExecutionModel(reviewPreferences.executionModel || "");
+    setReviewerModel(reviewPreferences.reviewerModel || "");
+  }, [reviewPreferences]);
+  useEffect(() => { syncReviewEditor(); }, [syncReviewEditor]);
+  const saveReviewSettings = useCallback(async () => {
+    try {
+      const dirty = reviewDirtyFields.current;
+      const shared: ReviewPreferencePatch = {};
+      if (dirty.has("mode")) shared.mode = reviewMode;
+      if (dirty.has("autoFix")) shared.autoFix = autoFix;
+      if (dirty.has("maxRounds")) shared.maxRounds = Number(maxRounds) || 3;
+      if (dirty.has("reviewerTimeoutMs")) shared.reviewerTimeoutMs = Math.max(1, Number(reviewerTimeoutMinutes) || 15) * 60_000;
+      if (dirty.has("repairTimeoutMs")) shared.repairTimeoutMs = Math.max(1, Number(repairTimeoutMinutes) || 30) * 60_000;
+      if (dirty.has("reviewerRole")) shared.reviewerRole = reviewerRole.trim() || "Code reviewer";
+      if (dirty.has("instructions")) shared.instructions = reviewInstructions;
+      if (dirty.has("reviewerSession")) shared.reviewerSession = reviewerSession;
+      const models: ReviewModelOverride = {};
+      const modelReset: string[] = [];
+      if (dirty.has("executionModel")) executionModel.trim() ? models.executionModel = executionModel.trim() : modelReset.push("executionModel");
+      if (dirty.has("reviewerModel")) reviewerModel.trim() ? models.reviewerModel = reviewerModel.trim() : modelReset.push("reviewerModel");
+      if (reviewSettingsScope === "project") {
+        if (Object.keys(shared).length) await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: shared, resetFields: [] });
+        if (Object.keys(models).length || modelReset.length) await reviewSettingsUpdateRpc({ projectConfig, scope: "project-model", patch: models, resetFields: modelReset });
+      } else if (Object.keys(shared).length || Object.keys(models).length || modelReset.length) {
+        await reviewSettingsUpdateRpc({ projectConfig, scope: "global", patch: { ...shared, ...models }, resetFields: modelReset });
+      }
+      reviewDirtyFields.current.clear();
+      setReviewSettingsOpen(false);
+      await reviewSettingsQuery.refetch();
+      await agentReviewQuery.refetch();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "审核设置保存失败");
+    }
+  }, [agentReviewQuery, autoFix, executionModel, maxRounds, projectConfig, repairTimeoutMinutes, reviewInstructions, reviewerModel, reviewerRole, reviewerSession, reviewerTimeoutMinutes, reviewMode, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, toast]);
+  const closeReviewSettings = useCallback(() => {
+    syncReviewEditor();
+    setReviewSettingsOpen(false);
+  }, [syncReviewEditor]);
+  const openReviewSettings = useCallback(() => {
+    setLayoutMenuOpen(false);
+    syncReviewEditor();
+    setReviewSettingsOpen(true);
+  }, [syncReviewEditor]);
+  const resetReviewField = useCallback((field: string) => {
+    const modelField = field === "executionModel" || field === "reviewerModel";
+    void reviewSettingsUpdateRpc({ projectConfig, scope: reviewSettingsScope === "global" ? "global" : modelField ? "project-model" : "project", patch: {}, resetFields: [field] }).then(() => {
+      reviewDirtyFields.current.clear();
+      return reviewSettingsQuery.refetch();
+    }).catch((error) => toast.error(error instanceof Error ? error.message : "恢复继承失败"));
+  }, [projectConfig, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, toast]);
+  const resetAllProjectReviewOverrides = useCallback(async () => {
+    try {
+      await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["mode", "autoFix", "maxRounds", "reviewerRole", "instructions", "reviewerSession", "reviewerTimeoutMs", "repairTimeoutMs"] });
+      await reviewSettingsUpdateRpc({ projectConfig, scope: "project-model", patch: {}, resetFields: ["executionModel", "reviewerModel"] });
+      reviewDirtyFields.current.clear();
+      await reviewSettingsQuery.refetch();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "恢复继承失败");
+    }
+  }, [projectConfig, reviewSettingsQuery, reviewSettingsUpdateRpc, toast]);
+  const reviewSources = reviewSettingsQuery.data?.sources || {};
+  const reviewProject = reviewSettingsQuery.data?.project || {};
+  const reviewGlobal = reviewSettingsQuery.data?.global || {};
+  const reviewProjectModels = reviewSettingsQuery.data?.models || {};
+  const sourceLabel = (field: string) => {
+    const source = reviewSources[field];
+    return source === "project" || source === "project-model" ? "本项目" : source === "global" || source === "global-model" ? "全局" : "默认/跟随";
+  };
+  const hasReviewOverride = (field: string) => {
+    const source = reviewSettingsScope === "project"
+      ? field === "executionModel" || field === "reviewerModel" ? reviewProjectModels : reviewProject
+      : reviewGlobal;
+    return Object.prototype.hasOwnProperty.call(source, field);
+  };
+  const startAgentReview = useCallback(() => {
+    if (!selectedWorkspaceId) return;
+    void reviewStartRpc({ projectConfig, workspaceId: selectedWorkspaceId, executionAgentId: boundAgent?.id }).then((result) => {
+      if (!result.ok) toast.error(result.error?.message || "审核无法开始");
+      else setReviewSessionId("");
+      return agentReviewQuery.refetch();
+    }).catch((error) => toast.error(error instanceof Error ? error.message : "审核无法开始"));
+  }, [agentReviewQuery, boundAgent?.id, projectConfig, reviewStartRpc, selectedWorkspaceId, toast]);
+  const controlAgentReview = useCallback((action: "stop" | "resume" | "review" | "repair") => {
+    if (!selectedWorkspaceId || !agentReview) return;
+    void reviewControlRpc({ projectConfig, workspaceId: selectedWorkspaceId, sessionId: agentReview.id, action }).then((result) => {
+      if (!result.ok) toast.error(result.error?.message || "审核操作失败");
+      return agentReviewQuery.refetch();
+    }).catch((error) => toast.error(error instanceof Error ? error.message : "审核操作失败"));
+  }, [agentReview, agentReviewQuery, projectConfig, reviewControlRpc, selectedWorkspaceId, toast]);
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const observationAreas: ObservationArea[] = [
     { label: copy.observationAreaList, snapshot: listState, fetching: listQuery.isFetching },
@@ -844,7 +992,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       ) : null}
       <View style={styles.tabs}>
         <TabButton active={tab === "workspace"} label="Workspace" onPress={() => setTab("workspace")} theme={theme} styles={styles} />
-        <TabButton active={tab === "review"} label={`Review set${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => setTab("review")} theme={theme} styles={styles} />
+        <TabButton active={tab === "review" && reviewTab === "set"} label={`Review set${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
+        {selectedWorkspaceId && !selectedWorkspaceIsMain ? <TabButton active={tab === "review" && reviewTab === "agent"} label="Agent Review" onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
       </View>
       <View
         style={styles.bodyShell}
@@ -912,7 +1061,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               theme={theme}
               styles={styles}
             />
-          ) : (
+          ) : reviewTab === "agent" ? <AgentReviewView session={agentReview} history={agentReviewHistoryQuery.data?.sessions || []} loading={agentReviewQuery.isFetching} onStart={startAgentReview} onReview={() => controlAgentReview("review")} onRepair={() => controlAgentReview("repair")} onStop={() => controlAgentReview("stop")} onResume={() => controlAgentReview("resume")} onSelectHistory={setReviewSessionId} theme={theme} styles={styles} /> : (
             <ReviewView
               key={reviewIds.join("|")}
               workspaces={allWorkspaces.filter((workspace) => !isMainWorkspace(workspace))}
@@ -951,6 +1100,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}
         onCreate={listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setCreateOpen(true); } : undefined}
         onOpenStorage={openStorageMenu}
+        onOpenReviewSettings={openReviewSettings}
         open={layoutMenuOpen}
         onClose={() => setLayoutMenuOpen(false)}
         onCollapseAll={collapseAll}
@@ -959,6 +1109,44 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         theme={theme}
         styles={styles}
       />
+      <AnchoredMenu open={reviewSettingsOpen} onClose={closeReviewSettings} theme={theme} width={compact ? 270 : 330}>
+        <ScrollView style={{ maxHeight: compact ? 420 : 600 }} contentContainerStyle={{ gap: 6 }}>
+        <Text style={styles.layoutMenuHint}>Agent Review 设置</Text>
+        <View style={styles.briefActions}>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewSettingsScope === "project" }} onPress={() => { reviewDirtyFields.current.clear(); setReviewSettingsScope("project"); }} style={[styles.secondaryButton, reviewSettingsScope === "project" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>本项目</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewSettingsScope === "global" }} onPress={() => { reviewDirtyFields.current.clear(); setReviewSettingsScope("global"); }} style={[styles.secondaryButton, reviewSettingsScope === "global" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>全局默认</Text></Pressable>
+        </View>
+        <Text style={styles.layoutMenuHint}>未单独设置的字段继承全局默认。</Text>
+        <Text style={styles.layoutMenuHint}>审核模式 · {sourceLabel("mode")}</Text>
+        <View style={styles.briefActions}>
+          {["off", "manual", "automatic"].map((mode) => <Pressable key={mode} accessibilityRole="button" accessibilityState={{ selected: reviewMode === mode }} onPress={() => { markReviewField("mode"); setReviewMode(mode as "off" | "manual" | "automatic"); }} style={[styles.secondaryButton, reviewMode === mode && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{mode === "off" ? "关闭" : mode === "manual" ? "手动" : "自动"}</Text></Pressable>)}
+        </View>
+        <Pressable accessibilityRole="button" accessibilityState={{ selected: autoFix }} onPress={() => { markReviewField("autoFix"); setAutoFix((value) => !value); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{autoFix ? "✓ 自动修复" : "○ 手动修复"} · {sourceLabel("autoFix")}</Text></Pressable>
+        <TextInput accessibilityLabel="Reviewer role" onChangeText={(value) => { markReviewField("reviewerRole"); setReviewerRole(value); }} placeholder={`Reviewer 角色 · ${sourceLabel("reviewerRole")}`} placeholderTextColor={theme.colors.foregroundMuted} style={styles.targetInput} value={reviewerRole} />
+        <TextInput accessibilityLabel="Review instructions" multiline onChangeText={(value) => { markReviewField("instructions"); setReviewInstructions(value); }} placeholder={`审核要求 · ${sourceLabel("instructions")}`} placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { minHeight: 48 }]} value={reviewInstructions} />
+        <TextInput accessibilityLabel="Maximum review rounds" keyboardType="number-pad" onChangeText={(value) => { markReviewField("maxRounds"); setMaxRounds(value); }} placeholder={`最大轮次 · ${sourceLabel("maxRounds")}`} placeholderTextColor={theme.colors.foregroundMuted} style={styles.targetInput} value={maxRounds} />
+        <Text style={styles.layoutMenuHint}>超时 · 审核 {sourceLabel("reviewerTimeoutMs")} / 修复 {sourceLabel("repairTimeoutMs")}</Text>
+        <View style={styles.briefActions}>
+          <TextInput accessibilityLabel="Reviewer timeout minutes" keyboardType="number-pad" onChangeText={(value) => { markReviewField("reviewerTimeoutMs"); setReviewerTimeoutMinutes(value); }} placeholder="审核超时（分钟）" placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { flex: 1 }]} value={reviewerTimeoutMinutes} />
+          <TextInput accessibilityLabel="Repair timeout minutes" keyboardType="number-pad" onChangeText={(value) => { markReviewField("repairTimeoutMs"); setRepairTimeoutMinutes(value); }} placeholder="修复超时（分钟）" placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { flex: 1 }]} value={repairTimeoutMinutes} />
+        </View>
+        <Text style={styles.layoutMenuHint}>Reviewer 会话 · {sourceLabel("reviewerSession")}</Text>
+        <View style={styles.briefActions}>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerSession === "reuse" }} onPress={() => { markReviewField("reviewerSession"); setReviewerSession("reuse"); }} style={[styles.secondaryButton, reviewerSession === "reuse" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>复用会话</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerSession === "new_per_round" }} onPress={() => { markReviewField("reviewerSession"); setReviewerSession("new_per_round"); }} style={[styles.secondaryButton, reviewerSession === "new_per_round" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>每轮新建</Text></Pressable>
+        </View>
+        <Text style={styles.layoutMenuHint}>执行模型 · {sourceLabel("executionModel")}</Text>
+        <Pressable accessibilityRole="button" onPress={() => { markReviewField("executionModel"); setExecutionModel(""); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>跟随执行会话{!executionModel ? " ✓" : ""}</Text></Pressable>
+        {(reviewModelsQuery.data?.models || []).slice(0, 6).map((model) => <Pressable key={`exec-${model.id}`} accessibilityRole="button" onPress={() => { markReviewField("executionModel"); setExecutionModel(model.id); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{model.label}{executionModel === model.id ? " ✓" : ""}</Text></Pressable>)}
+        {reviewSettingsScope === "project" && hasReviewOverride("executionModel") ? <Pressable accessibilityRole="button" onPress={() => resetReviewField("executionModel")} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>恢复执行模型继承</Text></Pressable> : null}
+        <Text style={styles.layoutMenuHint}>Reviewer 模型 · {sourceLabel("reviewerModel")}</Text>
+        <Pressable accessibilityRole="button" onPress={() => { markReviewField("reviewerModel"); setReviewerModel(""); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>跟随执行模型{!reviewerModel ? " ✓" : ""}</Text></Pressable>
+        {(reviewModelsQuery.data?.models || []).slice(0, 6).map((model) => <Pressable key={`review-${model.id}`} accessibilityRole="button" onPress={() => { markReviewField("reviewerModel"); setReviewerModel(model.id); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{model.label}{reviewerModel === model.id ? " ✓" : ""}</Text></Pressable>)}
+        {reviewSettingsScope === "project" && hasReviewOverride("reviewerModel") ? <Pressable accessibilityRole="button" onPress={() => resetReviewField("reviewerModel")} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>恢复 Reviewer 模型继承</Text></Pressable> : null}
+        {reviewSettingsScope === "project" ? <Pressable accessibilityRole="button" onPress={() => { void resetAllProjectReviewOverrides(); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>恢复本项目全部继承</Text></Pressable> : null}
+        <Pressable accessibilityRole="button" onPress={saveReviewSettings} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>保存设置</Text></Pressable>
+        </ScrollView>
+      </AnchoredMenu>
     </View>
   );
 }

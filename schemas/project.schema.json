@@ -70,7 +70,21 @@
       },
       "additionalProperties": false
     },
-    "limits": { "type": "object" }
+    "limits": { "type": "object" },
+    "review": {
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["off", "manual", "automatic"] },
+        "autoFix": { "type": "boolean" },
+        "maxRounds": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "reviewerRole": { "type": "string", "minLength": 1 },
+        "instructions": { "type": "string" },
+        "reviewerSession": { "enum": ["reuse", "new_per_round"] },
+        "reviewerTimeoutMs": { "type": "integer", "minimum": 30000, "maximum": 3600000 },
+        "repairTimeoutMs": { "type": "integer", "minimum": 30000, "maximum": 7200000 }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

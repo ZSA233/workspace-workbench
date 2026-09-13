@@ -29,8 +29,11 @@ test("permission preset never implies planning state", () => {
   assert.equal(actualPlanningState(agent(false)), "execute");
 });
 
-test("a next-turn toggle cannot prove the effective mode of an active turn", () => {
-  const active = { ...agent(false), activeTurn: { turnId: "turn", startedAt: null }, status: "running" as const };
-  assert.equal(actualPlanningState(active), "unknown");
-  assert.throws(() => childExecutionConfig(active, false), (error: unknown) => error instanceof ExecutionPolicyError && error.code === "coordinator_active_mode_unavailable");
-});
+for (const planning of [true, false, undefined]) {
+  test(`running status does not override host planning=${planning}`, () => {
+    const active = { ...agent(planning), activeTurn: { turnId: "turn", startedAt: null }, status: "running" as const };
+    assert.equal(actualPlanningState(active), planning === undefined ? "unknown" : planning ? "plan" : "execute");
+    if (planning === false) assert.doesNotThrow(() => childExecutionConfig(active, false));
+    else assert.throws(() => childExecutionConfig(active, false), ExecutionPolicyError);
+  });
+}

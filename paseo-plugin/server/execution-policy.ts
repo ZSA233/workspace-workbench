@@ -4,9 +4,8 @@ import type { AgentPermissionMode } from "../shared/agent-session.ts";
 
 export type PlanningState = "plan" | "execute" | "unknown";
 export function actualPlanningState(agent: PaseoAgent): PlanningState {
-  // Paseo 0.8 exposes the mutable next-turn feature, not the effective mode of
-  // an active turn. A refreshed toggle is not evidence of that turn's mode.
-  if (agent.activeTurn || agent.status === "running") return "unknown";
+  // Activity and permission presets do not determine planning. Read the host
+  // toggle at each mutation boundary; never switch it on the caller's behalf.
   const feature = agent.features?.find((item) => item.id === "plan_mode");
   if (feature?.type !== "toggle" || typeof feature.value !== "boolean") return "unknown";
   return feature.value ? "plan" : "execute";
@@ -21,7 +20,6 @@ export function assertCoordinatorExecution(parent: PaseoAgent): void {
   if ((parent.runtimeInfo?.provider || parent.provider) !== "codex") {
     throw new ExecutionPolicyError("execution_provider_unverified", "主控提供方不是已验证的 Codex；请检查宿主会话提供方。");
   }
-  if (parent.activeTurn || parent.status === "running") throw new ExecutionPolicyError("coordinator_active_mode_unavailable", "Paseo 未提供活动 turn 的有效计划模式；开关可能仅适用于下一轮。请等待该轮结束后从界面执行，或升级支持有效模式校验的宿主。已暂停后续创建和任务投递。");
   const state = actualPlanningState(parent);
   if (state === "plan") throw new ExecutionPolicyError("coordinator_planning", "主控仍在计划模式。请在宿主明确授权并切换到执行，等待同步后重试。");
   if (state === "unknown") throw new ExecutionPolicyError("coordinator_mode_unknown", "宿主未返回主控实际计划状态。请刷新会话并等待模式同步；权限预设不能证明执行模式。");

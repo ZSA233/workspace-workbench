@@ -42,3 +42,9 @@ SDK 0.8 的 create/send 无模式 revision 或 compare-and-set 参数，客户�
 - 未修改主 checkout、YUVA、历史 Workspace、未跟踪 uv.lock；未自动合并或发布。
 
 下一步需要获授权的宿主独立 worktree 或支持有效模式与原子条件校验的宿主版本，补齐活动 turn 模式协议，再继续同语义的 Node 迁移和真实插件回归。当前执行状态为 needs_input，不是 ready_for_review。
+
+## 恢复实施（用户已批准）
+
+前述“必须修改宿主后才能继续”结论已撤回，不再作为阻塞。只在 Workbench 独立 worktree 实施。不以 running 状态推断模式；采用宿主 plan_mode 快照并在副作用边界重新核实，权限预设不代表模式，不自动切换。宿主调用间的竞态作为协议限制记录，不以扩大修改 Paseo 范围解决。
+
+模式定向回归 25 项及添加仓库真实 Git 回归 5 项通过，作为 Node 迁移基线。

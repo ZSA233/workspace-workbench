@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { sampleCurve, curvePath } from "../client/graph/geometry.ts";
 import { createHistoryLoadGate } from "../client/graph/pagination.ts";
+import { commitReferenceNames, formatCommitTime } from "../client/graph/commit-details.ts";
+import { getWorkbenchCopy } from "../shared/copy.ts";
 import { readFileSync } from "node:fs";
 
 test("history gates are independent closures and graph render does not construct a class", () => {
@@ -46,4 +48,44 @@ test("history gate rejects layout events, concurrent requests, failed-page repea
   assert.equal(attempt(200, 1200), false);
   assert.equal(attempt(50, 1150, false, "other/repo"), false);
   assert.equal(attempt(50, 1151, false, "other/repo"), true);
+});
+
+test("commit details format localized timestamps and omit HEAD from branch references", () => {
+  const zh = getWorkbenchCopy("zh-CN");
+  const en = getWorkbenchCopy("en-US");
+  const now = Date.parse("2026-09-12T15:44:00Z");
+  const zhTime = formatCommitTime("2026-09-11T15:44:00Z", "zh-CN", zh, now);
+  const enTime = formatCommitTime("2026-09-11T15:44:00Z", "en-US", en, now);
+  assert.match(zhTime.absolute, /2026/);
+  assert.match(enTime.absolute, /2026/);
+  assert.notEqual(zhTime.relative, zh.commitTimeUnknown);
+  assert.notEqual(enTime.relative, en.commitTimeUnknown);
+  assert.deepEqual(formatCommitTime(null, "zh-CN", zh, now), { absolute: zh.commitTimeUnknown, relative: "" });
+  assert.deepEqual(commitReferenceNames({
+    decorations: ["HEAD -> feature/demo", "origin/feature/demo"],
+    refs: [
+      { name: "refs/heads/feature/demo", shortName: "feature/demo", kind: "local", sha: "abc", isHead: true },
+      { name: "refs/remotes/origin/feature/demo", shortName: "origin/feature/demo", kind: "remote", sha: "abc" },
+    ],
+  }), ["origin/feature/demo", "feature/demo"]);
+});
+
+test("commit graph keeps details in a bounded bottom panel without changing the backend graph contract", () => {
+  const source = readFileSync(new URL("../client/components/graph.tsx", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("../client/components/ui.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("onHoverIn"));
+  assert.ok(source.includes("onHoverOut"));
+  assert.ok(source.includes("graphRowHover"));
+  assert.ok(source.includes("CommitDetailCard"));
+  assert.ok(source.includes("authoredAt"));
+  assert.ok(source.includes("graphDetailsPanel"));
+  assert.ok(source.includes("graphDetailsScroll"));
+  assert.ok(source.includes("selectedRow"));
+  assert.ok(!source.includes("graphCommitHoverOverlay"));
+  assert.ok(!styles.includes("graphCommitHoverOverlay"));
+  assert.ok(styles.includes("graphSurface: { backgroundColor: theme.colors.surface1"));
+  assert.ok(styles.includes("graphRowHover: { backgroundColor: theme.colors.surface2"));
+  assert.ok(styles.includes("graphRowActive: { backgroundColor: `${accent}18` }"));
+  assert.ok(source.includes("graphReferenceTags(row, theme, false)"));
+  assert.ok(!styles.includes("graphRow: { alignItems: \"center\", borderBottomColor: theme.colors.border, borderBottomWidth: 1, borderLeftColor: \"transparent\""));
 });

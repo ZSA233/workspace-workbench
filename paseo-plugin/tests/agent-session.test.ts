@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
@@ -19,7 +19,7 @@ function configFixture(root: string): string {
     workspaceRoot: join(root, "workspaces"),
     stateRoot: join(root, "state"),
     repositories: [{ id: "fixture", path: ".", enabled: true }],
-    agent: { provider: "paseo" },
+    agent: { provider: "paseo", bridge: { script: "mcp.mjs", endpoint: "127.0.0.1:6789" } },
   }));
   return path;
 }
@@ -92,7 +92,10 @@ function parentAgent() {
 test("default execution creates an independent Agent without a parent", async () => {
   const directory = mkdtempSync(join(tmpdir(), "workbench-agent-session-create-"));
   const previous = process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS;
+  const previousConfig = process.env.WORKSPACE_WORKBENCH_CONFIG;
+  const config = configFixture(directory);
   process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS = join(directory, "bindings.json");
+  process.env.WORKSPACE_WORKBENCH_CONFIG = config;
   const creates: Array<Record<string, unknown>> = [];
   const worker = { id: "worker", cwd: "/fixture/tree", workspaceId: "paseo", status: "idle", provider: "codex", model: "fixture", labels: {} };
   const paseo = {
@@ -105,15 +108,20 @@ test("default execution creates an independent Agent without a parent", async ()
     },
   } as unknown as PaseoApi;
   try {
-    const result = await handleAgentDelegate({ workspaceId: "sample", parentAgentId: "parent", handoff: handoffSchema.parse({ goal: "Execute fixture" }) }, { paseo, query: async () => ({ ok: true, result: { workspaceId: "sample", managed: true, treePath: "/fixture/tree", capabilities: { agent: true } } }) });
+    const result = await withProject({ projectConfig: config }, () => handleAgentDelegate({ workspaceId: "sample", parentAgentId: "parent", handoff: handoffSchema.parse({ goal: "Execute fixture" }) }, { paseo, query: async () => ({ ok: true, result: { workspaceId: "sample", managed: true, treePath: "/fixture/tree", capabilities: { agent: true } } }) }));
     assert.equal(result.ok, true);
     assert.equal(creates.length, 1);
     assert.equal(creates[0].parent, undefined);
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.relationship"], "independent");
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.parent"], undefined);
+    assert.deepEqual((creates[0].config as { toolPolicy: { preapproved: unknown[] } }).toolPolicy.preapproved, [
+      { kind: "mcp", server: "workspace-workbench-report", tool: "workbench_execution_report" },
+    ]);
   } finally {
     if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS;
     else process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS = previous;
+    if (previousConfig === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG;
+    else process.env.WORKSPACE_WORKBENCH_CONFIG = previousConfig;
     rmSync(directory, { recursive: true, force: true });
   }
 });

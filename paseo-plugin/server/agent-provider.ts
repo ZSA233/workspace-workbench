@@ -370,6 +370,13 @@ async function delegateAgent(
       ...childConfig,
       provider: selectedProvider,
       ...(bridge ? {
+        toolPolicy: {
+          ...(childConfig.toolPolicy || {}),
+          preapproved: [
+            ...(childConfig.toolPolicy?.preapproved || []),
+            { kind: "mcp" as const, server: "workspace-workbench-report", tool: "workbench_execution_report" },
+          ],
+        },
         mcpServers: {
           ...(childConfig.mcpServers || {}),
           "workspace-workbench-report": {

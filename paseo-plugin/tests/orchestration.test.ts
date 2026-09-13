@@ -7,7 +7,7 @@ import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
 import { childExecutionConfig } from "../server/execution-policy.ts";
 import { orchestrate } from "../server/orchestrator.ts";
 import { withProject } from "../server/projects.ts";
-import { workflowRequest } from "../shared/orchestration.ts";
+import { workflowRequest, workflowStatusRequest } from "../shared/orchestration.ts";
 
 const parent = (cwd: string, plan = false) => ({ id: "parent", cwd, provider: "codex", model: "fixture", currentModeId: "auto", availableModes: [{ id: "auto" }, { id: "full-access" }], pendingPermissions: [], features: [{ id: "plan_mode", type: "toggle", value: plan }] }) as unknown as PaseoAgent;
 test("provider modes fail closed and never grant full access to the child", () => {
@@ -48,6 +48,10 @@ test("preview is read-only; execute prepares, creates one child, retries without
     await run("execute");
     assert.equal(creates, 1);
     assert.equal(calls.filter((method) => method === "workspace.create").length, 1);
+    const status = await withProject({ projectConfig: config }, () => orchestrate("status", workflowStatusRequest.parse({ requestId: "one", workspaceId: "sample" }), "parent", { paseo, query }));
+    assert.equal((status as { ok?: boolean }).ok, true);
+    const normalizedStatus = await withProject({ projectConfig: config }, () => orchestrate("status", workflowStatusRequest.parse({ requestId: "one" }), "parent", { paseo, query }));
+    assert.equal((normalizedStatus as { ok?: boolean }).ok, true);
     await assert.rejects(withProject({ projectConfig: config }, () => orchestrate("execute", { ...request, name: "conflict" }, "parent", { paseo, query })), /identity_conflict/);
   } finally {
     if (prior === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = prior;

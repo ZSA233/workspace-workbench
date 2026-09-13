@@ -10,7 +10,8 @@ Paseo 插件（TypeScript Supervisor）
 ```
 
 每个 canonical 项目配置路径对应一个独立进程。插件统一启停、reload/unload 和异常恢复，
-没有合并成共享业务后端。正式运行需要 Node.js 22.14+ 和 Git，不依赖 Python 环境。
+没有合并成共享业务后端。正式运行需要 Node.js 22.14+ 和 Git；Python 只可能作为业务
+仓库声明的可选运行时，不再作为 Workbench 服务。
 SQLite 项目锁使用 Node 内置模块，不安装原生 npm addon。已安装 Paseo 的 Node 22.14.0
 实际验证支持该模块。
 
@@ -20,9 +21,12 @@ SQLite 项目锁使用 Node 内置模块，不安装原生 npm addon。已安装
    同步、幂等重试、运行时准备和 UI 入口；活动执行/审核与范围变更串行化。
 2. `5e77a94`：纠正早期过度保守的模式判断。权限、启动意图与宿主计划开关分离，不因
    running 就一律阻止；创建和投递前重新核实，复用不受初始模式永久约束。
-3. 本次 Node 迁移：配置/存储、Git、Workspace lifecycle、runtime/cache、observation、
-   review-set、transport 和 supervisor 分模块实现，生产入口与打包流程移除 Python worker。
-   Python 源码仅保留兼容与测试对照用途。
+3. `7f5f82b`：配置/存储、Git、Workspace lifecycle、runtime/cache、observation、
+   review-set、transport 和 supervisor 分模块实现，生产入口移除 Python worker。
+4. `c9a1253`、`c7a1d80`：修复无 snapshot 审核恢复、冻结 handoff 继承、协议字段和
+   Node/Python 对照验证记录。
+5. 合并到 `main` 后清理旧 Python Workbench 服务、PyInstaller/worker 构建、Python
+   wheel CI/release 和动态 Python oracle；版本检查与插件打包改为 Node 脚本。
 
 配置、schema-v1 记录、ID、原仓库、会话及审核历史不自动改写。既有运行时准备 JSON 和
 Go/NPM/pip 项目缓存直接复用；可重建的观察缓存改为有界 JSON 存储，旧 SQLite 文件保留。
@@ -30,8 +34,8 @@ NUL 未跟踪文件改为二进制分类，这是对旧文本计数错误的显�
 
 ## 验证证据
 
-- Python 全套回归：40 项通过。
-- Node/插件全套回归：120 项通过；覆盖真实 Git 的新旧协议对照、
+- 清理前 Python 全套回归：40 项通过，作为删除旧服务前的协议基线。
+- 清理前 Node/插件全套回归：125 项通过；覆盖真实 Git 的新旧协议对照、
   根提交/rename/二进制/路径边界、运行时文件复用、共享缓存、并发与部分观察刷新、
   handoff 图片和 Reviewer。
 - 真实 Node 进程验证：多项目与同请求并发、跨 generation 回收、错误 token 拒绝、
@@ -46,6 +50,8 @@ NUL 未跟踪文件改为二进制分类，这是对旧文本计数错误的显�
 - 删除审核发现“先删历史、后删 worktree”会在安全拒绝时丢失记录，已调整顺序；
   preview 被阻止或 Git 删除失败都不清理会话与审核历史。
 - TypeScript 类型检查、版本一致性、npm 包内容和发布形态压缩包检查通过。
+- 清理后 Node-only 回归：122 项通过；Node 版本检查、插件打包、CI/release 路径均不再
+  依赖旧 Python Workbench 服务。Node runtime adapter 仍接受 Go、Python、Node 要求。
 
 以上实际插件验证没有创建新的执行 Agent；模式切换场景由受控宿主快照/竞态测试覆盖，
 不能冒充模型会话复现。按用户后续说明，不以偶发现象必须复现为实施前提。
@@ -59,8 +65,9 @@ NUL 未跟踪文件改为二进制分类，这是对旧文本计数错误的显�
 
 ## 边界与交付
 
-- 没有修改 Paseo、主 checkout、YUVA、历史失败 Workspace 或未跟踪 uv.lock。
-- 没有自动合并、发布或替换日常使用的插件；真实验证只使用隔离 daemon。
+- 没有修改 Paseo 或 YUVA；合并只将本分支 fast-forward 到主 checkout，未跟踪 uv.lock
+  未修改；历史 Workspace、记录、会话和审核历史保留。
+- 未发布或创建 tag；合并后的日常插件通过正式 reload 更新，真实场景优先使用隔离 daemon。
 - 宿主 SDK 不支持原子的模式条件 create/send，因此最后一次检查之后的宿主模式变化仍是
   协议竞态；不通过自动关闭计划模式或修改宿主来规避。
 - 无法验证身份的外部/旧后端保留并报错；自动旧 Python 回收只支持可精确核实的本地
@@ -73,8 +80,8 @@ NUL 未跟踪文件改为二进制分类，这是对旧文本计数错误的显�
 
 ## 审核交接状态
 
-实现提交为 `7f5f82b`，工作区已完成全部实现与验证。已调用正式报告接口提交
-`ready_for_review`，但被以 `execution_report_late` 拒收：前一次 `needs_input` 已将旧流程
-结束为 blocked。未绕过终态保护或直接修改审核状态文件。现有公开审核启动接口要求执行
-Agent 没有活动 turn，因此应在本回合结束后，通过 Workspace 的恢复/重新开始审核入口继续。
-此项是审核流程交接限制，不是 Node 重构未完成；正式 Reviewer 尚未给出结论。
+旧审核记录最初因 `review_snapshot_unavailable` 进入 failed。新版插件 reload 后通过正式
+`workspace.workbench.agent-review.control` RPC 恢复到 `waiting_execution`（revision 7），
+保留原 handoff 和全部历史，没有重发任务；当前执行 turn 结束后再由正式报告入口交接。
+没有直接编辑审核状态文件，也没有伪造 Reviewer 批准。真实模型 Reviewer 和浏览器渲染仍
+需要实际客户端单独验收。

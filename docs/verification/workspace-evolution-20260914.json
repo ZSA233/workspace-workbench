@@ -5,23 +5,25 @@
     "actual plugin loaded; separate Node backend PIDs for two projects",
     "real post-checkout hook failure retained partial addition; retry and idempotency preserved ID/history",
     "new repositories present in subsequent handoff runtime",
+    "eight public panel RPCs returned Node protocol payloads on the same real repositories",
+    "panel RPC remove/restore retained the same workspace and worktrees",
     "actual plugin reload retired both old workers, started replacements, and retained workspace records",
     "actual plugin request recovered a crashed project backend",
     "actual plugin unload exited workers and reclaimed sockets"
   ],
   "ok": true,
-  "verifiedAt": "2026-09-13T19:07:46.536671+00:00",
+  "verifiedAt": "2026-09-13T20:04:26.300Z",
   "temporaryProjectsRemoved": true,
   "pluginTests": {
-    "passed": 120,
+    "passed": 122,
     "failed": 0
   },
-  "pythonCompatibilityTests": {
+  "legacyPythonCompatibilityBaseline": {
     "passed": 40,
     "failed": 0
   },
   "typecheck": "passed",
-  "packageSmoke": "Unpacked backend starts with empty PATH and without node_modules or Python runtime",
+  "packageSmoke": "Node-only archive script produced a valid plugin archive; unpacked backend starts without a Python backend",
   "modeValidation": "Controlled host snapshot and race tests; no new execution Agent was created",
   "runtime": {
     "minimumNode": "22.14",
@@ -31,11 +33,14 @@
   },
   "supplementalReview": "Mode consistency criteria are documented in docs/workspace-evolution.md; the frozen handoff is unchanged",
   "implementationCommit": "7f5f82b",
+  "mergedCommit": "c7a1d80",
+  "cleanupCommit": "a4c652c",
+  "docsCommit": "pending",
   "reviewHandoff": {
     "requestedStatus": "ready_for_review",
     "accepted": false,
-    "code": "execution_report_late",
-    "reason": "The earlier needs_input report ended the original review flow. Existing public start-review API requires the execution turn to be idle.",
-    "nextAction": "After this execution turn ends, restore or start the Workspace review through the normal UI/API; do not rewrite the frozen handoff or state files."
+    "code": "pending_current_turn",
+    "reason": "The old terminal record was restored through the public control RPC to waiting_execution (revision 7). The current execution turn must finish before a new ready_for_review report can be submitted.",
+    "nextAction": "Submit the final execution report through the normal tool and let the formal Reviewer flow continue; do not rewrite the frozen handoff or state files."
   }
 }

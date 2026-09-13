@@ -1,6 +1,6 @@
 # 后端对照与审核恢复补充验证
 
-本轮在 `obs/workspace-evolution-20260914/workspace-workbench` 实施；未合并主工作区，未切换日常插件。真实 Paseo 0.8.0 实例直接从本分支目录加载插件。架构仍为插件 TypeScript Supervisor 管理每项目独立 Node worker 与 socket。
+本轮先在 `obs/workspace-evolution-20260914/workspace-workbench` 实施并验证，随后 fast-forward 合并到 `main`。主 checkout 的已安装 Paseo 插件已 reload，真实 Paseo 0.8.0 实例直接从合并后的主目录加载插件。架构仍为插件 TypeScript Supervisor 管理每项目独立 Node worker 与 socket。
 
 ## 审核恢复诊断与修复
 
@@ -8,7 +8,7 @@
 2. 对终止流程显式重新开始审核会创建新记录，但旧代码漏带 handoff，导致原验收要求丢失。现在携带原冻结 handoff，旧历史保留；新增回归核对 Reviewer prompt 仍包含原 criterion。
 3. UI 对恢复后的 waiting_execution 显示等待新报告的说明，也说明执行结束后可手动开始审核。未自动切换计划模式、未自动重发任务。
 
-这两处属于原插件审核状态机，不能归因于 Python/Node 迁移。尚未替换日常实例，旧实例仍有原问题。未直接修改任何正式审核状态文件或冻结 handoff。
+这两处属于原插件审核状态机，不能归因于 Python/Node 迁移。新版已通过正式 control RPC 恢复当前记录；未直接修改任何审核状态文件或冻结 handoff。
 
 ## 逐项核对
 
@@ -31,16 +31,17 @@
 
 ## 本轮结果
 
-- `npm --prefix paseo-plugin test`：124/124，无跳过。原 MCP schema 测试受会话角色环境影响，现各用例显式指定角色，避免执行会话下误判。
-- `PYTHONPATH=src python3 -m unittest discover -s tests`：40/40。
+- 清理前 `npm --prefix paseo-plugin test`：125/125，无跳过。原 MCP schema 测试受会话角色环境影响，现各用例显式指定角色，避免执行会话下误判。
+- 清理前 `PYTHONPATH=src python3 -m unittest discover -s tests`：40/40，作为删除旧服务前的兼容基线。
+- 清理后 Node-only `npm --prefix paseo-plugin test`：122/122，无跳过；动态 Python oracle 已移除。
 - `npm --prefix paseo-plugin run typecheck`、`git diff --check`：通过。
-- `node paseo-plugin/scripts/verify-live.mjs`：真实 Paseo 加载、8 类面板 RPC 与 Python 业务字段对照、移除/恢复、双项目 reload/unload、崩溃恢复全部通过。临时根目录 `/private/tmp/wb-live-46t0Pm` 已清理。
-- Node 测试运行时 22.22.1；真实 Paseo daemon 22.14.0。Python 只用于兼容性验证，不参与正式后端启动。
+- `node paseo-plugin/scripts/verify-live.mjs`：合并前后均完成真实 Paseo 加载、8 类面板 RPC、移除/恢复、双项目 reload/unload、崩溃恢复；清理后脚本不再启动 Python oracle。临时根目录均已清理。
+- Node 测试运行时 22.22.1；真实 Paseo daemon 22.14.0。项目运行时仍支持 Python 版本要求，但 Python 不参与 Workbench 后端启动。
 
 真实验证通过面板所用公共 RPC 调用，未操作浏览器渲染 UI；Reviewer 状态机测试使用 Agent 替身，不代表真实模型会话审核已经通过。当前用户限制不创建额外 Agent，本轮遵守该限制。
 
 ## 补充审核要求
 
-本文件追加验收，不修改冻结 handoff：核对无快照恢复、重复恢复无投递、终止后重启保留 criterion、错误身份拒绝、原安全边界及协议差异。正式 Reviewer 结论仍待获取。此前终止流程的晚报告拒收不应通过直接改文件绕过；新版正常恢复入口生效需要相应实例加载本分支插件。
+本文件追加验收，不修改冻结 handoff：核对无快照恢复、重复恢复无投递、终止后重启保留 criterion、错误身份拒绝、原安全边界及协议差异。正式 Reviewer 结论仍待获取。此前终止流程的晚报告拒收不通过直接改文件绕过；新版正常恢复入口已在合并后的日常插件上生效。
 
-实现提交：`c9a1253`。提交后再次调用 `workbench_execution_report(ready_for_review)`，旧实例仍以 `execution_report_late` 拒收。返回的正式历史确认用户两次恢复均因 `review_snapshot_unavailable` 失败，当前状态为 failed、round 0、snapshot null，与本轮修复的根因吻合。这是旧实例的实际记录证据；不代表新版真实 Reviewer 已经验证。
+实现提交：`c9a1253`、`c7a1d80` 已合并到 `main`。合并后通过正式 control RPC 将真实记录从 failed/snapshot-null 恢复为 waiting_execution（revision 7），保留原 handoff 和历史，没有重发任务。这是新版恢复入口的真实状态证据；不代表真实模型 Reviewer 已经验证。

@@ -1,7 +1,7 @@
 # Workspace Workbench 发布说明
 
 Workspace Workbench 使用 `MAJOR.MINOR.PATCH` 版本号。根目录的 `VERSION` 是唯一版本
-来源，Python 包、Paseo 包和锁文件都必须与它一致。
+来源，Paseo 包和锁文件都必须与它一致。
 
 ## 升级并检查版本
 
@@ -21,15 +21,14 @@ make release-check TAG=v0.1.1
 ## 发布版本
 
 ```sh
-git add VERSION pyproject.toml src/workspace_workbench/__init__.py \
-  paseo-plugin/package.json paseo-plugin/package-lock.json
+git add VERSION paseo-plugin/package.json paseo-plugin/package-lock.json
 git commit -m "chore(release): v0.1.1"
 git tag -a v0.1.1 -m "Release v0.1.1"
 git push origin main v0.1.1
 ```
 
-Release workflow 会检出指定 tag，运行完整测试和构建流程，发布带有
-`SHA256SUMS` 的 Python 与 Paseo 附件，然后将通过验证的同一个 commit 推进到
+Release workflow 会检出指定 tag，运行 Node 插件的完整测试和构建流程，发布带有
+`SHA256SUMS` 的 Paseo 插件附件，然后将通过验证的同一个 commit 推进到
 `stable` 分支。它不会发布到 PyPI 或 npm。发布任务使用并发锁，且只允许
 `stable` fast-forward 到新版本；如果 stable 已经分叉，workflow 会在创建 Release
 之前停止，不会强制覆盖远端提交。
@@ -80,10 +79,11 @@ paseo plugin ls workspace-workbench-paseo --json
 
 ## Release 附件
 
-GitHub Release 保留兼容用的 Python wheel、源码包，并提供包含 Node 后端源码的
-
+GitHub Release 提供包含 Node 后端源码的
 `workspace-workbench-paseo-VERSION.tar.gz` 和校验文件。Git 不可用、需要离线安装
 或需要固定附件审计时，可以使用这些文件。压缩包不包含项目 JSON、SQLite 数据、
 Socket、Agent 绑定或 secret。
 
-正式插件使用 Node.js 22.14+，不再构建或下载 PyInstaller worker。Python 附件只用于旧版本兼容；插件发布前运行 Node 协议/生命周期测试，并用 `node paseo-plugin/scripts/verify-live.mjs` 在独立 Paseo home 中验证真实加载、重载与卸载。
+正式插件使用 Node.js 22.14+，不再构建或下载 Python Workbench worker。项目配置中的
+Python 仍可作为业务仓库运行时使用；插件发布前运行 Node 协议/生命周期测试，并用
+`node paseo-plugin/scripts/verify-live.mjs` 在独立 Paseo home 中验证真实加载、重载与卸载。

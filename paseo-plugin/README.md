@@ -65,3 +65,6 @@ Agent。时间线和历史轮次会保存在项目的 `stateRoot/reviews` 下，
 
 发布压缩包适合固定版本或离线安装，包含跨平台的 TypeScript 后端源码（Node.js 22.14+）。压缩包不包含项目
 配置、缓存、Socket、Agent 绑定或 secret。
+
+项目仓库的运行时要求仍可使用 Go、Python 或 Node；这里的 Python 是业务项目运行时，Workbench 自身不再
+启动或下载 Python 后端。

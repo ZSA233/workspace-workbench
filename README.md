@@ -21,7 +21,8 @@ node --experimental-strip-types paseo-plugin/server/backend/main.ts serve --conf
 
 `serve --stdio` 使用兼容 JSON 行协议；`exec --config ... --workspace ... --repo ... -- COMMAND`
 仅在本地显式调用，验证已准备的运行时后执行。RPC 不开放任意命令执行。
-Python 源码暂留作旧版本兼容与协议对照测试，不参与插件后端选择、启动或正常运行。
+Workbench 后端只有 Node.js 实现。项目仓库仍可以在 `toolchain.repositories` 中声明 Go、Python
+或 Node 运行时；这些是业务项目的执行环境，由 Node 后端验证和准备，不是 Workbench 后端。
 
 向导默认将当前 Git 根目录作为一个仓库（配置路径为 `.`），配置保存在项目内的
 `.workspace-workbench/project.json`。隔离 Git worktree 默认放在

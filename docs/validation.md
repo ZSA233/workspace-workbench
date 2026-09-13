@@ -23,11 +23,13 @@
 ```sh
 make check
 make package
-PYTHONPATH=src python3 -m unittest discover -s tests
+node paseo-plugin/scripts/verify-live.mjs
 ```
 
-当前公共仓库自动化检查通过 23 项 Python 测试、28 项 Paseo 插件测试和 TypeScript
-类型检查。fixture 中的 Git 操作只影响临时仓库。
+当前自动化检查以 Node/Paseo 为唯一 Workbench 后端，覆盖插件 typecheck、Node/Git、
+Supervisor、Workspace 生命周期、审核恢复和 UI/MCP 合同。旧 Python 服务删除前的
+协议对照结果保存在 `docs/verification/backend-parity-review-recovery-20260914.md`。
+fixture 中的 Git 操作只影响临时仓库。
 
 ## 渲染证据与待验收内容
 

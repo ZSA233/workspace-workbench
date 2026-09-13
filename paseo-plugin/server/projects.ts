@@ -36,7 +36,7 @@ function localProjectConfigs(directory?: string): string[] {
 }
 
 function configuredProjectPaths(directory?: string): string[] {
-  const registry = join(homedir(), ".config", "workspace-workbench", "projects.json");
+  const registry = process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY || join(homedir(), ".config", "workspace-workbench", "projects.json");
   let paths: string[] = [];
   try {
     const value = existsSync(registry) ? JSON.parse(readFileSync(registry, "utf8")) : null;

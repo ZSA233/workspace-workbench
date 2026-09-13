@@ -8,10 +8,22 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "lib": ["ES2022"],
-    "types": ["node", "react"],
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "node",
+      "react"
+    ],
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true
   },
-  "include": ["./index.*", "./client/**/*", "./server/**/*", "./shared/**/*", "./tests/**/*"]
+  "include": [
+    "./index.*",
+    "./client/**/*",
+    "./server/**/*",
+    "./shared/**/*",
+    "./tests/**/*",
+    "./server/backend/**/*.ts"
+  ]
 }

@@ -8,7 +8,7 @@ import { observerSettings } from "./shared/settings";
 import { projectsQuery } from "./shared/projects";
 import { projectBackendStart, projectBackendStatus, projectRuntimeSettingsGet, projectRuntimeSettingsUpdate, projectSetupSave, projectSetupScan, projectStorageQuery } from "./shared/setup";
 import { registeredProjects, withProject } from "./server/projects";
-import { closeBackends } from "./server/backend-manager";
+import { closeBackends, startBackend } from "./server/backend-manager";
 import { handleProjectBackendStart, handleProjectBackendStatus, handleProjectRuntimeSettingsGet, handleProjectRuntimeSettingsUpdate, handleProjectSetupSave, handleProjectSetupScan, handleProjectStorage } from "./server/setup";
 import { registerAgentIntegration } from "./server/agent-integration";
 import { orchestrate } from "./server/orchestrator";
@@ -51,6 +51,9 @@ import {
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(observerSettings);
+  // Start all registered projects through one generation-owned supervisor.
+  // Failure remains project-specific and is retried on the next request.
+  void Promise.allSettled(registeredProjects().map(project => startBackend(project.configPath)));
   server.handle(reviewSessionQuery, (input, context) => withProject(input, () => handleReviewSessionQuery(input, context)));
   server.handle(reviewSessionList, (input) => withProject(input, () => handleReviewSessionList(input)));
   server.handle(reviewSessionEvents, (input) => withProject(input, () => handleReviewSessionEvents(input)));
@@ -90,5 +93,5 @@ export default function contribute(server: PluginServerContext) {
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
   server.handle(workspaceLifecycle, (input, context) => withProject(input, () => handleWorkspaceLifecycle(input, context)));
-  return () => { cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); closeBackends(); };
+  return () => { cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); return closeBackends(); };
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the standalone backend worker used by the Paseo plugin."""
+"""Legacy-only PyInstaller builder; the Paseo plugin now runs server/backend/main.ts."""
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 # Workspace Workbench Paseo 插件
 
 插件将 Workbench 放在 Paseo 的 Explorer 中，Agent 对话仍保留在主区域。普通用户无需
-单独启动 Python 服务，插件会自动使用内置或本机可用的 Workbench 后端。
+单独启动服务，插件使用 Node.js 22.14+ 统一管理内置 TypeScript 后端，不搜索或下载 Python worker。
 
 ## Git 安装
 
@@ -34,7 +34,7 @@ paseo plugin reload workspace-workbench-paseo --json
 如果需要手动启动后端（例如服务器或调试环境），可以使用项目配置启动服务：
 
 ```sh
-workspace-workbench serve --config /path/to/project/workbench.json
+node --experimental-strip-types server/backend/main.ts serve --config /path/to/project/workbench.json
 ```
 
 项目根目录本身是 Git 仓库时，向导默认使用 `path: "."`；子仓库只在用户展开并选择
@@ -63,5 +63,5 @@ Agent。时间线和历史轮次会保存在项目的 `stateRoot/reviews` 下，
 使用返回的 `assetId`（界面也会列出已注册的图片供点击加入）。图片注册只保存必要的资产内容和读取信息，
 不计算内容哈希；如果图片只存在于无法寻址的聊天展示中，需要先保存为本地文件或重新附加。
 
-发布压缩包适合固定版本或离线安装，包含匹配平台的后端 worker。压缩包不包含项目
+发布压缩包适合固定版本或离线安装，包含跨平台的 TypeScript 后端源码（Node.js 22.14+）。压缩包不包含项目
 配置、缓存、Socket、Agent 绑定或 secret。

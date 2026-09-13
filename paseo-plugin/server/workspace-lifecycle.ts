@@ -97,19 +97,17 @@ export async function executePermanentWorkspaceDelete(
     return failed(input, preview.error || { code: "workspace_delete_failed", message: "Workspace could not be permanently deleted" }, activeTasks);
   }
 
-  let runtimeCleanup: WorkspaceRuntimeCleanup;
-  try {
-    runtimeCleanup = operations.clearRuntime();
-  } catch (error) {
-    return failed(input, {
-      code: "workspace_runtime_cleanup_failed",
-      message: error instanceof Error ? error.message : "Workspace runtime state could not be cleaned up",
-    }, activeTasks);
-  }
+  const impact = preview.result as { canDelete?: boolean; blockedReason?: string } | undefined;
+  if (impact?.canDelete === false) return failed(input, { code: impact.blockedReason || "workspace_delete_blocked", message: "Workspace deletion is blocked; files and history are preserved" }, activeTasks);
 
+  // Recheck/delete first: a dirty worktree or failed Git operation must not
+  // erase its Agent binding and review history before the failure is known.
   const response = await operations.deleteWorkspace();
-  if (!response.ok) {
-    return failed(input, response.error || { code: "workspace_delete_failed", message: "Workspace could not be permanently deleted" }, activeTasks);
+  if (!response.ok) return failed(input, response.error || { code: "workspace_delete_failed", message: "Workspace could not be permanently deleted" }, activeTasks);
+  let runtimeCleanup: WorkspaceRuntimeCleanup;
+  try { runtimeCleanup = operations.clearRuntime(); }
+  catch (error) {
+    return { ...failed(input, { code: "workspace_runtime_cleanup_failed", message: `Worktree deletion completed, but runtime history cleanup failed: ${error instanceof Error ? error.message : String(error)}` }, activeTasks), result: response.result };
   }
   return success(input, {
     ...(withRuntimeState(response.result ?? preview.result, runtimeState) as Record<string, unknown>),

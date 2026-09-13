@@ -1,10 +1,11 @@
+# Standalone only: do not enable together with plugin-owned backend supervision.
 [Unit]
 Description=Workspace Workbench
 After=local-fs.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env python3 -m workspace_workbench serve --config %h/.config/workspace-workbench/project.json
+ExecStart=/usr/bin/node --experimental-strip-types /opt/workspace-workbench/paseo-plugin/server/backend/main.ts serve --config %h/.config/workspace-workbench/project.json
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true

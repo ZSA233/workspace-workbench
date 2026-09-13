@@ -363,7 +363,7 @@ async function updateLocalExclude(projectRoot: string, configPath: string, share
 }
 
 function registryPath(): string {
-  return join(homedir(), ".config", "workspace-workbench", "projects.json");
+  return process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY || join(homedir(), ".config", "workspace-workbench", "projects.json");
 }
 
 function registerProject(configPath: string): void {

@@ -80,8 +80,10 @@ paseo plugin ls workspace-workbench-paseo --json
 
 ## Release 附件
 
-GitHub Release 会包含 Python wheel、源码包、匹配 macOS arm64/x64 与 Linux arm64/x64
-平台的独立后端 worker、
+GitHub Release 保留兼容用的 Python wheel、源码包，并提供包含 Node 后端源码的
+
 `workspace-workbench-paseo-VERSION.tar.gz` 和校验文件。Git 不可用、需要离线安装
 或需要固定附件审计时，可以使用这些文件。压缩包不包含项目 JSON、SQLite 数据、
 Socket、Agent 绑定或 secret。
+
+正式插件使用 Node.js 22.14+，不再构建或下载 PyInstaller worker。Python 附件只用于旧版本兼容；插件发布前运行 Node 协议/生命周期测试，并用 `node paseo-plugin/scripts/verify-live.mjs` 在独立 Paseo home 中验证真实加载、重载与卸载。

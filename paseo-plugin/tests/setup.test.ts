@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import test from "node:test";
+import test, { after } from "node:test";
+import { closeBackends } from "../server/backend-manager.ts";
+after(async () => { await closeBackends(); });
 import { handleProjectStorage, saveProjectSetup, scanProject } from "../server/setup.ts";
 
 function git(root: string, ...args: string[]): void {
@@ -68,7 +70,7 @@ test("setup save writes a local config, local ignore block, and automatic regist
     assert.equal(storage.worktrees.relativePath, ".workspace-workbench/worktrees");
     assert.equal(storage.state.relativePath, ".workspace-workbench/state");
     assert.equal(storage.ignoreMode, "local");
-    assert.ok(["missing", "failed"].includes(result.backend.state));
+    assert.ok(["ready", "failed"].includes(result.backend.state));
     assert.equal(readFileSync(projectIgnore, "utf8"), projectIgnoreBefore);
   } finally {
     if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;

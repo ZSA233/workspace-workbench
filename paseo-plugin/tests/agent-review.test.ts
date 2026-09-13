@@ -239,7 +239,7 @@ test("permanent workspace cleanup removes runtime records before the same id is 
   });
 });
 
-test("permanent workspace deletion stops before the irreversible call when runtime cleanup fails", async () => {
+test("permanent deletion reports a runtime cleanup failure after confirmed filesystem deletion", async () => {
   const sequence: string[] = [];
   let deleteCalled = false;
   const result = await executePermanentWorkspaceDelete(
@@ -265,8 +265,9 @@ test("permanent workspace deletion stops before the irreversible call when runti
 
   assert.equal(result.ok, false);
   assert.equal(result.error?.code, "workspace_runtime_cleanup_failed");
-  assert.deepEqual(sequence, ["preview", "cleanup"]);
-  assert.equal(deleteCalled, false);
+  assert.deepEqual(sequence, ["preview", "delete", "cleanup"]);
+  assert.equal(deleteCalled, true);
+  assert.match(result.error?.message || "", /deletion completed/);
 });
 
 test("execution handoff creates the durable review timeline before completion", async () => {
@@ -612,4 +613,16 @@ test("an explicitly unavailable Reviewer model is reported without silently fall
     assert.match(result.error?.code || "", /reviewer_model_unavailable/);
     assert.equal(fixture.reviewerCreate.length, 0);
   });
+});
+
+test("blocked or failed filesystem deletion preserves all runtime history", async () => {
+  for (const blockedPreview of [true, false]) {
+    let cleared = false, deleted = false;
+    const result = await executePermanentWorkspaceDelete({ action: "delete", workspaceId: "fixture", confirm: true }, [], { agentBinding: true, reviewSessionCount: 2, activeReviewSessionId: null }, {
+      preview: async () => ({ ok: true, result: { canDelete: !blockedPreview, blockedReason: "workspace_dirty" } }),
+      deleteWorkspace: async () => { deleted = true; return { ok: false, error: { code: "workspace_dirty", message: "user changed worktree after preview" } }; },
+      clearRuntime: () => { cleared = true; throw new Error("must not clear history"); },
+    });
+    assert.equal(result.ok, false); assert.equal(cleared, false); assert.equal(deleted, !blockedPreview);
+  }
 });

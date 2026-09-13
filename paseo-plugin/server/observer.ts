@@ -159,6 +159,11 @@ const bridge = new ObserverBridge();
 export async function handleObserver(input: QueryInput, context?: AgentContext): Promise<ObserverResponse> {
   try {
     const callWithRecovery = async (): Promise<ObserverResponse> => {
+      const project = currentProject();
+      if (project) {
+        const backend = await startBackend(project.configPath);
+        if (backend.state !== "ready") return { ok: false, error: { code: "backend_unavailable", message: backend.message || "Backend is unavailable" } };
+      }
       if (input.method === "workspace.addRepositories") {
         return withWorkspaceScope(String(input.params.workspaceId || ""), async () => {
           if (context) {

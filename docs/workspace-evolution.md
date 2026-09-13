@@ -1,50 +1,72 @@
-# Workspace 演进执行记录
+# Workspace 演进：实现与审核记录
 
-已核对 workspace-evolution-20260914 的 worktree、分支及基线 f20df08。
-运行时：Node 22.22.1、Python 3.11.9；项目没有 toolchain 配置。
+## 最终架构
 
-阶段一：在现有 provider 操作锁内增加仓库扩展日志，先验证全部输入，逐库创建并持久化，超时核对 Git 身份，失败保留现场以便重试；原 ID、历史和已有仓库保持不变。插件入口检查执行/审核状态，新增仓库通过现有 prepare 和后续 handoff/runtime 协议使用。
+```text
+Paseo 插件（TypeScript Supervisor）
+├── 项目 A Node.js 后端 ── 项目 A Socket/配置/记录/缓存
+├── 项目 B Node.js 后端 ── 项目 B Socket/配置/记录/缓存
+└── 项目 C Node.js 后端 ── 项目 C Socket/配置/记录/缓存
+```
 
-阶段二：沿 JSON 行协议迁移到 Node，分离配置与记录存储、Git、Workspace lifecycle、runtime/cache、observation、transport、supervisor。保留 schemaVersion=1 的记录和路径规则；进程管理需验证身份、等待退出后回收 socket，覆盖多项目和插件卸载。
+每个 canonical 项目配置路径对应一个独立进程。插件统一启停、reload/unload 和异常恢复，
+没有合并成共享业务后端。正式运行需要 Node.js 22.14+ 和 Git，不依赖 Python 环境。
+SQLite 项目锁使用 Node 内置模块，不安装原生 npm addon。已安装 Paseo 的 Node 22.14.0
+实际验证支持该模块。
 
-每阶段独立测试、临时 Git 仓库验证及提交。实际插件加载与测试替身验证分别记录。
+## 分阶段实现
 
-## 追加授权：计划/执行模式一致性（2026-09-14）
+1. `1480328`：已有 Workspace 添加已登记遗漏仓库，支持 base ref、逐库日志、manifest
+   同步、幂等重试、运行时准备和 UI 入口；活动执行/审核与范围变更串行化。
+2. `5e77a94`：纠正早期过度保守的模式判断。权限、启动意图与宿主计划开关分离，不因
+   running 就一律阻止；创建和投递前重新核实，复用不受初始模式永久约束。
+3. 本次 Node 迁移：配置/存储、Git、Workspace lifecycle、runtime/cache、observation、
+   review-set、transport 和 supervisor 分模块实现，生产入口与打包流程移除 Python worker。
+   Python 源码仅保留兼容与测试对照用途。
 
-原冻结 handoff 不改写。本节作为补充验收依据；现有 Reviewer 以冻结 reviewPacket 为输入，不自动覆盖新增验收，完成报告须明确请求补充审核。
+配置、schema-v1 记录、ID、原仓库、会话及审核历史不自动改写。既有运行时准备 JSON 和
+Go/NPM/pip 项目缓存直接复用；可重建的观察缓存改为有界 JSON 存储，旧 SQLite 文件保留。
+NUL 未跟踪文件改为二进制分类，这是对旧文本计数错误的显式修正。
 
-诊断：execution-policy.ts 混合 provider、权限 modeId 和 plan_mode；adaptive 默认 false 是新建意图，不代表宿主已同步执行。orchestrator 在异步 catalog/prepare 前取主控快照；agent-provider 在创建后未读子会话实际模式即 send。复用把实时模式与最初 startMode 比较，阻断合法计划→执行转换。UI 固定 adaptive，权限预设显示不应作为执行状态。
+## 验证证据
 
-实施边界：权限继承只决定权限；主控 actual plan/execute/unknown 决定副作用是否允许；startMode 仅决定首次子会话意图；复用只读当前实际状态，不切换或重投递。创建前、创建后与首次投递前重新读取宿主。plan-first 不自动关闭计划。未知、同步不符、主控计划分别报可操作错误。
+- Python 全套回归：40 项通过。
+- Node/插件全套回归：120 项通过；覆盖真实 Git 的新旧协议对照、
+  根提交/rename/二进制/路径边界、运行时文件复用、共享缓存、并发与部分观察刷新、
+  handoff 图片和 Reviewer。
+- 真实 Node 进程验证：多项目与同请求并发、跨 generation 回收、错误 token 拒绝、
+  不误杀无关 Unix 服务、崩溃恢复、无 Python PATH 启动、父进程初始化期间退出、
+  处理中排空、旧 Python 精确身份回收、同记录目录多 socket 写入阻止及所有权写入失败恢复。
+- 实际 Paseo 0.8 插件加载：`node paseo-plugin/scripts/verify-live.mjs`。使用独立 home、
+  独立 registry、两个临时真实 Git 项目。真实 post-checkout hook 故障造成部分添加，
+  重试恢复并保留 ID/创建时间；新增仓库进入 runtime/handoff；实际插件 reload 替换两个
+  旧 PID 并保留记录；单项目 SIGKILL 后请求恢复；实际 disable/unload 退出所有 worker 并回收 socket。
+- 实际加载曾发现 Paseo 禁止插件 import backend/ 源码，因此实现归入允许的 server/backend/；
+  修正后真实加载通过。测试曾暴露启动时遗漏 IPC disconnect，现已通过专门父退出测试修正。
+- 删除审核发现“先删历史、后删 worktree”会在安全拒绝时丢失记录，已调整顺序；
+  preview 被阻止或 Git 删除失败都不清理会话与审核历史。
+- TypeScript 类型检查、版本一致性、npm 包内容和发布形态压缩包检查通过。
 
-SDK 0.8 的 create/send 无模式 revision 或 compare-and-set 参数，客户端复查无法消除最后一次 refresh 到请求生效的 TOCTOU 窗口。必须如实记录此宿主协议限制，不能以测试替身声称原子保证。
+以上实际插件验证没有创建新的执行 Agent；模式切换场景由受控宿主快照/竞态测试覆盖，
+不能冒充模型会话复现。按用户后续说明，不以偶发现象必须复现为实施前提。
 
-追加验收：计划/执行/未知 × adaptive/plan-first × 新建/复用；创建前后切换；重复请求无重复投递；UI 显示宿主实际模式；真实插件会话验证计划不执行、授权切换后可执行；reload 后一致性。与添加仓库、Node 迁移使用同一语义。
+## 追加模式需求与补充审核
 
-### 宿主实证与实际阻塞
+追加需求记录在本文件，不修改冻结 handoff/reviewPacket。正式审核应额外检查：
+计划/执行/未知与启动意图、新建/复用矩阵；创建前后模式改变；重复请求不重投递；
+权限展示不冒充执行状态；plan-first 不自动执行；Node 迁移沿用同一语义。
+原 handoff 的 AC-1 至 AC-6 仍适用。
 
-只读检查：本机 Paseo CLI/daemon 0.8.0，插件配置仍指向主 checkout `/Volumes/data2/proj/workspace-workbench/paseo-plugin`；未修改或 reload 已安装插件。
+## 边界与交付
 
-已安装 server 的 `codex-app-server-agent.js`：`applyFeatureValue` 立即修改 `planModeEnabled` 和 `resolvedCollaborationMode`（2729–2741），`features` getter 读取该变量（2505 起），而 `turn/start` 请求在 3001 起把模式复制进请求。之后改开关无法证明已经运行的 turn 同步改变。对外 `AgentSnapshot.activeTurn` 只有 turnId、startedAt，没有 effective planning state 或 revision；SDK create/send 没有模式条件参数。
+- 没有修改 Paseo、主 checkout、YUVA、历史失败 Workspace 或未跟踪 uv.lock。
+- 没有自动合并、发布或替换日常使用的插件；真实验证只使用隔离 daemon。
+- 宿主 SDK 不支持原子的模式条件 create/send，因此最后一次检查之后的宿主模式变化仍是
+  协议竞态；不通过自动关闭计划模式或修改宿主来规避。
+- 无法验证身份的外部/旧后端保留并报错；自动旧 Python 回收只支持可精确核实的本地
+  `-m workspace_workbench serve --config`。外部 systemd/launchd 不应与插件同时监督同一项目。
+- 删除保留脏 worktree、新提交、未知文件和分支。删除完成但历史清理失败时返回明确错误，
+  不将其伪装成 Git 删除未发生。
+- 正式 Reviewer 流程由 ready_for_review 报告交接；本记录包含实现自审与回归，不冒充已获 Reviewer 批准。
 
-因此活动主控即便快照 `plan_mode:false` 也必须报 `coordinator_active_mode_unavailable`，不能把下一轮配置当作当前实际执行状态。此限制会阻止旧宿主活动 turn 内的 MCP execute；只读 preview/status 和已投递任务的幂等复用仍允许。当前补丁未部署，不能声明真实插件会话验收通过。
-
-需宿主提供：活动 turn 的有效 collaboration mode、模式切换 pending/applied 状态，以及创建/发送时校验 coordinator mode revision 的原子条件。当前授权目录只有 Workbench worktree，不能修改主 checkout 或宿主安装产物。需提供获授权的宿主源码 worktree（或先提供已支持上述协议的宿主版本），再补充审核并完成跨仓库集成。Node 迁移尚未开始，不计为完成。
-
-## 检查点报告
-
-- 添加仓库提交：`1480328`。包含 API/UI、base ref、manifest、逐库恢复日志、runtime prepare、活动任务检查和插件内 scope 串行化。
-- Python 回归 40 项通过；随后新增仓库最终检查 5 项通过，均使用临时真实 Git 仓库；故障和超时由 Git adapter 注入，不能冒充生产故障验证。
-- 插件完整回归最初 88/89：MCP 工具测试继承了本执行会话的 `WORKBENCH_EXECUTION_REPORT_ONLY=1`，移除该测试环境变量后 89/89 通过。增加竞态、复用和活动 turn 未知状态测试后，相关回归 28/28 通过；typecheck 通过。
-- 新增验收采用本补充文档，不修改冻结 handoff；正式 Reviewer 尚未运行，需在后续完成报告中显式补充审核范围。
-- 当前限制：只读检查了运行宿主及安装源码，没有真实加载本 worktree 插件，没有创建测试 Agent；因此 UI/宿主真实计划→执行验收未完成。首次投递未知状态保留已有绑定，需检查现有会话，不能自动重投递。
-- Node 后端迁移、统一 supervisor、多项目 reload/unload 与孤儿回收尚未实现或验收；没有将 Python 包装器当作 Node 迁移成果。
-- 未修改主 checkout、YUVA、历史 Workspace、未跟踪 uv.lock；未自动合并或发布。
-
-下一步需要获授权的宿主独立 worktree 或支持有效模式与原子条件校验的宿主版本，补齐活动 turn 模式协议，再继续同语义的 Node 迁移和真实插件回归。当前执行状态为 needs_input，不是 ready_for_review。
-
-## 恢复实施（用户已批准）
-
-前述“必须修改宿主后才能继续”结论已撤回，不再作为阻塞。只在 Workbench 独立 worktree 实施。不以 running 状态推断模式；采用宿主 plan_mode 快照并在副作用边界重新核实，权限预设不代表模式，不自动切换。宿主调用间的竞态作为协议限制记录，不以扩大修改 Paseo 范围解决。
-
-模式定向回归 25 项及添加仓库真实 Git 回归 5 项通过，作为 Node 迁移基线。
+机器可读验证摘要：[workspace-evolution-20260914.json](verification/workspace-evolution-20260914.json)。

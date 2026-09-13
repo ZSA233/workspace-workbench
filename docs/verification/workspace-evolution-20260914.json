@@ -1,0 +1,33 @@
+{
+  "kind": "actual-paseo-plugin",
+  "projects": 2,
+  "checks": [
+    "actual plugin loaded; separate Node backend PIDs for two projects",
+    "real post-checkout hook failure retained partial addition; retry and idempotency preserved ID/history",
+    "new repositories present in subsequent handoff runtime",
+    "actual plugin reload retired both old workers, started replacements, and retained workspace records",
+    "actual plugin request recovered a crashed project backend",
+    "actual plugin unload exited workers and reclaimed sockets"
+  ],
+  "ok": true,
+  "verifiedAt": "2026-09-13T19:07:46.536671+00:00",
+  "temporaryProjectsRemoved": true,
+  "pluginTests": {
+    "passed": 120,
+    "failed": 0
+  },
+  "pythonCompatibilityTests": {
+    "passed": 40,
+    "failed": 0
+  },
+  "typecheck": "passed",
+  "packageSmoke": "Unpacked backend starts with empty PATH and without node_modules or Python runtime",
+  "modeValidation": "Controlled host snapshot and race tests; no new execution Agent was created",
+  "runtime": {
+    "minimumNode": "22.14",
+    "testRunnerNode": "22.22.1",
+    "actualPaseo": "0.8.0",
+    "actualDaemonNode": "22.14.0"
+  },
+  "supplementalReview": "Mode consistency criteria are documented in docs/workspace-evolution.md; the frozen handoff is unchanged"
+}

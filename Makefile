@@ -26,7 +26,7 @@ plugin-test:
 	npm --prefix paseo-plugin test
 
 backend:
-	python scripts/build_backend.py
+	npm --prefix paseo-plugin run typecheck
 
 plugin-package: version-check
 	mkdir -p dist

@@ -15,14 +15,16 @@
     "paseo-plugin.json",
     "tsconfig.json",
     "README.md",
-    "package-lock.json"
+    "package-lock.json",
+    "scripts"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.14"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:plugin-live": "node scripts/verify-live.mjs"
   },
   "dependencies": {
     "@getpaseo/client": "^0.8.0",

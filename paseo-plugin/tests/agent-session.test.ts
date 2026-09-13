@@ -102,7 +102,7 @@ test("default execution creates an independent Agent without a parent", async ()
   process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS = join(directory, "bindings.json");
   process.env.WORKSPACE_WORKBENCH_CONFIG = config;
   const creates: Array<Record<string, unknown>> = [];
-  const worker = { id: "worker", cwd: "/fixture/tree", workspaceId: "paseo", status: "idle", provider: "codex", model: "fixture", labels: {} };
+  const worker = { id: "worker", cwd: "/fixture/tree", workspaceId: "paseo", status: "idle", provider: "codex", model: "fixture", features: parentAgent().features, labels: {} };
   const paseo = {
     agents: {
       ref: (id: string) => ({ refresh: async () => ({ agent: id === "parent" ? parentAgent() : worker }), send: async () => {} }),
@@ -137,7 +137,7 @@ test("explicit child relationship keeps the Paseo parent link", async () => {
   const previous = process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS;
   process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS = join(directory, "bindings.json");
   const creates: Array<Record<string, unknown>> = [];
-  const worker = { id: "worker", cwd: "/fixture/tree", workspaceId: "paseo", status: "idle", provider: "codex", model: "fixture", labels: {} };
+  const worker = { id: "worker", cwd: "/fixture/tree", workspaceId: "paseo", status: "idle", provider: "codex", model: "fixture", features: parentAgent().features, labels: {} };
   const paseo = {
     agents: {
       ref: (id: string) => ({ refresh: async () => ({ agent: id === "parent" ? parentAgent() : worker }), send: async () => {} }),

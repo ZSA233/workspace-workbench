@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { currentProject } from "./projects.ts";
 import { digest, readState, writeState } from "./orchestration-state.ts";
-import { childExecutionConfig } from "./execution-policy.ts";
+import { childExecutionConfig, assertCoordinatorExecution, assertInitialWorkerMode, actualPlanningState, ExecutionPolicyError } from "./execution-policy.ts";
 import { copy } from "../shared/copy.ts";
 import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -104,6 +104,8 @@ function compactAgent(agent: PaseoAgent | null, binding: AgentBinding | null) {
     provider: agent.runtimeInfo?.provider || agent.provider,
     model: agent.runtimeInfo?.model || agent.model || null,
     status: agent.status || null,
+    planningState: actualPlanningState(agent),
+    permissionModeId: agent.currentModeId || null,
     relationship: binding?.relationship || (agent.labels?.["workspace-workbench.parent"] ? "child" : "independent"),
     parentAgentId: binding?.parentAgentId || null,
   };
@@ -241,6 +243,7 @@ function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeRe
     ...section("Expected branches", Object.entries(handoff.expected.branchByRepository).map(([repo, branch]) => `${repo}: ${branch}`)),
     ...section("Expected bases", Object.entries(handoff.expected.baseByRepository).map(([repo, base]) => `${repo}: ${base}`)),
     `Start mode: ${handoff.startMode}`,
+    ...(handoff.startMode === "plan-first" ? ["This handoff authorizes planning only. Do not edit, execute the implementation, or switch out of plan mode. Wait for explicit execution authorization and a confirmed host mode change."] : []),
     "The workspace root is a multi-repository container. Verify the supplied worktree paths and Git branches before editing. The requesting session already completed the runtime preflight; do not delegate or call execute again.",
     "Respect the host permission and sandbox policy. Verify configured runtimes before executing build commands.",
     localized.reviewPromptLanguage,
@@ -334,8 +337,9 @@ async function delegateAgent(
     return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: "parent_agent_missing", message: "Parent Agent is unavailable" } };
   }
   let childConfig;
-  try { childConfig = childExecutionConfig(parentSnapshot.agent, input.handoff.startMode === "plan-first"); }
-  catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: String((error as Error).message), message: copy.agentModeUnconfirmed } }; }
+  const existingBinding = getAgentBinding(input.workspaceId);
+  try { childConfig = existingBinding ? { provider: providerFromAgent(parentSnapshot.agent) } : childExecutionConfig(parentSnapshot.agent, input.handoff.startMode === "plan-first"); }
+  catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: error instanceof ExecutionPolicyError ? error.code : "execution_policy_failed", message: (error as Error).message } }; }
   let configuredProvider: string | null = null;
   const requestedExecutionModel = configuredExecutionModel();
   if (requestedExecutionModel) {
@@ -397,9 +401,10 @@ async function delegateAgent(
         if (saved.relationship !== relationship || (relationship === "child" && saved.parentAgentId !== input.parentAgentId) || current.agent.id !== saved.agentId || !runtimeAgentCwdMatches(runtime, current.agent.cwd) || !runtimeAgentCwdMatches(runtime, saved.cwd) || saved.workspaceId !== input.workspaceId) {
           return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_identity_changed", message: "Agent placement does not match the workspace" } };
         }
-        if (saved.delivery === "pending") throw new Error("handoff_delivery_uncertain");
-        const mode = current.agent.features?.find((feature) => feature.id === "plan_mode");
-        if (providerFromAgent(current.agent) !== selectedProvider || !mode || mode.type !== "toggle" || mode.value !== (input.handoff.startMode === "plan-first")) {
+        if (saved.delivery === "pending") return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_delivery_uncertain", message: "现有子会话已保留，但首次投递尚未确认。请检查该会话；Workbench 不会重复创建或自动重投递。" } };
+        // Reuse is read-only: the host owns subsequent authorized mode changes.
+        // The original startup intent must never reset or constrain that state.
+        if (providerFromAgent(current.agent) !== selectedProvider) {
           return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_mode_mismatch", message: copy.agentModeUnconfirmed } };
         }
         if (current.agent.status === "running" || current.agent.status === "initializing") {
@@ -415,8 +420,14 @@ async function delegateAgent(
       return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: "agent_refresh_failed", message: "Cannot confirm the existing Agent; retry later" } };
     }
   }
+  const verifyCoordinator = async () => {
+    const snapshot = (await parent.refresh())?.agent;
+    if (!snapshot) throw new ExecutionPolicyError("parent_agent_unavailable", "主控会话不可用，请刷新宿主后重试。");
+    assertCoordinatorExecution(snapshot);
+  };
   let paseoWorkspace;
   try {
+    await verifyCoordinator();
     paseoWorkspace = await context.paseo.workspaces.open(runtime.treePath);
     if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, relationship, stage: "creating" });
     const reportToken = randomUUID();
@@ -450,6 +461,7 @@ async function delegateAgent(
         },
       } : {}),
     };
+    await verifyCoordinator();
     const created = await paseoWorkspace.agents.create({
       ...(relationship === "child" ? { parent: input.parentAgentId } : {}),
       env: workerEnv,
@@ -494,16 +506,22 @@ async function delegateAgent(
       }
     }
     try {
+      await verifyCoordinator();
+      const worker = (await context.paseo.agents.ref(created.id).refresh())?.agent;
+      if (!worker) throw new ExecutionPolicyError("worker_mode_unknown", "宿主未返回新子会话，任务尚未投递，请检查会话状态。");
+      if (worker.id !== created.id || !runtimeAgentCwdMatches(runtime, worker.cwd)) throw new ExecutionPolicyError("agent_identity_changed", "宿主返回的子会话身份不匹配，未投递任务。");
+      assertInitialWorkerMode(worker, input.handoff.startMode === "plan-first");
+      await verifyCoordinator();
       const images = resolvedArtifactImageAttachments(handoffArtifacts);
       await created.send(handoffPrompt(input.workspaceId, input.handoff, runtime, relationship, handoffArtifacts), { messageId: handoffHash, ...(images.length ? { images } : {}) });
     } catch (error) {
-      return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: "handoff_delivery_uncertain", message: error instanceof Error ? error.message : "Agent handoff delivery is uncertain" } };
+      return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: error instanceof ExecutionPolicyError ? error.code : "handoff_delivery_uncertain", message: error instanceof Error ? error.message : "Agent handoff delivery is uncertain" } };
     }
     if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, relationship, stage: "sent", agentId: created.id });
     putAgentBinding({ ...binding, delivery: "sent", updatedAt: new Date().toISOString() });
     return { ok: true, action: "created" as const, workspaceId: input.workspaceId, agentId: created.id, relationship, status: created.current()?.status || "initializing" };
   } catch (error) {
-    return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: "agent_create_failed", message: error instanceof Error ? error.message : "Agent creation failed" } };
+    return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: error instanceof ExecutionPolicyError ? error.code : "agent_create_failed", message: error instanceof Error ? error.message : "Agent creation failed" } };
   }
 }
 

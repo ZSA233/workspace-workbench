@@ -59,6 +59,8 @@ const agentShape = z.object({
   cwd: z.string().nullable(),
   provider: z.string(),
   model: z.string().nullable(),
+  planningState: z.enum(["plan", "execute", "unknown"]).optional(),
+  permissionModeId: z.string().nullable().optional(),
   status: z.string().nullable(),
   relationship: agentRelationshipSchema,
   parentAgentId: z.string().nullable(),

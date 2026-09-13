@@ -108,6 +108,7 @@ export function ExecutionBindingCard({
         <View style={[styles.executionStatus, { borderColor: statusColor }]}>
           <Text style={[styles.executionStatusText, { color: statusColor }]}>{statusText}</Text>
         </View>
+        <Text style={styles.executionStatusText}>{agent?.planningState === "plan" ? "计划" : agent?.planningState === "execute" ? "执行" : "模式未知"} · 权限：{agent?.permissionModeId || "未知"}</Text>
         <InlineRefresh visible={refreshing} theme={theme} styles={styles} />
       </View>
       {recoverable || onOpenAgent ? (

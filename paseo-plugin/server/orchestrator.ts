@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { AgentContext } from "./agent-provider.ts";
 import { handleAgentDelegate, handleWorkspaceBinding } from "./agent-provider.ts";
-import { childExecutionConfig } from "./execution-policy.ts";
+import { childExecutionConfig, assertCoordinatorExecution } from "./execution-policy.ts";
 import { queryObserver } from "./observer.ts";
 import { currentProject, resolveProject } from "./projects.ts";
 import { digest, readState, writeState } from "./orchestration-state.ts";
@@ -148,7 +148,6 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
   const capabilities = (listing.result as { capabilities?: { create?: boolean; agent?: boolean; prepare?: boolean } }).capabilities;
   if (!capabilities?.agent || !rawRequest.workspaceId && !capabilities?.create) throw new Error("capability_unavailable");
   if (!rawRequest.workspaceId && (!rawRequest.name || !rawRequest.repositories?.length)) throw new Error("workspace_selection_required");
-  if (action === "execute") childExecutionConfig(parent, rawRequest.handoff.startMode === "plan-first");
   const catalog = await query({ method: "workspace.detail", params: { workspaceId: rawRequest.workspaceId || "main", summary: true } });
   if (!catalog.ok) return catalog;
   const normalized = normalizeWorkflowRequest(rawRequest, catalog.result);
@@ -174,8 +173,15 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
   const run = (async () => {
     let progress: Progress = compatiblePrevious || { identity, identityVersion: 2, workspaceId: fullRequest.workspaceId, stage: "validated" };
     if (progress.identity !== identity) progress = { ...progress, identity, identityVersion: 2 };
+    const verifyExecution = async () => {
+      const snapshot = (await context.paseo.agents.ref(parentAgentId).refresh())?.agent;
+      if (!snapshot) throw new Error("parent_agent_unavailable");
+      assertCoordinatorExecution(snapshot);
+    };
+    await verifyExecution();
     writeState(key, progress);
     if (!progress.workspaceId) {
+      await verifyExecution();
       const response = await query({ method: "workspace.create", params: { name: fullRequest.name, repositories: fullRequest.repositories, baseRefs: fullRequest.baseRefs } });
       if (!response.ok) return response;
       progress = { ...progress, workspaceId: (response.result as { id: string }).id, stage: "created" };
@@ -187,6 +193,7 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
       const repositories = (detail.result as { repositories: Array<{ id: string }> }).repositories;
       if (!repositories?.length) throw new Error("workspace_repositories_unavailable");
       for (const repository of repositories) {
+        await verifyExecution();
         const response = await query({ method: "workspace.prepare", params: { workspaceId: progress.workspaceId, repositoryId: repository.id } });
         const preparation = response.result as { status?: string; issues?: Array<{ code?: string; message?: string; details?: unknown }> } | undefined;
         if (!response.ok || preparation?.status === "prepare_failed") {

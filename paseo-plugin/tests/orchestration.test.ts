@@ -11,8 +11,8 @@ import { workflowRequest, workflowStatusRequest } from "../shared/orchestration.
 
 const parent = (cwd: string, plan = false) => ({ id: "parent", cwd, provider: "codex", model: "fixture", currentModeId: "auto", availableModes: [{ id: "auto" }, { id: "full-access" }], pendingPermissions: [], features: [{ id: "plan_mode", type: "toggle", value: plan }] }) as unknown as PaseoAgent;
 test("provider modes fail closed and inherit the current permission by default", () => {
-  assert.throws(() => childExecutionConfig(parent("/fixture", true), false), /mode_unconfirmed/);
-  assert.throws(() => childExecutionConfig({ ...parent("/fixture"), features: [] }, false), /mode_unconfirmed/);
+  assert.throws(() => childExecutionConfig(parent("/fixture", true), false), /主控仍在计划模式/);
+  assert.throws(() => childExecutionConfig({ ...parent("/fixture"), features: [] }, false), /未返回主控实际计划状态/);
   assert.equal(childExecutionConfig({ ...parent("/fixture"), currentModeId: "full-access" }, true).modeId, "full-access");
   assert.equal(childExecutionConfig({ ...parent("/fixture"), currentModeId: "full-access" }, true, "auto").modeId, "auto");
   assert.deepEqual(childExecutionConfig(parent("/fixture"), true).featureValues, { plan_mode: true });
@@ -27,7 +27,7 @@ test("preview is read-only; execute prepares, creates one child, retries without
   let planning = true, creates = 0;
   const calls: string[] = [];
   let worker: PaseoAgent | null = null;
-  const paseo = { agents: { ref: (id: string) => ({ refresh: async () => ({ agent: id === "parent" ? parent(root, planning) : worker }), send: async () => { throw new Error("unexpected redelivery"); } }), list: async () => ({ entries: worker ? [{ agent: worker }] : [], pageInfo: { hasMore: false } }) }, workspaces: { open: async () => ({ id: "paseo-fixture", agents: { create: async (options: { config: unknown; labels: Record<string,string>; parent?: string }) => { creates++; assert.equal((options.config as { modeId: string }).modeId, "auto"); assert.equal(options.parent, undefined); assert.equal(options.labels["workspace-workbench.relationship"], "independent"); worker = { ...parent(root + "/tree"), id: "child", labels: options.labels, status: "running", workspaceId: "paseo-fixture" }; return { id: "child", current: () => worker }; } } }) } } as unknown as PaseoApi;
+  const paseo = { agents: { ref: (id: string) => ({ refresh: async () => ({ agent: id === "parent" ? parent(root, planning) : worker }), send: async () => { throw new Error("unexpected redelivery"); } }), list: async () => ({ entries: worker ? [{ agent: worker }] : [], pageInfo: { hasMore: false } }) }, workspaces: { open: async () => ({ id: "paseo-fixture", agents: { create: async (options: { config: unknown; labels: Record<string,string>; parent?: string }) => { creates++; assert.equal((options.config as { modeId: string }).modeId, "auto"); assert.equal(options.parent, undefined); assert.equal(options.labels["workspace-workbench.relationship"], "independent"); worker = { ...parent(root + "/tree"), id: "child", labels: options.labels, status: "idle", workspaceId: "paseo-fixture" }; return { id: "child", current: () => worker }; } } }) } } as unknown as PaseoApi;
   const query = async (input: { method: string }) => {
     calls.push(input.method);
     if (input.method === "workspace.list") return { ok: true, result: { capabilities: { create: true, agent: true, prepare: true } } };
@@ -43,7 +43,7 @@ test("preview is read-only; execute prepares, creates one child, retries without
     assert.deepEqual((preview as { request: { repositories?: string[]; baseRefs: Record<string, string> } }).request.repositories, ["api"]);
     assert.deepEqual((preview as { request: { baseRefs: Record<string, string> } }).request.baseRefs, { api: "main" });
     assert.deepEqual(calls, ["workspace.list", "workspace.detail"]);
-    await assert.rejects(run("execute"), /mode_unconfirmed/);
+    await assert.rejects(run("execute"), /主控仍在计划模式/);
     assert.equal(creates, 0);
     planning = false;
     await run("execute");

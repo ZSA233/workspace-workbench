@@ -361,6 +361,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [handoffReferences, setHandoffReferences] = useState("");
   const [handoffReviewInstructions, setHandoffReviewInstructions] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [workerStartMode, setWorkerStartMode] = useState<"adaptive" | "plan-first">("adaptive");
   const [addRepositoriesOpen, setAddRepositoriesOpen] = useState(false);
   const newlyCreatedWorkspace = useRef<string | null>(null);
   const [delegating, setDelegating] = useState(false);
@@ -971,7 +972,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         references: handoffReferences,
         instructions: handoffReviewInstructions,
       }),
-      startMode: "adaptive",
+      startMode: workerStartMode,
       reviewLocale: locale,
       ...(handoffRelationship === "default" ? {} : { relationship: handoffRelationship }),
       policy: { placementGuard: true },
@@ -1262,6 +1263,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       {handoffPacketOpen ? <Modal open onOpenChange={(open) => { if (!open) setHandoffPacketOpen(false); }} title={localizedCopy.handoffPacket}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
           <Text style={styles.layoutMenuHint}>{localizedCopy.handoffPacketHint}</Text>
+          <Text style={styles.layoutMenuHint}>子会话首次启动意图（不代表宿主当前模式）</Text>
+          {(["plan-first", "adaptive"] as const).map((mode) => <Pressable key={mode} accessibilityRole="button" accessibilityState={{ selected: workerStartMode === mode }} onPress={() => setWorkerStartMode(mode)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{mode === "plan-first" ? "先计划，等待明确执行授权" : "执行已授权任务"}</Text></Pressable>)}
           <Text style={styles.reviewEntryMeta}>{localizedCopy.handoffUnderstanding}</Text>
           <TextInput accessibilityLabel={localizedCopy.handoffUnderstanding} multiline placeholder={localizedCopy.handoffUnderstandingPlaceholder} placeholderTextColor={theme.colors.foregroundMuted} value={handoffUnderstanding} onChangeText={setHandoffUnderstanding} style={[styles.targetInput, { minHeight: 58 }]} />
           <Text style={styles.reviewEntryMeta}>{localizedCopy.handoffPlan}</Text>

@@ -31,6 +31,11 @@ test('Agent reuse delivers handoff once; failed identity refresh does not create
   assert.equal(getAgentBinding('sample')?.handoff?.goal,'Review changes');
   await handleWorkspaceDelegate(input,context);
   assert.equal(sends,0,'completed handoff must not be delivered again');
+  child.features[0].value=true;
+  assert.equal((await handleWorkspaceDelegate(input,context)).action,'reused','reuse does not reset a host mode change');
+  child.features=[];
+  assert.equal((await handleWorkspaceDelegate(input,context)).action,'reused','read-only reuse does not infer unknown mode');
+  child.features=[{id:'plan_mode',type:'toggle',value:false}];
   const different=await handleWorkspaceDelegate({ ...input, handoff: handoffSchema.parse({ goal: 'Another task', relationship: 'child' }) },context);
   assert.equal(different.error?.code,'workspace_session_exists');
   const saved=getAgentBinding('sample')!;
@@ -56,8 +61,8 @@ test('new execution handoffs attach referenced images to the execution Agent', a
  process.env.WORKSPACE_WORKBENCH_ARTIFACT_ROOT=join(directory,'artifacts');
  let sentOptions: Record<string, unknown> | undefined;
  const parent={id:'parent',cwd:'/fixture/tree',provider:'codex',model:'model',features:[{id:'plan_mode',type:'toggle',value:false}],currentModeId:'auto',availableModes:[{id:'auto'}],pendingPermissions:[]};
- const worker={id:'worker',cwd:'/fixture/tree',workspaceId:'paseo',status:'initializing',current:()=>({status:'initializing'}),send:async(_message:string,options:Record<string, unknown>)=>{sentOptions=options;}};
- const paseo={agents:{ref:()=>({refresh:async()=>({agent:parent})})},workspaces:{open:async()=>({id:'paseo',agents:{create:async()=>worker}})}} as unknown as PaseoApi;
+ const worker={...parent,id:'worker',cwd:'/fixture/tree',workspaceId:'paseo',status:'initializing',current:()=>({status:'initializing'}),send:async(_message:string,options:Record<string, unknown>)=>{sentOptions=options;}};
+ const paseo={agents:{ref:(id:string)=>({refresh:async()=>({agent:id==='parent'?parent:worker})})},workspaces:{open:async()=>({id:'paseo',agents:{create:async()=>worker}})}} as unknown as PaseoApi;
  const context={paseo,query:async()=>({ok:true,result:{workspaceId:'sample',managed:true,treePath:'/fixture/tree',capabilities:{agent:true},repositories:[]}})};
  try{
   storeArtifactBytes({id:'draft',title:'Draft',kind:'image',mimeType:'image/png',bytes:Buffer.from('draft-image')});
@@ -71,3 +76,30 @@ test('new execution handoffs attach referenced images to the execution Agent', a
   rmSync(directory,{recursive:true,force:true});
  }
 });
+
+for (const phase of ['before-create', 'after-create', 'worker-unknown', 'worker-wrong-mode'] as const) {
+ test(`mode race ${phase} prevents first delivery`, async () => {
+  const directory=mkdtempSync(join(tmpdir(),'workbench-mode-race-'));
+  const previous=process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS;
+  process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS=join(directory,'bindings.json');
+  let planning=false, sends=0, creates=0;
+  const snapshot=(id:string)=>({id,cwd:'/fixture/tree',provider:'codex',model:'model',features:id==='worker'&&phase==='worker-unknown'?[]:[{id:'plan_mode',type:'toggle',value:id==='parent'?planning:phase==='worker-wrong-mode'}],currentModeId:'auto',availableModes:[{id:'auto'}],pendingPermissions:[]});
+  const paseo={agents:{ref:(id:string)=>({refresh:async()=>({agent:snapshot(id)})})},workspaces:{open:async()=>{
+   if(phase==='before-create')planning=true;
+   return {id:'paseo',agents:{create:async()=>{
+    creates++; if(phase==='after-create')planning=true;
+    return {id:'worker',send:async()=>{sends++;},current:()=>snapshot('worker')};
+   }}};
+  }}} as unknown as PaseoApi;
+  try {
+   const result=await handleWorkspaceDelegate({workspaceId:'race',parentAgentId:'parent',handoff:handoffSchema.parse({goal:'Fixture'})},{paseo,query:async()=>({ok:true,result:{managed:true,treePath:'/fixture/tree',capabilities:{agent:true}}})});
+   assert.equal(result.ok,false);
+   assert.equal(sends,0);
+   assert.equal(creates,phase==='before-create'?0:1);
+   assert.equal(result.error?.code,phase==='worker-unknown'?'worker_mode_unknown':phase==='worker-wrong-mode'?'worker_mode_not_synchronized':'coordinator_planning');
+  } finally {
+   if(previous===undefined)delete process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS;else process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS=previous;
+   rmSync(directory,{recursive:true,force:true});
+  }
+ });
+}

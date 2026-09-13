@@ -154,7 +154,13 @@ export function workspaceMeta(workspace: WorkspaceSummary, strings: WorkbenchCop
   const parts: string[] = [];
   if (isMainWorkspace(workspace)) return workspaceSignals(workspace, strings).join(" · ");
   if (workspace.state && workspace.state !== "active") {
-    parts.push(workspace.state === "removed" ? strings.workspaceStateRemoved : workspace.state === "deletion_pending" ? strings.workspaceStateDeletionPending : workspace.state);
+    parts.push(workspace.state === "removed"
+      ? strings.workspaceStateRemoved
+      : workspace.state === "deletion_pending"
+        ? strings.workspaceStateDeletionPending
+        : workspace.state === "create_failed"
+          ? strings.workspaceStateCreateFailed
+          : workspace.state);
   }
   if (workspace.repositoryCount > 1) parts.push(formatCopyFrom(strings, "repoCountLabel", [workspace.repositoryCount]));
   parts.push(...workspaceSignals(workspace, strings));

@@ -555,7 +555,7 @@ class GitWorktreeProvider:
             if not workspace.get("managed"):
                 raise WorkbenchError("live workspace cannot be removed", code="workspace_not_managed")
             state = str(workspace.get("state") or "active")
-            if state not in {"active", "deletion_pending", "removed"}:
+            if state not in {"active", "create_failed", "deletion_pending", "removed"}:
                 raise WorkbenchError("workspace is not removable in its current state", code="workspace_state_invalid")
             tasks = [dict(task) for task in (active_tasks or []) if isinstance(task, Mapping)]
             if lock_only:
@@ -614,6 +614,34 @@ class GitWorktreeProvider:
             saved = self._write_record(next_workspace)
             return {"workspaceId": workspace_id, "restored": True, "state": saved.get("state")}
 
+    @staticmethod
+    def _prune_stale_worktree(source_git: GitClient, worktree_path: Path) -> None:
+        """Remove a managed worktree whose linked .git marker is already gone."""
+        if worktree_path.is_symlink() or worktree_path.is_file():
+            worktree_path.unlink(missing_ok=True)
+        elif worktree_path.is_dir():
+            shutil.rmtree(worktree_path)
+        pruned = source_git.run(["worktree", "prune", "--expire", "now"], check=False)
+        if pruned.returncode != 0:
+            raise GitCommandError(
+                pruned.stderr.strip() or "stale Git worktree metadata could not be pruned",
+                code="git_worktree_cleanup_failed",
+                details={"worktreePath": str(worktree_path), "returncode": pruned.returncode},
+            )
+        remaining = source_git.run(["worktree", "list", "--porcelain"], check=False)
+        if remaining.returncode != 0:
+            raise GitCommandError(
+                remaining.stderr.strip() or "Git worktree registrations could not be checked",
+                code="git_worktree_cleanup_failed",
+                details={"worktreePath": str(worktree_path), "returncode": remaining.returncode},
+            )
+        if f"worktree {worktree_path}\n" in remaining.stdout:
+            raise WorkbenchError(
+                "stale Git worktree registration could not be removed",
+                code="git_worktree_cleanup_failed",
+                details={"worktreePath": str(worktree_path)},
+            )
+
     def permanent_delete(self, workspace_id: str, *, confirm: bool = False) -> dict[str, Any]:
         if not self.capabilities()["permanentDelete"]:
             raise WorkbenchError("permanent workspace deletion is disabled", code="capability_unavailable")
@@ -646,16 +674,15 @@ class GitWorktreeProvider:
                 worktree_path = Path(str(worktree_value)).expanduser().resolve()
                 if not _inside(worktree_path, tree_path):
                     raise WorkbenchError("workspace repository path is outside the provider root", code="path_invalid")
-                if not worktree_path.exists():
-                    continue
                 source_value = repository.get("sourcePath")
                 if source_value:
                     source_git = GitClient(source_value, timeout=self.config.git_timeout_seconds)
                     registered = source_git.run(["worktree", "list", "--porcelain"], check=False).stdout
                     if f"worktree {worktree_path}\n" in registered:
-                        source_git.run(["worktree", "remove", "--force", str(worktree_path)])
-                    elif worktree_path.is_dir():
-                        shutil.rmtree(worktree_path)
+                        if (worktree_path / ".git").exists():
+                            source_git.run(["worktree", "remove", "--force", str(worktree_path)])
+                        else:
+                            self._prune_stale_worktree(source_git, worktree_path)
                 elif worktree_path.is_dir():
                     shutil.rmtree(worktree_path)
             if tree_path.exists():

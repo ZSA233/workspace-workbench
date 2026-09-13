@@ -439,7 +439,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   // and trigger an unwanted fallback.
   const selectedWorkspace = observedWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId);
   const selectedWorkspaceIsMain = isMainWorkspace(selectedWorkspace);
-  const selectedWorkspaceBlocksTasks = selectedWorkspace?.state === "deletion_pending" || selectedWorkspace?.state === "removed";
+  const selectedWorkspaceUnavailable = selectedWorkspace?.state === "create_failed" || selectedWorkspace?.state === "record_invalid";
+  const selectedWorkspaceBlocksTasks = selectedWorkspaceUnavailable || selectedWorkspace?.state === "deletion_pending" || selectedWorkspace?.state === "removed";
   const agentId = "agentId" in props ? props.agentId : undefined;
   const parentAgentId = agentId || null;
   const rawAgentContextRpc = useRpc(agentContextQuery);
@@ -590,7 +591,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         maxCommits: graphView.maxCommits,
       },
     }),
-    enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady),
+    enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable),
     refetchInterval: observationInterval(REFRESH_INTERVALS.repository),
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
@@ -612,7 +613,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         commitSha: selectedCommit || undefined,
       },
     }),
-    enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady),
+    enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable),
     refetchInterval: observationInterval(REFRESH_INTERVALS.repository),
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
@@ -885,7 +886,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       boundedRefresh(listQuery.refetch()),
       ...(workspaceDirectory && !selectionResolved ? [boundedRefresh(identifyQuery.refetch())] : []),
       ...(selectedWorkspaceId ? [boundedRefresh(detailQuery.refetch())] : []),
-      ...(selectedWorkspaceId && selectedRepoPath ? [boundedRefresh(graphQuery.refetch()), boundedRefresh(changesQuery.refetch())] : []),
+      ...(selectedWorkspaceId && selectedRepoPath && !selectedWorkspaceUnavailable ? [boundedRefresh(graphQuery.refetch()), boundedRefresh(changesQuery.refetch())] : []),
       ...(tab === "review" && reviewIds.length ? [boundedRefresh(reviewQuery.refetch())] : []),
       ...(selectedWorkspaceId && selectedWorkspace && !selectedWorkspaceIsMain && listResult?.capabilities?.agent
         ? [boundedRefresh(bindingQuery.refetch())]
@@ -897,7 +898,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     });
     refreshFlight.current = flight;
     return flight;
-  }, [backendQuery.refetch, bindingQuery.refetch, changesQuery.refetch, detailQuery.refetch, graphQuery.refetch, identifyQuery.refetch, listQuery.refetch, listResult?.capabilities?.agent, reviewIds.length, reviewQuery.refetch, selectedRepoPath, selectedWorkspace, selectedWorkspaceId, selectedWorkspaceIsMain, selectionResolved, tab, workspaceDirectory]);
+  }, [backendQuery.refetch, bindingQuery.refetch, changesQuery.refetch, detailQuery.refetch, graphQuery.refetch, identifyQuery.refetch, listQuery.refetch, listResult?.capabilities?.agent, reviewIds.length, reviewQuery.refetch, selectedRepoPath, selectedWorkspace, selectedWorkspaceId, selectedWorkspaceIsMain, selectedWorkspaceUnavailable, selectionResolved, tab, workspaceDirectory]);
 
   useRefreshOnForeground(Boolean(projectConfig), refreshAll);
 

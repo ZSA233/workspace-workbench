@@ -148,6 +148,18 @@ export const WorkspaceView = memo(function WorkspaceView({
   }
   const repositories = detail.repositories;
   const toolchain = detail.workspace.toolchain;
+  if (detail.workspace.state === "create_failed") {
+    return (
+      <View onLayout={(event) => onContentLayout(event.nativeEvent.layout.height)}>
+        <View style={[styles.warningCard, { borderColor: theme.colors.statusDanger }]}>
+          <Text style={[styles.warningTitle, { color: theme.colors.statusDanger }]}>{copy.workspaceCreateFailedTitle}</Text>
+          <Text style={styles.warningText}>{copy.workspaceCreateFailedDescription}</Text>
+          {detail.workspace.issues?.map((issue, index) => <Text key={`${issue.code}-${index}`} style={styles.repositoryIssueDetail}>{issue.message}</Text>)}
+          <Text style={styles.layoutMenuHint}>{copy.workspaceCreateFailedRecovery}</Text>
+        </View>
+      </View>
+    );
+  }
   const selectedRepositoryIssues = selectedRepository
     ? selectedRepository.issues.concat(selectedRepository.changeIssues)
     : [];

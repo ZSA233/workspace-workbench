@@ -267,8 +267,9 @@ async function delegateAgent(
   const lifecycle = await (context.query || queryObserver)({ method: "workspace.list", params: { includeRemoved: true } });
   if (lifecycle.ok) {
     const workspace = (lifecycle.result as { workspaces?: Array<{ id?: string; state?: string }> } | undefined)?.workspaces?.find((item) => item.id === input.workspaceId);
-    if (workspace?.state === "deletion_pending" || workspace?.state === "removed") {
-      return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "workspace_deletion_pending", message: "This Workspace is pending deletion and cannot receive a new task" } };
+    if (workspace?.state === "deletion_pending" || workspace?.state === "removed" || workspace?.state === "create_failed") {
+      const failed = workspace.state === "create_failed";
+      return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: failed ? "workspace_create_failed" : "workspace_deletion_pending", message: failed ? "This Workspace failed to create and cannot receive a new task" : "This Workspace is pending deletion and cannot receive a new task" } };
     }
   }
   let existingReview = null;

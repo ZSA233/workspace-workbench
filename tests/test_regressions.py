@@ -39,6 +39,10 @@ class Regressions(unittest.TestCase):
                 self.assertEqual(record["state"], "create_failed")
                 self.assertFalse(Path(record["treePath"]).exists())
                 self.assertNotIn("obs/partial/api", run_git(repo, "branch", "--list"))
+                removed = service.handle("workspace.remove", {"workspaceId": "partial"})
+                self.assertEqual(removed["state"], "removed")
+                deleted = service.handle("workspace.delete", {"workspaceId": "partial", "confirm": True})
+                self.assertTrue(deleted["deleted"])
             finally:
                 service.close()
 
@@ -169,6 +173,31 @@ class Regressions(unittest.TestCase):
                 self.assertIn(branch, run_git(repo, "branch", "--list"))
                 with self.assertRaises(WorkbenchError):
                     service.provider.get("safe-delete")
+            finally:
+                service.close()
+
+    def test_permanent_delete_recovers_from_a_missing_worktree_git_marker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = make_repository(root, "api")
+            config = root / "project.json"
+            write_config(config, root, [{"id": "api", "path": "api"}])
+            service = ObserverService(load_config(config))
+            try:
+                created = service.handle("workspace.create", {"name": "stale-worktree"})
+                target = Path(created["repositories"][0]["worktreePath"])
+                branch = created["repositories"][0]["branch"]
+                marker = target / ".git"
+                self.assertTrue(marker.is_file())
+                marker.unlink()
+
+                service.handle("workspace.remove", {"workspaceId": "stale-worktree"})
+                deleted = service.handle("workspace.delete", {"workspaceId": "stale-worktree", "confirm": True})
+
+                self.assertTrue(deleted["deleted"])
+                self.assertFalse(target.exists())
+                self.assertIn(branch, run_git(repo, "branch", "--list"))
+                self.assertNotIn(str(target), run_git(repo, "worktree", "list", "--porcelain"))
             finally:
                 service.close()
 

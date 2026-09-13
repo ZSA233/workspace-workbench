@@ -279,9 +279,11 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
   const status = isMainWorkspace(workspace)
     ? ""
     : pending
-      ? localizedCopy.workspaceStateDeletionPending
+        ? localizedCopy.workspaceStateDeletionPending
       : removed
         ? localizedCopy.workspaceStateRemoved
+        : workspace.state === "create_failed"
+          ? localizedCopy.workspaceStateCreateFailed
     : workspace.dirty
     ? localizedCopy.workspaceStatusDirty
     : workspace.unpushed
@@ -297,6 +299,8 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
     ? theme.colors.statusWarning
     : removed
     ? theme.colors.foregroundMuted
+    : workspace.state === "create_failed"
+    ? theme.colors.statusDanger
     : workspace.dirty || workspace.unpushed || workspace.blockerCount > 0
     ? theme.colors.statusWarning
     : workspace.observationStale || workspace.dirty === null
@@ -320,9 +324,9 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
       {!isMainWorkspace(workspace) ? <View style={styles.workspaceOptionActions}>
         {onInspect ? <Pressable accessibilityLabel={localizedCopy.workspaceDeleteImpact} accessibilityRole="button" disabled={busy} onPress={() => onInspect(workspace)} style={styles.workspaceOptionAction}><Text style={styles.workspaceOptionActionText}>i</Text></Pressable> : null}
         {pending && onRestore ? <Pressable accessibilityLabel={localizedCopy.workspaceRestore} accessibilityRole="button" disabled={busy} onPress={() => onRestore(workspace)} style={styles.workspaceOptionAction}><Text style={[styles.workspaceOptionActionText, { color: observerAccent(theme) }]}>↩</Text></Pressable> : null}
-        {!removed && !pending && onRemove ? <Pressable accessibilityLabel={localizedCopy.workspaceDelete} accessibilityRole="button" disabled={busy} onPress={() => onRemove(workspace)} style={styles.workspaceOptionAction}><Text style={[styles.workspaceOptionActionText, { color: observerAccent(theme) }]}>×</Text></Pressable> : null}
+        {!removed && !pending && onRemove ? <Pressable accessibilityLabel={localizedCopy.workspaceDelete} accessibilityRole="button" disabled={busy} onPress={() => onRemove(workspace)} style={styles.workspaceOptionAction}><Icon name="CircleX" size={15} color={observerAccent(theme)} /></Pressable> : null}
         {removed && onRestore ? <Pressable accessibilityLabel={localizedCopy.workspaceRestore} accessibilityRole="button" disabled={busy} onPress={() => onRestore(workspace)} style={styles.workspaceOptionAction}><Text style={[styles.workspaceOptionActionText, { color: observerAccent(theme) }]}>↩</Text></Pressable> : null}
-        {removed && onPermanentDelete ? <Pressable accessibilityLabel={localizedCopy.workspacePermanentDelete} accessibilityRole="button" disabled={busy} onPress={() => onPermanentDelete(workspace)} style={styles.workspaceOptionAction}><Text style={[styles.workspaceOptionActionText, { color: theme.colors.statusDanger }]}>⌫</Text></Pressable> : null}
+        {removed && onPermanentDelete ? <Pressable accessibilityLabel={localizedCopy.workspacePermanentDelete} accessibilityRole="button" disabled={busy} onPress={() => onPermanentDelete(workspace)} style={styles.workspaceOptionAction}><Icon name="CircleX" size={15} color={theme.colors.statusDanger} /></Pressable> : null}
       </View> : null}
     </View>
   );

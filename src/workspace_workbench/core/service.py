@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping
 
 from .. import __version__
 from .cache import ObservationCache
-from .config import ProjectConfig, discover_git_repositories
+from .config import ProjectConfig, discover_git_repositories, load_config
 from .errors import WorkbenchError
 from .git import GitClient, GitFile
 from ..providers.git_worktree import GitWorktreeProvider
@@ -36,6 +36,7 @@ READ_METHODS = frozenset({
     "review-set.brief",
 })
 MANAGEMENT_METHODS = frozenset({
+    "observer.reload",
     "workspace.create",
     "workspace.prepare",
     "workspace.cleanup",
@@ -114,20 +115,7 @@ class ObserverService:
     def __init__(self, config: ProjectConfig, *, provider: WorkspaceProvider | None = None) -> None:
         self.config = config
         self.provider = provider or GitWorktreeProvider(config)
-        from ..providers.toolchain import ProjectRuntimeManager
-        if config.toolchain and str(config.toolchain.get("manager") or "mise") not in {"mise", "system"}:
-            raise WorkbenchError("unsupported toolchain provider", code="config_invalid")
-        self.toolchain = (
-            ProjectRuntimeManager(
-                config.toolchain,
-                config.state_root,
-                cache_root=config.cache_root,
-                cache_enabled=config.cache_enabled,
-                config_root=config.config_path.parent,
-            )
-            if config.toolchain
-            else None
-        )
+        self.toolchain = self._build_toolchain(config)
         self.cache = ObservationCache(
             sqlite_path=config.state_root / "observer.sqlite3",
             max_entries=config.cache_max_entries,
@@ -140,6 +128,35 @@ class ObserverService:
         self._repository_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="repository")
         self._detail_slots = threading.BoundedSemaphore(2)
         self._closed = False
+
+    @staticmethod
+    def _build_toolchain(config: ProjectConfig):
+        from ..providers.toolchain import ProjectRuntimeManager
+        if config.toolchain and str(config.toolchain.get("manager") or "mise") not in {"mise", "system"}:
+            raise WorkbenchError("unsupported toolchain provider", code="config_invalid")
+        return (
+            ProjectRuntimeManager(
+                config.toolchain,
+                config.state_root,
+                cache_root=config.cache_root,
+                cache_enabled=config.cache_enabled,
+                config_root=config.config_path.parent,
+            )
+            if config.toolchain
+            else None
+        )
+
+    def reload_config(self) -> dict[str, Any]:
+        next_config = load_config(self.config.config_path)
+        stable_fields = ("project_id", "source_root", "workspace_root", "state_root", "socket_path", "records_root", "trees_root", "repositories", "management_enabled", "agent_enabled")
+        if any(getattr(self.config, field) != getattr(next_config, field) for field in stable_fields):
+            raise WorkbenchError("project layout changes require a backend restart", code="config_reload_required")
+        next_toolchain = self._build_toolchain(next_config)
+        self.config = next_config
+        if hasattr(self.provider, "config"):
+            self.provider.config = next_config  # type: ignore[attr-defined]
+        self.toolchain = next_toolchain
+        return {"reloaded": True, "project": {"id": self.config.project_id, "displayName": self.config.display_name}}
 
     def close(self) -> None:
         if self._closed:
@@ -154,6 +171,8 @@ class ObserverService:
         values = dict(params or {})
         if method == "observer.health":
             return self.health()
+        if method == "observer.reload":
+            return self.reload_config()
         if method == "workspace.list":
             return self.workspace_list(values)
         if method == "workspace.detail":

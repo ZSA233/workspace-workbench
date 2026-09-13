@@ -184,6 +184,7 @@ import { chooseProject, useProjectMemory } from "./project-memory";
 import { CreateWorkspace } from "./components/create-workspace";
 import { ProjectSetup } from "./components/project-setup";
 import { ProjectStorageMenu } from "./components/project-storage";
+import { ProjectRuntimeMenu } from "./components/project-runtime";
 import { WorkspaceDeletionPanel } from "./components/workspace-deletion";
 
 import { ExecutionBindingCard } from "./components/agent";
@@ -274,6 +275,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const [storageMenuOpen, setStorageMenuOpen] = useState(false);
+  const [runtimeSettingsOpen, setRuntimeSettingsOpen] = useState(false);
   const [reviewSettingsOpen, setReviewSettingsOpen] = useState(false);
   const [reviewSettingsScope, setReviewSettingsScope] = useState<"project" | "global">("project");
   const [reviewMode, setReviewMode] = useState<"off" | "manual" | "automatic">("manual");
@@ -293,8 +295,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [sessionProviderRelationships, setSessionProviderRelationships] = useState<Record<string, AgentRelationship>>({});
   const markReviewField = useCallback((field: string) => { reviewDirtyFields.current.add(field); }, []);
   const markSessionField = useCallback((field: string) => { sessionDirtyFields.current.add(field); }, []);
-  const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setStorageMenuOpen(false); setLayoutMenuOpen(true); }, []);
-  const openStorageMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setStorageMenuOpen(true); }, []);
+  const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setStorageMenuOpen(false); setRuntimeSettingsOpen(false); setLayoutMenuOpen(true); }, []);
+  const openStorageMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setRuntimeSettingsOpen(false); setStorageMenuOpen(true); }, []);
+  const openRuntimeSettings = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setStorageMenuOpen(false); setReviewSettingsOpen(false); setRuntimeSettingsOpen(true); }, []);
   const compact = layout.compact || (panelWidth > 0 && panelWidth < 480);
   const styles = useMemo(() => makeStyles(theme, compact), [theme, compact]);
   const preferences = useObserverPreferences(preferenceScopeKey);
@@ -776,6 +779,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [syncReviewEditor]);
   const openReviewSettings = useCallback(() => {
     setLayoutMenuOpen(false);
+    setStorageMenuOpen(false);
+    setRuntimeSettingsOpen(false);
     syncReviewEditor();
     setReviewSettingsOpen(true);
   }, [syncReviewEditor]);
@@ -1454,6 +1459,15 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         compact={compact}
         theme={theme}
       />
+      <ProjectRuntimeMenu
+        open={runtimeSettingsOpen}
+        onClose={() => setRuntimeSettingsOpen(false)}
+        projectConfig={projectConfig}
+        compact={compact}
+        theme={theme}
+        styles={styles}
+        onSaved={() => { void Promise.allSettled([listQuery.refetch(), detailQuery.refetch(), storageQuery.refetch()]); }}
+      />
       <WorkspaceDeletionPanel
         open={Boolean(lifecycleWorkspaceId)}
         workspace={observedWorkspaces.find((workspace) => workspace.id === lifecycleWorkspaceId)}
@@ -1479,6 +1493,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}
         onCreate={listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setCreateOpen(true); } : undefined}
         onOpenStorage={openStorageMenu}
+        onOpenRuntimeSettings={openRuntimeSettings}
         onOpenReviewSettings={openReviewSettings}
         open={layoutMenuOpen}
         onClose={() => setLayoutMenuOpen(false)}

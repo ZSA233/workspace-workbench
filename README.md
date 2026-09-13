@@ -46,6 +46,10 @@ workspace-workbench serve --config /path/to/project/workbench.json
 `stateRoot/cache`，用于 Go 编译/模块、NPM 和 pip 下载缓存；`node_modules`、`.venv` 和构建产物
 仍然属于各自 Workspace，不会跨 Workspace 共用。
 
+插件中可从顶部“三点菜单 → 项目运行时设置”修改运行时策略、mise/运行时路径和项目缓存位置；
+同一页面也可以编辑按仓库划分的运行时要求 JSON。保存后服务会热加载配置，已有 Workspace 需要
+再次点击“准备运行时”。
+
 ## 安装 Paseo 插件
 
 直接从 GitHub 安装：

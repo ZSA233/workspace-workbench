@@ -133,7 +133,7 @@ class ObserverBridge {
     const request: SocketRequest = { id: String(++this.sequence), method: input.method, params: input.params || {} };
     const pending = this.request(request)
       .then((response) => {
-        if (response.ok && ["workspace.create", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete"].includes(input.method)) {
+        if (response.ok && ["observer.reload", "workspace.create", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete"].includes(input.method)) {
           for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
         }
         if (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method)) {

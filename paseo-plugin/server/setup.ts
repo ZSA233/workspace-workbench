@@ -4,8 +4,9 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import type { ProjectSetupScan, SetupRepository } from "../shared/setup.ts";
+import type { ProjectRuntimeSettings, ProjectRuntimeSettingsUpdateInput, ProjectSetupScan, SetupRepository } from "../shared/setup.ts";
 import { backendStatus, startBackend } from "./backend-manager.ts";
+import { handleObserver } from "./observer.ts";
 import { resolveProject, type ProjectRoute } from "./projects.ts";
 
 const execFileAsync = promisify(execFile);
@@ -24,6 +25,9 @@ type ConfigLayout = {
   recordsRoot: string;
   stateRoot: string;
 };
+
+const RUNTIME_TOOLS = new Set(["go", "python", "node"]);
+const RUNTIME_VERSION = /^\d+(?:\.\d+){0,2}$/;
 
 function slug(value: string): string {
   const result = value.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -51,6 +55,95 @@ function readConfigValue(path: string): ConfigValue {
   } catch {
     return {};
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function runtimeRequirements(value: unknown): Record<string, Record<string, string>> {
+  if (!isRecord(value)) return {};
+  const result: Record<string, Record<string, string>> = {};
+  for (const [repository, configured] of Object.entries(value)) {
+    if (!isRecord(configured)) continue;
+    const tools: Record<string, string> = {};
+    for (const [tool, version] of Object.entries(configured)) if (typeof version === "string") tools[tool] = version;
+    result[repository] = tools;
+  }
+  return result;
+}
+
+function runtimeSettingsResponse(configPath: string): ProjectRuntimeSettings {
+  const raw = readConfigValue(configPath);
+  const toolchain = isRecord(raw.toolchain) ? raw.toolchain : {};
+  const configuredMode = typeof toolchain.mode === "string" ? toolchain.mode : "";
+  const configuredManager = typeof toolchain.manager === "string" ? toolchain.manager : "";
+  const mode: ProjectRuntimeSettings["mode"] = configuredMode === "system" || configuredMode === "mise" || configuredMode === "auto"
+    ? configuredMode
+    : configuredManager === "system" ? "system" : "auto";
+  const manager: ProjectRuntimeSettings["manager"] = mode === "system" || configuredManager === "system" ? "system" : "mise";
+  const cache = isRecord(raw.cache) ? raw.cache : {};
+  return {
+    ok: true,
+    configured: Boolean(raw.toolchain && isRecord(raw.toolchain)),
+    mode,
+    manager,
+    managerPath: typeof toolchain.managerPath === "string" && toolchain.managerPath.trim() ? toolchain.managerPath.trim() : null,
+    runtimePaths: Array.isArray(toolchain.runtimePaths) ? toolchain.runtimePaths.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).map((value) => value.trim()) : [],
+    requirements: runtimeRequirements(toolchain.repositories),
+    cache: {
+      enabled: cache.enabled !== false,
+      root: typeof cache.root === "string" && cache.root.trim() ? cache.root.trim() : null,
+    },
+  };
+}
+
+function runtimeSettingsFallback(error?: { code: string; message: string }): ProjectRuntimeSettings {
+  return {
+    ok: false,
+    configured: false,
+    mode: "auto",
+    manager: "mise",
+    managerPath: null,
+    runtimePaths: [],
+    requirements: {},
+    cache: { enabled: true, root: null },
+    ...(error ? { error } : {}),
+  };
+}
+
+function validateRuntimeRequirements(requirements: ProjectRuntimeSettingsUpdateInput["requirements"], configuredRepositories: Set<string>): void {
+  for (const [repository, configured] of Object.entries(requirements)) {
+    if (!repository.trim()) throw new Error("运行时要求中的仓库名称不能为空。");
+    if (!configuredRepositories.has(repository)) throw new Error(`运行时要求引用了未配置的仓库：${repository}`);
+    for (const [tool, version] of Object.entries(configured)) {
+      if (!RUNTIME_TOOLS.has(tool) || !RUNTIME_VERSION.test(version)) {
+        throw new Error(`不支持的运行时要求：${repository}/${tool}@${version}`);
+      }
+    }
+  }
+}
+
+function applyRuntimeSettings(raw: ConfigValue, input: ProjectRuntimeSettingsUpdateInput): ConfigValue {
+  const previousToolchain = isRecord(raw.toolchain) ? raw.toolchain : {};
+  const toolchain: ConfigValue = {
+    ...previousToolchain,
+    mode: input.mode,
+    manager: input.mode === "system" ? "system" : "mise",
+    repositories: input.requirements,
+  };
+  if (input.managerPath) toolchain.managerPath = input.managerPath;
+  else delete toolchain.managerPath;
+  if (input.runtimePaths.length) toolchain.runtimePaths = input.runtimePaths;
+  else delete toolchain.runtimePaths;
+  raw.toolchain = toolchain;
+
+  const previousCache = isRecord(raw.cache) ? raw.cache : {};
+  const cache: ConfigValue = { ...previousCache, enabled: input.cacheEnabled };
+  if (input.cacheRoot) cache.root = input.cacheRoot;
+  else delete cache.root;
+  raw.cache = cache;
+  return raw;
 }
 
 function configLayout(configPath: string, raw: ConfigValue, defaultSourceRoot: string): ConfigLayout {
@@ -405,4 +498,35 @@ export async function handleProjectBackendStart(input: { projectConfig: string }
 
 export async function handleProjectBackendStatus(input: { projectConfig: string }) {
   return backendStatus(input.projectConfig);
+}
+
+export async function handleProjectRuntimeSettingsGet(input: { projectConfig: string }): Promise<ProjectRuntimeSettings> {
+  try {
+    const route = resolveProject({ projectConfig: input.projectConfig });
+    return runtimeSettingsResponse(route.configPath);
+  } catch (error) {
+    return runtimeSettingsFallback({ code: "project_runtime_settings_unavailable", message: error instanceof Error ? error.message : "项目运行时设置不可用" });
+  }
+}
+
+export async function handleProjectRuntimeSettingsUpdate(input: ProjectRuntimeSettingsUpdateInput): Promise<ProjectRuntimeSettings> {
+  try {
+    const route = resolveProject({ projectConfig: input.projectConfig });
+    const previous = readConfigValue(route.configPath);
+    const configuredRepositories = new Set(
+      Array.isArray(previous.repositories)
+        ? previous.repositories.flatMap((repository) => isRecord(repository) && typeof repository.id === "string" ? [repository.id] : [])
+        : [],
+    );
+    validateRuntimeRequirements(input.requirements, configuredRepositories);
+    atomicWrite(route.configPath, `${JSON.stringify(applyRuntimeSettings({ ...previous }, input), null, 2)}\n`);
+    const reloaded = await handleObserver({ method: "observer.reload", params: {}, projectConfig: route.configPath });
+    if (!reloaded.ok) {
+      atomicWrite(route.configPath, `${JSON.stringify(previous, null, 2)}\n`);
+      return runtimeSettingsFallback(reloaded.error || { code: "project_runtime_settings_reload_failed", message: "运行时设置未能应用" });
+    }
+    return runtimeSettingsResponse(route.configPath);
+  } catch (error) {
+    return runtimeSettingsFallback({ code: "project_runtime_settings_update_failed", message: error instanceof Error ? error.message : "项目运行时设置保存失败" });
+  }
 }

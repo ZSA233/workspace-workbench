@@ -96,7 +96,48 @@ export const projectBackendStatus = defineRpc({
   }),
 });
 
+const runtimeMode = z.enum(["auto", "system", "mise"]);
+const runtimeManager = z.enum(["mise", "system"]);
+const runtimeRequirements = z.record(
+  z.string().trim().min(1),
+  z.record(z.string().trim().min(1), z.string().trim().min(1)),
+);
+
+const projectRuntimeSettingsOutput = z.object({
+  ok: z.boolean(),
+  configured: z.boolean(),
+  mode: runtimeMode,
+  manager: runtimeManager,
+  managerPath: z.string().nullable(),
+  runtimePaths: z.array(z.string()),
+  requirements: runtimeRequirements,
+  cache: z.object({ enabled: z.boolean(), root: z.string().nullable() }),
+  error: z.object({ code: z.string(), message: z.string() }).optional(),
+});
+
+export const projectRuntimeSettingsGet = defineRpc({
+  name: "workspace.workbench.project.runtime.settings.get",
+  input: z.object({ projectConfig: z.string().trim().min(1) }),
+  output: projectRuntimeSettingsOutput,
+});
+
+export const projectRuntimeSettingsUpdate = defineRpc({
+  name: "workspace.workbench.project.runtime.settings.update",
+  input: z.object({
+    projectConfig: z.string().trim().min(1),
+    mode: runtimeMode,
+    managerPath: z.string().trim().min(1).nullable(),
+    runtimePaths: z.array(z.string().trim().min(1)).max(32),
+    requirements: runtimeRequirements,
+    cacheEnabled: z.boolean(),
+    cacheRoot: z.string().trim().min(1).nullable(),
+  }),
+  output: projectRuntimeSettingsOutput,
+});
+
 export type ProjectSetupScan = z.infer<typeof projectSetupScan.output>;
 export type ProjectSetupSave = z.infer<typeof projectSetupSave.output>;
 export type ProjectStorageInfo = z.infer<typeof projectStorageQuery.output>;
 export type ProjectBackendStatus = z.infer<typeof projectBackendStatus.output>;
+export type ProjectRuntimeSettings = z.infer<typeof projectRuntimeSettingsGet.output>;
+export type ProjectRuntimeSettingsUpdateInput = z.infer<typeof projectRuntimeSettingsUpdate.input>;

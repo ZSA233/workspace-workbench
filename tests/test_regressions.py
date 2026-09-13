@@ -18,6 +18,26 @@ from workspace_workbench.core.service import ObserverService
 
 
 class Regressions(unittest.TestCase):
+    def test_observer_reload_applies_runtime_settings_without_changing_project_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_repository(root, "api")
+            config = root / "project.json"
+            write_config(config, root, [{"id": "api", "path": "api"}])
+            service = ObserverService(load_config(config))
+            try:
+                self.assertIsNone(service.toolchain)
+                raw = json.loads(config.read_text(encoding="utf-8"))
+                raw["toolchain"] = {"mode": "system", "manager": "system", "repositories": {"api": {}}}
+                raw["cache"] = {"enabled": False}
+                config.write_text(json.dumps(raw), encoding="utf-8")
+                self.assertEqual(service.handle("observer.reload")["reloaded"], True)
+                self.assertIsNotNone(service.toolchain)
+                self.assertEqual(service.toolchain.mode, "system")
+                self.assertFalse(service.config.cache_enabled)
+            finally:
+                service.close()
+
     def test_auto_toolchain_uses_matching_system_runtime_and_project_caches(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

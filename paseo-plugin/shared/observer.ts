@@ -3,6 +3,7 @@ import { z } from "zod";
 
 export const observerMethods = [
   "observer.health",
+  "observer.reload",
   "workspace.list",
   "workspace.detail",
   "workspace.identify",

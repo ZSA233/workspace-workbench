@@ -15,6 +15,18 @@ test("routing refuses unknown projects and ambiguous global access", () => {
   assert.equal(resolveProject({ projectConfig: other.configPath }, [route, other]).configPath, other.configPath);
 });
 
+test("managed Workbench paths resolve their registered project without a copied config", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "workspace-workbench-managed-path-")));
+  try {
+    const route: ProjectRoute = { configPath: join(root, "project.json"), sourceRoot: root, workspaceRoot: join(root, ".workspace-workbench"), treesRoot: join(root, ".workspace-workbench", "worktrees"), recordsRoot: join(root, ".workspace-workbench", "records"), stateRoot: join(root, ".workspace-workbench", "state"), socketPath: join(root, ".workspace-workbench", "observer.sock"), displayName: "Fixture" };
+    const managedPath = join(route.treesRoot, "fixture-agent-flow");
+    mkdirSync(managedPath, { recursive: true });
+    assert.equal(resolveProject({ directory: managedPath }, [route]).configPath, route.configPath);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("project-local configuration is discovered from the current directory without manual registration", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "workspace-workbench-project-")));
   try {

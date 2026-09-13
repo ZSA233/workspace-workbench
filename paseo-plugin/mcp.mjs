@@ -57,6 +57,15 @@ const schema = {
     },
   },
 };
+const workspaceStatusSchema = {
+  type: "object",
+  required: ["requestId"],
+  additionalProperties: false,
+  properties: {
+    requestId: { type: "string", minLength: 1 },
+    workspaceId: { type: "string", minLength: 1 },
+  },
+};
 const reviewerReadSchema = {
   type: "object", additionalProperties: false, properties: {},
 };
@@ -112,7 +121,7 @@ let client;
 async function handle(message) {
   if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version } };
   if (message.method === "ping") return {};
-  if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema, annotations: { readOnlyHint: !["workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: false } })) };
+  if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name === "workbench_workspace_status" ? workspaceStatusSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema, annotations: { readOnlyHint: !["workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: false } })) };
   if (message.method !== "tools/call") throw new Error("method_not_found");
   const tool = tools.find((value) => message.params?.name === value.name);
   const action = tool?.name === "workbench_execution_report" ? "execution_report" : tool ? reviewerActions.get(tool.name) || tool.name.replace("workbench_workspace_", "") : null;

@@ -10,9 +10,14 @@ export const workflowRequest = z.object({
   baseRefs: z.record(z.string(), z.string()).default({}),
   handoff: handoffSchema,
 });
+export const workflowStatusRequest = z.object({
+  requestId: z.string().min(1),
+  workspaceId: z.string().min(1).optional(),
+});
 export const orchestrationRpc = defineRpc({
   name: "workspace.workbench.orchestrate",
-  input: z.object({ projectConfig: z.string(), token: z.string().min(1), action: z.enum(["preview", "execute", "status"]), request: workflowRequest }),
+  input: z.object({ projectConfig: z.string(), token: z.string().min(1), action: z.enum(["preview", "execute", "status"]), request: z.union([workflowRequest, workflowStatusRequest]) }),
   output: z.unknown(),
 });
 export type WorkflowRequest = z.infer<typeof workflowRequest>;
+export type WorkflowStatusRequest = z.infer<typeof workflowStatusRequest>;

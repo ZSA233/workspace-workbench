@@ -3,9 +3,16 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+// A test launched from an execution/reviewer session must not inherit that
+// session's MCP role. Each case explicitly selects its own role below.
+const mcpEnv = { ...process.env };
+delete mcpEnv.WORKBENCH_REVIEW_ONLY;
+delete mcpEnv.WORKBENCH_EXECUTION_REPORT_ONLY;
+
 test("MCP exposes only the public Workbench tool names with compact schemas", () => {
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], {
     encoding: "utf8",
+    env: mcpEnv,
     input: '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n',
   });
   assert.equal(result.status, 0, result.stderr);
@@ -33,10 +40,10 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
 
 test("review and execution MCP processes expose only their role tools", () => {
   const input = '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n';
-  const reviewer = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], { encoding: "utf8", input, env: { ...process.env, WORKBENCH_REVIEW_ONLY: "1" } });
+  const reviewer = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], { encoding: "utf8", input, env: { ...mcpEnv, WORKBENCH_REVIEW_ONLY: "1" } });
   assert.equal(reviewer.status, 0, reviewer.stderr);
   assert.deepEqual(JSON.parse(reviewer.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_reviewer_read", "workbench_reviewer_result"]);
-  const execution = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], { encoding: "utf8", input, env: { ...process.env, WORKBENCH_EXECUTION_REPORT_ONLY: "1" } });
+  const execution = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], { encoding: "utf8", input, env: { ...mcpEnv, WORKBENCH_EXECUTION_REPORT_ONLY: "1" } });
   assert.equal(execution.status, 0, execution.stderr);
   assert.deepEqual(JSON.parse(execution.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_execution_report"]);
 });

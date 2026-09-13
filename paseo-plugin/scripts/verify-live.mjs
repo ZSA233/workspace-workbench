@@ -205,6 +205,46 @@ try {
   assert.equal(runtime.ok, true, JSON.stringify(runtime));
   assert.equal(runtime.result.repositories.length, 3);
   report.checks.push("new repositories present in subsequent handoff runtime");
+  // Exercise the same public RPC used by the panel, and compare its payload
+  // with the retained Python protocol oracle on these real worktrees.
+  const volatile = new Set(["observedAt", "durationMs", "observation", "cache", "updatedAt"]);
+  function compatible(actual, expected, path) {
+    if (Array.isArray(expected)) {
+      assert.equal(actual?.length, expected.length, path);
+      expected.forEach((value, i) => compatible(actual[i], value, `${path}[${i}]`));
+    } else if (expected !== null && typeof expected === "object") {
+      for (const [key, value] of Object.entries(expected))
+        if (!volatile.has(key)) compatible(actual?.[key], value, `${path}.${key}`);
+    } else assert.deepEqual(actual, expected, path);
+  }
+  for (const [method, query] of [
+    ["workspace.list", {}],
+    ["workspace.detail", { workspaceId: "sample" }],
+    ["workspace.identify", { directory: created.result.treePath }],
+    ["workspace.runtime", { workspaceId: "sample" }],
+    ["repository.graph", { workspaceId: "sample", repositoryId: "one", historyMode: "full" }],
+    ["repository.changes", { workspaceId: "sample", repositoryId: "one", scope: "working" }],
+    ["review-set.compare", { workspaceIds: ["sample"] }],
+    ["review-set.brief", { workspaceIds: ["sample"] }],
+  ]) {
+    const expected = JSON.parse(execFileSync("python3", ["-m", "workspace_workbench", "serve", "--stdio", "--config", configs[0]], {
+      env: { ...env, PYTHONPATH: resolve(plugin, "../src") },
+      input: JSON.stringify({ id: 1, method, params: query }) + "\n",
+      encoding: "utf8", timeout: 15000,
+    }).trim());
+    const actual = await rpc(configs[0], method, query);
+    assert.equal(actual.ok, true, JSON.stringify(actual));
+    assert.equal(expected.ok, true, JSON.stringify(expected));
+    compatible(actual.result, expected.result, method);
+  }
+  report.checks.push("eight panel RPC payloads matched legacy Python fields on the same real repositories (timing/cache metadata excluded)");
+  const removed = await rpc(configs[0], "workspace.remove", { workspaceId: "sample" });
+  assert.equal(removed.ok, true, JSON.stringify(removed));
+  assert.equal(removed.result.state, "removed");
+  const restored = await rpc(configs[0], "workspace.restore", { workspaceId: "sample" });
+  assert.equal(restored.ok, true, JSON.stringify(restored));
+  assert.equal(restored.result.state, "active");
+  report.checks.push("panel RPC remove/restore retained the same workspace and worktrees");
   execFileSync(
     cli,
     [

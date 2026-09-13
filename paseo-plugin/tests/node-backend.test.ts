@@ -59,7 +59,7 @@ export function git(path: string, args: string[]) {
   assert.equal(r.status, 0, r.stderr);
   return r.stdout.trim();
 }
-function oracle(config: string, method: string, params: Json): Json {
+function oracleResponse(config: string, method: string, params: Json): Json {
   const r = spawnSync(
     "python3",
     ["-m", "workspace_workbench", "serve", "--stdio", "--config", config],
@@ -73,11 +73,86 @@ function oracle(config: string, method: string, params: Json): Json {
     },
   );
   assert.equal(r.status, 0, r.stderr);
-  const response = JSON.parse(r.stdout.trim());
+  return JSON.parse(r.stdout.trim());
+}
+function oracle(config: string, method: string, params: Json): Json {
+  const response = oracleResponse(config, method, params);
   assert.equal(response.ok, true, JSON.stringify(response));
   return response.result;
 }
 const pythonAvailable = spawnSync("python3", ["--version"]).status === 0;
+
+test("legacy and Node rejection codes preserve invalid-request behavior", { skip: !pythonAvailable }, async () => {
+  const f = fixture();
+  const service = new Service(f.config);
+  try {
+    for (const [method, params] of [
+      ["missing.method", {}],
+      ["agent.execute", {}],
+      ["workspace.detail", { workspaceId: "missing" }],
+      ["workspace.runtime", { workspaceId: "main" }],
+      ["workspace.prepare", { workspaceId: "main", repositoryId: "one" }],
+    ] as Array<[string, Json]>) {
+      const expected = oracleResponse(f.configPath, method, params);
+      assert.equal(expected.ok, false, method);
+      await assert.rejects(service.handle(method, params), (error: any) => {
+        assert.equal(error.code, expected.error.code, method);
+        return true;
+      });
+    }
+  } finally { await service.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("Python and Node expose the same roster, detail, identification and review comparison fields", { skip: !pythonAvailable }, async () => {
+  const f = fixture();
+  const service = new Service(f.config);
+  // Compare legacy fields recursively; timing and cache scheduling are not
+  // semantic data. New additive fields are permitted by the JSON protocol.
+  const volatile = new Set(["observedAt", "durationMs", "observation", "cache", "updatedAt"]);
+  function compatible(actual: any, expected: any, path = "result") {
+    if (Array.isArray(expected)) {
+      assert.equal(actual.length, expected.length, path);
+      expected.forEach((value, i) => compatible(actual[i], value, `${path}[${i}]`));
+    } else if (expected !== null && typeof expected === "object") {
+      for (const [key, value] of Object.entries(expected)) {
+        if (!volatile.has(key)) compatible(actual?.[key], value, `${path}.${key}`);
+      }
+    } else assert.deepEqual(actual, expected, path);
+  }
+  try {
+    const created = oracle(f.configPath, "workspace.create", { name: "parity", repositories: ["one", "two"] });
+    for (const [method, params] of [
+      ["workspace.identify", { directory: created.treePath }],
+      ["workspace.list", {}],
+      ["workspace.detail", { workspaceId: "parity" }],
+      ["review-set.compare", { workspaceIds: ["parity"] }],
+    ] as Array<[string, Json]>) {
+      compatible(await service.handle(method, params), oracle(f.configPath, method, params), method);
+    }
+    const checkout = created.repositories[0].worktreePath;
+    writeFileSync(join(checkout, "README.md"), "modified\n");
+    writeFileSync(join(checkout, "untracked.txt"), "new\n");
+    service.cache.clear();
+    rmSync(join(f.root, "state/observer.sqlite3"), { force: true });
+    compatible(await service.handle("workspace.detail", { workspaceId: "parity" }), oracle(f.configPath, "workspace.detail", { workspaceId: "parity" }), "dirty detail");
+    renameSync(checkout, `${checkout}-temporarily-moved`);
+    service.cache.clear();
+    rmSync(join(f.root, "state/observer.sqlite3"), { force: true });
+    compatible(await service.handle("workspace.detail", { workspaceId: "parity" }), oracle(f.configPath, "workspace.detail", { workspaceId: "parity" }), "missing detail");
+    renameSync(`${checkout}-temporarily-moved`, checkout);
+    for (const method of ["workspace.remove", "workspace.restore"]) {
+      const params = { workspaceId: "parity" };
+      const expected = oracle(f.configPath, method, params);
+      compatible(await service.handle(method, params), expected, method);
+      service.cache.clear();
+      rmSync(join(f.root, "state/observer.sqlite3"), { force: true });
+      compatible(await service.handle("workspace.list", { includeRemoved: true }), oracle(f.configPath, "workspace.list", { includeRemoved: true }), `${method} roster`);
+    }
+  } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
 
 test(
   "Node reads Python records, preserves IDs/history, and matches Git protocol outputs",

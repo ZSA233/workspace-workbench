@@ -1326,7 +1326,7 @@ async function startReviewInternal(input: { workspaceId: string; projectConfig: 
   const snapshot = await captureSnapshot(input.workspaceId, runtime, context, existing?.handoff?.reviewPacket.references || boundHandoff(input.workspaceId)?.reviewPacket.references || []);
   const reusable = existing && !["approved", "blocked", "failed", "stopped", "limit_reached"].includes(existing.status) ? existing : null;
   let session = reusable || newSession({ workspaceId: input.workspaceId, projectConfig: input.projectConfig, executionAgentId, preferences, status: "queued" });
-  session = { ...session, executionAgentId, executionModelId, preferences: existing?.preferences || preferences, status: "queued", round: Math.max(1, existing?.round || 1), snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, snapshot, lastError: null, pendingOperation: null };
+  session = { ...session, handoff: existing?.handoff || session.handoff, executionAgentId, executionModelId, preferences: existing?.preferences || preferences, status: "queued", round: Math.max(1, existing?.round || 1), snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, snapshot, lastError: null, pendingOperation: null };
   session = persistSession(session, reusable ? { kind: "review_queued", summary: "Review queued by user", details: { snapshotId: snapshot.snapshotId, diffId: snapshot.diffId } } : { kind: "started", summary: "Review started from the Workspace", details: { snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, executionAgentId } });
   return startReviewer(session, context);
 }
@@ -1535,6 +1535,15 @@ export async function handleReviewSessionControl(input: { projectConfig: string;
       if (input.action === "repair") return { ok: true, session: await sendRepair(session, context) };
       if (input.action === "review") return { ok: true, session: await startReviewer(session, context) };
       if (session.status === "stopped" || session.status === "failed" || session.status === "blocked") {
+        // Execution can stop before a review snapshot exists. Resume the report
+        // gate, not the Reviewer; never redeliver the execution handoff here.
+        if (!session.snapshot) {
+          const runtime = await currentRuntime(session.workspaceId, context);
+          const execution = session.executionAgentId ? await context.paseo.agents.ref(session.executionAgentId).refresh() : null;
+          if (!execution?.agent || execution.agent.archivedAt || !runtimeAgentCwdMatches(runtime, execution.agent.cwd)) throw new Error("execution_agent_identity_changed");
+          const resumed = persistSession({ ...session, status: "waiting_execution", lastError: null }, { kind: "resumed", summary: "Waiting for a new execution report; no task was resent", details: { phase: "waiting_execution" } });
+          return { ok: true, session: resumed };
+        }
         const resumed = persistSession({ ...session, status: "queued", lastError: null }, { kind: "resumed", summary: "Review resumed", details: {} });
         return { ok: true, session: await startReviewer(resumed, context) };
       }

@@ -617,6 +617,7 @@ export class Workspaces {
         removed: true,
         pending: false,
         state: w.state,
+        activeTasks: [],
       };
     w.state = params.lockOnly || tasks.length ? "deletion_pending" : "removed";
     if (w.state === "deletion_pending")

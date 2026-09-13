@@ -102,7 +102,7 @@ export class Observation {
     const result: Json = {
       ...repo,
       status: "clean",
-      branch: null,
+      branch: "",
       head: null,
       headShort: null,
       baseRef: null,

@@ -369,6 +369,7 @@ export function AgentReviewView({
         {result.checks.filter((check) => check.status === "passed").length ? <MiniTag label={`${copy.reviewCheckPassed} ${result.checks.filter((check) => check.status === "passed").length}`} color={theme.colors.statusSuccess} styles={styles} /> : null}
       </View>
     </View> : null}
+    {session.status === "waiting_execution" && session.events.some((event) => event.kind === "resumed" && event.details?.phase === "waiting_execution") ? <Text style={styles.reviewEntryMeta}>{copy.reviewResumeWaitingReport}</Text> : null}
     {session.lastError ? <View style={styles.reviewErrorBanner}><Text style={styles.warningText}>{localizedReviewError(session.lastError, copy)}</Text><Text style={styles.reviewEntryMeta}>{copy.reviewErrorCodeLabel}: {session.lastError.code}</Text></View> : null}
     <View style={styles.reviewTimeline}>
       {session.events.map((event) => {

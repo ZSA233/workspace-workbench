@@ -453,6 +453,50 @@ test("model discovery and settings update keep shared rules separate from local 
   });
 });
 
+test("resume before a snapshot restores the report gate without resending and preserves the frozen handoff", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    const handoff = handoffSchema.parse({ goal: "Keep this requirement", reviewPacket: { acceptanceCriteria: [{ id: "AC-original", text: "Preserve the original criterion", required: true }] } });
+    const original = recordExecutionHandoff({ workspaceId: "managed-fixture", projectConfig: fixture.config, executionAgentId: "execution-fixture", handoff });
+    writeState("context:resume-token", { agentId: "execution-fixture", cwd: fixture.root, workspaceId: original.workspaceId });
+    const input = { projectConfig: fixture.config, workspaceId: original.workspaceId, executionAgentId: "execution-fixture", token: "resume-token" };
+    fixture.setExecutionBusy(true, "blocked-turn");
+    await acceptExecutionReport({ ...input, report: { status: "needs_input", summary: "Missing input", changes: [], tests: [], knownLimitations: [] } }, fixture.context);
+    const control = { projectConfig: fixture.config, workspaceId: original.workspaceId, sessionId: original.id, action: "resume" as const };
+    const resumed = await handleReviewSessionControl(control, fixture.context);
+    assert.equal(resumed.ok, true);
+    assert.equal(resumed.session?.status, "waiting_execution");
+    assert.equal(resumed.session?.id, original.id);
+    assert.deepEqual(resumed.session?.handoff, original.handoff);
+    assert.equal(fixture.sent.length + fixture.reviewerCreate.length + fixture.reviewerSent.length, 0);
+    const duplicate = await handleReviewSessionControl(control, fixture.context);
+    assert.equal(duplicate.session?.revision, resumed.session?.revision);
+    fixture.setExecutionBusy(true, "ready-turn");
+    const ready = await acceptExecutionReport({ ...input, report: { status: "ready_for_review", summary: "Complete", changes: [], tests: [], knownLimitations: [] } }, fixture.context);
+    assert.equal(ready.accepted, true);
+    await handleReviewTurnEnded({ agent: { id: "execution-fixture" }, turnId: "ready-turn", outcome: { kind: "completed" } }, fixture.context);
+    assert.equal(readReviewSession(original.workspaceId)?.status, "ready_for_review");
+    fixture.setExecutionBusy(false);
+    const started = await startReview(input, fixture.context);
+    assert.equal(started.status, "reviewing");
+    assert.match(String(fixture.reviewerCreate[0]?.prompt), /AC-original/);
+  });
+});
+
+test("restarting a terminal review preserves its frozen acceptance criteria and history", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    const handoff = handoffSchema.parse({ goal: "Original goal", reviewPacket: { acceptanceCriteria: [{ id: "AC-original", text: "Preserve this", required: true }] } });
+    const original = recordExecutionHandoff({ workspaceId: "managed-fixture", projectConfig: fixture.config, executionAgentId: "execution-fixture", handoff });
+    await handleReviewSessionControl({ projectConfig: fixture.config, workspaceId: original.workspaceId, action: "stop" }, fixture.context);
+    const started = await startReview({ projectConfig: fixture.config, workspaceId: original.workspaceId }, fixture.context);
+    assert.notEqual(started.id, original.id);
+    assert.deepEqual(started.handoff, original.handoff);
+    assert.match(String(fixture.reviewerCreate[0]?.prompt), /AC-original/);
+    assert.equal(readReviewSession(original.workspaceId, original.id)?.status, "stopped");
+  });
+});
+
 test("ordinary turn endings do not start review; an explicit report is finalized only after the turn ends", async () => {
   const fixture = harness();
   await withFixture(fixture, async () => {

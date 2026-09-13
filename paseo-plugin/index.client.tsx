@@ -4,9 +4,10 @@ import { useEffect, useSyncExternalStore } from "react";
 import { contextSurfacePrefix, createOpenGuard, workbenchDestination } from "./client/open-workbench";
 
 import { clearFileReviews, configureFileReviewOpener, openFileReview } from "./client/file-review-store";
-import { copy } from "./shared/copy";
+import { copy, getWorkbenchCopy } from "./shared/copy";
 import { FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel } from "./client/entry-panels";
 import { atInitializationStage, INITIALIZATION_REVISION } from "./client/initialization";
+import { localeFromHostProps } from "./client/i18n";
 
 const observerSurfaceId = "workbench";
 
@@ -71,6 +72,7 @@ function contributeClient(client: PluginClientContext) {
     }
   }
   function FailureSurface(props: PluginSurfaceProps) {
+    const copy = getWorkbenchCopy(localeFromHostProps(props));
     return <View style={{ flex: 1 }}><Text style={{ padding: 12, color: props.theme.colors.statusWarning }}>{copy.openFailed}</Text><WorkbenchSurfacePanel {...props} /></View>;
   }
   const surfaceCleanup = atInitializationStage("surface", () => client.addSurface(observerSurfaceId, ContextualSurface));

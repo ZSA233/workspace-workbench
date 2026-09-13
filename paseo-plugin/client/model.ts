@@ -212,15 +212,15 @@ const transientIssueCodes = new Set([
   "git_log_failed",
 ]);
 
-const issueLabels: Record<string, string> = {
-  worktree_missing: copy.text_db427e2fe9,
-  record_invalid: copy.text_e0ea8945c4,
-  path_invalid: copy.text_ec1e4a1e10,
-  file_not_changed: copy.text_8c9ee7d66a,
-  commit_missing: copy.text_e7404b46f4,
-  base_missing: copy.text_f3ec0129e4,
-  component_missing: copy.text_2f51f7e68d,
-  detached_edit_worktree: copy.text_caa94a3fdf,
+const issueLabelKeys: Record<string, keyof WorkbenchCopy> = {
+  worktree_missing: "text_db427e2fe9",
+  record_invalid: "text_e0ea8945c4",
+  path_invalid: "text_ec1e4a1e10",
+  file_not_changed: "text_8c9ee7d66a",
+  commit_missing: "text_e7404b46f4",
+  base_missing: "text_f3ec0129e4",
+  component_missing: "text_2f51f7e68d",
+  detached_edit_worktree: "text_caa94a3fdf",
 };
 
 export function responseObservationState(
@@ -261,8 +261,8 @@ export function hasTransientIssues(issues: readonly Issue[]): boolean {
   return issues.some((issue) => isTransientIssueCode(issue.code));
 }
 
-export function issueDisplayLabel(code: string): string {
-  return issueLabels[code] || copy.text_6b9afea9f1;
+export function issueDisplayLabel(code: string, strings: WorkbenchCopy = copy): string {
+  return issueLabelKeys[code] ? strings[issueLabelKeys[code]] : strings.text_6b9afea9f1;
 }
 
 export type FileChange = {
@@ -919,24 +919,24 @@ export function formatChangeCount(value: number | null | undefined): string {
   return typeof value === "number" ? String(value) : "—";
 }
 
-export function formatObservedTime(value: string | null | undefined): string {
-  if (!value) return copy.text_6dbf7070d6;
+export function formatObservedTime(value: string | null | undefined, strings: WorkbenchCopy = copy): string {
+  if (!value) return strings.text_6dbf7070d6;
   const time = Date.parse(value);
-  if (!Number.isFinite(time)) return copy.text_9e636642d6;
+  if (!Number.isFinite(time)) return strings.text_9e636642d6;
   const delta = Math.max(0, Date.now() - time);
-  if (delta < 60_000) return copy.text_adea7d427f;
-  if (delta < 3_600_000) return formatCopy("text_61af484c81", [Math.floor(delta / 60_000)]);
+  if (delta < 60_000) return strings.text_adea7d427f;
+  if (delta < 3_600_000) return formatCopyFrom(strings, "text_61af484c81", [Math.floor(delta / 60_000)]);
   return new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export function formatRelativeTime(value: string | null | undefined): string {
-  if (!value) return copy.text_fcd9714424;
+export function formatRelativeTime(value: string | null | undefined, strings: WorkbenchCopy = copy): string {
+  if (!value) return strings.text_fcd9714424;
   const time = Date.parse(value);
-  if (!Number.isFinite(time)) return copy.text_6478dde454;
+  if (!Number.isFinite(time)) return strings.text_6478dde454;
   const delta = Math.max(0, Date.now() - time);
-  if (delta < 60_000) return copy.text_9e636642d6;
-  if (delta < 3_600_000) return formatCopy("text_607909447d", [Math.floor(delta / 60_000)]);
-  if (delta < 86_400_000) return formatCopy("text_87a6439b2e", [Math.floor(delta / 3_600_000)]);
-  return formatCopy("text_9094e27946", [Math.floor(delta / 86_400_000)]);
+  if (delta < 60_000) return strings.text_9e636642d6;
+  if (delta < 3_600_000) return formatCopyFrom(strings, "text_607909447d", [Math.floor(delta / 60_000)]);
+  if (delta < 86_400_000) return formatCopyFrom(strings, "text_87a6439b2e", [Math.floor(delta / 3_600_000)]);
+  return formatCopyFrom(strings, "text_9094e27946", [Math.floor(delta / 86_400_000)]);
 }
-import { copy, formatCopy } from "../shared/copy.ts";
+import { copy, formatCopyFrom, type WorkbenchCopy } from "../shared/copy.ts";

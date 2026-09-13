@@ -5,9 +5,10 @@ type PluginWorkspacePanelProps
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useEffect,useState } from "react";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
-import { copy } from "../../shared/copy";
+import { formatCopyFrom } from "../../shared/copy";
 import { IconButton } from "./icon-button";
 import { observerAccent } from "../theme";
+import { useWorkbenchCopy } from "../i18n";
 
 import {
 ancestorPaths,
@@ -78,6 +79,7 @@ export function ChangedTree({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   const files = changes?.files || [];
   const fileKey = files.map((file) => `${file.path}:${file.status}:${file.additions}:${file.deletions}`).join("|");
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(defaultExpandedPaths(files, selectedFile));
@@ -116,7 +118,7 @@ export function ChangedTree({
           {stale ? <View accessibilityLabel={copy.observationStale} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.statusWarning }} /> : null}
         </View>
         <View style={styles.treeHeaderRight}>
-          <Text style={styles.sectionCount}>{loading ? "…" : `${files.length} files`}</Text>
+          <Text style={styles.sectionCount}>{loading ? "…" : formatCopyFrom(copy, "fileCountLabel", [files.length])}</Text>
           <IconButton label={copy.text_41e5243e2d} icon="FolderTree" active={mode === "tree"} color={mode === "tree" ? theme.colors.accentForeground : theme.colors.foregroundMuted} background={mode === "tree" ? observerAccent(theme) : undefined} onPress={() => onMode("tree")} />
           <IconButton label={copy.text_49deaf7da2} icon="List" active={mode === "files"} color={mode === "files" ? theme.colors.accentForeground : theme.colors.foregroundMuted} background={mode === "files" ? observerAccent(theme) : undefined} onPress={() => onMode("files")} />
         </View>
@@ -153,7 +155,7 @@ export function ChangedTree({
             />
           ))}
           {!loading && !files.length && !stale ? <Text style={styles.emptyText}>{copy.text_5ee36e41d4}</Text> : null}
-          {visibleIssues(changes?.issues || []).map((issue) => <Text key={`${issue.code}-${issue.path || ""}`} style={styles.warningText}>{issueLabel(issue)}</Text>)}
+          {visibleIssues(changes?.issues || []).map((issue) => <Text key={`${issue.code}-${issue.path || ""}`} style={styles.warningText}>{issueLabel(issue, copy)}</Text>)}
         </SectionViewport>
       ) : null}
     </View>

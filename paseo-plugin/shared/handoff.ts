@@ -16,6 +16,8 @@ export const handoffSchema = z.object({
   startMode: z.enum(["adaptive", "plan-first"]).default("adaptive"),
   handoffId: z.string().trim().min(1).optional(),
   providerModel: z.string().trim().min(1).optional(),
+  /** Locale used for Reviewer summaries and execution reports. */
+  reviewLocale: z.enum(["zh-CN", "en-US"]).optional(),
   /** Optional per-task override; project/provider settings remain the default. */
   relationship: agentRelationshipSchema.optional(),
   policy: z.object({

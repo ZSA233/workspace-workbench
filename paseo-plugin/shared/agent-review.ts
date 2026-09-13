@@ -4,6 +4,8 @@ import { agentRelationshipSchema } from "./agent-session.ts";
 
 export const reviewModeSchema = z.enum(["off", "manual", "automatic"]);
 export const reviewerSessionModeSchema = z.enum(["reuse", "new_per_round"]);
+export const reviewLocaleSchema = z.enum(["zh-CN", "en-US"]);
+export type ReviewLocale = z.infer<typeof reviewLocaleSchema>;
 
 /** Fields stored in a project config. Models are deliberately not included. */
 export const reviewPreferencePatchSchema = z.object({
@@ -36,6 +38,8 @@ export const reviewPreferencesSchema = z.object({
   repairTimeoutMs: z.number().int().min(30_000).max(7_200_000).default(1_800_000),
   executionModel: z.string().trim().min(1).nullable().default(null),
   reviewerModel: z.string().trim().min(1).nullable().default(null),
+  /** Runtime-only locale captured when a review starts; never written to project settings. */
+  locale: reviewLocaleSchema.default("zh-CN"),
 });
 export type ReviewPreferences = z.infer<typeof reviewPreferencesSchema>;
 
@@ -142,6 +146,9 @@ export const reviewEventSchema = z.object({
     "repair_sent", "paused", "resumed", "stopped", "failed", "blocked",
     "expired", "finished",
   ]),
+  /** Stable localization key for system events. Older records may omit it. */
+  messageKey: z.string().trim().min(1).optional(),
+  messageArgs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
   summary: z.string().trim().min(1),
   details: z.record(z.string(), z.unknown()).default({}),
 });
@@ -172,6 +179,7 @@ export const reviewSessionSchema = z.object({
     startMode: z.enum(["adaptive", "plan-first"]).default("adaptive"),
     handoffId: z.string().optional(),
     relationship: agentRelationshipSchema.optional(),
+    reviewLocale: reviewLocaleSchema.optional(),
     expected: z.object({
       branchByRepository: z.record(z.string(), z.string()).default({}),
       baseByRepository: z.record(z.string(), z.string()).default({}),
@@ -241,7 +249,7 @@ export const reviewModels = defineRpc({
 });
 export const reviewSessionStart = defineRpc({
   name: "workspace.workbench.agent-review.start",
-  input: projectContext.extend({ executionAgentId: z.string().trim().min(1).optional(), requestId: z.string().trim().min(1).optional() }),
+  input: projectContext.extend({ executionAgentId: z.string().trim().min(1).optional(), locale: reviewLocaleSchema.optional(), requestId: z.string().trim().min(1).optional() }),
   output: z.object({ ok: z.boolean(), session: reviewSessionSchema.nullable(), error: rpcError.optional() }),
 });
 export const reviewPreview = defineRpc({

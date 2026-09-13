@@ -8,6 +8,7 @@ import {
 import { FlatList, Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
+import { copy, formatCopyFrom, type WorkbenchCopy } from "../shared/copy";
 import { observerQuery, type ObserverResponse } from "../shared/observer";
 import {
   buildDiffOverviewMarkers,
@@ -37,6 +38,7 @@ import type { ReviewMode } from "./review-mode";
 import { editorCodeFontFamily, HighlightedCode } from "./syntax";
 import { Svg, Rect } from "./graph/svg-web";
 import { observerAccent } from "./theme";
+import { useWorkbenchCopy } from "./i18n";
 
 type FilePanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 const MIN_SPLIT_PANEL_WIDTH = 860;
@@ -50,13 +52,14 @@ function responseErrorLabel(
   response: ObserverResponse | undefined,
   error: unknown,
   hasSnapshot: boolean,
+  strings: WorkbenchCopy = copy,
 ): string | null {
   if (response && !response.ok) {
     const code = response.error?.code || "";
-    if (isTransientIssueCode(code)) return hasSnapshot ? null : copy.text_a7fc5b37a4;
-    return issueDisplayLabel(code);
+    if (isTransientIssueCode(code)) return hasSnapshot ? null : strings.text_a7fc5b37a4;
+    return issueDisplayLabel(code, strings);
   }
-  if (error) return hasSnapshot ? null : copy.text_a7fc5b37a4;
+  if (error) return hasSnapshot ? null : strings.text_a7fc5b37a4;
   return null;
 }
 
@@ -67,13 +70,14 @@ function statusColor(status: string, theme: FilePanelProps["theme"]): string {
   return theme.colors.statusWarning;
 }
 
-function scopeLabel(scope: FileReviewSelection["scope"]): string {
-  if (scope === "working") return copy.text_c580606e1c;
-  if (scope === "commit") return copy.text_09cbc97ae2;
-  return copy.text_d1d2ccdd33;
+function scopeLabel(scope: FileReviewSelection["scope"], strings: WorkbenchCopy = copy): string {
+  if (scope === "working") return strings.text_c580606e1c;
+  if (scope === "commit") return strings.text_09cbc97ae2;
+  return strings.text_d1d2ccdd33;
 }
 
 export function FileReviewPanel(props: FilePanelProps) {
+  const copy = useWorkbenchCopy();
   const hostWorkspaceId = props.workspaceId;
   const selections = useFileReviews(hostWorkspaceId);
   const { theme, layout } = props;
@@ -132,14 +136,14 @@ export function FileReviewPanel(props: FilePanelProps) {
   );
   const durableFailure = diffQuery.data && !diffQuery.data.ok && ["file_not_changed", "path_invalid", "worktree_missing", "commit_missing", "base_missing"].includes(diffQuery.data.error?.code || "");
   const diff = durableFailure ? null : resultOf<DiffResult>(diffState.response);
-  const error = responseErrorLabel(diffQuery.data, diffQuery.error, Boolean(diff));
+  const error = responseErrorLabel(diffQuery.data, diffQuery.error, Boolean(diff), copy);
 
   function close(selection: FileReviewSelection): void {
     closeFileReview(hostWorkspaceId, selectionKey(selection));
   }
 
   return (
-    <View style={styles.screen} accessibilityLabel="Workspace Changes" onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
+    <View style={styles.screen} accessibilityLabel={copy.changesTitle} onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
       <View style={styles.header}>
         <View style={styles.headerCopy}>
           <Text numberOfLines={1} style={styles.title}>{copy.text_01970ba582}</Text>
@@ -211,7 +215,7 @@ export function FileReviewPanel(props: FilePanelProps) {
             <View style={styles.fileHeaderCopy}>
               <Text numberOfLines={1} style={styles.filePath}>{activeSelection.path}</Text>
               <Text style={styles.metaText} numberOfLines={1}>
-                {activeSelection.branch || "detached"} · {scopeLabel(activeSelection.scope)} · {activeSelection.statusLabel}
+                {activeSelection.branch || copy.graphDetached} · {scopeLabel(activeSelection.scope, copy)} · {activeSelection.statusLabel}
               </Text>
             </View>
           </View>
@@ -260,6 +264,7 @@ function DiffViewer({
   theme: FilePanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   const parsed = useMemo(() => parseUnifiedPatch(diff.patch), [diff.patch]);
   const rows = useMemo(() => displayRows(parsed, mode), [mode, parsed]);
   const references = useMemo(() => formatDiffReferences({
@@ -543,12 +548,12 @@ function OverviewRailNative({
   if (!height) return null;
   const { thumbHeight, thumbTop } = overviewRailMetrics(contentHeight, height, scrollOffset);
   return (
-    <View accessibilityLabel="Diff overview" style={styles.overviewRail}>
+    <View accessibilityLabel={copy.diffOverview} style={styles.overviewRail}>
       <View pointerEvents="none" style={[styles.overviewBackground, { height }]} />
       {markers.map((marker, index) => (
           <Pressable
             key={`${marker.hunkIndex}-${marker.kind}-${marker.startLine}-${index}`}
-            accessibilityLabel={`Diff hunk ${marker.hunkIndex + 1}`}
+            accessibilityLabel={formatCopyFrom(copy, "diffHunk", [marker.hunkIndex + 1])}
             accessibilityRole="button"
             onPress={() => onSelectHunk(marker.hunkIndex)}
             style={[styles.overviewMarker, {
@@ -576,7 +581,7 @@ function OverviewRailWeb({
   if (!height) return null;
   const { thumbHeight, thumbTop } = overviewRailMetrics(contentHeight, height, scrollOffset);
   return (
-    <View accessibilityLabel="Diff overview" style={styles.overviewRail}>
+    <View accessibilityLabel={copy.diffOverview} style={styles.overviewRail}>
       <Svg height={height} style={styles.overviewSvg} width={12}>
         <Rect fill={theme.colors.surface2} height={height} width={12} x={0} y={0} />
         {markers.map((marker, index) => (
@@ -771,4 +776,3 @@ function makeStyles(theme: FilePanelProps["theme"]) {
     binaryTitle: { color: theme.colors.foreground, fontSize: 13, fontWeight: "700" },
   });
 }
-import { copy } from "../shared/copy";

@@ -4,7 +4,6 @@ type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { memo,useEffect,useState } from "react";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
-import { copy } from "../../shared/copy";
 
 import {
 isTransientIssueCode,
@@ -20,6 +19,7 @@ type RepositorySummary,
 type WorkspaceSummary
 } from "../model";
 import { ChangeCounts,InlineRefresh,SectionDisclosureButton,SectionViewport,fileCountLabel,issueDetail,issueLabel,makeStyles,repositoryBranchLabel,statusColor,visibleIssues } from "./ui";
+import { useWorkbenchCopy } from "../i18n";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -126,6 +126,7 @@ export const WorkspaceView = memo(function WorkspaceView({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   const [repositoryDetailTop, setRepositoryDetailTop] = useState<number | null>(null);
   const [changesRelativeTop, setChangesRelativeTop] = useState<number | null>(null);
 
@@ -212,7 +213,7 @@ export const WorkspaceView = memo(function WorkspaceView({
           style={styles.repositoryDetail}
         >
           {attentionIssues.map((issue) => (
-            <Text key={`${issue.code}-${issue.path || ""}`} style={styles.warningText}>{issueLabel(issue)}</Text>
+            <Text key={`${issue.code}-${issue.path || ""}`} style={styles.warningText}>{issueLabel(issue, copy)}</Text>
           ))}
           {repositoryDetailsOpen ? selectedRepositoryIssues.filter((issue) => !isTransientIssueCode(issue.code)).map((issue) => (
             <Text key={`detail-${issue.code}-${issue.path || ""}`} selectable style={styles.repositoryIssueDetail}>{issueDetail(issue)}</Text>
@@ -283,6 +284,7 @@ export function ToolchainNotice({
   repositoryCount: number;
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   const preparedCount = Object.values(toolchain.preparedRepositories).filter((item) => item.status === "ready").length;
   const statusLabel: Record<string, string> = {
     needs_prepare: copy.text_9fd34d1b5f,
@@ -317,6 +319,7 @@ export function RepositoryRow({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   const hasTransientIssue = repository.issues.concat(repository.changeIssues).some((issue) => isTransientIssueCode(issue.code));
   const stale = Boolean(repository.observationStale || hasTransientIssue);
   const status = stale ? "stale" : repository.status || (repository.dirty ? "dirty" : "clean");
@@ -325,13 +328,13 @@ export function RepositoryRow({
   const metaStatus = stale
     ? copy.text_f9f75e6112
     : repository.dirty && workingFiles
-    ? `${status} · ${fileCountLabel(workingFiles)}`
+    ? `${status} · ${fileCountLabel(workingFiles, copy)}`
     : status;
   return (
     <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={[styles.repositoryRow, selected && styles.repositoryRowActive]}>
       <View style={[styles.repositoryDot, { backgroundColor: statusTone }]} />
       <View style={styles.repositoryCopy}>
-        <Text numberOfLines={1} style={styles.repositoryLine}>{repository.name} · {repositoryBranchLabel(repository)}</Text>
+        <Text numberOfLines={1} style={styles.repositoryLine}>{repository.name} · {repositoryBranchLabel(repository, copy)}</Text>
         <Text numberOfLines={1} style={styles.repositoryMeta}>{metaStatus} {copy.text_97def2ca9e}{repository.headShort || "—"}</Text>
       </View>
       <View style={styles.repositoryMetrics}>

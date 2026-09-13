@@ -5,13 +5,12 @@ type PluginWorkspacePanelProps
 import { TextInput } from "@getpaseo/plugin/client/react-native";
 import { useState } from "react";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
-import { copy } from "../../shared/copy";
-
 import {
 type ReviewResult,
 type WorkspaceSummary
 } from "../model";
 import { ChangeCounts,InlineRefresh,StatusPill,makeStyles,relationLabel,repositoryCountLabel,statusColor,workspaceSignals } from "./ui";
+import { useWorkbenchCopy } from "../i18n";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -54,6 +53,7 @@ export function ReviewView({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   const [briefOpen, setBriefOpen] = useState(false);
 
   return (
@@ -69,7 +69,7 @@ export function ReviewView({
       <View style={styles.reviewWorkspaceList}>
         {workspaces.map((workspace) => {
           const selected = reviewIds.includes(workspace.id);
-          const signals = workspaceSignals(workspace);
+          const signals = workspaceSignals(workspace, copy);
           return (
             <Pressable
               key={workspace.id}
@@ -81,7 +81,7 @@ export function ReviewView({
               <View style={[styles.checkbox, selected && styles.checkboxActive]}>{selected ? <Text style={styles.checkboxTick}>✓</Text> : null}</View>
               <View style={styles.reviewWorkspaceCopy}>
                 <Text numberOfLines={1} style={styles.reviewWorkspaceName}>{workspace.id}</Text>
-                <Text numberOfLines={1} style={styles.reviewWorkspaceMeta}>{repositoryCountLabel(workspace.repositoryCount)}{signals.length ? ` · ${signals.join(" · ")}` : ""}</Text>
+                <Text numberOfLines={1} style={styles.reviewWorkspaceMeta}>{repositoryCountLabel(workspace.repositoryCount, copy)}{signals.length ? ` · ${signals.join(" · ")}` : ""}</Text>
               </View>
             </Pressable>
           );
@@ -98,12 +98,12 @@ export function ReviewView({
                     {repository.aggregate.commits} {copy.text_91a9479226}<ChangeCounts additions={repository.aggregate.additions} deletions={repository.aggregate.deletions} styles={styles} />
                   </Text>
                 </View>
-                <StatusPill status={repository.status} label={relationLabel(repository.status)} theme={theme} styles={styles} />
+                <StatusPill status={repository.status} label={relationLabel(repository.status, copy)} theme={theme} styles={styles} />
               </View>
               <View style={styles.targetRow}>
                 <TextInput
                   editable
-                  accessibilityLabel={`${repository.repoPath} target branch`}
+                  accessibilityLabel={`${repository.repoPath} · ${copy.reviewTargetBranch}`}
                   onChangeText={(value: string) => onTargetOverride(repository.repoPath, value)}
                   placeholder={copy.text_e50d9d028a}
                   placeholderTextColor={theme.colors.foregroundMuted}
@@ -114,13 +114,13 @@ export function ReviewView({
               {repository.entries.map((entry) => (
                 <View key={entry.workspaceId} style={styles.reviewEntry}>
                 <View style={styles.reviewEntryCopy}>
-                  <Text numberOfLines={1} style={styles.reviewBranch}>{entry.branch || "detached"}</Text>
-                    {entry.dirty || entry.unpushed ? <Text numberOfLines={1} style={styles.reviewEntryMeta}>{[entry.dirty ? "dirty" : "", entry.unpushed ? "unpushed" : ""].filter(Boolean).join(" · ")}</Text> : null}
+                  <Text numberOfLines={1} style={styles.reviewBranch}>{entry.branch || copy.branchDetached}</Text>
+                    {entry.dirty || entry.unpushed ? <Text numberOfLines={1} style={styles.reviewEntryMeta}>{[entry.dirty ? copy.workspaceStatusDirty : "", entry.unpushed ? copy.workspaceStatusUnpushed : ""].filter(Boolean).join(" · ")}</Text> : null}
                   </View>
                   <Text style={styles.arrowText}>→</Text>
                   <View style={styles.reviewTarget}>
                     <Text numberOfLines={1} style={styles.reviewBranch}>{entry.targetBranch || copy.text_a5b4c3b08d}</Text>
-                    <Text style={[styles.relationText, { color: statusColor(entry.relation, theme) }]}>{relationLabel(entry.relation)}</Text>
+                    <Text style={[styles.relationText, { color: statusColor(entry.relation, theme) }]}>{relationLabel(entry.relation, copy)}</Text>
                   </View>
                 </View>
               ))}

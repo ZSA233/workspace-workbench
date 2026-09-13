@@ -13,6 +13,7 @@ import { queryObserver } from "./observer.ts";
 import { getAgentBinding, putAgentBinding, type AgentBinding } from "./agent-store.ts";
 import { configuredExecutionModel, readReviewSession, recordExecutionHandoff } from "./agent-review.ts";
 import { resolveAgentRelationship } from "./agent-session.ts";
+import { getWorkbenchCopy } from "../shared/copy.ts";
 import type { AgentRelationship } from "../shared/agent-session.ts";
 import {
   agentDelegate,
@@ -179,6 +180,7 @@ function providerFromAgent(agent: PaseoAgent): string | null {
 }
 
 function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeResult, relationship: AgentRelationship): string {
+  const localized = getWorkbenchCopy(handoff.reviewLocale || "zh-CN");
   const section = (title: string, values: readonly string[]) => values.length ? [`${title}:`, ...values.map((value) => `- ${value}`), ""] : [];
   return [
     "Workspace Workbench Agent handoff",
@@ -208,6 +210,7 @@ function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeRe
     `Start mode: ${handoff.startMode}`,
     "The workspace root is a multi-repository container. Verify the supplied worktree paths and Git branches before editing. The requesting session already completed the runtime preflight; do not delegate or call execute again.",
     "Respect the host permission and sandbox policy. Verify configured runtimes before executing build commands.",
+    localized.reviewPromptLanguage,
     "When the approved implementation work is complete, call workbench_execution_report with ready_for_review, a concise change summary, tests and known limitations. A normal turn ending alone is not a completion signal. If input is needed or the task fails, report needs_input or failed instead.",
   ].join("\n");
 }

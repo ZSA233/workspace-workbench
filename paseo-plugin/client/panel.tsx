@@ -10,7 +10,7 @@ import { copyText,Modal,ScrollView,TextInput,useToast } from "@getpaseo/plugin/c
 import { useQuery } from "@tanstack/react-query";
 import { useCallback,useEffect,useMemo,useRef,useState } from "react";
 import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,View,type ViewStyle } from "react-native";
-import { copy } from "../shared/copy";
+import { copy, getWorkbenchCopy, localizedReviewError } from "../shared/copy";
 
 import {
 agentContextQuery,
@@ -45,6 +45,7 @@ import { useLastSuccessfulResponse, type ObserverSnapshot } from "./observation"
 import { useRefreshOnForeground } from "./foreground-refresh";
 import { useObserverPreferences } from "./preferences";
 import { readSurfaceWorkspace, type WorkbenchSurfaceProps } from "./surface-context";
+import { localeFromHostProps, useWorkbenchCopy, WorkbenchLocaleProvider, useWorkbenchLocale } from "./i18n";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -97,23 +98,23 @@ type ObservationArea = {
   fetching: boolean;
 };
 
-function observationStatusLabel(status: ObserverSnapshot["status"]): string {
-  if (status === "loading") return copy.text_fcabadb2a7;
-  if (status === "refreshing") return copy.observationRefreshing;
-  if (status === "degraded") return copy.observationDegraded;
-  if (status === "expired") return copy.observationStale;
-  if (status === "unavailable") return copy.observationUnavailable;
-  return copy.observationStatus;
+function observationStatusLabel(status: ObserverSnapshot["status"], strings = copy): string {
+  if (status === "loading") return strings.text_fcabadb2a7;
+  if (status === "refreshing") return strings.observationRefreshing;
+  if (status === "degraded") return strings.observationDegraded;
+  if (status === "expired") return strings.observationStale;
+  if (status === "unavailable") return strings.observationUnavailable;
+  return strings.observationStatus;
 }
 
-function observationAreaDetail(area: ObservationArea): string {
+function observationAreaDetail(area: ObservationArea, strings = copy): string {
   const status = area.snapshot.status === "expired"
     ? "expired"
     : area.fetching || area.snapshot.refreshing
       ? "refreshing"
       : area.snapshot.status;
-  const timestamp = area.snapshot.lastSuccessfulAt ? ` · ${formatObservedTime(area.snapshot.lastSuccessfulAt)}` : "";
-  return `${area.label}：${observationStatusLabel(status)}${timestamp}`;
+  const timestamp = area.snapshot.lastSuccessfulAt ? ` · ${formatObservedTime(area.snapshot.lastSuccessfulAt, strings)}` : "";
+  return `${area.label}: ${observationStatusLabel(status, strings)}${timestamp}`;
 }
 
 const PREFERENCE_SCOPE_FALLBACK = "global";
@@ -164,10 +165,12 @@ export function WorkbenchPanel(props: PanelProps) {
     hostWorkspaceId,
     (workspace) => (workspace ? { directory: workspace.directory, name: workspace.name } : null),
   );
-  return <ObserverPanelContent {...props} hostWorkspaceId={hostWorkspaceId} paseoWorkspace={paseoWorkspace} />;
+  return <WorkbenchLocaleProvider locale={localeFromHostProps(props)}><ObserverPanelContent {...props} hostWorkspaceId={hostWorkspaceId} paseoWorkspace={paseoWorkspace} /></WorkbenchLocaleProvider>;
 }
 
 export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
+  const locale = localeFromHostProps(props);
+  const localizedCopy = getWorkbenchCopy(locale);
   const paseo = usePaseo();
   const workspaceId = props.target?.workspaceId || "";
   const workspace = useQuery({
@@ -179,17 +182,18 @@ export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
     if (!workspaceId) return;
     return paseo.workspaces.ref(workspaceId).subscribe(() => { void workspace.refetch(); });
   }, [paseo, workspaceId, workspace.refetch]);
-  if (workspaceId && !workspace.data) return <View style={{ padding: 12, gap: 8 }}>
-    <Text style={{ color: props.theme.colors.foregroundMuted }}>{workspace.isPending ? copy.hostWorkspaceLoading : copy.hostWorkspaceUnavailable}</Text>
-    {workspace.isError ? <Pressable accessibilityRole="button" onPress={() => { void workspace.refetch(); }}><Text style={{ color: props.theme.colors.foreground }}>{copy.refreshNow}</Text></Pressable> : null}
-  </View>;
+  if (workspaceId && !workspace.data) return <WorkbenchLocaleProvider locale={locale}><View style={{ padding: 12, gap: 8 }}>
+    <Text style={{ color: props.theme.colors.foregroundMuted }}>{workspace.isPending ? localizedCopy.hostWorkspaceLoading : localizedCopy.hostWorkspaceUnavailable}</Text>
+    {workspace.isError ? <Pressable accessibilityRole="button" onPress={() => { void workspace.refetch(); }}><Text style={{ color: props.theme.colors.foreground }}>{localizedCopy.refreshNow}</Text></Pressable> : null}
+  </View></WorkbenchLocaleProvider>;
   const context = props.target?.agentId
     ? { context: "agent" as const, workspaceId, agentId: props.target.agentId }
     : { context: "workspace" as const, workspaceId };
-  return <ObserverPanelContent {...props} {...context} hostWorkspaceId={workspaceId} paseoWorkspace={workspace.data || null} />;
+  return <WorkbenchLocaleProvider locale={locale}><ObserverPanelContent {...props} {...context} hostWorkspaceId={workspaceId} paseoWorkspace={workspace.data || null} /></WorkbenchLocaleProvider>;
 }
 
 export function ObserverPanelContent(props: ObserverPanelContentProps) {
+  const localizedCopy = useWorkbenchCopy();
   const getProjects = useRpc(projectsQuery);
   const directory = props.paseoWorkspace?.directory || "";
   const projects = useQuery({ queryKey: ["workbench-projects", props.host.id, directory], queryFn: () => getProjects({ directory: directory || undefined }), refetchOnWindowFocus: false, retry: false });
@@ -203,7 +207,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     setSetupProject(null);
     setChosen("");
   }, [directory]);
-  if (!directory && !memory.ready) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{copy.projectLoading}</Text>;
+  if (!directory && !memory.ready) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoading}</Text>;
   if (directory && !active) return <ProjectSetup
     directory={directory}
     theme={props.theme}
@@ -214,7 +218,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     }}
   />;
   if (!active || pickingProject) return <View style={{ padding: 12, gap: 8 }}>
-    <Text style={{ color: props.theme.colors.foreground }}>{projects.isPending ? copy.projectLoading : projects.isError ? copy.projectLoadFailed : !projects.data?.length ? copy.noRegisteredProjects : copy.selectProject}</Text>
+    <Text style={{ color: props.theme.colors.foreground }}>{projects.isPending ? localizedCopy.projectLoading : projects.isError ? localizedCopy.projectLoadFailed : !projects.data?.length ? localizedCopy.noRegisteredProjects : localizedCopy.selectProject}</Text>
     {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => { setChosen(p.configPath); setSetupProject(null); setPickingProject(false); }}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
   </View>;
   return <View style={{ flex: 1 }}>
@@ -226,6 +230,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const { projectConfig } = props;
   const { hostWorkspaceId, paseoWorkspace } = props;
   const { theme, layout } = props;
+  const localizedCopy = useWorkbenchCopy();
+  const locale = useWorkbenchLocale();
   const preferenceScopeKey = `project:${projectConfig}:paseo-workspace:${hostWorkspaceId || PREFERENCE_SCOPE_FALLBACK}`;
   const [panelWidth, setPanelWidth] = useState(0);
   const [panelHeight, setPanelHeight] = useState(0);
@@ -240,7 +246,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [maxRounds, setMaxRounds] = useState("3");
   const [reviewerTimeoutMinutes, setReviewerTimeoutMinutes] = useState("15");
   const [repairTimeoutMinutes, setRepairTimeoutMinutes] = useState("30");
-  const [reviewerRole, setReviewerRole] = useState("Code reviewer");
+  const [reviewerRole, setReviewerRole] = useState("");
   const [reviewInstructions, setReviewInstructions] = useState("");
   const [reviewerSession, setReviewerSession] = useState<"reuse" | "new_per_round">("reuse");
   const [executionModel, setExecutionModel] = useState("");
@@ -330,7 +336,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   });
   const listState = useLastSuccessfulResponse("workspace-list", listQuery.data, { error: listQuery.error, staleAfterMs: STALE_WINDOWS.list });
   const listResult = resultOf<ListResult>(listState.response);
-  const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error);
+  const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
   const listReady = Boolean(listResult);
   useEffect(() => {
     if (backendQuery.data?.state !== "ready" || listReady) return;
@@ -399,7 +405,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const binding = (bindingQuery.data?.binding || null) as WorkspaceBindingResponse["binding"];
   const savedHandoff = bindingQuery.data?.handoff || null;
   const boundAgent = (bindingQuery.data?.agent || null) as WorkspaceBindingResponse["agent"];
-  const bindingFailure = bindingQuery.data?.error?.message || queryErrorMessage(bindingQuery.error);
+  const bindingFailure = bindingQuery.data?.error?.message || queryErrorMessage(bindingQuery.error, localizedCopy);
   const identifyQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "identify", workspaceDirectory],
     queryFn: () => rpc({ method: "workspace.identify", params: { directory: workspaceDirectory } }),
@@ -476,7 +482,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     staleAfterMs: STALE_WINDOWS.detail,
   });
   const detail = resultOf<DetailResult>(detailState.response);
-  const detailFailure = queryFailureForDisplay(detailState, detailQuery.data, detailQuery.error);
+  const detailFailure = queryFailureForDisplay(detailState, detailQuery.data, detailQuery.error, localizedCopy);
   const detailUnavailable = !detail
     && detailState.initialFailure
     && !isRecoverableObserverFailure(detailQuery.data, detailQuery.error);
@@ -513,7 +519,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   });
   const graphState = useLastSuccessfulResponse(`repository-graph:${selectedWorkspaceId}:${selectedRepoPath}`, graphQuery.data, { error: graphQuery.error, staleAfterMs: STALE_WINDOWS.repository });
   const graph = resultOf<GraphResult>(graphState.response);
-  const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error);
+  const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error, localizedCopy);
   const changesScope: ChangeScope = selectedCommit ? "commit" : changeScope;
   const changesQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "repository-changes", selectedWorkspaceId, selectedRepoPath, changesScope, selectedCommit],
@@ -539,7 +545,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     { error: changesQuery.error, staleAfterMs: STALE_WINDOWS.repository },
   );
   const changes = resultOf<ChangesResult>(changesState.response);
-  const changesFailure = queryFailureForDisplay(changesState, changesQuery.data, changesQuery.error);
+  const changesFailure = queryFailureForDisplay(changesState, changesQuery.data, changesQuery.error, localizedCopy);
 
   useEffect(() => {
     if (changeTreeMode !== null || !changes) return;
@@ -583,7 +589,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   });
   const reviewState = useLastSuccessfulResponse(`review:${reviewIds.join("|")}:${JSON.stringify(targetOverrides)}`, reviewQuery.data, { error: reviewQuery.error, staleAfterMs: STALE_WINDOWS.review });
   const review = resultOf<ReviewResult>(reviewState.response);
-  const reviewFailure = queryFailureForDisplay(reviewState, reviewQuery.data, reviewQuery.error);
+  const reviewFailure = queryFailureForDisplay(reviewState, reviewQuery.data, reviewQuery.error, localizedCopy);
   const reviewSessionRpc = useRpc(reviewSessionQuery);
   const reviewSessionListRpc = useRpc(reviewSessionList);
   const reviewStartRpc = useRpc(reviewSessionStart);
@@ -635,8 +641,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       setMaxRounds(String(reviewPreferences.maxRounds));
       setReviewerTimeoutMinutes(String(Math.max(1, Math.round(reviewPreferences.reviewerTimeoutMs / 60_000))));
       setRepairTimeoutMinutes(String(Math.max(1, Math.round(reviewPreferences.repairTimeoutMs / 60_000))));
-      setReviewerRole(reviewPreferences.reviewerRole);
-      setReviewInstructions(reviewPreferences.instructions);
+      const builtInRole = reviewPreferences.reviewerRole === "Code reviewer" || reviewPreferences.reviewerRole === "代码审核者";
+      const builtInInstructions = reviewPreferences.instructions === "Check requirement fit, correctness, regressions and tests; keep the implementation simple."
+        || reviewPreferences.instructions === "检查需求是否满足、实现是否正确、是否引入回归、测试是否充分；保持实现简单。";
+      setReviewerRole(builtInRole ? localizedCopy.reviewDefaultRole : reviewPreferences.reviewerRole);
+      setReviewInstructions(builtInInstructions ? localizedCopy.reviewDefaultInstructions : reviewPreferences.instructions);
       setReviewerSession(reviewPreferences.reviewerSession);
       setExecutionModel(reviewPreferences.executionModel || "");
       setReviewerModel(reviewPreferences.reviewerModel || "");
@@ -649,7 +658,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       setSessionDefaultRelationship(sessionPatch?.defaultRelationship || agentSessionPreferences.defaultRelationship);
       setSessionProviderRelationships(sessionPatch?.providerRelationships || {});
     }
-  }, [agentSessionPreferences, agentSessionSettingsQuery.data?.global, agentSessionSettingsQuery.data?.project, reviewPreferences, reviewSettingsScope]);
+  }, [agentSessionPreferences, agentSessionSettingsQuery.data?.global, agentSessionSettingsQuery.data?.project, localizedCopy, reviewPreferences, reviewSettingsScope]);
   useEffect(() => { syncReviewEditor(); }, [syncReviewEditor]);
   const saveReviewSettings = useCallback(async () => {
     try {
@@ -660,7 +669,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       if (dirty.has("maxRounds")) shared.maxRounds = Number(maxRounds) || 3;
       if (dirty.has("reviewerTimeoutMs")) shared.reviewerTimeoutMs = Math.max(1, Number(reviewerTimeoutMinutes) || 15) * 60_000;
       if (dirty.has("repairTimeoutMs")) shared.repairTimeoutMs = Math.max(1, Number(repairTimeoutMinutes) || 30) * 60_000;
-      if (dirty.has("reviewerRole")) shared.reviewerRole = reviewerRole.trim() || "Code reviewer";
+      if (dirty.has("reviewerRole")) shared.reviewerRole = reviewerRole.trim() || localizedCopy.reviewDefaultRole;
       if (dirty.has("instructions")) shared.instructions = reviewInstructions;
       if (dirty.has("reviewerSession")) shared.reviewerSession = reviewerSession;
       const models: ReviewModelOverride = {};
@@ -684,9 +693,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       await agentSessionSettingsQuery.refetch();
       await agentReviewQuery.refetch();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "审核设置保存失败");
+      toast.error(localizedReviewError(error instanceof Error ? { code: error.message } : null, localizedCopy, localizedCopy.reviewSettingsSaveFailed));
     }
-  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, autoFix, executionModel, maxRounds, projectConfig, repairTimeoutMinutes, reviewInstructions, reviewerModel, reviewerRole, reviewerSession, reviewerTimeoutMinutes, reviewMode, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, sessionDefaultRelationship, sessionProviderRelationships, toast]);
+  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, autoFix, executionModel, localizedCopy, maxRounds, projectConfig, repairTimeoutMinutes, reviewInstructions, reviewerModel, reviewerRole, reviewerSession, reviewerTimeoutMinutes, reviewMode, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, sessionDefaultRelationship, sessionProviderRelationships, toast]);
   const closeReviewSettings = useCallback(() => {
     syncReviewEditor();
     setReviewSettingsOpen(false);
@@ -701,8 +710,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     void reviewSettingsUpdateRpc({ projectConfig, scope: reviewSettingsScope === "global" ? "global" : modelField ? "project-model" : "project", patch: {}, resetFields: [field] }).then(() => {
       reviewDirtyFields.current.clear();
       return reviewSettingsQuery.refetch();
-    }).catch((error) => toast.error(error instanceof Error ? error.message : "恢复继承失败"));
-  }, [projectConfig, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, toast]);
+    }).catch((error) => toast.error(localizedReviewError(error instanceof Error ? { code: error.message } : null, localizedCopy, localizedCopy.reviewSettingsSaveFailed)));
+  }, [localizedCopy, projectConfig, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, toast]);
   const resetAllProjectReviewOverrides = useCallback(async () => {
     try {
       await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["mode", "autoFix", "maxRounds", "reviewerRole", "instructions", "reviewerSession", "reviewerTimeoutMs", "repairTimeoutMs"] });
@@ -714,9 +723,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       await agentReviewQuery.refetch();
       await agentSessionSettingsQuery.refetch();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "恢复继承失败");
+      toast.error(localizedReviewError(error instanceof Error ? { code: error.message } : null, localizedCopy, localizedCopy.reviewSettingsSaveFailed));
     }
-  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, projectConfig, reviewSettingsQuery, reviewSettingsUpdateRpc, toast]);
+  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, localizedCopy, projectConfig, reviewSettingsQuery, reviewSettingsUpdateRpc, toast]);
   const reviewSources = reviewSettingsQuery.data?.sources || {};
   const reviewProject = reviewSettingsQuery.data?.project || {};
   const reviewGlobal = reviewSettingsQuery.data?.global || {};
@@ -730,7 +739,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [agentSessionProvidersQuery.data?.providers, boundAgent?.provider]);
   const sourceLabel = (field: string) => {
     const source = reviewSources[field];
-    return source === "project" || source === "project-model" ? "本项目" : source === "global" || source === "global-model" ? "全局" : "默认/跟随";
+    return source === "project" || source === "project-model" ? localizedCopy.reviewSourceProject : source === "global" || source === "global-model" ? localizedCopy.reviewSourceGlobal : localizedCopy.reviewSourceDefault;
   };
   const hasReviewOverride = (field: string) => {
     const source = reviewSettingsScope === "project"
@@ -741,36 +750,36 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const sessionSourceLabel = (field: "defaultRelationship" | string) => {
     if (field === "defaultRelationship") {
       const source = sessionSources?.defaultRelationship;
-      return source === "project" ? "本项目" : source === "global" ? "全局" : "默认";
+      return source === "project" ? localizedCopy.reviewSourceProject : source === "global" ? localizedCopy.reviewSourceGlobal : localizedCopy.reviewSourceDefaultShort;
     }
     const source = sessionSources?.providerRelationships?.[field];
-    return source === "project" ? "本项目" : source === "global" ? "全局" : "默认";
+    return source === "project" ? localizedCopy.reviewSourceProject : source === "global" ? localizedCopy.reviewSourceGlobal : localizedCopy.reviewSourceDefaultShort;
   };
   const startAgentReview = useCallback(() => {
     if (!selectedWorkspaceId) return;
-    void reviewStartRpc({ projectConfig, workspaceId: selectedWorkspaceId, executionAgentId: boundAgent?.id }).then((result) => {
-      if (!result.ok) toast.error(result.error?.message || "审核无法开始");
+    void reviewStartRpc({ projectConfig, workspaceId: selectedWorkspaceId, executionAgentId: boundAgent?.id, locale }).then((result) => {
+      if (!result.ok) toast.error(localizedReviewError(result.error, localizedCopy));
       else setReviewSessionId("");
       return agentReviewQuery.refetch();
-    }).catch((error) => toast.error(error instanceof Error ? error.message : "审核无法开始"));
-  }, [agentReviewQuery, boundAgent?.id, projectConfig, reviewStartRpc, selectedWorkspaceId, toast]);
+    }).catch(() => toast.error(localizedCopy.reviewErrorGeneric));
+  }, [agentReviewQuery, boundAgent?.id, locale, localizedCopy, projectConfig, reviewStartRpc, selectedWorkspaceId, toast]);
   const controlAgentReview = useCallback((action: "stop" | "resume" | "review" | "repair") => {
     if (!selectedWorkspaceId || !agentReview) return;
     void reviewControlRpc({ projectConfig, workspaceId: selectedWorkspaceId, sessionId: agentReview.id, action }).then((result) => {
-      if (!result.ok) toast.error(result.error?.message || "审核操作失败");
+      if (!result.ok) toast.error(localizedReviewError(result.error, localizedCopy));
       return agentReviewQuery.refetch();
-    }).catch((error) => toast.error(error instanceof Error ? error.message : "审核操作失败"));
-  }, [agentReview, agentReviewQuery, projectConfig, reviewControlRpc, selectedWorkspaceId, toast]);
+    }).catch(() => toast.error(localizedCopy.reviewErrorGeneric));
+  }, [agentReview, agentReviewQuery, localizedCopy, projectConfig, reviewControlRpc, selectedWorkspaceId, toast]);
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const observationAreas: ObservationArea[] = [
-    { label: copy.observationAreaList, snapshot: listState, fetching: listQuery.isFetching },
-    { label: copy.observationAreaDetail, snapshot: detailState, fetching: detailQuery.isFetching },
-    { label: copy.observationAreaGraph, snapshot: graphState, fetching: graphQuery.isFetching },
-    { label: copy.observationAreaChanges, snapshot: changesState, fetching: changesQuery.isFetching },
-    ...(tab === "review" ? [{ label: "Review set", snapshot: reviewState, fetching: reviewQuery.isFetching }] : []),
+    { label: localizedCopy.observationAreaList, snapshot: listState, fetching: listQuery.isFetching },
+    { label: localizedCopy.observationAreaDetail, snapshot: detailState, fetching: detailQuery.isFetching },
+    { label: localizedCopy.observationAreaGraph, snapshot: graphState, fetching: graphQuery.isFetching },
+    { label: localizedCopy.observationAreaChanges, snapshot: changesState, fetching: changesQuery.isFetching },
+    ...(tab === "review" ? [{ label: localizedCopy.tabReviewSet, snapshot: reviewState, fetching: reviewQuery.isFetching }] : []),
   ];
   const unavailableArea = observationAreas.find((area) => area.snapshot.status === "unavailable");
-  const observerError = listUnavailable ? listFailure : unavailableArea ? copy.observationUnavailable : null;
+  const observerError = listUnavailable ? listFailure : unavailableArea ? localizedCopy.observationUnavailable : null;
   const observationExpired = Boolean(
     listState.expired ||
       detailState.expired ||
@@ -813,14 +822,14 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   useRefreshOnForeground(Boolean(projectConfig), refreshAll);
 
   const observationLabel = observerError
-    ? copy.observationUnavailable
+    ? localizedCopy.observationUnavailable
     : observationExpired
-      ? copy.observationStale
+      ? localizedCopy.observationStale
       : observationRefreshing
-        ? copy.observationRefreshing
+        ? localizedCopy.observationRefreshing
         : observationDegraded
-          ? copy.observationDegraded
-          : copy.observationStatus;
+          ? localizedCopy.observationDegraded
+          : localizedCopy.observationStatus;
   const observationIcon = observerError || observationExpired ? "CircleAlert" : "RefreshCw";
   const observationColor = observerError
     ? theme.colors.statusDanger
@@ -830,21 +839,21 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
 
   async function delegateSelectedWorkspace(): Promise<void> {
     if (selectedWorkspaceIsMain) {
-      toast.show(copy.text_bb57803d41, { variant: "warning" });
+      toast.show(localizedCopy.text_bb57803d41, { variant: "warning" });
       return;
     }
     if (!selectedWorkspaceId || !parentAgentId) {
-      toast.show(copy.text_d7dd46e5e3, { variant: "warning" });
+      toast.show(localizedCopy.text_d7dd46e5e3, { variant: "warning" });
       return;
     }
     const goal = handoffGoal.trim();
     if (!savedHandoff && !goal && !binding?.agentId) {
-      toast.show(copy.text_afa9beb681, { variant: "warning" });
+      toast.show(localizedCopy.text_afa9beb681, { variant: "warning" });
       return;
     }
     const handoff = savedHandoff || (binding?.agentId ? {
       version: "workspace.workbench.handoff/v1" as const,
-      goal: copy.text_36cdf2a07a,
+      goal: localizedCopy.text_36cdf2a07a,
       decisions: [],
       inScope: [],
       outOfScope: [],
@@ -853,6 +862,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       constraints: [],
       ambiguities: [],
       startMode: "adaptive" as const,
+      reviewLocale: locale,
       ...(handoffRelationship === "default" ? {} : { relationship: handoffRelationship }),
       expected: { branchByRepository: {}, baseByRepository: {} },
     } : {
@@ -866,6 +876,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       constraints: [],
       ambiguities: [],
       startMode: "adaptive" as const,
+      reviewLocale: locale,
       ...(handoffRelationship === "default" ? {} : { relationship: handoffRelationship }),
       expected: { branchByRepository: {}, baseByRepository: {} },
     });
@@ -878,19 +889,19 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       });
       if (result.ok) {
         const actionLabel = result.action === "created"
-          ? copy.text_a2eb60ef6c
+          ? localizedCopy.text_a2eb60ef6c
           : result.action === "already-running"
-            ? copy.text_0561f1d18e
+            ? localizedCopy.text_0561f1d18e
             : result.action === "reused"
-              ? copy.text_050246dd54
-              : copy.text_962c002fa2;
+              ? localizedCopy.text_050246dd54
+              : localizedCopy.text_962c002fa2;
         toast.show(actionLabel, { variant: "success" });
       } else {
-        toast.show(result.error?.message || copy.text_b4f57a0af8, { variant: result.action === "blocked" ? "warning" : "error" });
+        toast.show(result.error ? localizedReviewError(result.error, localizedCopy) : localizedCopy.text_b4f57a0af8, { variant: result.action === "blocked" ? "warning" : "error" });
       }
       await bindingQuery.refetch().catch(() => undefined);
     } catch (error) {
-      toast.show(error instanceof Error ? error.message : copy.text_341baadc12, { variant: "error" });
+      toast.show(error instanceof Error ? error.message : localizedCopy.text_341baadc12, { variant: "error" });
     } finally {
       setDelegating(false);
     }
@@ -911,8 +922,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
 
   function copyBrief(text: string): void {
     void copyText(text)
-      .then(() => toast.show(copy.text_2fb0b81c28, { variant: "success" }))
-      .catch(() => toast.show(copy.text_514f0cbbf2, { variant: "warning" }));
+      .then(() => toast.show(localizedCopy.text_2fb0b81c28, { variant: "success" }))
+      .catch(() => toast.show(localizedCopy.text_514f0cbbf2, { variant: "warning" }));
   }
 
   const allocation = useSectionSizing(panelHeight, panelWidth, `${selectedWorkspaceId}:${selectedRepoPath}:${tab}`, preferences.sectionLayout, preferences.commitResize);
@@ -994,7 +1005,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   return (
     <View
       style={styles.screen}
-      accessibilityLabel="Workspace Workbench"
+      accessibilityLabel={localizedCopy.productName}
       onLayout={(event) => {
         const width = event.nativeEvent.layout.width;
         if (Math.abs(width - panelWidth) > 1) setPanelWidth(width);
@@ -1026,11 +1037,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       {!selectedWorkspaceIsMain && listResult?.capabilities?.agent ? (
         <View>
         {parentAgentId && agentContextAvailable && !binding?.agentId ? <View style={styles.targetRow}>
-          <TextInput value={handoffGoal} onChangeText={setHandoffGoal} placeholder={copy.text_1b37d56f7a} style={styles.targetInput} />
+          <TextInput value={handoffGoal} onChangeText={setHandoffGoal} placeholder={localizedCopy.text_1b37d56f7a} style={styles.targetInput} />
           <View style={styles.briefActions}>
-            {(["default", "independent", "child"] as const).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: handoffRelationship === relationship }} onPress={() => setHandoffRelationship(relationship)} style={[styles.secondaryButton, handoffRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "default" ? "默认" : relationship === "independent" ? "独立" : "子 Agent"}</Text></Pressable>)}
+            {(["default", "independent", "child"] as const).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: handoffRelationship === relationship }} onPress={() => setHandoffRelationship(relationship)} style={[styles.secondaryButton, handoffRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "default" ? localizedCopy.reviewSettingsFollowDefault : relationship === "independent" ? localizedCopy.reviewSettingsIndependentShort : localizedCopy.reviewSettingsChildAgent}</Text></Pressable>)}
           </View>
-          <Pressable disabled={delegating || !handoffGoal.trim()} onPress={delegateSelectedWorkspace} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.text_99ad8551f2}</Text></Pressable>
+          <Pressable disabled={delegating || !handoffGoal.trim()} onPress={delegateSelectedWorkspace} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.text_99ad8551f2}</Text></Pressable>
         </View> : null}
         <ExecutionBindingCard
           workspaceId={selectedWorkspaceId}
@@ -1049,11 +1060,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         />
         </View>
       ) : null}
-      <View style={styles.tabs}>
-        <TabButton active={tab === "workspace"} label="Workspace" onPress={() => setTab("workspace")} theme={theme} styles={styles} />
-        <TabButton active={tab === "review" && reviewTab === "set"} label={`Review set${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
-        {selectedWorkspaceId && !selectedWorkspaceIsMain ? <TabButton active={tab === "review" && reviewTab === "agent"} label="Agent Review" onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
-      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
+        <TabButton active={tab === "workspace"} label={localizedCopy.tabWorkspace} onPress={() => setTab("workspace")} theme={theme} styles={styles} />
+        <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
+        {selectedWorkspaceId && !selectedWorkspaceIsMain ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
+      </ScrollView>
       <View
         style={styles.bodyShell}
         onLayout={(event) => {
@@ -1065,14 +1076,14 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <BodyContainer {...(tab === "review" || allocation.outerScroll ? { scrollEnabled: !sectionDragging, contentContainerStyle: styles.bodyContent } : {})} style={[styles.body, tab === "workspace" && !allocation.outerScroll && styles.bodyContent, stableScrollbarStyle]}>
           {backendQuery.data && backendQuery.data.state !== "ready" ? (
             <View style={styles.warningCard}>
-              <Text style={styles.warningTitle}>{copy.setupBackendTitle}</Text>
-              <Text style={styles.warningText}>{backendQuery.data.message || (backendQuery.data.state === "starting" ? copy.setupBackendStarting : copy.setupBackendFailed)}</Text>
-              <Pressable accessibilityRole="button" disabled={backendQuery.isFetching} onPress={() => { void backendQuery.refetch(); }} style={{ marginTop: 7 }}><Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "600" }}>{backendQuery.isFetching ? copy.setupBackendStarting : copy.setupRetry}</Text></Pressable>
+              <Text style={styles.warningTitle}>{localizedCopy.setupBackendTitle}</Text>
+              <Text style={styles.warningText}>{backendQuery.data.message || (backendQuery.data.state === "starting" ? localizedCopy.setupBackendStarting : localizedCopy.setupBackendFailed)}</Text>
+              <Pressable accessibilityRole="button" disabled={backendQuery.isFetching} onPress={() => { void backendQuery.refetch(); }} style={{ marginTop: 7 }}><Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "600" }}>{backendQuery.isFetching ? localizedCopy.setupBackendStarting : localizedCopy.setupRetry}</Text></Pressable>
             </View>
           ) : null}
           {observerError ? (
             <View style={styles.warningCard}>
-              <Text style={styles.warningTitle}>{copy.text_ddb6624fda}</Text>
+              <Text style={styles.warningTitle}>{localizedCopy.text_ddb6624fda}</Text>
               <Text style={styles.warningText}>{observerError}</Text>
             </View>
           ) : null}
@@ -1120,7 +1131,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               theme={theme}
               styles={styles}
             />
-          ) : reviewTab === "agent" ? <AgentReviewView session={agentReview} history={agentReviewHistoryQuery.data?.sessions || []} loading={agentReviewQuery.isFetching} onStart={startAgentReview} onReview={() => controlAgentReview("review")} onRepair={() => controlAgentReview("repair")} onStop={() => controlAgentReview("stop")} onResume={() => controlAgentReview("resume")} onSelectHistory={setReviewSessionId} theme={theme} styles={styles} /> : (
+          ) : reviewTab === "agent" ? <AgentReviewView session={agentReview} history={agentReviewHistoryQuery.data?.sessions || []} loading={agentReviewQuery.isFetching} onStart={startAgentReview} onReview={() => controlAgentReview("review")} onRepair={() => controlAgentReview("repair")} onStop={() => controlAgentReview("stop")} onResume={() => controlAgentReview("resume")} onSelectHistory={setReviewSessionId} onOpenAgent={props.navigation ? (id) => props.navigation?.openAgent({ agentId: id }) : undefined} theme={theme} styles={styles} /> : (
             <ReviewView
               key={reviewIds.join("|")}
               workspaces={allWorkspaces.filter((workspace) => !isMainWorkspace(workspace))}
@@ -1141,9 +1152,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       </View>
       <AnchoredMenu open={statusMenuOpen} onClose={() => setStatusMenuOpen(false)} theme={theme}>
         <Text style={styles.layoutMenuHint}>{observationLabel}</Text>
-        <Text style={styles.layoutMenuHint}>{copy.text_a6625c543c}{formatObservedTime(lastSuccessfulAt)}</Text>
-        {observationAreas.filter((area) => area.fetching || (area.snapshot.status !== "fresh" && area.snapshot.status !== "loading")).map((area) => <Text key={area.label} style={area.snapshot.status === "expired" ? styles.warningText : styles.layoutMenuHint}>{observationAreaDetail(area)}</Text>)}
-        <Pressable accessibilityRole="button" accessibilityLabel={copy.refreshNow} disabled={manualRefreshing} onPress={() => { void refreshAll(); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{copy.refreshNow}</Text></Pressable>
+        <Text style={styles.layoutMenuHint}>{localizedCopy.text_a6625c543c}{formatObservedTime(lastSuccessfulAt, localizedCopy)}</Text>
+        {observationAreas.filter((area) => area.fetching || (area.snapshot.status !== "fresh" && area.snapshot.status !== "loading")).map((area) => <Text key={area.label} style={area.snapshot.status === "expired" ? styles.warningText : styles.layoutMenuHint}>{observationAreaDetail(area, localizedCopy)}</Text>)}
+        <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.refreshNow} disabled={manualRefreshing} onPress={() => { void refreshAll(); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.refreshNow}</Text></Pressable>
       </AnchoredMenu>
       <ProjectStorageMenu
         open={storageMenuOpen}
@@ -1170,55 +1181,55 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       />
       <AnchoredMenu open={reviewSettingsOpen} onClose={closeReviewSettings} theme={theme} width={compact ? 270 : 330}>
         <ScrollView style={{ maxHeight: compact ? 420 : 600 }} contentContainerStyle={{ gap: 6 }}>
-        <Text style={styles.layoutMenuHint}>Agent 会话设置</Text>
+        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsTitle}</Text>
         <View style={styles.briefActions}>
-          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewSettingsScope === "project" }} onPress={() => { reviewDirtyFields.current.clear(); setReviewSettingsScope("project"); }} style={[styles.secondaryButton, reviewSettingsScope === "project" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>本项目</Text></Pressable>
-          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewSettingsScope === "global" }} onPress={() => { reviewDirtyFields.current.clear(); setReviewSettingsScope("global"); }} style={[styles.secondaryButton, reviewSettingsScope === "global" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>全局默认</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewSettingsScope === "project" }} onPress={() => { reviewDirtyFields.current.clear(); setReviewSettingsScope("project"); }} style={[styles.secondaryButton, reviewSettingsScope === "project" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsScopeProject}</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewSettingsScope === "global" }} onPress={() => { reviewDirtyFields.current.clear(); setReviewSettingsScope("global"); }} style={[styles.secondaryButton, reviewSettingsScope === "global" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsScopeGlobal}</Text></Pressable>
         </View>
-        <Text style={styles.layoutMenuHint}>未单独设置的字段继承全局默认。</Text>
-        <Text style={styles.layoutMenuHint}>执行会话关系 · {sessionSourceLabel("defaultRelationship")}</Text>
+        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsInheritedHint}</Text>
+        <Text style={styles.layoutMenuHint}>{localizedCopy.agentSessionSettings} · {sessionSourceLabel("defaultRelationship")}</Text>
         <View style={styles.briefActions}>
-          {(["independent", "child"] as AgentRelationship[]).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: sessionDefaultRelationship === relationship }} onPress={() => { markSessionField("defaultRelationship"); setSessionDefaultRelationship(relationship); }} style={[styles.secondaryButton, sessionDefaultRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "independent" ? "独立会话" : "子 Agent"}</Text></Pressable>)}
+          {(["independent", "child"] as AgentRelationship[]).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: sessionDefaultRelationship === relationship }} onPress={() => { markSessionField("defaultRelationship"); setSessionDefaultRelationship(relationship); }} style={[styles.secondaryButton, sessionDefaultRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "independent" ? localizedCopy.reviewSettingsIndependent : localizedCopy.reviewSettingsChildAgent}</Text></Pressable>)}
         </View>
-        <Text style={styles.layoutMenuHint}>Provider 覆盖</Text>
+        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsProviderOverrides}</Text>
         {sessionProviders.map((provider) => {
           const selected = sessionProviderRelationships[provider];
           return <View key={provider} style={{ gap: 4 }}>
             <Text style={styles.reviewEntryMeta}>{provider} · {sessionSourceLabel(provider)}</Text>
             <View style={styles.briefActions}>
-              <Pressable accessibilityRole="button" accessibilityState={{ selected: !selected }} onPress={() => { markSessionField("providerRelationships"); setSessionProviderRelationships((current) => { const next = { ...current }; delete next[provider]; return next; }); }} style={[styles.secondaryButton, !selected && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>跟随默认</Text></Pressable>
-              {(["independent", "child"] as AgentRelationship[]).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: selected === relationship }} onPress={() => { markSessionField("providerRelationships"); setSessionProviderRelationships((current) => ({ ...current, [provider]: relationship })); }} style={[styles.secondaryButton, selected === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "independent" ? "独立" : "子 Agent"}</Text></Pressable>)}
+              <Pressable accessibilityRole="button" accessibilityState={{ selected: !selected }} onPress={() => { markSessionField("providerRelationships"); setSessionProviderRelationships((current) => { const next = { ...current }; delete next[provider]; return next; }); }} style={[styles.secondaryButton, !selected && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsFollowDefault}</Text></Pressable>
+              {(["independent", "child"] as AgentRelationship[]).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: selected === relationship }} onPress={() => { markSessionField("providerRelationships"); setSessionProviderRelationships((current) => ({ ...current, [provider]: relationship })); }} style={[styles.secondaryButton, selected === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "independent" ? localizedCopy.reviewSettingsIndependentShort : localizedCopy.reviewSettingsChildAgent}</Text></Pressable>)}
             </View>
           </View>;
         })}
-        <Text style={styles.layoutMenuHint}>审核模式 · {sourceLabel("mode")}</Text>
+        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsMode} · {sourceLabel("mode")}</Text>
         <View style={styles.briefActions}>
-          {["off", "manual", "automatic"].map((mode) => <Pressable key={mode} accessibilityRole="button" accessibilityState={{ selected: reviewMode === mode }} onPress={() => { markReviewField("mode"); setReviewMode(mode as "off" | "manual" | "automatic"); }} style={[styles.secondaryButton, reviewMode === mode && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{mode === "off" ? "关闭" : mode === "manual" ? "手动" : "自动"}</Text></Pressable>)}
+          {["off", "manual", "automatic"].map((mode) => <Pressable key={mode} accessibilityRole="button" accessibilityState={{ selected: reviewMode === mode }} onPress={() => { markReviewField("mode"); setReviewMode(mode as "off" | "manual" | "automatic"); }} style={[styles.secondaryButton, reviewMode === mode && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{mode === "off" ? localizedCopy.reviewSettingsModeOff : mode === "manual" ? localizedCopy.reviewSettingsModeManual : localizedCopy.reviewSettingsModeAutomatic}</Text></Pressable>)}
         </View>
-        <Pressable accessibilityRole="button" accessibilityState={{ selected: autoFix }} onPress={() => { markReviewField("autoFix"); setAutoFix((value) => !value); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{autoFix ? "✓ 自动修复" : "○ 手动修复"} · {sourceLabel("autoFix")}</Text></Pressable>
-        <TextInput accessibilityLabel="Reviewer role" onChangeText={(value) => { markReviewField("reviewerRole"); setReviewerRole(value); }} placeholder={`Reviewer 角色 · ${sourceLabel("reviewerRole")}`} placeholderTextColor={theme.colors.foregroundMuted} style={styles.targetInput} value={reviewerRole} />
-        <TextInput accessibilityLabel="Review instructions" multiline onChangeText={(value) => { markReviewField("instructions"); setReviewInstructions(value); }} placeholder={`审核要求 · ${sourceLabel("instructions")}`} placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { minHeight: 48 }]} value={reviewInstructions} />
-        <TextInput accessibilityLabel="Maximum review rounds" keyboardType="number-pad" onChangeText={(value) => { markReviewField("maxRounds"); setMaxRounds(value); }} placeholder={`最大轮次 · ${sourceLabel("maxRounds")}`} placeholderTextColor={theme.colors.foregroundMuted} style={styles.targetInput} value={maxRounds} />
-        <Text style={styles.layoutMenuHint}>超时 · 审核 {sourceLabel("reviewerTimeoutMs")} / 修复 {sourceLabel("repairTimeoutMs")}</Text>
+        <Pressable accessibilityRole="button" accessibilityState={{ selected: autoFix }} onPress={() => { markReviewField("autoFix"); setAutoFix((value) => !value); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{autoFix ? `✓ ${localizedCopy.reviewSettingsAutoFix}` : `○ ${localizedCopy.reviewSettingsManualFix}`} · {sourceLabel("autoFix")}</Text></Pressable>
+        <TextInput accessibilityLabel={localizedCopy.reviewSettingsRole} onChangeText={(value) => { markReviewField("reviewerRole"); setReviewerRole(value); }} placeholder={`${localizedCopy.reviewSettingsRole} · ${sourceLabel("reviewerRole")}`} placeholderTextColor={theme.colors.foregroundMuted} style={styles.targetInput} value={reviewerRole} />
+        <TextInput accessibilityLabel={localizedCopy.reviewSettingsInstructions} multiline onChangeText={(value) => { markReviewField("instructions"); setReviewInstructions(value); }} placeholder={`${localizedCopy.reviewSettingsInstructions} · ${sourceLabel("instructions")}`} placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { minHeight: 48 }]} value={reviewInstructions} />
+        <TextInput accessibilityLabel={localizedCopy.reviewSettingsMaxRounds} keyboardType="number-pad" onChangeText={(value) => { markReviewField("maxRounds"); setMaxRounds(value); }} placeholder={`${localizedCopy.reviewSettingsMaxRounds} · ${sourceLabel("maxRounds")}`} placeholderTextColor={theme.colors.foregroundMuted} style={styles.targetInput} value={maxRounds} />
+        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsTimeout} · {localizedCopy.reviewSettingsReviewerTimeout} {sourceLabel("reviewerTimeoutMs")} / {localizedCopy.reviewSettingsRepairTimeout} {sourceLabel("repairTimeoutMs")}</Text>
         <View style={styles.briefActions}>
-          <TextInput accessibilityLabel="Reviewer timeout minutes" keyboardType="number-pad" onChangeText={(value) => { markReviewField("reviewerTimeoutMs"); setReviewerTimeoutMinutes(value); }} placeholder="审核超时（分钟）" placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { flex: 1 }]} value={reviewerTimeoutMinutes} />
-          <TextInput accessibilityLabel="Repair timeout minutes" keyboardType="number-pad" onChangeText={(value) => { markReviewField("repairTimeoutMs"); setRepairTimeoutMinutes(value); }} placeholder="修复超时（分钟）" placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { flex: 1 }]} value={repairTimeoutMinutes} />
+          <TextInput accessibilityLabel={localizedCopy.reviewSettingsReviewerTimeout} keyboardType="number-pad" onChangeText={(value) => { markReviewField("reviewerTimeoutMs"); setReviewerTimeoutMinutes(value); }} placeholder={localizedCopy.reviewSettingsReviewerTimeoutPlaceholder} placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { flex: 1 }]} value={reviewerTimeoutMinutes} />
+          <TextInput accessibilityLabel={localizedCopy.reviewSettingsRepairTimeout} keyboardType="number-pad" onChangeText={(value) => { markReviewField("repairTimeoutMs"); setRepairTimeoutMinutes(value); }} placeholder={localizedCopy.reviewSettingsRepairTimeoutPlaceholder} placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { flex: 1 }]} value={repairTimeoutMinutes} />
         </View>
-        <Text style={styles.layoutMenuHint}>Reviewer 会话 · {sourceLabel("reviewerSession")}</Text>
+        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsReviewerSession} · {sourceLabel("reviewerSession")}</Text>
         <View style={styles.briefActions}>
-          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerSession === "reuse" }} onPress={() => { markReviewField("reviewerSession"); setReviewerSession("reuse"); }} style={[styles.secondaryButton, reviewerSession === "reuse" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>复用会话</Text></Pressable>
-          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerSession === "new_per_round" }} onPress={() => { markReviewField("reviewerSession"); setReviewerSession("new_per_round"); }} style={[styles.secondaryButton, reviewerSession === "new_per_round" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>每轮新建</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerSession === "reuse" }} onPress={() => { markReviewField("reviewerSession"); setReviewerSession("reuse"); }} style={[styles.secondaryButton, reviewerSession === "reuse" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsReuse}</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerSession === "new_per_round" }} onPress={() => { markReviewField("reviewerSession"); setReviewerSession("new_per_round"); }} style={[styles.secondaryButton, reviewerSession === "new_per_round" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsNewPerRound}</Text></Pressable>
         </View>
-        <Text style={styles.layoutMenuHint}>执行模型 · {sourceLabel("executionModel")}</Text>
-        <Pressable accessibilityRole="button" onPress={() => { markReviewField("executionModel"); setExecutionModel(""); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>跟随执行会话{!executionModel ? " ✓" : ""}</Text></Pressable>
+        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsExecutionModel} · {sourceLabel("executionModel")}</Text>
+        <Pressable accessibilityRole="button" onPress={() => { markReviewField("executionModel"); setExecutionModel(""); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.reviewSettingsFollowExecution}{!executionModel ? " ✓" : ""}</Text></Pressable>
         {(reviewModelsQuery.data?.models || []).slice(0, 6).map((model) => <Pressable key={`exec-${model.id}`} accessibilityRole="button" onPress={() => { markReviewField("executionModel"); setExecutionModel(model.id); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{model.label}{executionModel === model.id ? " ✓" : ""}</Text></Pressable>)}
-        {reviewSettingsScope === "project" && hasReviewOverride("executionModel") ? <Pressable accessibilityRole="button" onPress={() => resetReviewField("executionModel")} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>恢复执行模型继承</Text></Pressable> : null}
-        <Text style={styles.layoutMenuHint}>Reviewer 模型 · {sourceLabel("reviewerModel")}</Text>
-        <Pressable accessibilityRole="button" onPress={() => { markReviewField("reviewerModel"); setReviewerModel(""); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>跟随执行模型{!reviewerModel ? " ✓" : ""}</Text></Pressable>
+        {reviewSettingsScope === "project" && hasReviewOverride("executionModel") ? <Pressable accessibilityRole="button" onPress={() => resetReviewField("executionModel")} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.reviewSettingsResetExecution}</Text></Pressable> : null}
+        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsReviewerModel} · {sourceLabel("reviewerModel")}</Text>
+        <Pressable accessibilityRole="button" onPress={() => { markReviewField("reviewerModel"); setReviewerModel(""); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.reviewSettingsFollowExecution}{!reviewerModel ? " ✓" : ""}</Text></Pressable>
         {(reviewModelsQuery.data?.models || []).slice(0, 6).map((model) => <Pressable key={`review-${model.id}`} accessibilityRole="button" onPress={() => { markReviewField("reviewerModel"); setReviewerModel(model.id); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{model.label}{reviewerModel === model.id ? " ✓" : ""}</Text></Pressable>)}
-        {reviewSettingsScope === "project" && hasReviewOverride("reviewerModel") ? <Pressable accessibilityRole="button" onPress={() => resetReviewField("reviewerModel")} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>恢复 Reviewer 模型继承</Text></Pressable> : null}
-        {reviewSettingsScope === "project" ? <Pressable accessibilityRole="button" onPress={() => { void resetAllProjectReviewOverrides(); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>恢复本项目全部继承</Text></Pressable> : null}
-        <Pressable accessibilityRole="button" onPress={saveReviewSettings} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>保存设置</Text></Pressable>
+        {reviewSettingsScope === "project" && hasReviewOverride("reviewerModel") ? <Pressable accessibilityRole="button" onPress={() => resetReviewField("reviewerModel")} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.reviewSettingsResetReviewer}</Text></Pressable> : null}
+        {reviewSettingsScope === "project" ? <Pressable accessibilityRole="button" onPress={() => { void resetAllProjectReviewOverrides(); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.reviewSettingsResetAll}</Text></Pressable> : null}
+        <Pressable accessibilityRole="button" onPress={saveReviewSettings} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsSave}</Text></Pressable>
         </ScrollView>
       </AnchoredMenu>
     </View>

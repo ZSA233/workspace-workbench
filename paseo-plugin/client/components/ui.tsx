@@ -5,7 +5,7 @@ type PluginWorkspacePanelProps
 import { Icon,ScrollView } from "@getpaseo/plugin/client/react-native";
 import { createContext,useContext,useEffect,useMemo,useRef,useState,type ReactNode } from "react";
 import { ActivityIndicator,PanResponder,Platform,Pressable,StyleSheet,Text,View,type ViewStyle,type ScrollViewProps } from "react-native";
-import { copy, formatCopy } from "../../shared/copy";
+import { copy, formatCopyFrom, type WorkbenchCopy } from "../../shared/copy";
 
 import { type ObserverResponse } from "../../shared/observer";
 import { GRAPH_ROW_HEIGHT } from "../graph/constants";
@@ -25,6 +25,7 @@ type SectionLayoutPreference,
 type WorkspaceSummary
 } from "../model";
 import { observerAccent } from "../theme";
+import { useWorkbenchCopy } from "../i18n";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -47,9 +48,9 @@ export function resultOf<T>(response: ObserverResponse | undefined): T | null {
   return response.result as T;
 }
 
-export function queryErrorMessage(error: unknown): string | null {
+export function queryErrorMessage(error: unknown, strings: WorkbenchCopy = copy): string | null {
   if (!error) return null;
-  return error instanceof Error ? error.message : copy.text_fb36ad230f;
+  return error instanceof Error ? error.message : strings.text_fb36ad230f;
 }
 
 export function responseErrorCode(response: ObserverResponse | undefined): string | null {
@@ -78,6 +79,21 @@ export function workspaceIdFromProps(props: PanelProps): string {
 }
 
 export function statusColor(status: string, theme: PanelProps["theme"]): string {
+  if (["approved", "completed"].includes(status)) {
+    return theme.colors.statusSuccess;
+  }
+  if (["reviewing", "queued", "fixing"].includes(status)) {
+    return observerAccent(theme);
+  }
+  if (["ready_for_review", "changes_requested", "stopping", "limit_reached"].includes(status)) {
+    return theme.colors.statusWarning;
+  }
+  if (["blocked", "failed"].includes(status)) {
+    return theme.colors.statusDanger;
+  }
+  if (["waiting_execution", "stopped"].includes(status)) {
+    return theme.colors.foregroundMuted;
+  }
   if (["dirty", "needs-review", "diverged", "modified", "stale"].includes(status)) {
     return theme.colors.statusWarning;
   }
@@ -97,12 +113,12 @@ export function fileColor(status: string, theme: PanelProps["theme"]): string {
   return theme.colors.statusWarning;
 }
 
-export function relationLabel(relation: string): string {
+export function relationLabel(relation: string, strings: WorkbenchCopy = copy): string {
   const labels: Record<string, string> = {
-    "fast-forward-candidate": copy.text_f7e720248d,
-    "already-contained": copy.text_ee5b0077ae,
-    diverged: copy.text_da56864458,
-    unknown: copy.text_27b5842c97,
+    "fast-forward-candidate": strings.text_f7e720248d,
+    "already-contained": strings.text_ee5b0077ae,
+    diverged: strings.text_da56864458,
+    unknown: strings.text_27b5842c97,
   };
   return labels[relation] || relation;
 }
@@ -118,53 +134,53 @@ export function isMainWorkspace(workspace: WorkspaceSummary | undefined): boolea
   return Boolean(workspace && (workspace.kind === "live" || workspace.managed === false));
 }
 
-export function workspaceDisplayName(workspace: WorkspaceSummary | undefined): string {
-  if (!workspace) return copy.text_c7ae08f54c;
+export function workspaceDisplayName(workspace: WorkspaceSummary | undefined, strings: WorkbenchCopy = copy): string {
+  if (!workspace) return strings.text_c7ae08f54c;
   return workspace.displayName || workspace.id;
 }
 
-export function workspaceSignals(workspace: WorkspaceSummary): string[] {
+export function workspaceSignals(workspace: WorkspaceSummary, strings: WorkbenchCopy = copy): string[] {
   const signals: string[] = [];
-  if ((workspace.dirtyRepositoryCount || 0) > 0) signals.push(`${workspace.dirtyRepositoryCount} dirty`);
-  if (workspace.unpushed) signals.push("unpushed");
-  if (workspace.blockerCount > 0) signals.push("needs review");
+  if ((workspace.dirtyRepositoryCount || 0) > 0) signals.push(`${workspace.dirtyRepositoryCount} ${strings.workspaceStatusDirty}`);
+  if (workspace.unpushed) signals.push(strings.workspaceStatusUnpushed);
+  if (workspace.blockerCount > 0) signals.push(strings.workspaceStatusNeedsReview);
   if (workspace.toolchain?.status && workspace.toolchain.status !== "ready") {
     signals.push(`toolchain ${workspace.toolchain.status}`);
   }
   return signals;
 }
 
-export function workspaceMeta(workspace: WorkspaceSummary): string {
+export function workspaceMeta(workspace: WorkspaceSummary, strings: WorkbenchCopy = copy): string {
   const parts: string[] = [];
-  if (isMainWorkspace(workspace)) return workspaceSignals(workspace).join(" · ");
+  if (isMainWorkspace(workspace)) return workspaceSignals(workspace, strings).join(" · ");
   if (workspace.state && workspace.state !== "active") parts.push(workspace.state);
-  if (workspace.repositoryCount > 1) parts.push(`${workspace.repositoryCount} repos`);
-  parts.push(...workspaceSignals(workspace));
+  if (workspace.repositoryCount > 1) parts.push(formatCopyFrom(strings, "repoCountLabel", [workspace.repositoryCount]));
+  parts.push(...workspaceSignals(workspace, strings));
   const claim = workspaceClaim(workspace);
   if (claim) parts.push(claim);
   return parts.join(" · ");
 }
 
-export function repositoryBranchLabel(repository: Pick<RepositorySummary, "branch" | "status" | "issues">): string {
+export function repositoryBranchLabel(repository: Pick<RepositorySummary, "branch" | "status" | "issues">, strings: WorkbenchCopy = copy): string {
   if (repository.status === "missing" || repository.issues.some((issue) => issue.code === "worktree_missing")) {
-    return "missing";
+    return strings.branchMissing;
   }
   const branch = repository.branch;
   const parts = branch.split("/").filter(Boolean);
-  if (parts.length <= 3) return branch || "detached";
+  if (parts.length <= 3) return branch || strings.branchDetached;
   return `${parts.slice(0, 2).join("/")}/…/${parts.at(-1)}`;
 }
 
-export function repositoryCountLabel(count: number): string {
-  return `${count} repo${count === 1 ? "" : "s"}`;
+export function repositoryCountLabel(count: number, strings: WorkbenchCopy = copy): string {
+  return formatCopyFrom(strings, "repoCountLabel", [count]);
 }
 
-export function fileCountLabel(count: number): string {
-  return `${count} file${count === 1 ? "" : "s"}`;
+export function fileCountLabel(count: number, strings: WorkbenchCopy = copy): string {
+  return formatCopyFrom(strings, "fileCountLabel", [count]);
 }
 
-export function issueLabel(issue: Issue): string {
-  return issueDisplayLabel(issue.code);
+export function issueLabel(issue: Issue, strings: WorkbenchCopy = copy): string {
+  return issueDisplayLabel(issue.code, strings);
 }
 
 export function issueDetail(issue: Issue): string {
@@ -186,6 +202,7 @@ export function queryFailureForDisplay(
   snapshot: { response: ObserverResponse | undefined; failed: boolean },
   response: ObserverResponse | undefined,
   error: unknown,
+  strings: WorkbenchCopy = copy,
 ): string | null {
   if (response && !response.ok) {
     const code = response.error?.code || "";
@@ -193,17 +210,17 @@ export function queryFailureForDisplay(
     if (isTransientIssueCode(code)
       && code !== "observer_unavailable"
       && code !== "observer_connection_refused") {
-      return snapshot.response ? null : copy.text_f496a15d9d;
+      return snapshot.response ? null : strings.text_f496a15d9d;
     }
-    return response.error?.message || issueDisplayLabel(code);
+    return response.error?.message || issueDisplayLabel(code, strings);
   }
   if (response?.ok && response.result && typeof response.result === "object") {
     const observation = (response.result as { observation?: { cacheState?: unknown } }).observation;
     if (typeof observation?.cacheState === "string") return null;
   }
   if (snapshot.response) return null;
-  if (error) return copy.text_b30f770e31;
-  return snapshot.failed ? copy.text_b71f1b83e5 : null;
+  if (error) return strings.text_b30f770e31;
+  return snapshot.failed ? strings.text_b71f1b83e5 : null;
 }
 
 export function LayoutMenuItem({
@@ -231,6 +248,7 @@ export function InlineRefresh({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   if (!visible) return null;
   return <ActivityIndicator accessibilityLabel={copy.text_21eaf73725} color={observerAccent(theme)} size="small" style={styles.inlineRefresh} />;
 }
@@ -298,6 +316,7 @@ export function SectionViewport({
   styles: ReturnType<typeof makeStyles>;
   children: ReactNode;
 }) {
+  const copy = useWorkbenchCopy();
   const allocation = useContext(SectionAllocationContext);
   const [contentHeight, setContentHeight] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
@@ -340,7 +359,7 @@ export function SectionViewport({
       {resizable && !allocation?.outerScroll ? (
         <View
           {...responder.current.panHandlers}
-          accessibilityLabel={formatCopy("text_39e5b16a6b", [id])}
+          accessibilityLabel={formatCopyFrom(copy, "text_39e5b16a6b", [id])}
           accessibilityRole="button"
           hitSlop={{ bottom: 10, top: 10 }}
           style={[styles.sectionResizeHandle, verticalResizeCursorStyle]}
@@ -371,6 +390,7 @@ export function ChangeCounts({
   prefix?: string;
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   if (fileCount === 0) return null;
   const showCounts = fileCount === undefined || typeof additions === "number" || typeof deletions === "number";
   return (
@@ -383,7 +403,7 @@ export function ChangeCounts({
           <Text style={styles.deletionCount}>−{formatChangeCount(deletions)}</Text>
         </>
       ) : (
-        <Text style={styles.changePrefix}>{fileCountLabel(fileCount || 0)}</Text>
+        <Text style={styles.changePrefix}>{fileCountLabel(fileCount || 0, copy)}</Text>
       )}
     </Text>
   );
@@ -465,7 +485,7 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     workspaceOptionMeta: { color: theme.colors.foregroundMuted, fontSize: 10, marginTop: 2 },
     workspaceOptionState: { fontFamily: "monospace", fontSize: 10 },
     tabs: { backgroundColor: theme.colors.surface1, borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", paddingHorizontal: compact ? 13 : 15 },
-    tabButton: { borderBottomColor: "transparent", borderBottomWidth: 2, marginRight: 22, paddingBottom: 8, paddingTop: 9 },
+    tabButton: { borderBottomColor: "transparent", borderBottomWidth: 2, flexShrink: 0, marginRight: compact ? 14 : 22, paddingBottom: 8, paddingTop: 9 },
     tabButtonActive: { borderBottomColor: accent },
     tabText: { color: theme.colors.foregroundMuted, fontSize: 12, fontWeight: "500" },
     tabTextActive: { color: theme.colors.foreground, fontWeight: "700" },
@@ -578,6 +598,49 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     footerTime: { color: theme.colors.foregroundMuted, fontSize: 10 },
     footerStaleTime: { color: theme.colors.statusWarning },
     reviewPanel: { gap: 8 },
+    reviewOverviewHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: 2 },
+    reviewOverviewTitle: { alignItems: "center", flexDirection: "row", gap: 8, minWidth: 0 },
+    reviewRoundText: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 10 },
+    reviewProgressScroll: { minWidth: "100%" },
+    reviewProgress: { alignItems: "flex-start", flexDirection: "row", minWidth: compact ? 330 : 410, paddingHorizontal: 3, paddingVertical: 8 },
+    reviewProgressStep: { alignItems: "center", minWidth: compact ? 70 : 88 },
+    reviewProgressNode: { alignItems: "center", borderRadius: 999, borderWidth: 2, height: compact ? 23 : 26, justifyContent: "center", width: compact ? 23 : 26 },
+    reviewProgressNodeText: { fontSize: compact ? 10 : 11, fontWeight: "800" },
+    reviewProgressLabel: { fontSize: compact ? 8 : 9, marginTop: 5, maxWidth: compact ? 76 : 94, textAlign: "center" },
+    reviewProgressLine: { flex: 1, height: 1, marginTop: compact ? 11 : 12, minWidth: compact ? 12 : 18 },
+    reviewHistoryRow: { gap: 4 },
+    reviewResultBanner: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.border, borderRadius: 6, borderWidth: 1, gap: 5, padding: 8 },
+    reviewResultTitle: { color: theme.colors.foreground, flex: 1, fontSize: 11, fontWeight: "700" },
+    reviewErrorBanner: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.statusDanger, borderRadius: 6, borderWidth: 1, gap: 3, padding: 8 },
+    reviewTagRow: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 5 },
+    reviewMessage: { alignItems: "flex-start", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", gap: 8, paddingBottom: 9, paddingTop: 4 },
+    reviewMessageSystem: { opacity: 0.85 },
+    reviewMessageAvatar: { alignItems: "center", borderRadius: 999, height: 23, justifyContent: "center", marginTop: 1, width: 23 },
+    reviewMessageAvatarText: { fontSize: 10, fontWeight: "800" },
+    reviewMessageContent: { flex: 1, minWidth: 0 },
+    reviewMessageHeader: { alignItems: "center", flexDirection: "row", gap: 6, minHeight: 24 },
+    reviewMessageRole: { color: theme.colors.foreground, flexShrink: 1, fontSize: 11, fontWeight: "700" },
+    reviewMessageBody: { backgroundColor: theme.colors.surface2, borderColor: theme.colors.border, borderRadius: 6, borderWidth: 1, marginTop: 3, padding: 7 },
+    reviewMessageText: { color: theme.colors.foreground, fontSize: 11, lineHeight: 16 },
+    reviewExpandButton: { alignSelf: "flex-start", marginTop: 5 },
+    reviewExpandText: { color: accent, fontSize: 10, fontWeight: "600" },
+    reviewDetails: { borderTopColor: theme.colors.border, borderTopWidth: 1, gap: 6, marginTop: 7, paddingTop: 6 },
+    reviewDetailSection: { gap: 4 },
+    reviewDetailMeta: { color: theme.colors.foregroundMuted, fontSize: 9, lineHeight: 13 },
+    reviewFindingList: { gap: 5 },
+    reviewFindingRow: { alignItems: "flex-start", flexDirection: "row", gap: 5 },
+    reviewFindingCopy: { flex: 1, gap: 2, minWidth: 0 },
+    reviewFindingPath: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 9 },
+    reviewFindingMessage: { color: theme.colors.foreground, fontSize: 10, lineHeight: 14 },
+    reviewFindingFooter: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 5 },
+    reviewFindingSuggestion: { color: theme.colors.foregroundMuted, flexShrink: 1, fontSize: 9, lineHeight: 13 },
+    reviewCheckList: { gap: 4 },
+    reviewCheckRow: { alignItems: "flex-start", flexDirection: "row", gap: 5 },
+    reviewActionBar: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 6, paddingTop: 3 },
+    primaryReviewButton: { backgroundColor: accent, borderColor: accent, borderRadius: 5, borderWidth: 1, paddingHorizontal: 9, paddingVertical: 6 },
+    primaryReviewButtonText: { color: theme.colors.accentForeground, fontSize: 10, fontWeight: "700" },
+    reviewConversationButton: { marginLeft: "auto", paddingHorizontal: 3, paddingVertical: 5 },
+    reviewConversationButtonText: { color: accent, fontSize: 10, fontWeight: "600" },
     reviewWorkspaceList: { gap: 3, marginTop: 4 },
     reviewWorkspaceRow: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", gap: 7, minHeight: 39, paddingVertical: 5 },
     reviewWorkspaceRowActive: { backgroundColor: theme.colors.surface2 },

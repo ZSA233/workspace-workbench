@@ -14,6 +14,7 @@ import { readReviewState, readState, writeReviewState, writeState, digest } from
 import type { AgentContext } from "./agent-provider.ts";
 import { queryObserver } from "./observer.ts";
 import type { Handoff } from "../shared/handoff.ts";
+import { formatCopyFrom, getWorkbenchCopy } from "../shared/copy.ts";
 import {
   executionReport,
   reviewModels,
@@ -34,6 +35,7 @@ import {
   reviewerRead,
   reviewerResult,
   reviewSnapshotSchema,
+  type ReviewLocale,
   type ReviewEvent,
   type ReviewModelOverride,
   type ReviewPreferencePatch,
@@ -172,6 +174,7 @@ function handoffSnapshot(handoff: Handoff): NonNullable<ReviewSession["handoff"]
     startMode: handoff.startMode,
     ...(handoff.handoffId ? { handoffId: handoff.handoffId } : {}),
     ...(handoff.relationship ? { relationship: handoff.relationship } : {}),
+    ...(handoff.reviewLocale ? { reviewLocale: handoff.reviewLocale } : {}),
     expected: {
       branchByRepository: { ...handoff.expected.branchByRepository },
       baseByRepository: { ...handoff.expected.baseByRepository },
@@ -322,7 +325,7 @@ export function reviewAuthToken(sessionId: string): string | null {
   return readReviewState<ReviewAuth>(authKey(sessionId))?.token || null;
 }
 
-function persistSession(session: ReviewSession, event?: { kind: ReviewEvent["kind"]; summary: string; details?: Record<string, unknown> }): ReviewSession {
+function persistSession(session: ReviewSession, event?: { kind: ReviewEvent["kind"]; summary: string; messageKey?: string; messageArgs?: Record<string, string | number | boolean>; details?: Record<string, unknown> }): ReviewSession {
   const stored = readReviewState<unknown>(sessionKey(session.workspaceId, session.id));
   const parsedStored = reviewSessionSchema.safeParse(stored);
   if (parsedStored.success && parsedStored.data.revision !== session.revision) throw new Error("review_state_conflict");
@@ -331,8 +334,13 @@ function persistSession(session: ReviewSession, event?: { kind: ReviewEvent["kin
     sequence: session.events.length,
     createdAt: now(),
     kind: event.kind,
+    messageKey: event.messageKey || `review.event.${event.kind}`,
+    ...(event.messageArgs ? { messageArgs: event.messageArgs } : {}),
     summary: event.summary,
-    details: event.details || {},
+    details: {
+      ...(event.details || {}),
+      round: session.round,
+    },
   } : null;
   const next = reviewSessionSchema.parse({
     ...session,
@@ -399,7 +407,10 @@ export function recordExecutionHandoff(input: { workspaceId: string; projectConf
     workspaceId: input.workspaceId,
     projectConfig: input.projectConfig,
     executionAgentId: input.executionAgentId,
-    preferences: preferenceLayers().effective,
+    preferences: {
+      ...preferenceLayers().effective,
+      ...(handoff.reviewLocale ? { locale: handoff.reviewLocale } : {}),
+    },
     status: "waiting_execution",
     handoff,
   });
@@ -729,16 +740,32 @@ function reviewMcpEnvironment(session: ReviewSession, reviewerAgentId: string, t
   };
 }
 
+function reviewerLanguageParts(session: ReviewSession): { localized: ReturnType<typeof getWorkbenchCopy>; role: string; instructions: string } {
+  const localized = getWorkbenchCopy(session.preferences.locale as ReviewLocale);
+  const role = session.preferences.reviewerRole === "Code reviewer" || session.preferences.reviewerRole === "代码审核者"
+    ? localized.reviewDefaultRole
+    : session.preferences.reviewerRole;
+  const instructions = session.preferences.instructions === "Check requirement fit, correctness, regressions and tests; keep the implementation simple."
+    || session.preferences.instructions === "检查需求是否满足、实现是否正确、是否引入回归、测试是否充分；保持实现简单。"
+    ? localized.reviewDefaultInstructions
+    : session.preferences.instructions;
+  return { localized, role, instructions };
+}
+
 function reviewerPrompt(session: ReviewSession): string {
+  const { localized, role, instructions } = reviewerLanguageParts(session);
   const previousReview = session.events.filter((event) => event.kind === "review_result").at(-1);
   const previousCompletion = session.events.filter((event) => event.kind === "ready_for_review").at(-1);
   return [
-    `Review session ${session.id}, round ${session.round}.`,
-    "The server will authenticate your read and result calls. Read the fixed snapshot before deciding.",
-    `Expected snapshot identity: ${session.snapshotId}; expected diff identity: ${session.diffId}.`,
-    `Original task context: ${JSON.stringify(session.handoff || {})}.`,
-    `Previous review result and repair evidence: ${JSON.stringify({ review: previousReview?.details || null, completion: previousCompletion?.details || null }).slice(0, 6000)}.`,
-    "Return findings with stable IDs and only mark approved when no required fix remains.",
+    formatCopyFrom(localized, "reviewPromptIntro", [session.id, session.round]),
+    localized.reviewPromptRead,
+    formatCopyFrom(localized, "reviewPromptIdentity", [session.snapshotId, session.diffId]),
+    formatCopyFrom(localized, "reviewPromptOriginal", [JSON.stringify(session.handoff || {})]),
+    formatCopyFrom(localized, "reviewPromptPrevious", [JSON.stringify({ review: previousReview?.details || null, completion: previousCompletion?.details || null }).slice(0, 6000)]),
+    localized.reviewPromptReturn,
+    localized.reviewPromptLanguage,
+    `${localized.reviewSettingsRole}: ${role}.`,
+    `${localized.reviewSettingsInstructions}: ${instructions}`,
   ].join(" ");
 }
 
@@ -787,6 +814,7 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
   const project = currentProject();
   if (!project) throw new Error("project_context_required");
   const model = await resolveReviewerModel(session, runtime, context);
+  const { localized, role, instructions } = reviewerLanguageParts(session);
   const bridge = bridgeEndpoint(project.configPath);
   const recovered = await findExistingReviewer(session, context);
   const previousAuth = readReviewState<ReviewAuth>(authKey(session.id));
@@ -815,7 +843,7 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
   try {
     workspace = await context.paseo.workspaces.open(runtime.treePath!);
     handle = await workspace.agents.create({
-      title: `${session.preferences.reviewerRole} · ${session.workspaceId}`,
+      title: `${role} · ${session.workspaceId}`,
       env: reviewMcpEnvironment(session, "pending", token, bridge),
       config: {
         provider: `codex/${model.model}`,
@@ -826,7 +854,13 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
           { kind: "mcp", server: "workbench-review", tool: "workbench_reviewer_result" },
         ] },
         mcpServers: { "workbench-review": { type: "stdio", command: process.execPath, args: [bridge.script], env: reviewMcpEnvironment(session, "pending", token, bridge), alwaysLoad: true } },
-        systemPrompt: `You are the ${session.preferences.reviewerRole}. You are strictly read-only. Use workbench_reviewer_read to obtain the fixed snapshot, then submit exactly one structured workbench_reviewer_result. Never edit files, run mutating commands, delegate, create workspaces or merge. ${session.preferences.instructions}`,
+      systemPrompt: [
+        formatCopyFrom(localized, "reviewSystemRole", [role]),
+        localized.reviewSystemReadOnly,
+        localized.reviewSystemNeverWrite,
+        `${localized.reviewSettingsInstructions}: ${instructions}`,
+        localized.reviewPromptLanguage,
+      ].join(" "),
       },
       prompt: reviewerPrompt(session),
       clientMessageId: requestId,
@@ -1121,7 +1155,7 @@ export async function stopReview(session: ReviewSession, context: AgentContext):
   return persistSession({ ...stopping, status: "stopped", stopAgentIds: [], pendingOperation: null, lastError: null }, { kind: "stopped", summary: "Review stopped", details: {} });
 }
 
-async function startReviewInternal(input: { workspaceId: string; projectConfig: string; executionAgentId?: string }, context: AgentContext): Promise<ReviewSession> {
+async function startReviewInternal(input: { workspaceId: string; projectConfig: string; executionAgentId?: string; locale?: ReviewLocale }, context: AgentContext): Promise<ReviewSession> {
   const existing = readSession(input.workspaceId);
   const interruptedReviewerOperation = existing?.status === "queued" && (existing.pendingOperation?.kind === "create_reviewer" || existing.pendingOperation?.kind === "send_reviewer");
   if (existing && !interruptedReviewerOperation && existing.status === "ready_for_review") return startReviewer(existing, context);
@@ -1136,6 +1170,10 @@ async function startReviewInternal(input: { workspaceId: string; projectConfig: 
   }
   const layers = preferenceLayers();
   if (layers.effective.mode === "off") throw new Error("review_disabled");
+  const preferences = {
+    ...layers.effective,
+    ...(input.locale ? { locale: input.locale } : {}),
+  };
   const runtime = await currentRuntime(input.workspaceId, context);
   const executionAgentId = input.executionAgentId || existing?.executionAgentId || null;
   if (!executionAgentId) throw new Error("execution_agent_required");
@@ -1147,13 +1185,13 @@ async function startReviewInternal(input: { workspaceId: string; projectConfig: 
   const executionModelId = execution.agent.runtimeInfo?.model || execution.agent.model || null;
   const snapshot = await captureSnapshot(input.workspaceId, runtime, context);
   const reusable = existing && !["approved", "blocked", "failed", "stopped", "limit_reached"].includes(existing.status) ? existing : null;
-  let session = reusable || newSession({ workspaceId: input.workspaceId, projectConfig: input.projectConfig, executionAgentId, preferences: layers.effective, status: "queued" });
-  session = { ...session, executionAgentId, executionModelId, preferences: existing?.preferences || layers.effective, status: "queued", round: Math.max(1, existing?.round || 1), snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, snapshot, lastError: null, pendingOperation: null };
+  let session = reusable || newSession({ workspaceId: input.workspaceId, projectConfig: input.projectConfig, executionAgentId, preferences, status: "queued" });
+  session = { ...session, executionAgentId, executionModelId, preferences: existing?.preferences || preferences, status: "queued", round: Math.max(1, existing?.round || 1), snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, snapshot, lastError: null, pendingOperation: null };
   session = persistSession(session, reusable ? { kind: "review_queued", summary: "Review queued by user", details: { snapshotId: snapshot.snapshotId, diffId: snapshot.diffId } } : { kind: "started", summary: "Review started from the Workspace", details: { snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, executionAgentId } });
   return startReviewer(session, context);
 }
 
-export function startReview(input: { workspaceId: string; projectConfig: string; executionAgentId?: string }, context: AgentContext): Promise<ReviewSession> {
+export function startReview(input: { workspaceId: string; projectConfig: string; executionAgentId?: string; locale?: ReviewLocale }, context: AgentContext): Promise<ReviewSession> {
   const key = `${currentProject()?.configPath || input.projectConfig}:${input.workspaceId}`;
   const active = reviewStartFlights.get(key);
   if (active) return active;
@@ -1320,7 +1358,7 @@ export async function handleReviewPreview(input: { projectConfig: string; worksp
   }
 }
 
-export async function handleReviewSessionStart(input: { projectConfig: string; workspaceId: string; executionAgentId?: string; token?: string }, context: AgentContext): Promise<ReturnType<typeof reviewSessionStart.output.parse>> {
+export async function handleReviewSessionStart(input: { projectConfig: string; workspaceId: string; executionAgentId?: string; locale?: ReviewLocale; token?: string }, context: AgentContext): Promise<ReturnType<typeof reviewSessionStart.output.parse>> {
   try { await authorizeReviewCaller(input.token, context); return { ok: true, session: await startReview(input, context) }; }
   catch (error) { return { ok: false, session: readSession(input.workspaceId), error: errorInfo(error, "Review could not start") }; }
 }

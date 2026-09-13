@@ -195,6 +195,9 @@ test("start creates a real read-only Reviewer from a server snapshot and include
     const created = fixture.reviewerCreate[0];
     const config = created.config as Record<string, unknown>;
     assert.equal(config.provider, "codex/model-a");
+    assert.match(String(created.prompt), /请使用中文返回审核摘要/);
+    assert.match(String(config.systemPrompt), /只能进行只读审核/);
+    assert.match(String(config.systemPrompt), /保持实现简单/);
     assert.deepEqual(config.options, { sandbox_mode: "read-only", approval_policy: "never" });
     assert.deepEqual((config.toolPolicy as { preapproved: unknown[] }).preapproved, [
       { kind: "mcp", server: "workbench-review", tool: "workbench_reviewer_read" },
@@ -206,6 +209,18 @@ test("start creates a real read-only Reviewer from a server snapshot and include
     assert.equal(snapshot.ok, true);
     const pendingIdSnapshot = await readReviewerSnapshot({ workspaceId: session.workspaceId, sessionId: session.id, reviewerAgentId: "pending", token: reviewAuthToken(session.id)! }, fixture.context);
     assert.equal(pendingIdSnapshot.ok, true);
+  });
+});
+
+test("an explicit English review locale is captured in the Reviewer prompt", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    const session = await startReview({ projectConfig: fixture.config, workspaceId: "managed-fixture", executionAgentId: "execution-fixture", locale: "en-US" }, fixture.context);
+    assert.equal(session.preferences.locale, "en-US");
+    assert.match(String(fixture.reviewerCreate[0].prompt), /Return the review summary/);
+    const config = fixture.reviewerCreate[0].config as Record<string, unknown>;
+    assert.match(String(config.systemPrompt), /strictly read-only/);
+    assert.match(String(config.systemPrompt), /keep the implementation simple/);
   });
 });
 

@@ -4,15 +4,16 @@ import { useQuery } from "@tanstack/react-query";
 import { PanResponder, Platform, Pressable, Text, useWindowDimensions, View } from "react-native";
 import type { ObserverMethod, ObserverResponse } from "../../shared/observer";
 import type { DetailResult } from "../model";
-import { copy } from "../../shared/copy";
 import { clampCreateWorkspaceHeight, CREATE_WORKSPACE_MAX_HEIGHT, CREATE_WORKSPACE_MIN_HEIGHT, CREATE_WORKSPACE_MIN_LIST_HEIGHT, createWorkspaceNaturalHeight } from "../create-workspace-layout";
 import { makeStyles } from "./ui";
+import { useWorkbenchCopy } from "../i18n";
 
 export function CreateWorkspace({ projectKey, currentRepo, rpc, onCreated, onClose, styles }: {
   projectKey: string; currentRepo: string;
   rpc(input: { method: ObserverMethod; params: Record<string, unknown> }): Promise<ObserverResponse>;
   onCreated(id: string): Promise<void>; onClose(): void; styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   const [name, setName] = useState("");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string[]>(currentRepo ? [currentRepo] : []);

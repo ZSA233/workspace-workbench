@@ -3,12 +3,13 @@ type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { ActivityIndicator,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
-import { copy, formatCopy } from "../../shared/copy";
+import { copy, formatCopyFrom, type WorkbenchCopy } from "../../shared/copy";
 
 import {
 type WorkspaceBindingResponse
 } from "../../shared/handoff";
 import { InlineRefresh,makeStyles } from "./ui";
+import { useWorkbenchCopy } from "../i18n";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -26,21 +27,21 @@ const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
   ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
   : null;
 
-export function executionStatusLabel(status: string | undefined | null): string {
+export function executionStatusLabel(status: string | undefined | null, strings: WorkbenchCopy = copy): string {
   const labels: Record<string, string> = {
-    pending: copy.text_15c5640f77,
-    initializing: copy.text_fb0309dda4,
-    running: copy.text_1f425b6bf0,
-    idle: copy.text_837e7a109a,
-    permission: copy.text_4c5958e011,
-    completed: copy.text_e99b48a29b,
-    blocked: copy.text_059c4d4016,
-    error: copy.text_9746cfc7d2,
-    closed: copy.text_f628761bf5,
-    archived: copy.text_5cfbea2b76,
-    "not-started": copy.text_87f8d08d81,
+    pending: strings.text_15c5640f77,
+    initializing: strings.text_fb0309dda4,
+    running: strings.text_1f425b6bf0,
+    idle: strings.text_837e7a109a,
+    permission: strings.text_4c5958e011,
+    completed: strings.text_e99b48a29b,
+    blocked: strings.text_059c4d4016,
+    error: strings.text_9746cfc7d2,
+    closed: strings.text_f628761bf5,
+    archived: strings.text_5cfbea2b76,
+    "not-started": strings.text_87f8d08d81,
   };
-  return labels[status || "not-started"] || status || copy.text_87f8d08d81;
+  return labels[status || "not-started"] || status || strings.text_87f8d08d81;
 }
 
 export function executionStatusColor(status: string | undefined | null, theme: PanelProps["theme"]): string {
@@ -80,26 +81,27 @@ export function ExecutionBindingCard({
   styles: ReturnType<typeof makeStyles>;
 }) {
   if (!workspaceId) return null;
+  const localizedCopy = useWorkbenchCopy();
   const bindingStatus = binding?.status;
-  const relationshipLabel = binding?.relationship === "child" ? "子 Agent" : binding?.relationship === "independent" ? "独立会话" : "执行会话";
+  const relationshipLabel = binding?.relationship === "child" ? localizedCopy.reviewSettingsChildAgent : binding?.relationship === "independent" ? localizedCopy.reviewSettingsIndependent : localizedCopy.reviewSettingsFollowExecution;
   const status = bindingStatus && ["completed", "blocked", "permission", "error", "archived"].includes(bindingStatus)
     ? bindingStatus
     : agent?.status || bindingStatus || "not-started";
   const statusColor = error && !loading || agentContextState === "unavailable" ? theme.colors.statusWarning : executionStatusColor(status, theme);
   const statusText = loading
-    ? copy.text_b21b631cd5
+    ? localizedCopy.text_b21b631cd5
     : agentContextState === "loading"
-      ? copy.agentContextLoading
+      ? localizedCopy.agentContextLoading
       : agentContextState === "unavailable" && !binding
-        ? copy.agentContextUnavailable
+        ? localizedCopy.agentContextUnavailable
         : error && !binding && !agent
-          ? copy.text_95abdc4ebd
+          ? localizedCopy.text_95abdc4ebd
           : !canDelegate && !binding
-            ? copy.agentCoordinatorRequired
-            : executionStatusLabel(status);
+            ? localizedCopy.agentCoordinatorRequired
+            : executionStatusLabel(status, localizedCopy);
   const recoverable = canDelegate && ["error", "blocked", "closed"].includes(status);
   return (
-    <View style={styles.executionBar} accessibilityLabel={formatCopy("text_f41a05dfe8", [statusText])}>
+    <View style={styles.executionBar} accessibilityLabel={formatCopyFrom(localizedCopy, "text_f41a05dfe8", [statusText])}>
       <View style={styles.executionSummary}>
         <View style={[styles.executionStatusDot, { backgroundColor: statusColor }]} />
         <Text style={styles.executionLabel}>{relationshipLabel}</Text>
@@ -112,13 +114,13 @@ export function ExecutionBindingCard({
         <View style={styles.executionActions}>
           {onOpenAgent ? (
             <Pressable accessibilityRole="button" disabled={delegating} onPress={onOpenAgent} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>{copy.text_f7acefd2d4}</Text>
+              <Text style={styles.secondaryButtonText}>{localizedCopy.text_f7acefd2d4}</Text>
             </Pressable>
           ) : null}
           {recoverable ? (
             <Pressable accessibilityRole="button" disabled={delegating} onPress={onDelegate} style={[styles.secondaryButton, delegating && styles.executionButtonDisabled]}>
               {delegating ? <ActivityIndicator color={theme.colors.foregroundMuted} size="small" /> : null}
-              <Text style={styles.secondaryButtonText}>{copy.text_2b6021df2f}</Text>
+              <Text style={styles.secondaryButtonText}>{localizedCopy.text_2b6021df2f}</Text>
             </Pressable>
           ) : null}
         </View>

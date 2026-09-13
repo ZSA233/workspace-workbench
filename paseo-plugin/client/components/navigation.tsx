@@ -5,7 +5,7 @@ type PluginWorkspacePanelProps
 import { FlatList, Icon } from "@getpaseo/plugin/client/react-native";
 import { useEffect, type ReactNode } from "react";
 import { BackHandler,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
-import { copy, formatCopy } from "../../shared/copy";
+import { formatCopyFrom } from "../../shared/copy";
 
 import {
 countWorkspaceFilter,
@@ -13,6 +13,7 @@ type WorkspaceFilter,
 type WorkspaceSummary
 } from "../model";
 import { observerAccent } from "../theme";
+import { useWorkbenchCopy } from "../i18n";
 import { InlineRefresh,LayoutMenuItem,isMainWorkspace,makeStyles,repositoryCountLabel,workspaceDisplayName,workspaceMeta } from "./ui";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
@@ -43,16 +44,17 @@ export function PanelHeader({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const localizedCopy = useWorkbenchCopy();
   return (
     <View style={styles.panelHeader}>
       <View style={styles.panelTitleGroup}>
         <View style={styles.pluginIcon}><Icon name="GitBranch" size={14} color={observerAccent(theme)} /></View>
-        <Text style={styles.panelTitle}>{copy.text_6cea90adcf}</Text>
+        <Text style={styles.panelTitle}>{localizedCopy.text_6cea90adcf}</Text>
       </View>
       <View style={styles.panelHeaderActions}>
-        <Text style={styles.readOnlyText}>{agentEnabled ? copy.text_ca42ecd50e : copy.readOnlyObservation}</Text>
+        <Text style={styles.readOnlyText}>{agentEnabled ? localizedCopy.text_ca42ecd50e : localizedCopy.readOnlyObservation}</Text>
         <Pressable
-          accessibilityLabel={copy.text_1744b62533}
+          accessibilityLabel={localizedCopy.text_1744b62533}
           accessibilityRole="button"
           onLongPress={onOpenLayoutMenu}
           onPress={onOpenLayoutMenu}
@@ -90,18 +92,20 @@ export function LayoutMenu({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const localizedCopy = useWorkbenchCopy();
   return <AnchoredMenu open={open} onClose={onClose} theme={theme}>
-    {onCreate ? <LayoutMenuItem label={copy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
-    {onSwitchProject ? <LayoutMenuItem label={copy.switchProject} onPress={onSwitchProject} styles={styles} /> : null}
-    {onOpenStorage ? <LayoutMenuItem label={copy.storageMenu} onPress={onOpenStorage} styles={styles} /> : null}
-    {onOpenReviewSettings ? <LayoutMenuItem label="Agent session settings" onPress={onOpenReviewSettings} styles={styles} /> : null}
-    <LayoutMenuItem label={copy.text_5f6a1bf190} onPress={onCollapseAll} styles={styles} />
-    <LayoutMenuItem label={copy.text_66c98ab6d8} onPress={onExpandAll} styles={styles} />
-    <LayoutMenuItem label={copy.text_e003f209ca} onPress={onReset} styles={styles} />
+    {onCreate ? <LayoutMenuItem label={localizedCopy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
+    {onSwitchProject ? <LayoutMenuItem label={localizedCopy.switchProject} onPress={onSwitchProject} styles={styles} /> : null}
+    {onOpenStorage ? <LayoutMenuItem label={localizedCopy.storageMenu} onPress={onOpenStorage} styles={styles} /> : null}
+    {onOpenReviewSettings ? <LayoutMenuItem label={localizedCopy.reviewSettingsMenu} onPress={onOpenReviewSettings} styles={styles} /> : null}
+    <LayoutMenuItem label={localizedCopy.text_5f6a1bf190} onPress={onCollapseAll} styles={styles} />
+    <LayoutMenuItem label={localizedCopy.text_66c98ab6d8} onPress={onExpandAll} styles={styles} />
+    <LayoutMenuItem label={localizedCopy.text_e003f209ca} onPress={onReset} styles={styles} />
   </AnchoredMenu>;
 }
 
 export function AnchoredMenu({ open, onClose, theme, children, width = 190 }: { open: boolean; onClose(): void; theme: PanelProps["theme"]; children: ReactNode; width?: number }) {
+  const localizedCopy = useWorkbenchCopy();
   useEffect(() => {
     if (!open) return;
     const subscription = BackHandler?.addEventListener?.("hardwareBackPress", () => { onClose(); return true; });
@@ -116,7 +120,7 @@ export function AnchoredMenu({ open, onClose, theme, children, width = 190 }: { 
   if (!open) return null;
   return (
     <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 100, elevation: 20 }}>
-      <Pressable accessibilityLabel={copy.text_4d0b4688c7} onPress={onClose} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
+      <Pressable accessibilityLabel={localizedCopy.text_4d0b4688c7} onPress={onClose} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
       <View accessibilityRole="menu" style={{ position: "absolute", top: 40, right: 12, width, padding: 6, borderRadius: 6, backgroundColor: theme.colors.surface1, borderColor: theme.colors.border, borderWidth: 1 }}>
         {children}
       </View>
@@ -161,13 +165,14 @@ export function WorkspaceSelector({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const localizedCopy = useWorkbenchCopy();
   const attention = countWorkspaceFilter(workspaces, "attention");
   const filters: { id: WorkspaceFilter; label: string; count: number }[] = [
-    { id: "all", label: copy.text_778fc8f994, count: workspaces.length },
-    { id: "attention", label: copy.text_284b34e15f, count: attention },
-    { id: "dirty", label: "dirty", count: workspaces.filter((workspace) => workspace.dirty).length },
-    { id: "unpushed", label: copy.text_05162ec10a, count: workspaces.filter((workspace) => workspace.unpushed).length },
-    { id: "history", label: copy.text_be78b20585, count: historyWorkspaces.length },
+    { id: "all", label: localizedCopy.text_778fc8f994, count: workspaces.length },
+    { id: "attention", label: localizedCopy.text_284b34e15f, count: attention },
+    { id: "dirty", label: localizedCopy.workspaceStatusDirty, count: workspaces.filter((workspace) => workspace.dirty).length },
+    { id: "unpushed", label: localizedCopy.text_05162ec10a, count: workspaces.filter((workspace) => workspace.unpushed).length },
+    { id: "history", label: localizedCopy.text_be78b20585, count: historyWorkspaces.length },
   ];
   return (
     <View style={styles.selector}>
@@ -175,22 +180,22 @@ export function WorkspaceSelector({
       <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={onOpen} style={[styles.selectorButton, { flex: 1 }]}>
         <View style={styles.selectorCopy}>
           <View style={styles.selectorValueRow}>
-            <Text numberOfLines={1} style={styles.selectorValue}>{workspaceDisplayName(selectedWorkspace)}</Text>
+            <Text numberOfLines={1} style={styles.selectorValue}>{workspaceDisplayName(selectedWorkspace, localizedCopy)}</Text>
             <InlineRefresh visible={refreshing} theme={theme} styles={styles} />
           </View>
-          {loading ? <Text numberOfLines={1} style={styles.selectorMeta}>{copy.text_80bf719ff7}</Text> : null}
+          {loading ? <Text numberOfLines={1} style={styles.selectorMeta}>{localizedCopy.text_80bf719ff7}</Text> : null}
           {!loading && !selectedWorkspace && failure ? <Text numberOfLines={2} style={styles.selectorFailure}>{failure}</Text> : null}
-          {!loading && selectedWorkspace && workspaceMeta(selectedWorkspace) ? (
-            <Text numberOfLines={1} style={styles.selectorMeta}>{workspaceMeta(selectedWorkspace)}</Text>
+          {!loading && selectedWorkspace && workspaceMeta(selectedWorkspace, localizedCopy) ? (
+            <Text numberOfLines={1} style={styles.selectorMeta}>{workspaceMeta(selectedWorkspace, localizedCopy)}</Text>
           ) : null}
-          {!loading && !selectedWorkspace ? <Text numberOfLines={1} style={styles.selectorMeta}>{formatCopy("text_2e046dd497", [workspaces.length])}</Text> : null}
+          {!loading && !selectedWorkspace ? <Text numberOfLines={1} style={styles.selectorMeta}>{formatCopyFrom(localizedCopy, "text_2e046dd497", [workspaces.length])}</Text> : null}
         </View>
         <View style={styles.selectorChevron}>
           <Icon name={open ? "ChevronUp" : "ChevronDown"} size={15} color={theme.colors.foregroundMuted} />
         </View>
       </Pressable>
       {statusControl}
-      {onOpenLayoutMenu ? <Pressable accessibilityRole="button" accessibilityLabel={copy.text_1744b62533} onPress={onOpenLayoutMenu} style={[styles.layoutMenuButton, { width: 36, height: 36 }]}><Icon name="Ellipsis" size={18} color={theme.colors.foregroundMuted} /></Pressable> : null}
+      {onOpenLayoutMenu ? <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.text_1744b62533} onPress={onOpenLayoutMenu} style={[styles.layoutMenuButton, { width: 36, height: 36 }]}><Icon name="Ellipsis" size={18} color={theme.colors.foregroundMuted} /></Pressable> : null}
       </View>
       {open ? (
         <View style={styles.selectorExpanded}>
@@ -209,8 +214,8 @@ export function WorkspaceSelector({
             ))}
           </View>
           <View style={styles.selectorListHeader}>
-            <Text style={styles.selectorListLabel}>{copy.text_205b4561ed}</Text>
-            <Text style={styles.selectorListCount}>{visibleWorkspaces.length}{copy.text_42099b4af0}{workspaces.length}</Text>
+            <Text style={styles.selectorListLabel}>{localizedCopy.text_205b4561ed}</Text>
+            <Text style={styles.selectorListCount}>{visibleWorkspaces.length}{localizedCopy.text_42099b4af0}{workspaces.length}</Text>
           </View>
           <FlatList
             data={visibleWorkspaces}
@@ -233,7 +238,7 @@ export function WorkspaceSelector({
             showsVerticalScrollIndicator={visibleWorkspaces.length > 7}
             style={styles.workspaceOptionList}
             windowSize={7}
-            ListEmptyComponent={!loading ? <Text style={styles.emptyText}>{copy.text_daa32fe25c}</Text> : null}
+            ListEmptyComponent={!loading ? <Text style={styles.emptyText}>{localizedCopy.text_daa32fe25c}</Text> : null}
           />
         </View>
       ) : null}
@@ -248,16 +253,17 @@ function WorkspaceOption({ workspace, selected, onSelect, theme, styles }: {
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const localizedCopy = useWorkbenchCopy();
   const status = isMainWorkspace(workspace)
     ? ""
     : workspace.dirty
-    ? "dirty"
+    ? localizedCopy.workspaceStatusDirty
     : workspace.unpushed
-      ? "unpushed"
+      ? localizedCopy.workspaceStatusUnpushed
       : workspace.blockerCount > 0
-        ? "needs review"
+        ? localizedCopy.workspaceStatusNeedsReview
         : workspace.state !== "active"
-          ? workspace.state
+          ? workspace.state === "removed" ? localizedCopy.workspaceStateRemoved : workspace.state
           : "";
   const statusTone = isMainWorkspace(workspace)
     ? observerAccent(theme)
@@ -275,8 +281,8 @@ function WorkspaceOption({ workspace, selected, onSelect, theme, styles }: {
     >
       <View style={[styles.workspaceStatusDot, { backgroundColor: statusTone }]} />
       <View style={styles.workspaceOptionCopy}>
-        <Text numberOfLines={1} style={styles.workspaceOptionTitle}>{workspaceDisplayName(workspace)}</Text>
-        <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{repositoryCountLabel(workspace.repositoryCount)}</Text>
+        <Text numberOfLines={1} style={styles.workspaceOptionTitle}>{workspaceDisplayName(workspace, localizedCopy)}</Text>
+        <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{repositoryCountLabel(workspace.repositoryCount, localizedCopy)}</Text>
       </View>
       {status && status !== "active" ? <Text style={[styles.workspaceOptionState, { color: statusTone }]}>{status}</Text> : null}
     </Pressable>

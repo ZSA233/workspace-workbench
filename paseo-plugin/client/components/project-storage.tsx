@@ -1,9 +1,10 @@
 import { Pressable, Text, View } from "react-native";
 import type { PluginAgentPanelProps, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 
+import type { WorkbenchCopy } from "../../shared/copy";
 import type { ProjectStorageInfo } from "../../shared/setup";
-import { copy } from "../../shared/copy";
 import { AnchoredMenu } from "./navigation";
+import { useWorkbenchCopy } from "../i18n";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type Theme = PanelProps["theme"];
@@ -27,6 +28,7 @@ export function ProjectStorageMenu({
   compact: boolean;
   theme: Theme;
 }) {
+  const copy = useWorkbenchCopy();
   return (
     <AnchoredMenu open={open} onClose={onClose} theme={theme} width={compact ? 240 : 290}>
       <View style={{ gap: 8, padding: 4 }}>
@@ -42,11 +44,11 @@ export function ProjectStorageMenu({
         ) : null}
         {storage ? (
           <>
-            <StorageRow label={copy.storageConfig} value={storage.config} theme={theme} />
-            <StorageRow label={copy.storageWorktrees} value={storage.worktrees} theme={theme} />
-            <StorageRow label={copy.storageState} value={storage.state} theme={theme} />
-            <StorageRow label={copy.storageSocket} value={storage.socket} theme={theme} />
-            <StorageRow label="Git" text={gitIgnoreLabel(storage.ignoreMode)} theme={theme} />
+            <StorageRow copy={copy} label={copy.storageConfig} value={storage.config} theme={theme} />
+            <StorageRow copy={copy} label={copy.storageWorktrees} value={storage.worktrees} theme={theme} />
+            <StorageRow copy={copy} label={copy.storageState} value={storage.state} theme={theme} />
+            <StorageRow copy={copy} label={copy.storageSocket} value={storage.socket} theme={theme} />
+            <StorageRow copy={copy} label={copy.gitLabel} text={gitIgnoreLabel(storage.ignoreMode, copy)} theme={theme} />
           </>
         ) : null}
       </View>
@@ -54,7 +56,8 @@ export function ProjectStorageMenu({
   );
 }
 
-function StorageRow({ label, value, text, theme }: {
+function StorageRow({ copy, label, value, text, theme }: {
+  copy: WorkbenchCopy;
   label: string;
   value?: ProjectStorageInfo["config"];
   text?: string;
@@ -64,19 +67,19 @@ function StorageRow({ label, value, text, theme }: {
     <View style={{ borderTopColor: theme.colors.border, borderTopWidth: 1, gap: 2, paddingTop: 6 }}>
       <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9, fontWeight: "700", textTransform: "uppercase" }}>{label}</Text>
       <Text selectable ellipsizeMode="middle" numberOfLines={1} style={{ color: theme.colors.foreground, fontFamily: "monospace", fontSize: 10 }}>
-        {text || (value ? pathLabel(value) : "—")}
+        {text || (value ? pathLabel(value, copy) : "—")}
       </Text>
     </View>
   );
 }
 
-function pathLabel(value: ProjectStorageInfo["config"]): string {
+function pathLabel(value: ProjectStorageInfo["config"], copy: WorkbenchCopy): string {
   if (value.relativePath) return value.relativePath;
-  if (value.location === "user") return `本机 · ${value.path}`;
-  return `项目外 · ${value.path}`;
+  if (value.location === "user") return copy.localStorageLabel.replace("{0}", value.path);
+  return copy.externalStorageLabel.replace("{0}", value.path);
 }
 
-function gitIgnoreLabel(mode: ProjectStorageInfo["ignoreMode"]): string {
+function gitIgnoreLabel(mode: ProjectStorageInfo["ignoreMode"], copy: ReturnType<typeof useWorkbenchCopy>): string {
   if (mode === "local") return copy.storageGitLocal;
   if (mode === "shared") return copy.storageGitShared;
   if (mode === "ignored") return copy.storageGitIgnored;

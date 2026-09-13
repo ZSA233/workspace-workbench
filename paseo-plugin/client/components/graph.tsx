@@ -5,7 +5,7 @@ type PluginWorkspacePanelProps
 import { useMemo, useRef } from "react";
 import { createHistoryLoadGate } from "../graph/pagination";
 import { ActivityIndicator,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
-import { copy, formatCopy } from "../../shared/copy";
+import { formatCopyFrom } from "../../shared/copy";
 import { IconButton } from "./icon-button";
 
 import { GraphCanvas } from "../graph/canvas";
@@ -20,7 +20,8 @@ type RepositorySummary,
 type SectionLayoutPreference
 } from "../model";
 import { observerAccent } from "../theme";
-import { ChangeCounts,InlineRefresh,MiniTag,ScopeButton,SectionDisclosureButton,SectionViewport,fileCountLabel,makeStyles } from "./ui";
+import { useWorkbenchCopy } from "../i18n";
+import { ChangeCounts,InlineRefresh,MiniTag,ScopeButton,SectionDisclosureButton,SectionViewport,makeStyles } from "./ui";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -89,6 +90,7 @@ export function CommitGraph({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   const historyGate = useRef<ReturnType<typeof createHistoryLoadGate> | null>(null);
   if (historyGate.current === null) historyGate.current = createHistoryLoadGate();
   const rows = useMemo(() => layoutGraph(graph?.nodes || []), [graph?.nodes]);
@@ -99,14 +101,14 @@ export function CommitGraph({
   const graphHeight = (rows.length + (showWorktree ? 1 : 0)) * GRAPH_ROW_HEIGHT;
   const branchScopeAvailable = repository.branchScopeAvailable !== false;
   const graphScope = selectedCommit
-    ? "commit changes"
+    ? copy.graphCommitChanges
     : graph?.historyMode === "full"
       ? copy.text_80a8716fca
       : changeScope === "working"
-        ? "HEAD → WORKTREE"
+        ? copy.graphHeadWorktree
         : branchScopeAvailable
-          ? "base → HEAD"
-          : copy.text_ddde5db955;
+          ? copy.graphBaseHead
+          : copy.graphDetached;
   const hasOlder = Boolean(graph?.hasOlder && (graphViewLimit(graph) < 200 || graph?.historyMode === "branch"));
   return (
     <View style={styles.graphSection}>
@@ -125,8 +127,8 @@ export function CommitGraph({
         <View style={styles.graphHeaderActions}>
           {!selectedCommit ? (
             <View style={styles.changeScopeRow}>
-              {showWorktree ? <ScopeButton label={formatCopy("text_22c7a14625", [workingFileCount])} active={changeScope === "working"} onPress={() => onScope("working")} styles={styles} /> : null}
-              {branchScopeAvailable ? <ScopeButton label={formatCopy("text_46b798f402", [repository.changes.files])} active={changeScope === "branch"} onPress={() => onScope("branch")} styles={styles} /> : null}
+              {showWorktree ? <ScopeButton label={formatCopyFrom(copy, "text_22c7a14625", [workingFileCount])} active={changeScope === "working"} onPress={() => onScope("working")} styles={styles} /> : null}
+              {branchScopeAvailable ? <ScopeButton label={formatCopyFrom(copy, "text_46b798f402", [repository.changes.files])} active={changeScope === "branch"} onPress={() => onScope("branch")} styles={styles} /> : null}
             </View>
           ) : <IconButton label={copy.text_62b4069970} icon="Undo2" color={theme.colors.foregroundMuted} onPress={() => onCommit("")} />}
           <IconButton label={copy.text_4f55ee1e68} icon="Info" active={detailsOpen} color={theme.colors.foregroundMuted} onPress={onToggleDetails} />
@@ -190,7 +192,7 @@ export function CommitGraph({
           {graph?.historyMode === "full" && hasOlder ? (
             <Pressable accessibilityRole="button" disabled={loadingMore} onPress={onGraphMore} style={[styles.historyButton, loadingMore && styles.historyButtonDisabled]}>
               {loadingMore ? <ActivityIndicator color={observerAccent(theme)} size="small" /> : null}
-              <Text style={styles.historyButtonText}>{loadingMore ? copy.text_76c6f5f575 : formatCopy("historyScroll", [graph.loadedCount || rows.filter((row) => !row.node.isBase).length])}</Text>
+              <Text style={styles.historyButtonText}>{loadingMore ? copy.text_76c6f5f575 : formatCopyFrom(copy, "historyScroll", [graph.loadedCount || rows.filter((row) => !row.node.isBase).length])}</Text>
             </Pressable>
           ) : graph?.historyMode === "full" && graph.loadedCount ? (
             <Text style={styles.historyEndText}>{graph.hasOlder ? copy.text_f9d6d6a329 : copy.text_5731f87e8f} {copy.text_c9b020caa5}{graph.loadedCount}</Text>
@@ -220,13 +222,14 @@ export function WorkingTreeRow({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   return (
     <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={[styles.graphRow, styles.graphWorktreeRow, selected && styles.graphRowActive]}>
       <View style={{ width: railWidth }} />
       <View style={styles.graphRowCopy}>
           <Text numberOfLines={1} style={styles.graphSubject}>
           <Text style={styles.graphWorktreeLabel}>{copy.text_ef7c82a2b7}</Text>
-          <Text style={styles.graphSha}>{formatCopy("text_29e918bbdd", [fileCountLabel(Math.max(repository.workingChanges.files, repository.dirtyPaths?.length || 0))])}</Text>
+          <Text style={styles.graphSha}>{formatCopyFrom(copy, "text_29e918bbdd", [formatCopyFrom(copy, "fileCountLabel", [Math.max(repository.workingChanges.files, repository.dirtyPaths?.length || 0)])])}</Text>
           <Text>{" · "}</Text>
           <ChangeCounts additions={repository.workingChanges.additions} deletions={repository.workingChanges.deletions} styles={styles} />
         </Text>
@@ -250,6 +253,7 @@ export function GraphCommitRow({
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const copy = useWorkbenchCopy();
   const isHead = row.node.decorations.some((decoration) => decoration === "HEAD" || decoration.startsWith("HEAD "));
   const laneColor = graphLaneColor(theme, row.colorIndex);
   const branchRefs = (row.node.refs || []).filter((ref) => !ref.isHead).slice(0, 2);
@@ -266,7 +270,7 @@ export function GraphCommitRow({
       <View style={styles.graphRowCopy}>
         <Text numberOfLines={1} style={styles.graphSubject}>
           <Text style={styles.graphSha}>{row.node.shortSha}</Text>
-          {row.node.isBase ? "  base" : `  ${row.node.subject}`}
+          {row.node.isBase ? `  ${copy.graphBaseLabel}` : `  ${row.node.subject}`}
         </Text>
         {isHead ? <MiniTag label="HEAD" color={observerAccent(theme)} styles={styles} /> : null}
         {row.node.isBase ? <MiniTag label="BASE" color={theme.colors.foregroundMuted} styles={styles} /> : null}

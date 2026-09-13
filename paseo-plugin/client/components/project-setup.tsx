@@ -4,8 +4,8 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { useEffect, useState, type ReactNode } from "react";
 import { projectSetupSave, projectSetupScan, type ProjectBackendStatus, type ProjectSetupScan, type ProjectSetupSave } from "../../shared/setup.ts";
-import { copy } from "../../shared/copy.ts";
 import { observerAccent } from "../theme.ts";
+import { useWorkbenchCopy } from "../i18n";
 
 type Theme = PluginWorkspacePanelProps["theme"];
 
@@ -14,6 +14,7 @@ export function ProjectSetup({ directory, theme, onSaved }: {
   theme: Theme;
   onSaved: (project: ProjectSetupSave["project"], backend: ProjectBackendStatus) => void;
 }) {
+  const copy = useWorkbenchCopy();
   const scan = useRpc(projectSetupScan);
   const save = useRpc(projectSetupSave);
   const scanQuery = useQuery({
@@ -165,6 +166,7 @@ function ActionButton({ label, onPress, theme, disabled = false, primary = false
 }
 
 function RepositoryOption({ repository, selected, label, onPress, theme }: { repository: ProjectSetupScan["repositories"][number]; selected: boolean; label?: string; onPress: () => void; theme: Theme }) {
+  const copy = useWorkbenchCopy();
   const accent = observerAccent(theme);
   const branch = repository.branch || (repository.head ? copy.setupDetached : copy.setupNoCommits);
   const state = !repository.valid

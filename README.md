@@ -66,6 +66,9 @@ paseo plugin update workspace-workbench-paseo --json
 
 ## 可选的 Agent 交接
 
+从用户视角查看“直接在当前工作区执行”和“创建独立 Workspace 执行”的完整流程，见
+[`docs/agent-workspace-flow.md`](docs/agent-workspace-flow.md)。
+
 如果需要 Paseo Agent 编排，在项目 JSON 中加入：
 
 ```json

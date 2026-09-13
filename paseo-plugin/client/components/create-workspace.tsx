@@ -8,7 +8,8 @@ import { clampCreateWorkspaceHeight, CREATE_WORKSPACE_MAX_HEIGHT, CREATE_WORKSPA
 import { makeStyles } from "./ui";
 import { useWorkbenchCopy } from "../i18n";
 
-export function CreateWorkspace({ projectKey, currentRepo, rpc, onCreated, onClose, styles }: {
+export function CreateWorkspace({ addTo, projectKey, currentRepo, rpc, onCreated, onClose, styles }: {
+  addTo?: { id: string; repositoryPaths: string[] };
   projectKey: string; currentRepo: string;
   rpc(input: { method: ObserverMethod; params: Record<string, unknown> }): Promise<ObserverResponse>;
   onCreated(id: string): Promise<void>; onClose(): void; styles: ReturnType<typeof makeStyles>;
@@ -16,7 +17,7 @@ export function CreateWorkspace({ projectKey, currentRepo, rpc, onCreated, onClo
   const copy = useWorkbenchCopy();
   const [name, setName] = useState("");
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<string[]>(currentRepo ? [currentRepo] : []);
+  const [selected, setSelected] = useState<string[]>(!addTo && currentRepo ? [currentRepo] : []);
   const [bases, setBases] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -28,9 +29,9 @@ export function CreateWorkspace({ projectKey, currentRepo, rpc, onCreated, onClo
   const pendingHeight = useRef<number | null>(null);
   const window = useWindowDimensions();
   const catalog = useQuery({ queryKey: ["workbench-create-catalog", projectKey], queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: "main", summary: true } }), retry: false });
-  const repositories = catalog.data?.ok ? (catalog.data.result as DetailResult).repositories : [];
+  const repositories = (catalog.data?.ok ? (catalog.data.result as DetailResult).repositories : []).filter((repo) => !addTo?.repositoryPaths.includes(repo.repoPath));
   const valid = repositories.filter((repo) => repo.status !== "missing" && Boolean(repo.head));
-  const canCreate = name.trim() && selected.length && selected.every((path) => valid.some((repo) => repo.repoPath === path));
+  const canCreate = (addTo || name.trim()) && selected.length && selected.every((path) => valid.some((repo) => repo.repoPath === path));
   const filteredRepositories = useMemo(
     () => repositories.filter((repo) => `${repo.name} ${repo.repoPath}`.toLowerCase().includes(search.toLowerCase())),
     [repositories, search],
@@ -92,13 +93,15 @@ export function CreateWorkspace({ projectKey, currentRepo, rpc, onCreated, onClo
     if (lock.current || !canCreate) return;
     lock.current = true; setBusy(true); setError("");
     try {
-      const response = await rpc({ method: "workspace.create", params: { name: name.trim(), repositories: [...selected].sort(), baseRefs: Object.fromEntries(selected.map((path) => [path, bases[path]?.trim() || "HEAD"])) } });
+      const response = await rpc({ method: addTo ? "workspace.addRepositories" : "workspace.create", params: { ...(addTo ? { workspaceId: addTo.id } : { name: name.trim() }), repositories: [...selected].sort(), baseRefs: Object.fromEntries(selected.map((path) => [path, bases[path]?.trim() || "HEAD"])) } });
       if (!response.ok) throw new Error(response.error?.message || copy.text_deb3990191);
-      await onCreated((response.result as { id: string }).id);
+      const result = response.result as { id: string; preparations?: Array<{ status?: string }> };
+      if (result.preparations?.some((item) => item.status === "prepare_failed")) throw new Error("仓库已添加，运行时准备失败。修复运行时后重试；不会重复创建仓库。");
+      await onCreated(result.id);
     } catch (cause) { setError(cause instanceof Error ? cause.message : copy.text_deb3990191); }
     finally { lock.current = false; setBusy(false); }
   }
-  return <Modal open onOpenChange={(open) => { if (!open && !busy) onClose(); }} title={copy.text_1623afda9e}>
+  return <Modal open onOpenChange={(open) => { if (!open && !busy) onClose(); }} title={addTo ? "添加仓库" : copy.text_1623afda9e}>
     {/* Web can size a non-scrolling modal to its content. Native sheets keep
         their host-controlled detent and use only the bounded list to scroll. */}
     <Modal.Content
@@ -106,7 +109,7 @@ export function CreateWorkspace({ projectKey, currentRepo, rpc, onCreated, onClo
       style={[styles.createModalContent, { height: dialogHeight, maxHeight }]}
       contentContainerStyle={styles.createModalBody}
     >
-      <TextInput accessibilityLabel={copy.text_76848596cb} placeholder={copy.text_76848596cb} value={name} onChangeText={setName} editable={!busy} style={inputStyle} />
+      {!addTo ? <TextInput accessibilityLabel={copy.text_76848596cb} placeholder={copy.text_76848596cb} value={name} onChangeText={setName} editable={!busy} style={inputStyle} /> : null}
       <TextInput accessibilityLabel={copy.createSearch} placeholder={copy.createSearch} value={search} onChangeText={setSearch} style={inputStyle} />
       <FlatList
         data={filteredRepositories}
@@ -136,7 +139,7 @@ export function CreateWorkspace({ projectKey, currentRepo, rpc, onCreated, onClo
       {catalog.isError || catalog.data && !catalog.data.ok ? <Text style={styles.warningText}>{copy.createCatalogFailed}</Text> : null}
       <Pressable onPress={() => setExpanded((value) => !value)}><Text style={styles.secondaryButtonText}>{copy.createBase}</Text></Pressable>
       {error ? <Text style={styles.warningText}>{error}</Text> : null}
-      <Pressable accessibilityRole="button" disabled={!canCreate || busy} onPress={() => { void create(); }} style={[styles.copyButton, (!canCreate || busy) && { opacity: 0.5 }]}><Text style={styles.copyButtonText}>{busy ? copy.text_1680b04bf6 : copy.text_fcbd093292}</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={!canCreate || busy} onPress={() => { void create(); }} style={[styles.copyButton, (!canCreate || busy) && { opacity: 0.5 }]}><Text style={styles.copyButtonText}>{busy ? copy.text_1680b04bf6 : addTo ? "添加仓库" : copy.text_fcbd093292}</Text></Pressable>
     </Modal.Content>
   </Modal>;
 }

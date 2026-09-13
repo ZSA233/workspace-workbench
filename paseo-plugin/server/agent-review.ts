@@ -1,3 +1,4 @@
+import { withWorkspaceScope } from "./workspace-scope.ts";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, utimesSync } from "node:fs";
@@ -1512,8 +1513,10 @@ export async function handleReviewPreview(input: { projectConfig: string; worksp
 }
 
 export async function handleReviewSessionStart(input: { projectConfig: string; workspaceId: string; executionAgentId?: string; locale?: ReviewLocale; token?: string }, context: AgentContext): Promise<ReturnType<typeof reviewSessionStart.output.parse>> {
+  return withWorkspaceScope(input.workspaceId, async () => {
   try { await authorizeReviewCaller(input.token, context); return { ok: true, session: await startReview(input, context) }; }
   catch (error) { return { ok: false, session: readSession(input.workspaceId), error: errorInfo(error, "Review could not start") }; }
+  });
 }
 
 export async function handleReviewSessionControl(input: { projectConfig: string; workspaceId: string; sessionId?: string; action: "stop" | "resume" | "review" | "repair"; token?: string }, context: AgentContext): Promise<ReturnType<typeof reviewSessionControl.output.parse>> {

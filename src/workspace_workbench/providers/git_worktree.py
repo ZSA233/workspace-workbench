@@ -229,7 +229,7 @@ class GitWorktreeProvider:
             return
         if not isinstance(manifest, dict) or manifest.get("id") != workspace.get("id"):
             return
-        manifest["state"] = workspace.get("state")
+        manifest.update(workspace)
         if "deletion" in workspace:
             manifest["deletion"] = workspace["deletion"]
         else:
@@ -476,6 +476,13 @@ class GitWorktreeProvider:
         if len(matches) > 1:
             raise WorkbenchError(f"repository reference is ambiguous in workspace: {requested}", code="repository_ambiguous", details=[item.get("id") for item in matches])
         raise WorkbenchError(f"repository does not exist in workspace: {requested}", code="repository_missing")
+
+    def add_repositories(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        if not self.config.management_enabled:
+            raise WorkbenchError("management disabled", code="capability_unavailable")
+        from .repository_addition import add_repositories
+        with self._mutation():
+            return add_repositories(self, params)
 
     def create(self, params: Mapping[str, Any]) -> dict[str, Any]:
         if not self.capabilities()["create"]:

@@ -9,6 +9,7 @@ export const observerMethods = [
   "workspace.identify",
   "workspace.runtime",
   "workspace.create",
+  "workspace.addRepositories",
   "workspace.prepare",
   "workspace.cleanup",
   "workspace.remove",

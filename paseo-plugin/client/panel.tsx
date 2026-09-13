@@ -361,6 +361,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [handoffReferences, setHandoffReferences] = useState("");
   const [handoffReviewInstructions, setHandoffReviewInstructions] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [addRepositoriesOpen, setAddRepositoriesOpen] = useState(false);
   const newlyCreatedWorkspace = useRef<string | null>(null);
   const [delegating, setDelegating] = useState(false);
   const [lifecycleWorkspaceId, setLifecycleWorkspaceId] = useState("");
@@ -1255,6 +1256,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         if (Math.abs(width - panelWidth) > 1) setPanelWidth(width);
       }}
     >
+      {selectedWorkspace?.managed && !selectedWorkspaceBlocksTasks && listResult?.capabilities?.create ? <Pressable accessibilityRole="button" onPress={() => setAddRepositoriesOpen(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>添加仓库</Text></Pressable> : null}
+      {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await listQuery.refetch(); await detailQuery.refetch(); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
       {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await listQuery.refetch(); newlyCreatedWorkspace.current = id; selectWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
       {handoffPacketOpen ? <Modal open onOpenChange={(open) => { if (!open) setHandoffPacketOpen(false); }} title={localizedCopy.handoffPacket}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>

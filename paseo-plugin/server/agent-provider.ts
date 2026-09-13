@@ -1,3 +1,4 @@
+import { withWorkspaceScope } from "./workspace-scope.ts";
 import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -250,6 +251,9 @@ function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeRe
 const delegates = new Map<string, { identity: string; promise: Promise<Awaited<ReturnType<typeof delegateAgent>>> }>();
 
 export async function handleAgentDelegate(input: AgentDelegateInput, context: AgentContext) {
+  return withWorkspaceScope(input.workspaceId, () => handleAgentDelegateLocked(input, context));
+}
+async function handleAgentDelegateLocked(input: AgentDelegateInput, context: AgentContext) {
   const projectKey = `${currentProject()?.configPath || ""}:${input.workspaceId}`;
   const active = delegates.get(projectKey);
   const identity = JSON.stringify(input);

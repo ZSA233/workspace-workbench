@@ -40,7 +40,7 @@ function withRuntimeState(result: unknown, runtimeState: WorkspaceRuntimeState):
     : { runtimeState, result };
 }
 
-async function activeWorkspaceTasks(workspaceId: string, context: AgentContext): Promise<{ tasks: ActiveTask[]; error?: { code: string; message: string } }> {
+export async function activeWorkspaceTasks(workspaceId: string, context: AgentContext): Promise<{ tasks: ActiveTask[]; error?: { code: string; message: string } }> {
   const tasks: ActiveTask[] = [];
   try {
     const binding = await handleWorkspaceBinding({ workspaceId }, context);
@@ -58,8 +58,7 @@ async function activeWorkspaceTasks(workspaceId: string, context: AgentContext):
       tasks.push({ kind: "review", id: session.id, label: "Agent Review", status: session.status });
     }
   } catch {
-    // A review state that cannot be read is not treated as an active task. The
-    // execution Agent binding above remains the fail-closed signal for writes.
+    return { tasks, error: { code: "workspace_task_status_unavailable", message: "Review state could not be checked; retry after recovery" } };
   }
   return { tasks };
 }

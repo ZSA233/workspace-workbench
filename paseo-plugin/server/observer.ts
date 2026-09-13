@@ -1,3 +1,5 @@
+import { withWorkspaceScope } from "./workspace-scope.ts";
+import type { AgentContext } from "./agent-provider.ts";
 import { createConnection, type Socket } from "node:net";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -133,10 +135,10 @@ class ObserverBridge {
     const request: SocketRequest = { id: String(++this.sequence), method: input.method, params: input.params || {} };
     const pending = this.request(request)
       .then((response) => {
-        if (response.ok && ["observer.reload", "workspace.create", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete"].includes(input.method)) {
+        if (response.ok && ["observer.reload", "workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete"].includes(input.method)) {
           for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
         }
-        if (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method)) {
+        if (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method)) {
           if (cacheable(response)) this.cache.set(key, { response, expiresAt: Date.now() + responseCacheTtlMs });
         }
         return response;
@@ -154,9 +156,20 @@ class ObserverBridge {
 
 const bridge = new ObserverBridge();
 
-export async function handleObserver(input: QueryInput): Promise<ObserverResponse> {
+export async function handleObserver(input: QueryInput, context?: AgentContext): Promise<ObserverResponse> {
   try {
     const callWithRecovery = async (): Promise<ObserverResponse> => {
+      if (input.method === "workspace.addRepositories") {
+        return withWorkspaceScope(String(input.params.workspaceId || ""), async () => {
+          if (context) {
+            const { activeWorkspaceTasks } = await import("./workspace-lifecycle.ts");
+            const active = await activeWorkspaceTasks(String(input.params.workspaceId || ""), context);
+            if (active.error) return { ok: false, error: active.error };
+            if (active.tasks.length) return { ok: false, error: { code: "workspace_task_active", message: "请先结束当前执行或审核，再添加仓库。" } };
+          }
+          return bridge.call(input);
+        });
+      }
       try {
         return await bridge.call(input);
       } catch (error) {

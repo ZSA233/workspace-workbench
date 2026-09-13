@@ -38,6 +38,7 @@ READ_METHODS = frozenset({
 MANAGEMENT_METHODS = frozenset({
     "observer.reload",
     "workspace.create",
+    "workspace.addRepositories",
     "workspace.prepare",
     "workspace.cleanup",
     "workspace.remove",
@@ -181,6 +182,14 @@ class ObserverService:
             return self.provider.identify(str(values.get("directory") or self.config.source_root))
         if method == "workspace.runtime":
             return self.workspace_runtime(values)
+        if method == "workspace.addRepositories":
+            workspace = self.provider.add_repositories(values)
+            preparations = []
+            if self.toolchain:
+                for requested in values.get("repositories", []):
+                    repository = self.provider.repository(workspace["id"], requested)
+                    preparations.append(self.toolchain.prepare(workspace, repository["id"]))
+            return {**workspace, "preparations": preparations}
         if method == "workspace.create":
             if not self.config.management_enabled or not self.provider.capabilities().get("create"):
                 raise WorkbenchError("workspace management is disabled for this project", code="capability_unavailable")
@@ -617,6 +626,8 @@ class ObserverService:
         workspace = self._workspace(str(params.get("workspaceId") or ""))
         if not workspace.get("managed"):
             raise WorkbenchError("live workspace is not managed", code="workspace_not_managed")
+        if workspace.get("repositoryAdditions"):
+            raise WorkbenchError("finish or recover repository additions before starting a task", code="repository_addition_pending")
         runtime_repositories: list[dict[str, Any]] = []
         for repository in workspace.get("repositories", []):
             path = Path(str(repository.get("worktreePath") or "")).resolve()

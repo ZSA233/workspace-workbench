@@ -12,6 +12,7 @@ import {
   agentSessionSettingsSchema,
   agentSessionSettingsUpdate,
   type AgentRelationship,
+  type AgentPermissionMode,
   type AgentSessionPatch,
   type AgentSessionSettings,
   type AgentSessionSettingsResponse,
@@ -102,6 +103,7 @@ function mergeProviderRelationships(...patches: AgentSessionPatch[]): Record<str
 function effectiveSettings(project: AgentSessionPatch, global: AgentSessionPatch, globalProject: AgentSessionPatch): AgentSessionSettings {
   return agentSessionSettingsSchema.parse({
     defaultRelationship: project.defaultRelationship ?? globalProject.defaultRelationship ?? global.defaultRelationship ?? "independent",
+    permissionMode: project.permissionMode ?? globalProject.permissionMode ?? global.permissionMode ?? "inherit",
     providerRelationships: mergeProviderRelationships(global, globalProject, project),
   });
 }
@@ -138,6 +140,7 @@ function settingsResponse(): AgentSessionSettingsResponse {
     global,
     sources: {
       defaultRelationship: project.defaultRelationship ? "project" : global.defaultRelationship ? "global" : "default",
+      permissionMode: project.permissionMode ? "project" : global.permissionMode ? "global" : "default",
       providerRelationships,
     },
   };
@@ -178,11 +181,23 @@ export async function handleAgentSessionSettingsGet(): Promise<AgentSessionSetti
 
 function settingsResponseFallback(): Omit<AgentSessionSettingsResponse, "ok" | "error"> {
   return {
-    effective: { defaultRelationship: "independent", providerRelationships: {} },
+    effective: { defaultRelationship: "independent", permissionMode: "inherit", providerRelationships: {} },
     project: {},
     global: {},
-    sources: { defaultRelationship: "default", providerRelationships: {} },
+    sources: { defaultRelationship: "default", permissionMode: "default", providerRelationships: {} },
   };
+}
+
+/** Resolve the permission preset for a newly created execution Agent. */
+export function resolveAgentPermissionMode(): AgentPermissionMode {
+  try {
+    const project = readProjectPatch();
+    const global = readGlobalPatch();
+    const globalProject = readGlobalProjectPatch(currentProjectConfig());
+    return effectiveSettings(project, global, globalProject).permissionMode;
+  } catch {
+    return "inherit";
+  }
 }
 
 export async function handleAgentSessionSettingsUpdate(input: { scope: "project" | "global"; patch: AgentSessionPatch; resetFields: string[] }): Promise<AgentSessionSettingsResponse> {

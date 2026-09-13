@@ -1477,9 +1477,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         </View>
         <Text style={styles.layoutMenuHint}>{localizedCopy.agentSessionPermissionSettings} · {sessionSourceLabel("permissionMode")}</Text>
         <Text style={styles.layoutMenuHint}>{localizedCopy.agentSessionPermissionHint}</Text>
-        <View style={styles.briefActions}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.briefActions}>
           {(["inherit", "auto", "auto-review", "full-access"] as AgentPermissionMode[]).map((mode) => <Pressable key={mode} accessibilityRole="button" accessibilityState={{ selected: sessionPermissionMode === mode }} onPress={() => { markSessionField("permissionMode"); setSessionPermissionMode(mode); }} style={[styles.secondaryButton, sessionPermissionMode === mode && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{sessionPermissionLabel(mode)}</Text></Pressable>)}
-        </View>
+        </ScrollView>
         <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsProviderOverrides}</Text>
         {sessionProviders.map((provider) => {
           const selected = sessionProviderRelationships[provider];

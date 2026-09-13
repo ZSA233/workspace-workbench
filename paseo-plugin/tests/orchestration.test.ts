@@ -10,10 +10,11 @@ import { withProject } from "../server/projects.ts";
 import { workflowRequest, workflowStatusRequest } from "../shared/orchestration.ts";
 
 const parent = (cwd: string, plan = false) => ({ id: "parent", cwd, provider: "codex", model: "fixture", currentModeId: "auto", availableModes: [{ id: "auto" }, { id: "full-access" }], pendingPermissions: [], features: [{ id: "plan_mode", type: "toggle", value: plan }] }) as unknown as PaseoAgent;
-test("provider modes fail closed and never grant full access to the child", () => {
+test("provider modes fail closed and inherit the current permission by default", () => {
   assert.throws(() => childExecutionConfig(parent("/fixture", true), false), /mode_unconfirmed/);
   assert.throws(() => childExecutionConfig({ ...parent("/fixture"), features: [] }, false), /mode_unconfirmed/);
-  assert.equal(childExecutionConfig({ ...parent("/fixture"), currentModeId: "full-access" }, true).modeId, "auto");
+  assert.equal(childExecutionConfig({ ...parent("/fixture"), currentModeId: "full-access" }, true).modeId, "full-access");
+  assert.equal(childExecutionConfig({ ...parent("/fixture"), currentModeId: "full-access" }, true, "auto").modeId, "auto");
   assert.deepEqual(childExecutionConfig(parent("/fixture"), true).featureValues, { plan_mode: true });
 });
 

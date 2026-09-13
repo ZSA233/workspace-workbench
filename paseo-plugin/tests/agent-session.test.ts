@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import { handleAgentDelegate } from "../server/agent-provider.ts";
-import { handleAgentSessionSettingsGet, handleAgentSessionSettingsUpdate, resolveAgentRelationship } from "../server/agent-session.ts";
+import { handleAgentSessionSettingsGet, handleAgentSessionSettingsUpdate, resolveAgentPermissionMode, resolveAgentRelationship } from "../server/agent-session.ts";
 import { getAgentBinding, putAgentBinding } from "../server/agent-store.ts";
 import { withProject } from "../server/projects.ts";
 import { handoffSchema } from "../shared/handoff.ts";
@@ -35,16 +35,21 @@ test("agent session settings resolve project provider overrides over global defa
     await withProject({ projectConfig: config }, async () => {
       const initial = await handleAgentSessionSettingsGet();
       assert.equal(initial.effective.defaultRelationship, "independent");
-      await handleAgentSessionSettingsUpdate({ scope: "global", patch: { defaultRelationship: "child", providerRelationships: { codex: "child" } }, resetFields: [] });
-      await handleAgentSessionSettingsUpdate({ scope: "project", patch: { defaultRelationship: "independent", providerRelationships: { fixture: "child" } }, resetFields: [] });
-      assert.deepEqual(JSON.parse(readFileSync(config, "utf8")).agent.session, { defaultRelationship: "independent", providerRelationships: { fixture: "child" } });
+      assert.equal(initial.effective.permissionMode, "inherit");
+      await handleAgentSessionSettingsUpdate({ scope: "global", patch: { defaultRelationship: "child", permissionMode: "full-access", providerRelationships: { codex: "child" } }, resetFields: [] });
+      await handleAgentSessionSettingsUpdate({ scope: "project", patch: { defaultRelationship: "independent", permissionMode: "auto", providerRelationships: { fixture: "child" } }, resetFields: [] });
+      assert.deepEqual(JSON.parse(readFileSync(config, "utf8")).agent.session, { defaultRelationship: "independent", permissionMode: "auto", providerRelationships: { fixture: "child" } });
       const resolved = await handleAgentSessionSettingsGet();
       assert.equal(resolved.effective.defaultRelationship, "independent");
+      assert.equal(resolved.effective.permissionMode, "auto");
       assert.equal(resolveAgentRelationship("codex/model"), "child");
       assert.equal(resolveAgentRelationship("fixture/model"), "child");
       assert.equal(resolveAgentRelationship("other/model"), "independent");
+      assert.equal(resolveAgentPermissionMode(), "auto");
       await handleAgentSessionSettingsUpdate({ scope: "project", patch: {}, resetFields: ["providerRelationships"] });
       assert.equal(resolveAgentRelationship("fixture/model"), "independent");
+      await handleAgentSessionSettingsUpdate({ scope: "project", patch: {}, resetFields: ["permissionMode"] });
+      assert.equal(resolveAgentPermissionMode(), "full-access");
       await handleAgentSessionSettingsUpdate({ scope: "project", patch: {}, resetFields: ["defaultRelationship"] });
       assert.equal(resolveAgentRelationship("other/model"), "child");
     });
@@ -76,13 +81,13 @@ test("legacy Agent bindings remain child sessions and upgrade on the next write"
   }
 });
 
-function parentAgent() {
+function parentAgent(currentModeId: "auto" | "full-access" = "auto") {
   return {
     id: "parent",
     cwd: "/fixture/source",
     provider: "codex",
     model: "fixture",
-    currentModeId: "auto",
+    currentModeId,
     availableModes: [{ id: "auto" }, { id: "full-access" }],
     features: [{ id: "plan_mode", type: "toggle", value: false }],
     pendingPermissions: [],
@@ -112,6 +117,7 @@ test("default execution creates an independent Agent without a parent", async ()
     assert.equal(result.ok, true);
     assert.equal(creates.length, 1);
     assert.equal(creates[0].parent, undefined);
+    assert.equal((creates[0].config as { modeId: string }).modeId, "auto");
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.relationship"], "independent");
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.parent"], undefined);
     assert.deepEqual((creates[0].config as { toolPolicy: { preapproved: unknown[] } }).toolPolicy.preapproved, [

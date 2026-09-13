@@ -269,44 +269,6 @@ test("replacement waits for an in-flight real Git operation to drain", async () 
   }
 });
 
-const legacyPython = spawnSync("python3", ["--version"]).status === 0;
-test(
-  "an exact legacy Python socket owner is retired automatically",
-  { skip: !legacyPython || process.platform !== "darwin" },
-  async () => {
-    const f = fixture("legacy"),
-      supervisor = new BackendSupervisor(entry);
-    const child = spawn(
-      "python3",
-      ["-m", "workspace_workbench", "serve", "--config", f.route.configPath],
-      {
-        env: {
-          ...process.env,
-          PYTHONPATH: resolve(import.meta.dirname, "../../src"),
-        },
-        stdio: ["ignore", "ignore", "ignore"],
-      },
-    );
-    try {
-      await until(
-        async () =>
-          !!(await backendRequest(f.route.socketPath, "observer.health"))?.ok,
-      );
-      await supervisor.ensure(f.route, "0.1.3");
-      assert.equal(
-        (await backendRequest(f.route.socketPath, "observer.health"))?.result
-          .implementation,
-        "node",
-      );
-      await until(() => child.exitCode !== null || !!child.signalCode);
-    } finally {
-      if (child.exitCode === null && !child.signalCode) child.kill("SIGTERM");
-      await supervisor.close();
-      rmSync(f.root, { recursive: true, force: true });
-    }
-  },
-);
-
 test("a second socket cannot create another writer for the same records", async () => {
   const f = fixture("single-owner"),
     supervisor = new BackendSupervisor(entry);

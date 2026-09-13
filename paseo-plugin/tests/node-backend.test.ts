@@ -59,213 +59,45 @@ export function git(path: string, args: string[]) {
   assert.equal(r.status, 0, r.stderr);
   return r.stdout.trim();
 }
-function oracleResponse(config: string, method: string, params: Json): Json {
-  const r = spawnSync(
-    "python3",
-    ["-m", "workspace_workbench", "serve", "--stdio", "--config", config],
-    {
-      encoding: "utf8",
-      input: JSON.stringify({ id: 1, method, params }) + "\n",
-      env: {
-        ...process.env,
-        PYTHONPATH: resolve(import.meta.dirname, "../../src"),
-      },
-    },
-  );
-  assert.equal(r.status, 0, r.stderr);
-  return JSON.parse(r.stdout.trim());
-}
-function oracle(config: string, method: string, params: Json): Json {
-  const response = oracleResponse(config, method, params);
-  assert.equal(response.ok, true, JSON.stringify(response));
-  return response.result;
-}
-const pythonAvailable = spawnSync("python3", ["--version"]).status === 0;
-
-test("legacy and Node rejection codes preserve invalid-request behavior", { skip: !pythonAvailable }, async () => {
+test("Node backend preserves public rejection codes and idempotent records", async () => {
   const f = fixture();
   const service = new Service(f.config);
   try {
-    for (const [method, params] of [
-      ["missing.method", {}],
-      ["agent.execute", {}],
-      ["workspace.detail", { workspaceId: "missing" }],
-      ["workspace.runtime", { workspaceId: "main" }],
-      ["workspace.prepare", { workspaceId: "main", repositoryId: "one" }],
-    ] as Array<[string, Json]>) {
-      const expected = oracleResponse(f.configPath, method, params);
-      assert.equal(expected.ok, false, method);
+    for (const [method, params, code] of [
+      ["missing.method", {}, "method_not_allowed"],
+      ["agent.execute", {}, "agent_provider_required"],
+      ["workspace.detail", { workspaceId: "missing" }, "workspace_missing"],
+      ["workspace.runtime", { workspaceId: "main" }, "workspace_not_managed"],
+      ["workspace.prepare", { workspaceId: "main", repositoryId: "one" }, "capability_unavailable"],
+    ] as Array<[string, Json, string]>) {
       await assert.rejects(service.handle(method, params), (error: any) => {
-        assert.equal(error.code, expected.error.code, method);
+        assert.equal(error.code, code, method);
         return true;
       });
     }
-  } finally { await service.close(); rmSync(f.root, { recursive: true, force: true }); }
-});
-
-test("Python and Node expose the same roster, detail, identification and review comparison fields", { skip: !pythonAvailable }, async () => {
-  const f = fixture();
-  const service = new Service(f.config);
-  // Compare legacy fields recursively; timing and cache scheduling are not
-  // semantic data. New additive fields are permitted by the JSON protocol.
-  const volatile = new Set(["observedAt", "durationMs", "observation", "cache", "updatedAt"]);
-  function compatible(actual: any, expected: any, path = "result") {
-    if (Array.isArray(expected)) {
-      assert.equal(actual.length, expected.length, path);
-      expected.forEach((value, i) => compatible(actual[i], value, `${path}[${i}]`));
-    } else if (expected !== null && typeof expected === "object") {
-      for (const [key, value] of Object.entries(expected)) {
-        if (!volatile.has(key)) compatible(actual?.[key], value, `${path}.${key}`);
-      }
-    } else assert.deepEqual(actual, expected, path);
-  }
-  try {
-    const created = oracle(f.configPath, "workspace.create", { name: "parity", repositories: ["one", "two"] });
-    for (const [method, params] of [
-      ["workspace.identify", { directory: created.treePath }],
-      ["workspace.list", {}],
-      ["workspace.detail", { workspaceId: "parity" }],
-      ["review-set.compare", { workspaceIds: ["parity"] }],
-    ] as Array<[string, Json]>) {
-      compatible(await service.handle(method, params), oracle(f.configPath, method, params), method);
-    }
-    const checkout = created.repositories[0].worktreePath;
-    writeFileSync(join(checkout, "README.md"), "modified\n");
-    writeFileSync(join(checkout, "untracked.txt"), "new\n");
-    service.cache.clear();
-    rmSync(join(f.root, "state/observer.sqlite3"), { force: true });
-    compatible(await service.handle("workspace.detail", { workspaceId: "parity" }), oracle(f.configPath, "workspace.detail", { workspaceId: "parity" }), "dirty detail");
-    renameSync(checkout, `${checkout}-temporarily-moved`);
-    service.cache.clear();
-    rmSync(join(f.root, "state/observer.sqlite3"), { force: true });
-    compatible(await service.handle("workspace.detail", { workspaceId: "parity" }), oracle(f.configPath, "workspace.detail", { workspaceId: "parity" }), "missing detail");
-    renameSync(`${checkout}-temporarily-moved`, checkout);
-    for (const method of ["workspace.remove", "workspace.restore"]) {
-      const params = { workspaceId: "parity" };
-      const expected = oracle(f.configPath, method, params);
-      compatible(await service.handle(method, params), expected, method);
-      service.cache.clear();
-      rmSync(join(f.root, "state/observer.sqlite3"), { force: true });
-      compatible(await service.handle("workspace.list", { includeRemoved: true }), oracle(f.configPath, "workspace.list", { includeRemoved: true }), `${method} roster`);
-    }
+    const request = { name: "sample", repositories: ["one"], baseRefs: { one: "HEAD" } };
+    const created = await service.handle("workspace.create", request);
+    const repeated = await service.handle("workspace.create", request);
+    assert.equal(repeated.requestHash, created.requestHash);
+    assert.equal(repeated.createdAt, created.createdAt);
+    const added = await service.handle("workspace.addRepositories", {
+      workspaceId: created.id,
+      repositories: ["two"],
+      baseRefs: { two: "HEAD" },
+    });
+    assert.equal(added.repositories.length, 2);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(added.treePath, ".workspace/manifest.json"), "utf8")).repositories,
+      added.repositories,
+    );
+    const runtime = await service.handle("workspace.runtime", { workspaceId: created.id });
+    assert.equal(runtime.repositories.length, 2);
+    assert.equal((await service.handle("review-set.brief", { workspaceIds: [created.id] })).repositories.length, 2);
   } finally {
     await service.close();
     rmSync(f.root, { recursive: true, force: true });
   }
 });
-
-test(
-  "Node reads Python records, preserves IDs/history, and matches Git protocol outputs",
-  { skip: !pythonAvailable },
-  async () => {
-    const f = fixture(),
-      request = {
-        name: "sample",
-        repositories: ["one"],
-        baseRefs: { one: "HEAD" },
-      };
-    let service: Service | undefined;
-    try {
-      const original = oracle(f.configPath, "workspace.create", request);
-      service = new Service(f.config);
-      const repeated = await service.handle("workspace.create", request);
-      assert.equal(repeated.requestHash, original.requestHash);
-      assert.equal(repeated.createdAt, original.createdAt);
-      const added = await service.handle("workspace.addRepositories", {
-        workspaceId: "sample",
-        repositories: ["two"],
-        baseRefs: { two: "HEAD" },
-      });
-      assert.equal(added.repositories.length, 2);
-      assert.deepEqual(added.repositories[0], original.repositories[0]);
-      assert.deepEqual(
-        JSON.parse(
-          readFileSync(
-            join(added.treePath, ".workspace/manifest.json"),
-            "utf8",
-          ),
-        ).repositories,
-        added.repositories,
-      );
-      const runtime = await service.handle("workspace.runtime", {
-        workspaceId: "sample",
-      });
-      assert.deepEqual(
-        runtime,
-        oracle(f.configPath, "workspace.runtime", { workspaceId: "sample" }),
-      );
-      const path = added.repositories[0].worktreePath;
-      writeFileSync(join(path, "README.md"), "initial\nmore\n");
-      writeFileSync(join(path, "new file.txt"), "new\n");
-      writeFileSync(join(path, "binary.dat"), Buffer.from([0, 1, 2]));
-      service.cache.clear();
-      for (const scope of ["working", "commit", "branch"]) {
-        const params = {
-          workspaceId: "sample",
-          repositoryId: "one",
-          scope,
-          ...(scope === "commit"
-            ? { commitSha: git(path, ["rev-parse", "HEAD"]) }
-            : {}),
-        };
-        const actual = await service.handle("repository.changes", params),
-          expected = oracle(f.configPath, "repository.changes", params);
-        // Legacy Python counted NUL-only untracked content as text. Node follows
-        // Git's binary classification; all other fields remain wire-compatible.
-        if (scope === "working") {
-          const binary = expected.files.find(
-            (file: Json) => file.path === "binary.dat",
-          );
-          if (binary && !binary.binary) {
-            expected.summary.additions -= binary.additions || 0;
-            expected.summary.binaryFiles++;
-            binary.additions = null;
-            binary.binary = true;
-          }
-        }
-        assert.deepEqual(actual.files, expected.files);
-        assert.deepEqual(actual.summary, expected.summary);
-      }
-      const params = {
-        workspaceId: "sample",
-        repositoryId: "one",
-        scope: "working",
-        path: "new file.txt",
-      };
-      assert.equal(
-        (await service.handle("repository.diff", params)).patch,
-        oracle(f.configPath, "repository.diff", params).patch,
-      );
-      const graphParams = {
-        workspaceId: "sample",
-        repositoryId: "one",
-        historyMode: "full",
-        maxCommits: 10,
-      };
-      assert.deepEqual(
-        (await service.handle("repository.graph", graphParams)).nodes,
-        oracle(f.configPath, "repository.graph", graphParams).nodes,
-      );
-      service.cache.clear();
-      const dirty = await service.handle("workspace.runtime", {
-        workspaceId: "sample",
-      });
-      assert.deepEqual(
-        dirty.repositories,
-        oracle(f.configPath, "workspace.runtime", { workspaceId: "sample" })
-          .repositories,
-      );
-      const review = { workspaceIds: ["sample"] };
-      assert.deepEqual(
-        (await service.handle("review-set.brief", review)).repositories,
-        oracle(f.configPath, "review-set.brief", review).repositories,
-      );
-    } finally {
-      await service?.close();
-      rmSync(f.root, { recursive: true, force: true });
-    }
-  },
-);
 
 test("native additions recover partial failures, timeouts, and preserve modified branches", async () => {
   const f = fixture(),
@@ -331,61 +163,35 @@ test("native additions recover partial failures, timeouts, and preserve modified
   }
 });
 
-test(
-  "Node preparation reuses legacy runtime state and project caches",
-  { skip: !pythonAvailable },
-  async () => {
-    const f = fixture({
-        toolchain: {
-          mode: "system",
-          runtimePaths: [dirname(process.execPath)],
-          repositories: { one: { node: process.versions.node.split(".")[0] } },
-        },
-      }),
-      service = new Service(f.config);
-    try {
-      oracle(f.configPath, "workspace.create", {
-        name: "sample",
-        repositories: ["one"],
-      });
-      const old = oracle(f.configPath, "workspace.prepare", {
-        workspaceId: "sample",
-        repositoryId: "one",
-      });
-      const prepared = await service.handle("workspace.prepare", {
-        workspaceId: "sample",
-        repositoryId: "one",
-      });
-      assert.deepEqual(prepared, old);
-      const runtime = await service.handle("workspace.runtime", {
-        workspaceId: "sample",
-      });
-      assert.deepEqual(
-        runtime.toolchain,
-        oracle(f.configPath, "workspace.runtime", { workspaceId: "sample" })
-          .toolchain,
-      );
-      assert.equal(
-        runtime.toolchain.environment.variables.NPM_CONFIG_CACHE,
-        join(f.config.cacheRoot, "npm"),
-      );
-      const raw = JSON.parse(readFileSync(f.configPath, "utf8"));
-      raw.toolchain.repositories.two = {
-        node: process.versions.node.split(".")[0],
-      };
-      writeFileSync(f.configPath, JSON.stringify(raw));
-      await service.handle("observer.reload");
-      const add = await service.handle("workspace.addRepositories", {
-        workspaceId: "sample",
-        repositories: ["two"],
-      });
-      assert.equal(add.preparations[0].status, "ready");
-    } finally {
-      await service.close();
-      rmSync(f.root, { recursive: true, force: true });
-    }
-  },
-);
+test("Node runtime preparation supports Node and Python project requirements", async () => {
+  const f = fixture({
+    toolchain: {
+      mode: "system",
+      runtimePaths: [dirname(process.execPath)],
+      repositories: {
+        one: { node: process.versions.node.split(".")[0] },
+        two: { python: "3.11" },
+      },
+    },
+  });
+  const service = new Service(f.config);
+  try {
+    const created = await service.handle("workspace.create", { name: "sample", repositories: ["one"] });
+    const prepared = await service.handle("workspace.prepare", { workspaceId: created.id, repositoryId: "one" });
+    assert.equal(prepared.status, "ready");
+    const runtime = await service.handle("workspace.runtime", { workspaceId: created.id });
+    assert.equal(runtime.toolchain.environment.variables.NPM_CONFIG_CACHE, join(f.config.cacheRoot, "npm"));
+    assert.equal(service.runtime?.requirements.two.python, "3.11");
+    const raw = JSON.parse(readFileSync(f.configPath, "utf8"));
+    raw.toolchain.repositories.two = { python: "3.11" };
+    writeFileSync(f.configPath, JSON.stringify(raw));
+    await service.handle("observer.reload");
+    assert.equal(service.runtime?.requirements.two.python, "3.11");
+  } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
 
 test("cache single-flight, refresh, persistence and bounds", async () => {
   const f = fixture({ limits: { cacheTtlSeconds: 0.5 } }),

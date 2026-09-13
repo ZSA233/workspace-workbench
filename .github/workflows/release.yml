@@ -35,16 +35,8 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - name: Verify release version and tag
-        run: python scripts/version.py --check --tag "$RELEASE_TAG"
-      - name: Install Python build tooling
-        run: python -m pip install build
-      - name: Build Python distributions
-        run: python -m build --outdir dist
+        run: node scripts/version.mjs --check --tag "$RELEASE_TAG"
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -60,7 +52,7 @@ jobs:
           npm test
         working-directory: paseo-plugin
       - name: Package Paseo plugin
-        run: python scripts/package_plugin.py --output-dir dist
+        run: node scripts/package_plugin.mjs --output-dir dist
       - name: Create checksums
         run: sha256sum dist/* > dist/SHA256SUMS
       - name: Promote released commit to stable

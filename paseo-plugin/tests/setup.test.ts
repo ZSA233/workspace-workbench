@@ -47,10 +47,8 @@ test("setup save writes a local config, local ignore block, and automatic regist
   const projectIgnoreBefore = readFileSync(projectIgnore, "utf8");
   const home = mkdtempSync(join(process.env.TMPDIR || "/tmp", "workspace-workbench-home-"));
   const priorHome = process.env.HOME;
-  const priorPython = process.env.WORKSPACE_WORKBENCH_PYTHON;
   const priorDownload = process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD;
   process.env.HOME = home;
-  process.env.WORKSPACE_WORKBENCH_PYTHON = join(home, "missing-python");
   process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD = "1";
   try {
     const result = await saveProjectSetup({ directory: root, repositories: ["."], shareConfig: false });
@@ -74,7 +72,6 @@ test("setup save writes a local config, local ignore block, and automatic regist
     assert.equal(readFileSync(projectIgnore, "utf8"), projectIgnoreBefore);
   } finally {
     if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
-    if (priorPython === undefined) delete process.env.WORKSPACE_WORKBENCH_PYTHON; else process.env.WORKSPACE_WORKBENCH_PYTHON = priorPython;
     if (priorDownload === undefined) delete process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD; else process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD = priorDownload;
     rmSync(root, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
@@ -85,10 +82,8 @@ test("shared setup keeps the project config visible while ignoring runtime folde
   const root = temporaryGitProject();
   const home = mkdtempSync(join(process.env.TMPDIR || "/tmp", "workspace-workbench-home-"));
   const priorHome = process.env.HOME;
-  const priorPython = process.env.WORKSPACE_WORKBENCH_PYTHON;
   const priorDownload = process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD;
   process.env.HOME = home;
-  process.env.WORKSPACE_WORKBENCH_PYTHON = join(home, "missing-python");
   process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD = "1";
   try {
     writeFileSync(join(root, ".gitignore"), ".workspace-workbench/\n");
@@ -106,7 +101,6 @@ test("shared setup keeps the project config visible while ignoring runtime folde
     assert.match(readFileSync(join(root, ".git", "info", "exclude"), "utf8"), /project\.json/);
   } finally {
     if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
-    if (priorPython === undefined) delete process.env.WORKSPACE_WORKBENCH_PYTHON; else process.env.WORKSPACE_WORKBENCH_PYTHON = priorPython;
     if (priorDownload === undefined) delete process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD; else process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD = priorDownload;
     rmSync(root, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
@@ -130,10 +124,8 @@ test("setup save preserves an existing project storage layout", async () => {
   }));
   const home = mkdtempSync(join(process.env.TMPDIR || "/tmp", "workspace-workbench-home-"));
   const priorHome = process.env.HOME;
-  const priorPython = process.env.WORKSPACE_WORKBENCH_PYTHON;
   const priorDownload = process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD;
   process.env.HOME = home;
-  process.env.WORKSPACE_WORKBENCH_PYTHON = join(home, "missing-python");
   process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD = "1";
   try {
     await saveProjectSetup({ directory: root, repositories: ["."], shareConfig: false });
@@ -144,7 +136,6 @@ test("setup save preserves an existing project storage layout", async () => {
     assert.equal(config.stateRoot, "legacy-state");
   } finally {
     if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
-    if (priorPython === undefined) delete process.env.WORKSPACE_WORKBENCH_PYTHON; else process.env.WORKSPACE_WORKBENCH_PYTHON = priorPython;
     if (priorDownload === undefined) delete process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD; else process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD = priorDownload;
     rmSync(root, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });

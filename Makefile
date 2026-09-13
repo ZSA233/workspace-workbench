@@ -2,19 +2,19 @@
 	version-check bump-patch bump-minor bump-major release-check
 
 version-check:
-	python scripts/version.py --check
+	node scripts/version.mjs --check
 
 bump-patch:
-	python scripts/version.py --bump patch
+	node scripts/version.mjs --bump patch
 
 bump-minor:
-	python scripts/version.py --bump minor
+	node scripts/version.mjs --bump minor
 
 bump-major:
-	python scripts/version.py --bump major
+	node scripts/version.mjs --bump major
 
 test:
-	PYTHONPATH=src python -m unittest discover -s tests -v
+	$(MAKE) plugin-test
 
 typecheck:
 	$(MAKE) plugin-typecheck
@@ -30,13 +30,12 @@ backend:
 
 plugin-package: version-check
 	mkdir -p dist
-	python scripts/package_plugin.py --output-dir dist
+	node scripts/package_plugin.mjs --output-dir dist
 
 package: plugin-package
-	python -m build --outdir dist
 
 release-check:
 	@test -n "$(TAG)" || { echo "usage: make release-check TAG=vX.Y.Z" >&2; exit 2; }
-	python scripts/version.py --check --tag "$(TAG)"
+	node scripts/version.mjs --check --tag "$(TAG)"
 
-check: version-check test plugin-typecheck plugin-test
+check: version-check plugin-typecheck plugin-test

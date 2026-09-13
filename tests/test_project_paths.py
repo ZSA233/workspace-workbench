@@ -15,6 +15,37 @@ from workspace_workbench.providers.execution import execute
 
 
 class ProjectPathTests(unittest.TestCase):
+    def test_local_exec_inherits_prepared_project_runtime_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            make_repository(root, "api")
+            runtime_bin = root / "runtime-bin"
+            runtime_bin.mkdir()
+            go = runtime_bin / "go"
+            go.write_text("#!/bin/sh\nprintf 'go version go1.26.8 fixture\\n'\n", encoding="utf-8")
+            go.chmod(go.stat().st_mode | 0o111)
+            path = root / "project.json"
+            write_config(path, root, [{"id": "api", "path": "api"}])
+            value = json.loads(path.read_text())
+            value["toolchain"] = {
+                "mode": "auto",
+                "runtimePaths": [str(runtime_bin)],
+                "repositories": {"api": {"go": "1.26"}},
+            }
+            path.write_text(json.dumps(value))
+            service = ObserverService(load_config(path))
+            try:
+                workspace = service.handle("workspace.create", {"name": "runtime-env"})
+                with patch("workspace_workbench.providers.toolchain.shutil.which", return_value=None):
+                    service.handle("workspace.prepare", {"workspaceId": workspace["id"], "repositoryId": "api"})
+                cache_root = root / ".state" / "cache"
+                go_cache = cache_root / "go-build"
+                mod_cache = cache_root / "go-mod"
+                command = ["sh", "-c", f'test "$GOCACHE" = "{go_cache}" && test "$GOMODCACHE" = "{mod_cache}" && test "$GOTOOLCHAIN" = local']
+                self.assertEqual(execute(service, workspace["id"], "api", command), 0)
+            finally:
+                service.close()
+
     def test_local_exec_refuses_unprepared_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

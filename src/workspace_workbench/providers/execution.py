@@ -27,27 +27,25 @@ def execute(service: ObserverService, workspace_id: str, repository_id: str, com
     if GitClient(cwd).root() != cwd:
         raise WorkbenchError("worktree identity changed", code="worktree_identity_changed")
     environment = {**os.environ, "GOTOOLCHAIN": "local"}
-    bins = []
     if service.toolchain:
+        environment.update(service.toolchain.environment(workspace, repository["id"]))
         tools = service.toolchain.requirements.get(repository["id"], {})
         saved = service.toolchain.prepared_repository(workspace, repository["id"])
         if tools and (saved.get("status") != "ready" or saved.get("requested") != tools):
             raise WorkbenchError("prepare this repository's runtimes first", code="toolchain_not_ready")
         for tool, version in tools.items():
-            directory = Path(saved.get("paths", {}).get(tool, "")) / "bin"
-            executable = directory / tool
+            configured_executable = saved.get("executables", {}).get(tool) if isinstance(saved.get("executables"), dict) else None
+            executable = Path(str(configured_executable)).expanduser() if configured_executable else Path(saved.get("paths", {}).get(tool, "")) / "bin" / tool
             if not executable.is_file():
                 raise WorkbenchError("runtime executable missing", code="toolchain_not_ready")
             try:
                 result = subprocess.run([str(executable), "version" if tool == "go" else "--version"], cwd=cwd, env=environment, capture_output=True, text=True, timeout=10, check=True)
             except (OSError, subprocess.SubprocessError) as exc:
                 raise WorkbenchError("runtime verification failed", code="toolchain_not_ready") from exc
-            match = re.search(r"\b(?:go|v)?(\d+\.\d+(?:\.\d+)?)", result.stdout)
+            match = re.search(r"\b(?:go|v)?(\d+\.\d+(?:\.\d+)?)", f"{result.stdout}\n{result.stderr}")
             resolved = match.group(1) if match else ""
             if resolved != saved.get("resolved", {}).get(tool) or not (resolved == version or resolved.startswith(version + ".")):
                 raise WorkbenchError("runtime version changed", code="toolchain_not_ready")
-            bins.append(str(directory))
-    environment["PATH"] = os.pathsep.join([*bins, environment.get("PATH", "")])
     try:
         return subprocess.run(command, cwd=cwd, env=environment, check=False).returncode
     except OSError as exc:

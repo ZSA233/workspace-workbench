@@ -365,6 +365,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [lifecycleResponse, setLifecycleResponse] = useState<WorkspaceLifecycleResponse | null>(null);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
   const [lifecycleBusyWorkspaceId, setLifecycleBusyWorkspaceId] = useState("");
+  const [preparingToolchain, setPreparingToolchain] = useState(false);
 
   useEffect(() => {
     setSelectionResolved(false);
@@ -881,6 +882,28 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, null);
   const refreshFlight = useRef<Promise<void> | null>(null);
 
+  const prepareSelectedToolchain = useCallback(async () => {
+    if (!selectedWorkspaceId || selectedWorkspaceIsMain || !displayDetail || preparingToolchain) return;
+    setPreparingToolchain(true);
+    let failure: string | null = null;
+    try {
+      for (const repository of displayDetail.repositories) {
+        const response = await rpc({ method: "workspace.prepare", params: { workspaceId: selectedWorkspaceId, repositoryId: repository.repoPath } });
+        const result = response.result as { status?: string; issues?: Array<{ message?: string }> } | undefined;
+        if (!response.ok || result?.status === "prepare_failed") {
+          failure = response.error?.message || result?.issues?.find((issue) => issue.message)?.message || localizedCopy.text_273309c58d;
+          break;
+        }
+      }
+      await Promise.allSettled([detailQuery.refetch(), listQuery.refetch()]);
+    } catch (error) {
+      failure = error instanceof Error ? error.message : localizedCopy.text_273309c58d;
+    } finally {
+      setPreparingToolchain(false);
+    }
+    if (failure) toast.error(failure);
+  }, [detailQuery.refetch, displayDetail, listQuery.refetch, localizedCopy.text_273309c58d, preparingToolchain, rpc, selectedWorkspaceId, selectedWorkspaceIsMain, toast]);
+
   const refreshAll = useCallback((): Promise<void> => {
     if (refreshFlight.current) return refreshFlight.current;
     setManualRefreshing(true);
@@ -1390,6 +1413,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               onSectionHeightCommit={noHeightCommit}
               onSectionDragState={noSectionDragState}
               onOpenLayoutMenu={openLayoutMenu}
+              onPrepareToolchain={!selectedWorkspaceIsMain ? prepareSelectedToolchain : undefined}
+              preparingToolchain={preparingToolchain}
               graphPlatform={layout.platform}
               theme={theme}
               styles={styles}

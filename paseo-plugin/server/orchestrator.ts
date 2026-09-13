@@ -188,7 +188,12 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
       if (!repositories?.length) throw new Error("workspace_repositories_unavailable");
       for (const repository of repositories) {
         const response = await query({ method: "workspace.prepare", params: { workspaceId: progress.workspaceId, repositoryId: repository.id } });
-        if (!response.ok || (response.result as { status?: string })?.status === "prepare_failed") { writeState(key, { ...progress, stage: "prepare-failed" }); return { ok: false, error: response.error || { code: "prepare_failed", message: "Runtime preparation failed" } }; }
+        const preparation = response.result as { status?: string; issues?: Array<{ code?: string; message?: string; details?: unknown }> } | undefined;
+        if (!response.ok || preparation?.status === "prepare_failed") {
+          writeState(key, { ...progress, stage: "prepare-failed" });
+          const issue = preparation?.issues?.find((item) => item.message) || null;
+          return { ok: false, error: response.error || (issue ? { code: issue.code || "prepare_failed", message: issue.message || "Runtime preparation failed", ...(issue.details === undefined ? {} : { details: issue.details }) } : { code: "prepare_failed", message: "Runtime preparation failed" }) };
+        }
       }
     }
     const runtime = await query({ method: "workspace.runtime", params: { workspaceId: progress.workspaceId } });

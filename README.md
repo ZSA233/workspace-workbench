@@ -40,6 +40,12 @@ workspace-workbench serve --config /path/to/project/workbench.json
 已有配置中的 `workspaceRoot`、`treesRoot`、`recordsRoot` 和 `stateRoot` 会继续按原路径使用，
 不会自动移动已有的 worktree。
 
+如果配置了 `toolchain`，`mode` 默认为 `auto`：Workbench 会先验证系统中已有的 Go、Python
+或 Node 版本，只有缺少匹配版本时才使用可选的 mise。`mise` 不需要写入 shell 启动脚本；也可以
+通过 `managerPath` 或 `runtimePaths` 为非标准安装位置提供明确路径。项目级共享缓存默认放在
+`stateRoot/cache`，用于 Go 编译/模块、NPM 和 pip 下载缓存；`node_modules`、`.venv` 和构建产物
+仍然属于各自 Workspace，不会跨 Workspace 共用。
+
 ## 安装 Paseo 插件
 
 直接从 GitHub 安装：

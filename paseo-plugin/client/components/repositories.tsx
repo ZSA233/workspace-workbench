@@ -80,6 +80,8 @@ export const WorkspaceView = memo(function WorkspaceView({
   onSectionHeightCommit,
   onSectionDragState,
   onOpenLayoutMenu,
+  onPrepareToolchain,
+  preparingToolchain,
   graphPlatform,
   theme,
   styles,
@@ -122,6 +124,8 @@ export const WorkspaceView = memo(function WorkspaceView({
   onSectionHeightCommit: (id: ObserverSectionId, height: number | null) => void;
   onSectionDragState: (dragging: boolean) => void;
   onOpenLayoutMenu: () => void;
+  onPrepareToolchain?: () => void;
+  preparingToolchain?: boolean;
   graphPlatform: PanelProps["layout"]["platform"];
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
@@ -171,7 +175,7 @@ export const WorkspaceView = memo(function WorkspaceView({
     <View onLayout={(event) => onContentLayout(event.nativeEvent.layout.height)}>
       {detailError ? <Text style={styles.warningText}>{detailError}</Text> : null}
       {toolchain && toolchain.status !== "ready" && toolchain.status !== "not_applicable" ? (
-        <ToolchainNotice toolchain={toolchain} repositoryCount={repositories.length} styles={styles} />
+        <ToolchainNotice toolchain={toolchain} repositoryCount={repositories.length} styles={styles} onPrepare={onPrepareToolchain} preparing={preparingToolchain} />
       ) : null}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
@@ -291,10 +295,14 @@ export function ToolchainNotice({
   toolchain,
   repositoryCount,
   styles,
+  onPrepare,
+  preparing,
 }: {
   toolchain: NonNullable<WorkspaceSummary["toolchain"]>;
   repositoryCount: number;
   styles: ReturnType<typeof makeStyles>;
+  onPrepare?: () => void;
+  preparing?: boolean;
 }) {
   const copy = useWorkbenchCopy();
   const preparedCount = Object.values(toolchain.preparedRepositories).filter((item) => item.status === "ready").length;
@@ -314,6 +322,14 @@ export function ToolchainNotice({
         <Text style={styles.toolchainCount}>{preparedCount}{copy.text_42099b4af0}{repositoryCount} {copy.text_ededcbb377}</Text>
       </View>
       <Text numberOfLines={2} style={styles.toolchainText}>{detail}</Text>
+      <Pressable
+        accessibilityRole="button"
+        disabled={!onPrepare || preparing}
+        onPress={onPrepare}
+        style={styles.layoutMenuItem}
+      >
+        <Text style={styles.layoutMenuItemText}>{preparing ? copy.toolchainPreparing : copy.toolchainPrepare}</Text>
+      </Pressable>
     </View>
   );
 }

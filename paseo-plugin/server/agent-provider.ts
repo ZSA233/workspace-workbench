@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { currentProject } from "./projects.ts";
 import { digest, readState, writeState } from "./orchestration-state.ts";
 import { childExecutionConfig } from "./execution-policy.ts";
@@ -37,7 +37,10 @@ type RuntimeResult = {
   treePath: string | null;
   capabilities?: { agent?: boolean };
   repositories?: Array<{ id: string; worktreePath: string; branch: string; baseSha?: string }>;
-  toolchain?: unknown;
+  toolchain?: {
+    environment?: { pathEntries?: unknown; variables?: unknown };
+    preparedRepositories?: unknown;
+  };
 };
 
 export type AgentContext = { paseo: PaseoApi; query?: typeof queryObserver };
@@ -52,6 +55,21 @@ function runtimeAgentCwdMatches(runtime: RuntimeResult, cwd: string | null | und
   if (!cwd) return false;
   return [runtime.treePath, ...(runtime.repositories || []).map((repository) => repository.worktreePath)]
     .some((candidate) => samePath(cwd, candidate));
+}
+
+function runtimeEnvironment(runtime: RuntimeResult): Record<string, string> {
+  const environment = runtime.toolchain?.environment;
+  const rawPathEntries = Array.isArray(environment?.pathEntries) ? environment.pathEntries : [];
+  const pathEntries = rawPathEntries.filter((value): value is string => typeof value === "string" && isAbsolute(value));
+  const variables: Record<string, string> = {};
+  const allowedVariables = new Set(["GOCACHE", "GOMODCACHE", "NPM_CONFIG_CACHE", "PIP_CACHE_DIR", "MISE_CACHE_DIR", "GOTOOLCHAIN"]);
+  if (environment?.variables && typeof environment.variables === "object" && !Array.isArray(environment.variables)) {
+    for (const [key, value] of Object.entries(environment.variables as Record<string, unknown>)) {
+      if (allowedVariables.has(key) && typeof value === "string" && (key === "GOTOOLCHAIN" || isAbsolute(value))) variables[key] = value;
+    }
+  }
+  if (pathEntries.length) variables.PATH = [...pathEntries, process.env.PATH || ""].filter(Boolean).join(delimiter);
+  return variables;
 }
 
 function workerBridge(configPath: string): { endpoint: string; script: string } | null {
@@ -400,6 +418,7 @@ async function delegateAgent(
     const reportToken = randomUUID();
     const bridge = project ? workerBridge(project.configPath) : null;
     const workerEnv: Record<string, string> = {
+      ...runtimeEnvironment(runtime),
       WORKBENCH_WORKER_WORKSPACE: input.workspaceId,
       ...(project ? { WORKBENCH_PROJECT_CONFIG: project.configPath } : {}),
       ...(bridge ? { WORKBENCH_PASEO_ENDPOINT: bridge.endpoint, WORKBENCH_AGENT_TOKEN: reportToken, WORKBENCH_EXECUTION_REPORT_ONLY: "1" } : {}),

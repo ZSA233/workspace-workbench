@@ -79,7 +79,18 @@
       "required": ["provider"],
       "additionalProperties": false
     },
-    "toolchain": {"type": "object", "properties": {"manager": {"const": "mise"}, "repositories": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+){0,2}$"}}}}, "required": ["manager", "repositories"], "additionalProperties": false},
+    "toolchain": {
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["auto", "system", "mise"] },
+        "manager": { "enum": ["mise", "system"] },
+        "managerPath": { "type": "string", "minLength": 1 },
+        "runtimePaths": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "repositories": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+){0,2}$" } } }
+      },
+      "required": ["repositories"],
+      "additionalProperties": false
+    },
     "management": {
       "type": "object",
       "properties": { "enabled": { "type": "boolean" } },
@@ -95,6 +106,14 @@
       "additionalProperties": false
     },
     "limits": { "type": "object" },
+    "cache": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "root": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
     "review": {
       "type": "object",
       "properties": {

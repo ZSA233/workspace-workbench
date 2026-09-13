@@ -49,6 +49,8 @@ class ProjectConfig:
     cache_max_bytes: int = 32 * 1024 * 1024
     sqlite_max_entries: int = 5000
     cache_ttl_seconds: float = 3.0
+    cache_enabled: bool = True
+    cache_root: Path | None = None
     records_root: Path | None = None
     trees_root: Path | None = None
 
@@ -65,6 +67,8 @@ class ProjectConfig:
             "toolchain": self.toolchain,
             "agentEnabled": self.agent_enabled,
             "mainWorkspaceName": self.main_workspace_name,
+            "cacheEnabled": self.cache_enabled,
+            "cacheRoot": str(self.cache_root),
             "maxDiffBytes": self.max_diff_bytes,
             "discovery": {
                 "mode": self.discovery.mode,
@@ -263,6 +267,7 @@ def load_config(config_path: str | Path) -> ProjectConfig:
     main = raw.get("mainWorkspace") if isinstance(raw.get("mainWorkspace"), Mapping) else {}
     main_name = _string(main.get("displayName"), field_name="mainWorkspace.displayName", default="Main workspace") or "Main workspace"
     management = raw.get("management") if isinstance(raw.get("management"), Mapping) else {}
+    cache = raw.get("cache") if isinstance(raw.get("cache"), Mapping) else {}
     return ProjectConfig(
         project_id=project_id,
         display_name=display_name,
@@ -292,4 +297,6 @@ def load_config(config_path: str | Path) -> ProjectConfig:
         cache_max_bytes=cache_bytes,
         sqlite_max_entries=sqlite_entries,
         cache_ttl_seconds=cache_ttl,
+        cache_enabled=bool(cache.get("enabled", True)),
+        cache_root=_path(cache.get("root"), base=base, field_name="cache.root", default=state_root / "cache"),
     )

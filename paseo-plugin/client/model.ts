@@ -81,14 +81,21 @@ export type ToolchainRepositorySummary = {
   status: string;
   tools: string[];
   issues: Issue[];
+  sources?: Record<string, string>;
+  binPaths?: string[];
 };
 
 export type ToolchainSummary = {
   manager: string;
+  mode?: "auto" | "system" | "mise" | string;
   status: string;
+  managerAvailable?: boolean;
+  managerPath?: string | null;
+  cache?: { scope?: string; root?: string; enabled?: boolean };
   requirements: Record<string, ToolchainRequirementSummary>;
   preparedRepositories: Record<string, ToolchainRepositorySummary>;
   issues: Issue[];
+  environment?: { pathEntries?: string[]; variables?: Record<string, string> };
   generatedAt?: string | null;
 };
 

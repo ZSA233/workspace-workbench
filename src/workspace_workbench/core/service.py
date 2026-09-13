@@ -114,10 +114,20 @@ class ObserverService:
     def __init__(self, config: ProjectConfig, *, provider: WorkspaceProvider | None = None) -> None:
         self.config = config
         self.provider = provider or GitWorktreeProvider(config)
-        from ..providers.toolchain import MiseToolchainProvider
-        if config.toolchain and config.toolchain.get("manager") != "mise":
+        from ..providers.toolchain import ProjectRuntimeManager
+        if config.toolchain and str(config.toolchain.get("manager") or "mise") not in {"mise", "system"}:
             raise WorkbenchError("unsupported toolchain provider", code="config_invalid")
-        self.toolchain = MiseToolchainProvider(config.toolchain, config.state_root) if config.toolchain else None
+        self.toolchain = (
+            ProjectRuntimeManager(
+                config.toolchain,
+                config.state_root,
+                cache_root=config.cache_root,
+                cache_enabled=config.cache_enabled,
+                config_root=config.config_path.parent,
+            )
+            if config.toolchain
+            else None
+        )
         self.cache = ObservationCache(
             sqlite_path=config.state_root / "observer.sqlite3",
             max_entries=config.cache_max_entries,

@@ -18,6 +18,81 @@ from workspace_workbench.core.service import ObserverService
 
 
 class Regressions(unittest.TestCase):
+    def test_auto_toolchain_uses_matching_system_runtime_and_project_caches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_repository(root, "api")
+            make_repository(root, "web")
+            runtime_bin = root / "runtime-bin"
+            runtime_bin.mkdir()
+            go = runtime_bin / "go"
+            go.write_text("#!/bin/sh\nprintf 'go version go1.26.8 fixture\\n'\n", encoding="utf-8")
+            go.chmod(go.stat().st_mode | 0o111)
+            config = root / "project.json"
+            write_config(config, root, [{"id": "api", "path": "api"}, {"id": "web", "path": "web"}])
+            raw = json.loads(config.read_text(encoding="utf-8"))
+            raw["toolchain"] = {
+                "manager": "mise",
+                "mode": "auto",
+                "runtimePaths": [str(runtime_bin)],
+                "repositories": {"api": {"go": "1.26"}, "web": {"python": "3.12"}},
+            }
+            raw["cache"] = {"enabled": True}
+            config.write_text(json.dumps(raw), encoding="utf-8")
+            service = ObserverService(load_config(config))
+            workspaces = []
+            try:
+                workspace = service.handle("workspace.create", {"name": "system-runtime", "repositories": ["api"]})
+                workspaces.append(workspace)
+                with patch("workspace_workbench.providers.toolchain.shutil.which", return_value=None):
+                    prepared = service.handle("workspace.prepare", {"workspaceId": workspace["id"], "repositoryId": "api"})
+                self.assertEqual(prepared["status"], "ready")
+                self.assertEqual(prepared["sources"]["go"], "system")
+                environment = service.toolchain.environment(workspace, "api")
+                self.assertEqual(environment["GOCACHE"], str((root / ".state" / "cache" / "go-build").resolve()))
+                self.assertEqual(environment["GOMODCACHE"], str((root / ".state" / "cache" / "go-mod").resolve()))
+                self.assertNotIn("PIP_CACHE_DIR", environment)
+                self.assertTrue(environment["PATH"].startswith(str(runtime_bin.resolve())))
+                runtime = service.handle("workspace.runtime", {"workspaceId": workspace["id"]})
+                self.assertEqual(runtime["toolchain"]["environment"]["variables"]["GOCACHE"], environment["GOCACHE"])
+                second = service.handle("workspace.create", {"name": "system-runtime-two", "repositories": ["api"]})
+                workspaces.append(second)
+                with patch("workspace_workbench.providers.toolchain.shutil.which", return_value=None):
+                    service.handle("workspace.prepare", {"workspaceId": second["id"], "repositoryId": "api"})
+                self.assertEqual(service.toolchain.environment(second, "api")["GOCACHE"], environment["GOCACHE"])
+            finally:
+                for workspace in workspaces:
+                    service.handle("workspace.cleanup", {"workspaceId": workspace["id"], "confirm": True})
+                    service.handle("workspace.delete", {"workspaceId": workspace["id"], "confirm": True})
+                service.close()
+
+    def test_missing_manager_is_saved_with_actionable_details_when_system_runtime_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_repository(root, "api")
+            config = root / "project.json"
+            write_config(config, root, [{"id": "api", "path": "api"}])
+            raw = json.loads(config.read_text(encoding="utf-8"))
+            raw["toolchain"] = {
+                "manager": "mise",
+                "mode": "auto",
+                "managerPath": str(root / "missing" / "mise"),
+                "runtimePaths": [str(root / "missing" / "runtime")],
+                "repositories": {"api": {"go": "9.99"}},
+            }
+            config.write_text(json.dumps(raw), encoding="utf-8")
+            service = ObserverService(load_config(config))
+            try:
+                workspace = service.handle("workspace.create", {"name": "missing-runtime"})
+                with patch("workspace_workbench.providers.toolchain.shutil.which", return_value=None):
+                    prepared = service.handle("workspace.prepare", {"workspaceId": workspace["id"], "repositoryId": "api"})
+                self.assertEqual(prepared["status"], "prepare_failed")
+                self.assertEqual(prepared["issues"][0]["code"], "missing_manager")
+                self.assertIn("Install mise", prepared["issues"][0]["message"])
+                self.assertEqual(service.handle("workspace.detail", {"workspaceId": workspace["id"], "summary": True})["workspace"]["toolchain"]["issues"][0]["code"], "missing_manager")
+            finally:
+                service.close()
+
     def test_workspace_operation_timeout_is_separate_from_observation_timeout(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

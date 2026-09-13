@@ -10,9 +10,18 @@ on:
         description: Existing release tag to rebuild
         required: true
         type: string
+      promote_stable:
+        description: Promote this tag to stable after a successful build
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
+
+concurrency:
+  group: workspace-workbench-release
+  cancel-in-progress: false
 
 jobs:
   backend:
@@ -60,6 +69,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -113,6 +123,30 @@ jobs:
           done
       - name: Create checksums
         run: sha256sum dist/* > dist/SHA256SUMS
+      - name: Promote released commit to stable
+        if: github.event_name == 'push' || inputs.promote_stable == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_sha="$(git rev-parse 'HEAD^{commit}')"
+          if git ls-remote --exit-code origin refs/heads/stable >/dev/null 2>&1; then
+            git fetch --no-tags origin stable
+            stable_sha="$(git rev-parse 'refs/remotes/origin/stable^{commit}')"
+            if ! git merge-base --is-ancestor "$stable_sha" "$release_sha"; then
+              echo "::error title=Stable promotion blocked::stable ($stable_sha) is not an ancestor of the release commit ($release_sha); refusing to overwrite stable"
+              exit 1
+            fi
+            echo "stable can be fast-forwarded from $stable_sha to $release_sha"
+          else
+            echo "stable does not exist; it will be created at $release_sha"
+          fi
+          git push origin "$release_sha:refs/heads/stable"
+          actual_sha="$(git ls-remote origin refs/heads/stable | awk 'NR == 1 { print $1 }')"
+          if [[ "$actual_sha" != "$release_sha" ]]; then
+            echo "::error title=Stable promotion verification failed::expected stable at $release_sha, found $actual_sha"
+            exit 1
+          fi
+          echo "stable now points to $release_sha"
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -122,5 +156,3 @@ jobs:
           else
             gh release create "$RELEASE_TAG" dist/* --title "$RELEASE_TAG" --verify-tag --generate-notes
           fi
-      - name: Promote released commit to stable
-        run: git push origin HEAD:refs/heads/stable

@@ -30,8 +30,13 @@ git push origin main v0.1.1
 
 Release workflow 会检出指定 tag，运行完整测试和构建流程，发布带有
 `SHA256SUMS` 的 Python 与 Paseo 附件，然后将通过验证的同一个 commit 推进到
-`stable` 分支。它不会发布到 PyPI 或 npm。手动触发 workflow 时也必须指定已经
-存在的 tag，并通过同样的版本检查。
+`stable` 分支。它不会发布到 PyPI 或 npm。发布任务使用并发锁，且只允许
+`stable` fast-forward 到新版本；如果 stable 已经分叉，workflow 会在创建 Release
+之前停止，不会强制覆盖远端提交。
+
+手动触发 workflow 时必须指定已经存在的 tag，并通过同样的版本检查。手动重建默认
+不会移动 stable；只有明确需要把该 tag 推进到 stable 时才设置布尔输入
+`promote_stable=true`。这样重建旧版本不会意外把 stable 回退。
 
 已发布的版本号不能重复使用。如果某次发布在 tag 创建后失败，应修复代码并使用
 新的版本号重新发布。

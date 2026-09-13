@@ -23,7 +23,7 @@ import {
 import type { Handoff } from "../shared/handoff";
 import type { ReviewPacket } from "../shared/review-packet";
 import { artifactList } from "../shared/artifacts";
-import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpdate, type AgentRelationship, type AgentSessionPatch } from "../shared/agent-session";
+import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpdate, type AgentPermissionMode, type AgentRelationship, type AgentSessionPatch } from "../shared/agent-session";
 import { observerQuery } from "../shared/observer";
 import { projectsQuery, type ProjectInfo } from "../shared/projects";
 import { projectBackendStart, projectStorageQuery } from "../shared/setup";
@@ -86,18 +86,6 @@ function boundedRefresh<T>(request: Promise<T>): Promise<T | undefined> {
   });
 }
 
-function responseIsRefreshing(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  const response = value as { ok?: unknown; result?: unknown };
-  if (response.ok !== true || !response.result || typeof response.result !== "object") return false;
-  const observation = (response.result as { observation?: { cacheState?: unknown; refreshing?: unknown } }).observation;
-  return observation?.refreshing === true || observation?.cacheState === "refreshing";
-}
-
-function observationInterval(interval: number): (query: { state: { data: unknown } }) => number {
-  return (query) => responseIsRefreshing(query.state.data) ? 1_000 : interval;
-}
-
 type ObservationArea = {
   label: string;
   snapshot: ObserverSnapshot;
@@ -116,10 +104,10 @@ function observationStatusLabel(status: ObserverSnapshot["status"], strings = co
 function observationAreaDetail(area: ObservationArea, strings = copy): string {
   const status = area.snapshot.status === "expired"
     ? "expired"
-    : area.fetching || area.snapshot.refreshing
+    : area.fetching
       ? "refreshing"
       : area.snapshot.status;
-  const timestamp = area.snapshot.lastSuccessfulAt ? ` · ${formatObservedTime(area.snapshot.lastSuccessfulAt, strings)}` : "";
+  const timestamp = area.snapshot.lastObservedAt ? ` · ${formatObservedTime(area.snapshot.lastObservedAt, strings)}` : "";
   return `${area.label}: ${observationStatusLabel(status, strings)}${timestamp}`;
 }
 
@@ -301,6 +289,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const reviewDirtyFields = useRef(new Set<string>());
   const sessionDirtyFields = useRef(new Set<string>());
   const [sessionDefaultRelationship, setSessionDefaultRelationship] = useState<AgentRelationship>("independent");
+  const [sessionPermissionMode, setSessionPermissionMode] = useState<AgentPermissionMode>("inherit");
   const [sessionProviderRelationships, setSessionProviderRelationships] = useState<Record<string, AgentRelationship>>({});
   const markReviewField = useCallback((field: string) => { reviewDirtyFields.current.add(field); }, []);
   const markSessionField = useCallback((field: string) => { sessionDirtyFields.current.add(field); }, []);
@@ -398,7 +387,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "workspace-list"],
     queryFn: () => rpc({ method: "workspace.list", params: { includeRemoved: true } }),
-    refetchInterval: observationInterval(REFRESH_INTERVALS.list),
+    enabled: Boolean(projectConfig && backendQuery.data?.state === "ready"),
+    refetchInterval: REFRESH_INTERVALS.list,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -551,7 +541,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "workspace-detail", selectedWorkspaceId],
     queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, mode: "summary", refreshToolchain: false } }),
     enabled: Boolean(selectedWorkspaceId && selectedWorkspace && listReady),
-    refetchInterval: observationInterval(REFRESH_INTERVALS.detail),
+    refetchInterval: REFRESH_INTERVALS.detail,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -592,7 +582,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable),
-    refetchInterval: observationInterval(REFRESH_INTERVALS.repository),
+    refetchInterval: REFRESH_INTERVALS.repository,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -614,7 +604,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable),
-    refetchInterval: observationInterval(REFRESH_INTERVALS.repository),
+    refetchInterval: REFRESH_INTERVALS.repository,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -662,7 +652,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: tab === "review" && reviewIds.length > 0 && listReady,
-    refetchInterval: observationInterval(REFRESH_INTERVALS.review),
+    refetchInterval: REFRESH_INTERVALS.review,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -737,6 +727,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         ? agentSessionSettingsQuery.data?.project
         : agentSessionSettingsQuery.data?.global;
       setSessionDefaultRelationship(sessionPatch?.defaultRelationship || agentSessionPreferences.defaultRelationship);
+      setSessionPermissionMode(sessionPatch?.permissionMode || agentSessionPreferences.permissionMode);
       setSessionProviderRelationships(sessionPatch?.providerRelationships || {});
     }
   }, [agentSessionPreferences, agentSessionSettingsQuery.data?.global, agentSessionSettingsQuery.data?.project, localizedCopy, reviewPreferences, reviewSettingsScope]);
@@ -759,6 +750,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       if (dirty.has("reviewerModel")) reviewerModel.trim() ? models.reviewerModel = reviewerModel.trim() : modelReset.push("reviewerModel");
       const sessionPatch: AgentSessionPatch = {};
       if (sessionDirtyFields.current.has("defaultRelationship")) sessionPatch.defaultRelationship = sessionDefaultRelationship;
+      if (sessionDirtyFields.current.has("permissionMode")) sessionPatch.permissionMode = sessionPermissionMode;
       if (sessionDirtyFields.current.has("providerRelationships")) sessionPatch.providerRelationships = sessionProviderRelationships;
       if (reviewSettingsScope === "project") {
         if (Object.keys(shared).length) await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: shared, resetFields: [] });
@@ -776,7 +768,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     } catch (error) {
       toast.error(localizedReviewError(error instanceof Error ? { code: error.message } : null, localizedCopy, localizedCopy.reviewSettingsSaveFailed));
     }
-  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, autoFix, executionModel, localizedCopy, maxRounds, projectConfig, repairTimeoutMinutes, reviewInstructions, reviewerModel, reviewerRole, reviewerSession, reviewerTimeoutMinutes, reviewMode, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, sessionDefaultRelationship, sessionProviderRelationships, toast]);
+  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, autoFix, executionModel, localizedCopy, maxRounds, projectConfig, repairTimeoutMinutes, reviewInstructions, reviewerModel, reviewerRole, reviewerSession, reviewerTimeoutMinutes, reviewMode, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, sessionDefaultRelationship, sessionPermissionMode, sessionProviderRelationships, toast]);
   const closeReviewSettings = useCallback(() => {
     syncReviewEditor();
     setReviewSettingsOpen(false);
@@ -797,7 +789,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     try {
       await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["mode", "autoFix", "maxRounds", "reviewerRole", "instructions", "reviewerSession", "reviewerTimeoutMs", "repairTimeoutMs"] });
       await reviewSettingsUpdateRpc({ projectConfig, scope: "project-model", patch: {}, resetFields: ["executionModel", "reviewerModel"] });
-      await agentSessionSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["defaultRelationship", "providerRelationships"] });
+      await agentSessionSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["defaultRelationship", "permissionMode", "providerRelationships"] });
       reviewDirtyFields.current.clear();
       sessionDirtyFields.current.clear();
       await reviewSettingsQuery.refetch();
@@ -828,14 +820,25 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       : reviewGlobal;
     return Object.prototype.hasOwnProperty.call(source, field);
   };
-  const sessionSourceLabel = (field: "defaultRelationship" | string) => {
+  const sessionSourceLabel = (field: string) => {
     if (field === "defaultRelationship") {
       const source = sessionSources?.defaultRelationship;
+      return source === "project" ? localizedCopy.reviewSourceProject : source === "global" ? localizedCopy.reviewSourceGlobal : localizedCopy.reviewSourceDefaultShort;
+    }
+    if (field === "permissionMode") {
+      const source = sessionSources?.permissionMode;
       return source === "project" ? localizedCopy.reviewSourceProject : source === "global" ? localizedCopy.reviewSourceGlobal : localizedCopy.reviewSourceDefaultShort;
     }
     const source = sessionSources?.providerRelationships?.[field];
     return source === "project" ? localizedCopy.reviewSourceProject : source === "global" ? localizedCopy.reviewSourceGlobal : localizedCopy.reviewSourceDefaultShort;
   };
+  const sessionPermissionLabel = (mode: AgentPermissionMode) => mode === "inherit"
+    ? localizedCopy.agentSessionPermissionInherit
+    : mode === "auto"
+      ? localizedCopy.agentSessionPermissionAuto
+      : mode === "auto-review"
+        ? localizedCopy.agentSessionPermissionAutoReview
+        : localizedCopy.agentSessionPermissionFullAccess;
   const startAgentReview = useCallback(() => {
     if (!selectedWorkspaceId) return;
     void reviewStartRpc({ projectConfig, workspaceId: selectedWorkspaceId, executionAgentId: boundAgent?.id, locale }).then((result) => {
@@ -868,10 +871,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       changesState.expired ||
       (tab === "review" && reviewState.expired),
   );
-  const observationRefreshing = manualRefreshing || observationAreas.some((area) => area.fetching || area.snapshot.refreshing);
+  const observationRefreshing = manualRefreshing || observationAreas.some((area) => area.fetching);
   const observationDegraded = observationAreas.some((area) => area.snapshot.status === "degraded");
   const lastSuccessfulAt = observationAreas.reduce<string | null>((latest, area) => {
-    const candidate = area.snapshot.lastSuccessfulAt;
+    const candidate = area.snapshot.lastObservedAt;
     if (!candidate) return latest;
     if (!latest || (Date.parse(candidate) > Date.parse(latest))) return candidate;
     return latest;
@@ -883,7 +886,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     setManualRefreshing(true);
     const requests: Array<Promise<unknown>> = [
       boundedRefresh(backendQuery.refetch()),
-      boundedRefresh(listQuery.refetch()),
+      ...(backendQuery.data?.state === "ready" ? [boundedRefresh(listQuery.refetch())] : []),
       ...(workspaceDirectory && !selectionResolved ? [boundedRefresh(identifyQuery.refetch())] : []),
       ...(selectedWorkspaceId ? [boundedRefresh(detailQuery.refetch())] : []),
       ...(selectedWorkspaceId && selectedRepoPath && !selectedWorkspaceUnavailable ? [boundedRefresh(graphQuery.refetch()), boundedRefresh(changesQuery.refetch())] : []),
@@ -898,7 +901,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     });
     refreshFlight.current = flight;
     return flight;
-  }, [backendQuery.refetch, bindingQuery.refetch, changesQuery.refetch, detailQuery.refetch, graphQuery.refetch, identifyQuery.refetch, listQuery.refetch, listResult?.capabilities?.agent, reviewIds.length, reviewQuery.refetch, selectedRepoPath, selectedWorkspace, selectedWorkspaceId, selectedWorkspaceIsMain, selectedWorkspaceUnavailable, selectionResolved, tab, workspaceDirectory]);
+  }, [backendQuery.data?.state, backendQuery.refetch, bindingQuery.refetch, changesQuery.refetch, detailQuery.refetch, graphQuery.refetch, identifyQuery.refetch, listQuery.refetch, listResult?.capabilities?.agent, reviewIds.length, reviewQuery.refetch, selectedRepoPath, selectedWorkspace, selectedWorkspaceId, selectedWorkspaceIsMain, selectedWorkspaceUnavailable, selectionResolved, tab, workspaceDirectory]);
 
   useRefreshOnForeground(Boolean(projectConfig), refreshAll);
 
@@ -1471,6 +1474,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <Text style={styles.layoutMenuHint}>{localizedCopy.agentSessionSettings} · {sessionSourceLabel("defaultRelationship")}</Text>
         <View style={styles.briefActions}>
           {(["independent", "child"] as AgentRelationship[]).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: sessionDefaultRelationship === relationship }} onPress={() => { markSessionField("defaultRelationship"); setSessionDefaultRelationship(relationship); }} style={[styles.secondaryButton, sessionDefaultRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "independent" ? localizedCopy.reviewSettingsIndependent : localizedCopy.reviewSettingsChildAgent}</Text></Pressable>)}
+        </View>
+        <Text style={styles.layoutMenuHint}>{localizedCopy.agentSessionPermissionSettings} · {sessionSourceLabel("permissionMode")}</Text>
+        <Text style={styles.layoutMenuHint}>{localizedCopy.agentSessionPermissionHint}</Text>
+        <View style={styles.briefActions}>
+          {(["inherit", "auto", "auto-review", "full-access"] as AgentPermissionMode[]).map((mode) => <Pressable key={mode} accessibilityRole="button" accessibilityState={{ selected: sessionPermissionMode === mode }} onPress={() => { markSessionField("permissionMode"); setSessionPermissionMode(mode); }} style={[styles.secondaryButton, sessionPermissionMode === mode && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{sessionPermissionLabel(mode)}</Text></Pressable>)}
         </View>
         <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsProviderOverrides}</Text>
         {sessionProviders.map((provider) => {

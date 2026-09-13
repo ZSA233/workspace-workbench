@@ -83,7 +83,15 @@ def _status_label(status: str) -> str:
 
 def _partial(items: list[dict[str, Any]]) -> bool:
     durable = {"worktree_missing", "repository_invalid", "record_invalid", "base_missing", "workspace_dirty", "unpushed"}
-    return any(issue.get("code") not in durable for item in items for issue in [*item.get("issues", []), *item.get("changeIssues", [])])
+    # Lifecycle failures belong to the affected Workspace. They must remain
+    # visible on that row without making the entire Workspace roster look like
+    # an observer that is still running forever.
+    return any(
+        issue.get("code") not in durable
+        for item in items
+        if str(item.get("state") or "active") in {"active", "live"}
+        for issue in [*item.get("issues", []), *item.get("changeIssues", [])]
+    )
 
 
 def _file_dict(file: GitFile) -> dict[str, Any]:
@@ -120,7 +128,6 @@ class ObserverService:
         self.started_at = time.time()
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="workbench")
         self._repository_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="repository")
-        self._list_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="list-summary")
         self._detail_slots = threading.BoundedSemaphore(2)
         self._closed = False
 
@@ -130,7 +137,6 @@ class ObserverService:
         self._closed = True
         self._executor.shutdown(wait=False, cancel_futures=True)
         self.cache.close()
-        self._list_executor.shutdown(wait=True, cancel_futures=True)
         self._repository_executor.shutdown(wait=True)
 
     def handle(self, method: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -244,13 +250,7 @@ class ObserverService:
         """
 
         path = Path(str(repository.get("worktreePath") or repository.get("sourcePath") or "")).expanduser().resolve()
-        markers: list[str] = [str(path)]
-        for candidate in (path, path / ".git"):
-            try:
-                value = candidate.stat()
-                markers.append(f"{candidate}:{value.st_mtime_ns}:{value.st_size}")
-            except OSError:
-                markers.append(f"{candidate}:missing")
+        markers: list[str] = [str(path), f"exists:{path.is_dir()}"]
         git_marker = path / ".git"
         git_dir = git_marker
         if git_marker.is_file():
@@ -267,9 +267,7 @@ class ObserverService:
             pass
         for candidate in (
             git_dir / "HEAD",
-            git_dir / "index",
             git_dir / "packed-refs",
-            git_dir / "logs" / "HEAD",
             git_dir / "refs" / "heads",
             git_dir / "refs" / "remotes",
             common_dir / "packed-refs",
@@ -495,6 +493,21 @@ class ObserverService:
             **({"toolchain": self.toolchain.summary(workspace)} if self.toolchain else {}),
         }
 
+    def _roster_summary(self, workspace: Mapping[str, Any]) -> dict[str, Any]:
+        summary = self._summary(workspace, observed=[])
+        summary.update(
+            repositoryCount=len(workspace.get("repositories", [])),
+            dirty=None,
+            dirtyRepositoryCount=None,
+            dirtyRepositories=0,
+            unpushed=None,
+            unpushedRepositoryCount=None,
+            unpushedRepositories=0,
+            observedAt=None,
+            observationStale=True,
+        )
+        return summary
+
     def _list_fingerprint(self) -> str:
         parts = [self.config.digest]
         for workspace in self.provider.list():
@@ -506,23 +519,20 @@ class ObserverService:
                 if not isinstance(repository, Mapping):
                     continue
                 path = Path(str(repository.get("worktreePath") or repository.get("sourcePath") or ""))
-                try:
-                    stat_value = path.stat()
-                    git_marker = path / ".git"
-                    marker_stat = git_marker.stat() if git_marker.exists() else None
-                    parts.append(f"{path}:{stat_value.st_mtime_ns}:{marker_stat.st_mtime_ns if marker_stat else 0}")
-                except OSError:
-                    parts.append(f"{path}:missing")
+                parts.append(f"{repository.get('id')}:{path}:{path.is_dir()}")
         return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
     def workspace_list(self, params: Mapping[str, Any]) -> dict[str, Any]:
-        key = f"{self.config.digest}:workspace.list:{json.dumps(_json(params), sort_keys=True)}"
+        # The roster is intentionally independent from Git observation. A
+        # project can contain many historical Workspaces, so the selector
+        # must not wait for every repository before it can render anything.
+        key = f"{self.config.digest}:workspace.list.roster.v2:{json.dumps(_json(params), sort_keys=True)}"
         fingerprint = self._list_fingerprint()
 
         def produce() -> dict[str, Any]:
             started = time.monotonic()
             targets = [workspace for workspace in self.provider.list() if params.get("includeRemoved") or workspace.get("state") != "removed"]
-            workspaces = list(self._list_executor.map(lambda workspace: self._summary(workspace, summary_only=True), targets))
+            workspaces = [self._roster_summary(workspace) for workspace in targets]
             candidates = discover_git_repositories(self.config) if self.config.discovery.mode in {"auto", "hybrid"} else []
             return {
                 "schemaVersion": PROTOCOL_VERSION,
@@ -530,20 +540,10 @@ class ObserverService:
                 "workspaces": workspaces,
                 "capabilities": self.provider.capabilities(),
                 "discoveredCandidates": [repository.__dict__ for repository in candidates],
-                "observation": {"state": "partial" if _partial(workspaces) else "ready", "observedAt": _now(), "durationMs": round((time.monotonic() - started) * 1000)},
+                "observation": {"state": "ready", "observedAt": _now(), "durationMs": round((time.monotonic() - started) * 1000), "deferred": True},
             }
 
-        def roster() -> dict[str, Any]:
-            workspaces = []
-            for workspace in self.provider.list():
-                if not params.get("includeRemoved") and workspace.get("state") == "removed":
-                    continue
-                summary = self._summary(workspace, observed=[], summary_only=True)
-                summary.update(repositoryCount=len(workspace.get("repositories", [])), dirty=None, dirtyRepositoryCount=None, unpushed=None, observationStale=True, observedAt=None)
-                workspaces.append(summary)
-            return {"schemaVersion": PROTOCOL_VERSION, "project": {"id": self.config.project_id, "displayName": self.config.display_name}, "workspaces": workspaces, "capabilities": self.provider.capabilities(), "discoveredCandidates": [], "observation": {"state": "partial", "cacheState": "refreshing", "refreshing": True, "observedAt": None, "lastSuccessfulAt": None, "issues": [{"code": "observation_pending"}]}}
-
-        return self.cache.read(key, fingerprint, produce, cold_fallback=roster)
+        return self.cache.read(key, fingerprint, produce)
 
     def workspace_detail(self, params: Mapping[str, Any]) -> dict[str, Any]:
         workspace_id = str(params.get("workspaceId") or "")

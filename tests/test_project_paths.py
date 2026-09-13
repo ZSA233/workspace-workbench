@@ -52,8 +52,8 @@ class ProjectPathTests(unittest.TestCase):
                     self.assertLess(time.monotonic() - start, 1)
                     self.assertEqual(result["workspaces"][0]["repositoryCount"], 1)
                     self.assertIsNone(result["workspaces"][0]["dirty"])
-                    self.assertEqual(result["observation"]["state"], "partial")
-                    self.assertIsNone(result["observation"]["lastSuccessfulAt"])
+                    self.assertEqual(result["observation"]["state"], "ready")
+                    self.assertTrue(result["observation"]["deferred"])
                     gate.set()
             finally:
                 gate.set()

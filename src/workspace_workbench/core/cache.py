@@ -248,10 +248,14 @@ class ObservationCache:
     def _with_metadata(value: CachedValue, *, state: str, refreshing: bool = False) -> dict[str, object]:
         payload = dict(value.payload)
         observation = dict(payload.get("observation") or {})
+        observation_state = str(observation.get("state") or "ready")
+        cache_state = "degraded" if state != "refreshing" and observation_state != "ready" else state
+        observed_at = observation.get("observedAt")
         observation.update({
-            "cacheState": state,
+            "cacheState": cache_state,
             "cacheAgeMs": max(0, round((time.time() - value.updated_at) * 1000)),
             "refreshing": refreshing,
+            "lastObservedAt": observation.get("lastObservedAt") or (observed_at if isinstance(observed_at, str) else None),
             "lastSuccessfulAt": observation.get("lastSuccessfulAt") or (observation.get("observedAt") if observation.get("state", "ready") == "ready" else None),
         })
         payload["observation"] = observation
@@ -289,6 +293,7 @@ class ObservationCache:
                 while len(self._failures) > 256:
                     self._failures.popitem(last=False)
             previous = self.memory.latest(key) or self.sqlite.latest(key)
+            completed = value
             if previous and observation.get("state") == "partial":
                 merged = dict(value)
                 for field, identity in (("repositories", "repoPath"), ("workspaces", "id")):
@@ -301,12 +306,25 @@ class ObservationCache:
                         transient = any(issue.get("code") in {"git_timeout", "observation_timeout", "observer_busy"} for issue in issues)
                         rows.append({**old[item.get(identity)], "observationStale": True} if transient and item.get(identity) in old else item)
                     merged[field] = rows
-                merged["observation"] = {**observation, "lastSuccessfulAt": (previous.payload.get("observation") or {}).get("observedAt")}
-                self.memory.put(key, merged, fingerprint=fingerprint, updated_at=previous.updated_at)
-            elif not previous and observation.get("state") == "partial":
-                # Retain partial observations in L1 only; never claim a success
-                # timestamp or persist them as the last successful snapshot.
-                self.memory.put(key, value, fingerprint=fingerprint, updated_at=0)
+                previous_observation = previous.payload.get("observation") or {}
+                previous_successful = previous_observation.get("lastSuccessfulAt")
+                if not previous_successful and previous_observation.get("state", "ready") == "ready":
+                    previous_successful = previous_observation.get("observedAt")
+                merged_observation = dict(observation)
+                if previous_successful:
+                    merged_observation["lastSuccessfulAt"] = previous_successful
+                else:
+                    merged_observation.pop("lastSuccessfulAt", None)
+                merged["observation"] = merged_observation
+                completed = merged
+            completed_observation = dict(completed.get("observation") or {})
+            completed_observation.setdefault("lastObservedAt", completed_observation.get("observedAt"))
+            completed["observation"] = completed_observation
+            # A partial observation is still a completed observation. Keep its
+            # row-level issues visible, but advance the cache timestamp so a
+            # failed repository cannot force an endless refresh loop.
+            self.memory.put(key, completed, fingerprint=fingerprint, updated_at=now)
+            self.sqlite.put(key, completed, fingerprint=fingerprint, updated_at=now)
             return
         self.memory.put(key, value, fingerprint=fingerprint, updated_at=now)
         self.sqlite.put(key, value, fingerprint=fingerprint, updated_at=now)

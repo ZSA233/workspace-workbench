@@ -13,6 +13,7 @@ type SnapshotEntry = {
   response?: ObserverResponse;
   lastResponse?: ObserverResponse;
   lastError?: unknown;
+  lastObservedAt: string | null;
   lastSuccessfulAt: string | null;
   failureCount: number;
   firstFailureAt: number | null;
@@ -32,6 +33,7 @@ export type ObserverSnapshot = {
   expired: boolean;
   failed: boolean;
   initialFailure: boolean;
+  lastObservedAt: string | null;
   failureCount: number;
   lastSuccessfulAt: string | null;
   status: ObservationStatus;
@@ -68,12 +70,13 @@ export function classifyObservationResponse(response: ObserverResponse | undefin
 function observedAt(response: ObserverResponse): string {
   const result = response.result;
   if (result && typeof result === "object") {
-    const success = (result as { observation?: { lastSuccessfulAt?: unknown } }).observation?.lastSuccessfulAt;
-    if (typeof success === "string" && success) return success;
     const value = (result as { observedAt?: unknown }).observedAt;
     if (typeof value === "string" && value) return value;
-    const nested = (result as { observation?: { observedAt?: unknown } }).observation?.observedAt;
-    if (typeof nested === "string" && nested) return nested;
+    const nested = (result as { observation?: { observedAt?: unknown; lastObservedAt?: unknown; lastSuccessfulAt?: unknown } }).observation;
+    const observed = nested?.observedAt || nested?.lastObservedAt;
+    if (typeof observed === "string" && observed) return observed;
+    const success = nested?.lastSuccessfulAt;
+    if (typeof success === "string" && success) return success;
   }
   return new Date().toISOString();
 }
@@ -98,6 +101,7 @@ export function useLastSuccessfulResponse(
   let entry = cache.current.get(key);
   if (!entry) {
     entry = {
+      lastObservedAt: null,
       lastSuccessfulAt: null,
       failureCount: 0,
       firstFailureAt: null,
@@ -114,9 +118,10 @@ export function useLastSuccessfulResponse(
     const metadata = observationMetadata(response);
     entry.refreshing = metadata.refreshing;
     entry.lastErrorCode = metadata.lastErrorCode;
+    if (response && responseClass && responseClass !== "refreshing") entry.lastObservedAt = observedAt(response);
     if (response && responseClass === "ready") {
       entry.response = response;
-      entry.lastSuccessfulAt = observedAt(response);
+      entry.lastSuccessfulAt = entry.lastObservedAt;
       clearFailures(entry);
     } else if (response) {
       if (responseClass !== "refreshing") markFailure(entry);
@@ -167,11 +172,9 @@ export function useLastSuccessfulResponse(
     ? failed ? "unavailable" : "loading"
     : expired
       ? "expired"
-      : entry.refreshing
-        ? "refreshing"
-        : failed
-          ? "degraded"
-          : "fresh";
+      : failed || responseObservationState(displayResponse) !== "ready"
+        ? "degraded"
+        : "fresh";
 
   return {
     response: displayResponse,
@@ -179,6 +182,7 @@ export function useLastSuccessfulResponse(
     expired,
     failed,
     initialFailure: !entry.response && failed,
+    lastObservedAt: entry.lastObservedAt,
     failureCount: entry.failureCount,
     lastSuccessfulAt: entry.lastSuccessfulAt,
     status,

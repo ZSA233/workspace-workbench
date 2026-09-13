@@ -197,6 +197,50 @@ async function socketReachable(socketPath: string): Promise<boolean> {
   });
 }
 
+async function backendVersion(socketPath: string): Promise<{ reachable: boolean; version: string | null }> {
+  if (!existsSync(socketPath)) return { reachable: false, version: null };
+  return new Promise((resolve) => {
+    const socket = createConnection(socketPath);
+    let settled = false;
+    let buffer = "";
+    const finish = (result: { reachable: boolean; version: string | null }) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish({ reachable: false, version: null }), 1_000);
+    socket.setEncoding("utf8");
+    socket.once("connect", () => socket.write('{"id":"backend-health","method":"observer.health","params":{}}\n'));
+    socket.on("data", (chunk: string | Buffer) => {
+      buffer += String(chunk);
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      clearTimeout(timer);
+      try {
+        const response = JSON.parse(buffer.slice(0, newline)) as { ok?: unknown; result?: { version?: unknown } };
+        finish({ reachable: response.ok === true, version: typeof response.result?.version === "string" ? response.result.version : null });
+      } catch {
+        finish({ reachable: false, version: null });
+      }
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      finish({ reachable: false, version: null });
+    });
+    socket.once("close", () => {
+      clearTimeout(timer);
+      finish({ reachable: false, version: null });
+    });
+  });
+}
+
+function versionMismatch(version: string | null): string | null {
+  const expected = pluginVersion();
+  if (version === expected) return null;
+  return `Workbench backend version mismatch (running ${version || "unknown"}; expected ${expected}). Restart the Workbench backend.`;
+}
+
 function removeStaleSocket(socketPath: string): void {
   try {
     unlinkSync(socketPath);
@@ -239,7 +283,11 @@ function stopManaged(route: ProjectRoute): void {
 export async function backendStatus(projectConfig: string): Promise<ProjectBackendStatus> {
   try {
     const route = resolveProject({ projectConfig });
-    if (await socketReachable(route.socketPath)) return statusFor(route, "ready");
+    const probe = await backendVersion(route.socketPath);
+    if (probe.reachable) {
+      const mismatch = versionMismatch(probe.version);
+      return mismatch ? statusFor(route, "failed", mismatch) : statusFor(route, "ready");
+    }
     const entry = managed.get(route.configPath);
     if (entry && entry.child.exitCode === null && !entry.child.signalCode) return statusFor(route, "starting");
     if (existsSync(route.socketPath)) removeStaleSocket(route.socketPath);
@@ -258,7 +306,11 @@ export async function backendStatus(projectConfig: string): Promise<ProjectBacke
 }
 
 async function startBackendOnce(route: ProjectRoute): Promise<ProjectBackendStatus> {
-  if (await socketReachable(route.socketPath)) return statusFor(route, "ready");
+  const probe = await backendVersion(route.socketPath);
+  if (probe.reachable) {
+    const mismatch = versionMismatch(probe.version);
+    return mismatch ? statusFor(route, "failed", mismatch) : statusFor(route, "ready");
+  }
   const existing = managed.get(route.configPath);
   if (existing && existing.child.exitCode === null && !existing.child.signalCode) return waitForSocket(route, existing.child);
   if (existing) managed.delete(route.configPath);
@@ -297,7 +349,7 @@ export async function startBackend(projectConfig: string): Promise<ProjectBacken
   if (pending) return pending;
   const flight = (async () => {
     const first = await startBackendOnce(route);
-    if (first.state !== "failed") return first;
+    if (first.state !== "failed" || first.message?.includes("backend version mismatch")) return first;
     // A stale socket or a worker that exited during startup gets one clean,
     // bounded retry. Persistent failures remain visible to the caller.
     stopManaged(route);

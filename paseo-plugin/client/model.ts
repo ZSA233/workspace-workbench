@@ -140,6 +140,8 @@ export type ObservationMeta = {
   issues?: Issue[];
   cacheState?: "fresh" | "stale" | "refreshing" | "degraded" | string;
   cacheAgeMs?: number;
+  deferred?: boolean;
+  lastObservedAt?: string;
   lastSuccessfulAt?: string;
   refreshing?: boolean;
 };

@@ -222,7 +222,39 @@ class Regressions(unittest.TestCase):
                 reopened.read("repo", "three", lambda: {"value": 99, "observation": {"state": "partial"}})
             finally:
                 reopened.close()
-            self.assertEqual(reopened.sqlite.latest("repo").payload["value"], 2)
+            self.assertEqual(reopened.sqlite.latest("repo").payload["value"], 99)
+            self.assertEqual(reopened.sqlite.latest("repo").payload["observation"]["state"], "partial")
+
+    def test_partial_refresh_is_completed_and_does_not_reenter_refresh_loop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = ObservationCache(
+                sqlite_path=Path(directory) / "cache.sqlite3",
+                max_entries=20,
+                max_bytes=4096,
+                sqlite_max_entries=20,
+                ttl_seconds=0.05,
+            )
+            finished = threading.Event()
+
+            try:
+                cache.read("repo", "one", lambda: {"value": 1, "observation": {"state": "ready", "observedAt": "2026-01-01T00:00:00Z"}})
+                time.sleep(0.06)
+                pending = cache.read(
+                    "repo",
+                    "two",
+                    lambda: (
+                        finished.set(),
+                        {"value": 2, "observation": {"state": "partial", "observedAt": "2026-01-01T00:00:01Z", "issues": [{"code": "git_timeout"}]}}
+                    )[1],
+                )
+                self.assertEqual(pending["observation"]["cacheState"], "refreshing")
+                self.assertTrue(finished.wait(2))
+                completed = cache.read("repo", "two", lambda: {"value": 3, "observation": {"state": "ready"}})
+                self.assertEqual(completed["value"], 2)
+                self.assertEqual(completed["observation"]["cacheState"], "degraded")
+                self.assertFalse(completed["observation"]["refreshing"])
+            finally:
+                cache.close()
 
     def test_toolchain_fail_closed_without_prepare(self):
         with tempfile.TemporaryDirectory() as directory:

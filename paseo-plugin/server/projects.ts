@@ -52,7 +52,11 @@ function configuredProjectPaths(directory?: string): string[] {
 
 export function registeredProjects(options: { directory?: string } = {}): ProjectRoute[] {
   const paths = configuredProjectPaths(options.directory);
-  return [...new Set(paths)].flatMap((path) => {
+  const canonicalPaths = [...new Set(paths.map((path) => {
+    try { return realpathSync(path); }
+    catch { return resolve(path); }
+  }))];
+  return canonicalPaths.flatMap((path) => {
     try {
       const configPath = realpathSync(path);
       const value = JSON.parse(readFileSync(configPath, "utf8"));
@@ -70,7 +74,9 @@ export function registeredProjects(options: { directory?: string } = {}): Projec
 
 export function resolveProject(input: { projectConfig?: string; directory?: string }, projects = registeredProjects({ directory: input.directory })): ProjectRoute {
   if (input.projectConfig) {
-    const configPath = resolve(input.projectConfig!);
+    let configPath: string;
+    try { configPath = realpathSync(input.projectConfig); }
+    catch { configPath = resolve(input.projectConfig); }
     const candidates = projects.some((project) => project.configPath === configPath)
       ? projects
       : [...projects, ...registeredProjects({ directory: dirname(configPath) })];

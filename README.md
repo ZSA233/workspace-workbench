@@ -90,6 +90,22 @@ workbench_workspace_execute
 workbench_workspace_status
 ```
 
+完成交接后，执行 Agent 可以提交明确的 `ready_for_review` 报告；普通对话结束不会自动触发审核。
+在非主 Workspace 的面板中打开 `Agent Review` 页签即可手动开始审核。审核设置从顶部三个点菜单进入，
+可以分别设置审核模式、自动修复、审核轮次、Reviewer 要求和 Codex 模型；项目设置优先于全局默认。
+审核期间会在当前 Workspace 的时间线中显示执行、审核、修复和结果。Reviewer 使用独立的只读沙箱，
+只能读取固定快照并提交结构化结果。`approved` 只代表对应代码版本通过审核，不会自动合并或发布。
+
+主控 Agent 还可以使用以下 Review 工具：
+
+```text
+workbench_review_preview
+workbench_review_execute
+workbench_review_status
+workbench_review_stop
+workbench_review_resume
+```
+
 `preview` 只读。`execute` 需要用户明确要求隔离 Workspace、批准计划，并继续遵守
 宿主的权限检查。从面板手动创建 Workspace 不会自动创建 Agent。
 

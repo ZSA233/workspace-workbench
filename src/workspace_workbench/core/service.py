@@ -556,6 +556,7 @@ class ObserverService:
         workspace = self._workspace(str(params.get("workspaceId") or ""))
         if not workspace.get("managed"):
             raise WorkbenchError("live workspace is not managed", code="workspace_not_managed")
+        runtime_repositories: list[dict[str, Any]] = []
         for repository in workspace.get("repositories", []):
             path = Path(str(repository.get("worktreePath") or "")).resolve()
             if not path.is_dir():
@@ -563,6 +564,82 @@ class ObserverService:
             git = self._git(repository)
             if git.root() != path or git.branch() != repository.get("branch"):
                 raise WorkbenchError("worktree Git identity changed", code="worktree_identity_changed")
+            head = git.head()
+            branch = git.branch()
+            base_ref, base_sha = self._base(repository, git)
+            status_result = git.run(["status", "--porcelain=v1", "-z", "--untracked-files=all"], check=False)
+            staged_result = git.run(["diff", "--no-ext-diff", "--cached", "--binary"], check=False)
+            if status_result.returncode != 0 or staged_result.returncode != 0:
+                raise WorkbenchError("Git status is unavailable", code="git_runtime_unavailable")
+            status = status_result.stdout
+            staged = staged_result.stdout
+            if head:
+                working_result = git.run(["diff", "--no-ext-diff", "--binary", "HEAD"], check=False)
+                if working_result.returncode != 0:
+                    raise WorkbenchError("Git working-tree diff is unavailable", code="git_runtime_unavailable")
+                working = working_result.stdout
+            else:
+                working = ""
+            dirty_paths: list[str] = []
+            file_digests: list[str] = []
+            for item_status, item_path in git.status_porcelain():
+                path_value = str(item_path).split("\x00")[-1]
+                if not path_value:
+                    continue
+                relative_path = Path(path_value)
+                if relative_path.is_absolute() or ".." in relative_path.parts:
+                    dirty_paths.append(path_value)
+                    file_digests.append(f"{path_value}:outside")
+                    continue
+                dirty_paths.append(path_value)
+                candidate = path.joinpath(*relative_path.parts)
+                resolved_candidate = candidate.resolve()
+                try:
+                    resolved_candidate.relative_to(path)
+                except ValueError:
+                    file_digests.append(f"{path_value}:outside")
+                    continue
+                try:
+                    item = candidate.lstat()
+                    symlink = False
+                    current = path
+                    for segment in relative_path.parts:
+                        current = current / segment
+                        segment_stat = current.lstat()
+                        if stat.S_ISLNK(segment_stat.st_mode):
+                            symlink = True
+                            break
+                    if symlink or stat.S_ISLNK(item.st_mode):
+                        link = os.readlink(current if symlink else candidate)
+                        file_digests.append(f"{path_value}:symlink:{link}")
+                    elif stat.S_ISREG(item.st_mode):
+                        hasher = hashlib.sha256()
+                        with candidate.open("rb") as stream:
+                            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                                hasher.update(chunk)
+                        file_digests.append(f"{path_value}:file:{item.st_size}:{hasher.hexdigest()}")
+                    else:
+                        file_digests.append(f"{path_value}:special:{item.st_mode}")
+                except OSError:
+                    file_digests.append(f"{path_value}:unreadable")
+            dirty_paths.sort()
+            file_digests.sort()
+            index_digest = hashlib.sha256(staged.encode("utf-8", errors="replace")).hexdigest()
+            worktree_digest = hashlib.sha256((working + "\x00".join(file_digests)).encode("utf-8", errors="replace")).hexdigest()
+            status_digest = hashlib.sha256(status.encode("utf-8", errors="replace")).hexdigest()
+            runtime_repositories.append({
+                "id": repository.get("id"),
+                "repoPath": repository.get("repoPath"),
+                "worktreePath": str(path),
+                "branch": branch,
+                "baseRef": base_ref,
+                "baseSha": base_sha,
+                "head": head,
+                "indexDigest": index_digest,
+                "worktreeDigest": worktree_digest,
+                "statusDigest": status_digest,
+                "dirtyPaths": dirty_paths,
+            })
         toolchain = self.toolchain.summary(workspace) if self.toolchain else None
         if toolchain and toolchain["status"] != "ready":
             raise WorkbenchError("prepare runtimes before execution", code="toolchain_not_ready", details=toolchain)
@@ -572,10 +649,7 @@ class ObserverService:
             "managed": bool(workspace.get("managed", True)),
             "treePath": workspace.get("treePath"),
             "sourceRoot": workspace.get("sourceRoot"),
-            "repositories": [
-                {"id": item.get("id"), "repoPath": item.get("repoPath"), "worktreePath": item.get("worktreePath"), "branch": item.get("branch"), "baseSha": item.get("baseSha")}
-                for item in workspace.get("repositories", []) if isinstance(item, Mapping)
-            ],
+            "repositories": runtime_repositories,
             "capabilities": self.provider.capabilities(),
             "toolchain": toolchain,
         }

@@ -16,6 +16,16 @@ workbench_workspace_execute
 workbench_workspace_status
 ```
 
+Review 编排工具另外包括：
+
+```text
+workbench_review_preview
+workbench_review_execute
+workbench_review_status
+workbench_review_stop
+workbench_review_resume
+```
+
 这些工具和面板使用同一个 Workbench 编排器。为了兼容不执行工具搜索的 provider，新建的
 主控 Agent 会常驻加载这个 bridge；工具 schema 和说明保持精简，也不会暴露项目专属仓库名。
 
@@ -31,6 +41,23 @@ workbench_workspace_status
 
 重试必须保持相同的 `requestId` 和完整请求内容。重复请求会从已记录的阶段继续，不会再次
 创建 Workspace 或子 Agent。
+
+## Agent Review
+
+执行 Agent 的普通 turn 结束只表示该 turn 结束。只有执行 Agent 通过专用报告提交
+`ready_for_review`，并且该 turn 已成功结束、绑定的 worktree 身份仍然匹配时，Workbench 才会
+推进审核。失败或需要输入的报告会停在可见的阻塞状态。
+
+在已绑定的非主 Workspace 中，`Agent Review` 页签显示持久化时间线。审核可以手动开始，也可以在
+项目设置中设为自动；自动审核和自动修复是两个独立开关。Reviewer 读取服务端刚采集的固定快照，
+覆盖基准之后的提交、暂存/未暂存变更和未忽略的新文件，并返回 `approved`、`changes_requested`
+或 `blocked`。代码变化后旧结果会过期，不能代表新版本通过。
+
+Reviewer Agent 由独立的 Codex 会话运行，使用只读沙箱、禁止权限提升，并只加载读取快照和提交结果
+两个 Workbench 工具。若宿主无法确认该边界，审核会停在错误状态，不会用提示词代替运行约束。
+
+`changes_requested` 可以把带 finding ID 的修复交接发送回原执行 Agent，默认最多三轮；停止、断线、
+插件重载和 daemon 重启都会保留流程记录。审核通过后仍需用户自行查看差异并明确合并。
 
 ## 已存在的会话
 

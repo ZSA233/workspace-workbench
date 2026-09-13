@@ -32,7 +32,7 @@ const instructions = [
 export function registerAgentIntegration(server: PluginServerContext): () => void {
   let api: import("@getpaseo/client").PaseoApi | null = null;
   const cleanups = [server.before("agent.create", ({ request }) => {
-    if (request.env?.WORKBENCH_WORKER_WORKSPACE) return request;
+    if (request.env?.WORKBENCH_WORKER_WORKSPACE || request.env?.WORKBENCH_REVIEW_ONLY) return request;
     let project;
     try { project = resolveProject({ directory: request.config.cwd }); } catch { return request; }
     const bridge = bridgeConfig(project.configPath);
@@ -45,7 +45,7 @@ export function registerAgentIntegration(server: PluginServerContext): () => voi
       mcpServers: { ...request.config.mcpServers, "workspace-workbench": { type: "stdio" as const, command: process.execPath, args: [bridge.script], env: environment, alwaysLoad: true } },
     } };
   }), server.before("agent.session_open", ({ request }) => {
-    if (request.env.WORKBENCH_WORKER_WORKSPACE) return request;
+    if (request.env.WORKBENCH_WORKER_WORKSPACE || request.env.WORKBENCH_REVIEW_ONLY) return request;
     if (request.purpose !== "interactive") return request;
     let project;
     try { project = resolveProject({ directory: request.cwd }); } catch { return request; }
@@ -61,7 +61,7 @@ export function registerAgentIntegration(server: PluginServerContext): () => voi
       if (prior && prior.token !== token) writeState(`context:${prior.token}`, { agentId: request.agentId, cwd: request.cwd, revoked: true });
       writeState(`context:${token}`, { agentId: request.agentId, cwd: request.cwd });
       writeState(`session:${request.agentId}`, { token });
-      return { ...request, env: { ...request.env, WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath, WORKBENCH_PASEO_ENDPOINT: bridge.endpoint } };
+      return { ...request, env: { ...request.env, WORKBENCH_AGENT_ID: request.agentId, WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath, WORKBENCH_PASEO_ENDPOINT: bridge.endpoint } };
     });
   })];
   server.handle(orchestrationRpc, (input, context) => withProject(input, async () => {

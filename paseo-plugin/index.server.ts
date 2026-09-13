@@ -13,10 +13,52 @@ import { handleProjectBackendStart, handleProjectBackendStatus, handleProjectSet
 import { registerAgentIntegration } from "./server/agent-integration";
 import { orchestrate } from "./server/orchestrator";
 import { digest } from "./server/orchestration-state";
+import {
+  executionReport,
+  reviewModels,
+  reviewerRead,
+  reviewerResult,
+  reviewSessionControl,
+  reviewSessionEvents,
+  reviewSessionList,
+  reviewSessionQuery,
+  reviewSessionStart,
+  reviewPreview,
+  reviewSettingsGet,
+  reviewSettingsUpdate,
+} from "./shared/agent-review";
+import {
+  handleExecutionReportRpc,
+  handleReviewModels,
+  handleReviewPreview,
+  handleReviewSessionControl,
+  handleReviewSessionEvents,
+  handleReviewSessionList,
+  handleReviewSessionQuery,
+  handleReviewSessionStart,
+  handleReviewSettingsGet,
+  handleReviewSettingsUpdate,
+  handleReviewerReadRpc,
+  handleReviewerResultRpc,
+  registerReviewLifecycle,
+} from "./server/agent-review";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(observerSettings);
+  server.handle(reviewSessionQuery, (input, context) => withProject(input, () => handleReviewSessionQuery(input, context)));
+  server.handle(reviewSessionList, (input) => withProject(input, () => handleReviewSessionList(input)));
+  server.handle(reviewSessionEvents, (input) => withProject(input, () => handleReviewSessionEvents(input)));
+  server.handle(reviewSettingsGet, (input) => withProject(input, () => handleReviewSettingsGet(input)));
+  server.handle(reviewSettingsUpdate, (input) => withProject(input, () => handleReviewSettingsUpdate(input)));
+  server.handle(reviewModels, (input, context) => withProject(input, () => handleReviewModels(input, context)));
+  server.handle(reviewPreview, (input, context) => withProject(input, () => handleReviewPreview(input, context)));
+  server.handle(reviewSessionStart, (input, context) => withProject(input, () => handleReviewSessionStart(input, context)));
+  server.handle(reviewSessionControl, (input, context) => withProject(input, () => handleReviewSessionControl(input, context)));
+  server.handle(executionReport, (input, context) => withProject(input, () => handleExecutionReportRpc(input, context)));
+  server.handle(reviewerRead, (input, context) => withProject(input, () => handleReviewerReadRpc(input, context)));
+  server.handle(reviewerResult, (input, context) => withProject(input, () => handleReviewerResultRpc(input, context)));
   const cleanupAgents = registerAgentIntegration(server);
+  const cleanupReviewLifecycle = registerReviewLifecycle(server);
   server.handle(projectsQuery, async (input) => registeredProjects({ directory: input.directory }));
   server.handle(projectSetupScan, handleProjectSetupScan);
   server.handle(projectSetupSave, handleProjectSetupSave);
@@ -34,5 +76,5 @@ export default function contribute(server: PluginServerContext) {
     try { return workspaceDelegate.output.parse(await orchestrate("execute", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)); }
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
-  return () => { cleanupAgents(); closeObserverBridge(); closeBackends(); };
+  return () => { cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); closeBackends(); };
 }

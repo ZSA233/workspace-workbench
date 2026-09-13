@@ -300,9 +300,16 @@ export async function saveProjectSetup(input: { directory: string; repositories:
   const previousProject = previous.project && typeof previous.project === "object" && !Array.isArray(previous.project)
     ? previous.project as ConfigValue
     : {};
+  const previousDiscovery = previous.discovery && typeof previous.discovery === "object" && !Array.isArray(previous.discovery)
+    ? previous.discovery as ConfigValue
+    : {};
   const value = {
+    // Setup is also used to refresh an existing project. Keep every unknown
+    // but valid extension (agent bridge, toolchain, limits, review, adapter)
+    // instead of silently replacing it with a minimal config.
+    ...previous,
     schemaVersion: 1,
-    project: { id: slug(stringValue(previousProject.id, scan.displayName)), displayName: scan.displayName },
+    project: { ...previousProject, id: slug(stringValue(previousProject.id, scan.displayName)), displayName: scan.displayName },
     sourceRoot: stringValue(previous.sourceRoot, relative(configDirectory, scan.projectRoot) || "."),
     workspaceRoot: stringValue(previous.workspaceRoot, "."),
     recordsRoot: stringValue(previous.recordsRoot, unixRelative(configDirectory, layout.recordsRoot)),
@@ -310,6 +317,7 @@ export async function saveProjectSetup(input: { directory: string; repositories:
     stateRoot: stringValue(previous.stateRoot, unixRelative(configDirectory, layout.stateRoot)),
     socketPath: stringValue(previous.socketPath, "auto"),
     discovery: {
+      ...previousDiscovery,
       mode: "hybrid",
       roots: ["."],
       maxDepth: 3,

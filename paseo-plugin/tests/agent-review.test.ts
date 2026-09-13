@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withProject } from "../server/projects.ts";
 import {
+  getReviewWorkspaceState,
   handleReviewModels,
   handleReviewSessionControl,
   handleReviewSessionEvents,
@@ -22,6 +23,8 @@ import {
   reviewAuthToken,
   startReview,
 } from "../server/agent-review.ts";
+import { getAgentBinding, putAgentBinding } from "../server/agent-store.ts";
+import { clearWorkspaceRuntimeState, executePermanentWorkspaceDelete } from "../server/workspace-lifecycle.ts";
 import { resolveReviewPreferences } from "../shared/agent-review.ts";
 import type { AgentContext } from "../server/agent-provider.ts";
 import { writeState } from "../server/orchestration-state.ts";
@@ -152,6 +155,65 @@ test("review preferences resolve field by field and preserve project config", ()
   assert.equal(resolved.autoFix, true);
   assert.equal(resolved.maxRounds, 5);
   assert.equal(resolved.reviewerModel, "model-b");
+});
+
+test("permanent workspace cleanup removes runtime records before the same id is reused", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    const handoff = {
+      version: "workspace.workbench.handoff/v1" as const,
+      goal: "Original workspace task",
+      decisions: [], inScope: [], outOfScope: [], steps: [], acceptance: [], constraints: [], ambiguities: [],
+      startMode: "adaptive" as const,
+      policy: { placementGuard: true },
+      expected: { branchByRepository: {}, baseByRepository: {} },
+    };
+    const first = recordExecutionHandoff({ workspaceId: "managed-fixture", projectConfig: fixture.config, executionAgentId: "execution-fixture", handoff });
+    putAgentBinding({ workspaceId: "managed-fixture", agentId: "execution-fixture", relationship: "independent", paseoWorkspaceId: "managed-fixture", cwd: fixture.root, provider: "codex/model-a", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    assert.equal(Boolean(getAgentBinding("managed-fixture")), true);
+    assert.equal(getReviewWorkspaceState("managed-fixture").sessionCount, 1);
+
+    const cleanup = clearWorkspaceRuntimeState("managed-fixture");
+    assert.equal(cleanup.bindingRemoved, true);
+    assert.equal(cleanup.sessionsRemoved, 1);
+    assert.equal(getAgentBinding("managed-fixture"), null);
+    assert.equal(getReviewWorkspaceState("managed-fixture").sessionCount, 0);
+    assert.equal(readReviewSession("managed-fixture"), null);
+
+    const recreated = recordExecutionHandoff({ workspaceId: "managed-fixture", projectConfig: fixture.config, executionAgentId: "execution-fixture", handoff: { ...handoff, goal: "Recreated workspace task" } });
+    assert.notEqual(recreated.id, first.id);
+    assert.equal(readReviewSession("managed-fixture")?.id, recreated.id);
+  });
+});
+
+test("permanent workspace deletion stops before the irreversible call when runtime cleanup fails", async () => {
+  const sequence: string[] = [];
+  let deleteCalled = false;
+  const result = await executePermanentWorkspaceDelete(
+    { action: "delete", workspaceId: "managed-fixture", confirm: true },
+    [],
+    { agentBinding: true, reviewSessionCount: 1, activeReviewSessionId: "review-1" },
+    {
+      preview: async () => {
+        sequence.push("preview");
+        return { ok: true, result: { state: "active" } };
+      },
+      clearRuntime: () => {
+        sequence.push("cleanup");
+        throw new Error("agent_bindings_unreadable");
+      },
+      deleteWorkspace: async () => {
+        deleteCalled = true;
+        sequence.push("delete");
+        return { ok: true, result: { state: "removed" } };
+      },
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.code, "workspace_runtime_cleanup_failed");
+  assert.deepEqual(sequence, ["preview", "cleanup"]);
+  assert.equal(deleteCalled, false);
 });
 
 test("execution handoff creates the durable review timeline before completion", async () => {

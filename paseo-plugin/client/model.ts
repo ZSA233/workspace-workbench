@@ -92,6 +92,46 @@ export type ToolchainSummary = {
   generatedAt?: string | null;
 };
 
+export type WorkspaceTask = {
+  kind?: string;
+  id?: string;
+  label?: string;
+  status?: string;
+};
+
+export type WorkspaceDeletion = {
+  requestedAt?: string;
+  blocksNewTasks?: boolean;
+  activeTasks?: WorkspaceTask[];
+};
+
+export type WorkspaceDeletionImpact = {
+  workspaceId: string;
+  preview: boolean;
+  irreversible: boolean;
+  canDelete?: boolean;
+  repositories?: Array<{
+    id?: string;
+    repoPath?: string;
+    branch?: string | null;
+    worktreePath?: string | null;
+    worktreeExists?: boolean;
+    dirty?: boolean;
+    dirtyPaths?: string[];
+    branchPreserved?: boolean;
+  }>;
+  dirtyRepositories?: number;
+  externalReferences?: Array<{ repository?: string; ref?: string }>;
+  branchesPreserved?: string[];
+  preserves?: string[];
+  loses?: string[];
+  runtimeState?: {
+    agentBinding?: boolean;
+    reviewSessionCount?: number;
+    activeReviewSessionId?: string | null;
+  };
+};
+
 export type ObservationMeta = {
   state: "ready" | "partial" | "timeout" | "busy" | string;
   observedAt?: string;
@@ -117,6 +157,7 @@ export type WorkspaceSummary = {
   lastUsedAt?: string | null;
   updatedAt?: string | null;
   observedAt?: string | null;
+  deletion?: WorkspaceDeletion | null;
   repositoryCount: number;
   dirtyRepositoryCount: number | null;
   dirty: boolean | null;
@@ -140,7 +181,8 @@ export function resolveWorkspaceSelection(input: {
   identifiedWorkspaceId?: string | null;
   workspaces: readonly WorkspaceSummary[];
 }): WorkspaceSelectionResolution | null {
-  const ids = new Set(input.workspaces.map((workspace) => workspace.id));
+  const selectable = input.workspaces.filter((workspace) => workspace.state !== "removed");
+  const ids = new Set(selectable.map((workspace) => workspace.id));
   if (input.currentWorkspaceId && ids.has(input.currentWorkspaceId)) {
     return { workspaceId: input.currentWorkspaceId, source: "current" };
   }
@@ -150,7 +192,7 @@ export function resolveWorkspaceSelection(input: {
   if (input.identifiedWorkspaceId && ids.has(input.identifiedWorkspaceId)) {
     return { workspaceId: input.identifiedWorkspaceId, source: "identified" };
   }
-  const first = input.workspaces[0];
+  const first = selectable[0];
   return first ? { workspaceId: first.id, source: "first" } : null;
 }
 
@@ -314,7 +356,7 @@ export type DetailResult = {
 };
 
 export type ListResult = {
-  capabilities?: { create?: boolean; prepare?: boolean; cleanup?: boolean; agent?: boolean };
+  capabilities?: { create?: boolean; prepare?: boolean; cleanup?: boolean; remove?: boolean; restore?: boolean; permanentDelete?: boolean; agent?: boolean };
   workspaces: WorkspaceSummary[];
   observedAt?: string;
   observation?: ObservationMeta;
@@ -476,7 +518,8 @@ export function matchesWorkspaceFilter(
   if (filter === "dirty") return workspace.dirty === true;
   if (filter === "unpushed") return workspace.unpushed === true;
   return Boolean(
-    workspace.dirty ||
+    workspace.state === "deletion_pending" ||
+      workspace.dirty ||
       workspace.unpushed ||
       workspace.blockerCount > 0 ||
       workspace.attentionReasons?.length,

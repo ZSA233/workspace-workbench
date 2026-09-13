@@ -24,6 +24,7 @@ import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpd
 import { observerQuery } from "../shared/observer";
 import { projectsQuery, type ProjectInfo } from "../shared/projects";
 import { projectBackendStart, projectStorageQuery } from "../shared/setup";
+import { workspaceLifecycle, type WorkspaceLifecycleResponse } from "../shared/workspace-lifecycle";
 import { isMainWorkspace,isRecoverableObserverFailure,makeStyles,mergeDetailResponse,queryErrorMessage,queryFailureForDisplay,resultOf,TabButton,workspaceIdFromProps } from "./components/ui";
 import { openFileReview } from "./file-review-store";
 import {
@@ -35,11 +36,13 @@ sortWorkspaces,
 type ChangeScope,
 type ChangesResult,
 type DetailResult,
-type FileChange,
-type GraphResult,
-type ListResult,
+  type FileChange,
+  type GraphResult,
+  type ListResult,
 type ReviewResult,
-type WorkspaceFilter
+type WorkspaceFilter,
+type WorkspaceSummary,
+type WorkspaceTask
 } from "./model";
 import { useLastSuccessfulResponse, type ObserverSnapshot } from "./observation";
 import { useRefreshOnForeground } from "./foreground-refresh";
@@ -150,6 +153,7 @@ import { chooseProject, useProjectMemory } from "./project-memory";
 import { CreateWorkspace } from "./components/create-workspace";
 import { ProjectSetup } from "./components/project-setup";
 import { ProjectStorageMenu } from "./components/project-storage";
+import { WorkspaceDeletionPanel } from "./components/workspace-deletion";
 
 import { ExecutionBindingCard } from "./components/agent";
 
@@ -292,6 +296,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const bindingRpc = (input: Parameters<typeof rawBindingRpc>[0]) => rawBindingRpc({ ...input, projectConfig });
   const rawDelegateRpc = useRpc(workspaceDelegate);
   const delegateRpc = (input: Parameters<typeof rawDelegateRpc>[0]) => rawDelegateRpc({ ...input, projectConfig });
+  const lifecycleRpc = useRpc(workspaceLifecycle);
   const toast = useToast();
   const selectedWorkspaceId = preferences.selectedWorkspaceId;
   const [selectionResolved, setSelectionResolved] = useState(false);
@@ -315,6 +320,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [createOpen, setCreateOpen] = useState(false);
   const newlyCreatedWorkspace = useRef<string | null>(null);
   const [delegating, setDelegating] = useState(false);
+  const [lifecycleWorkspaceId, setLifecycleWorkspaceId] = useState("");
+  const [lifecycleMode, setLifecycleMode] = useState<"inspect" | "permanent">("inspect");
+  const [lifecycleResponse, setLifecycleResponse] = useState<WorkspaceLifecycleResponse | null>(null);
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  const [lifecycleBusyWorkspaceId, setLifecycleBusyWorkspaceId] = useState("");
 
   useEffect(() => {
     setSelectionResolved(false);
@@ -369,6 +379,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   // and trigger an unwanted fallback.
   const selectedWorkspace = observedWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId);
   const selectedWorkspaceIsMain = isMainWorkspace(selectedWorkspace);
+  const selectedWorkspaceBlocksTasks = selectedWorkspace?.state === "deletion_pending" || selectedWorkspace?.state === "removed";
   const agentId = "agentId" in props ? props.agentId : undefined;
   const parentAgentId = agentId || null;
   const rawAgentContextRpc = useRpc(agentContextQuery);
@@ -422,7 +433,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     if (!listReady || !preferences.hydrated || selectionResolved) return;
     const hasSavedSelection = Boolean(
       preferences.savedWorkspaceId &&
-        observedWorkspaces.some((workspace) => workspace.id === preferences.savedWorkspaceId),
+        observedWorkspaces.some((workspace) => workspace.id === preferences.savedWorkspaceId && workspace.state !== "removed"),
     );
     const identifySettled = Boolean(identifyQuery.data || identifyQuery.error);
     if (!hasSavedSelection && workspaceDirectory && !identifySettled) return;
@@ -455,7 +466,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
 
   useEffect(() => {
     if (!listReady || !preferences.hydrated || !selectionResolved || !selectedWorkspaceId) return;
-    if (observedWorkspaces.some((workspace) => workspace.id === selectedWorkspaceId)) { newlyCreatedWorkspace.current = null; return; }
+    const currentSelection = observedWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId);
+    if (currentSelection && (currentSelection.state !== "removed" || workspaceFilter === "history")) { newlyCreatedWorkspace.current = null; return; }
     // A successful create can precede the last-good roster's React update.
     // Its absence from that older snapshot is not evidence of deletion.
     if (newlyCreatedWorkspace.current === selectedWorkspaceId) return;
@@ -464,7 +476,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     setSelectedCommit("");
     setSelectedFile("");
     scopeRepositoryIdentity.current = "";
-  }, [listReady, observedWorkspaces, preferences.hydrated, selectedWorkspaceId, selectionResolved]);
+  }, [listReady, observedWorkspaces, preferences.hydrated, selectedWorkspaceId, selectionResolved, workspaceFilter]);
 
   const detailQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "workspace-detail", selectedWorkspaceId],
@@ -838,6 +850,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       : theme.colors.foregroundMuted;
 
   async function delegateSelectedWorkspace(): Promise<void> {
+    if (selectedWorkspaceBlocksTasks) {
+      toast.show(localizedCopy.workspaceDeleteQueued, { variant: "warning" });
+      return;
+    }
     if (selectedWorkspaceIsMain) {
       toast.show(localizedCopy.text_bb57803d41, { variant: "warning" });
       return;
@@ -906,6 +922,122 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       setDelegating(false);
     }
   }
+
+  const closeLifecycle = useCallback(() => {
+    if (lifecycleBusyWorkspaceId) return;
+    setLifecycleWorkspaceId("");
+    setLifecycleResponse(null);
+    setLifecycleError(null);
+  }, [lifecycleBusyWorkspaceId]);
+
+  const inspectWorkspaceLifecycle = useCallback((workspace: WorkspaceSummary, mode: "inspect" | "permanent" = "inspect") => {
+    setLifecycleWorkspaceId(workspace.id);
+    setLifecycleMode(mode);
+    setLifecycleResponse(null);
+    setLifecycleError(null);
+    setLifecycleBusyWorkspaceId(workspace.id);
+    void lifecycleRpc({ projectConfig, workspaceId: workspace.id, action: "inspect" })
+      .then((result) => {
+        setLifecycleResponse(result);
+        if (!result.ok) setLifecycleError(result.error?.message || localizedCopy.workspaceDeleteUnavailable);
+      })
+      .catch((error) => setLifecycleError(error instanceof Error ? error.message : localizedCopy.workspaceDeleteUnavailable))
+      .finally(() => { setLifecycleBusyWorkspaceId(""); });
+  }, [lifecycleRpc, localizedCopy.workspaceDeleteUnavailable, projectConfig]);
+
+  const removeWorkspace = useCallback(async (workspace: WorkspaceSummary): Promise<void> => {
+    setLifecycleBusyWorkspaceId(workspace.id);
+    setLifecycleError(null);
+    try {
+      const result = await lifecycleRpc({ projectConfig, workspaceId: workspace.id, action: "remove" });
+      setLifecycleResponse(result);
+      if (!result.ok) {
+        const message = result.error?.message || localizedCopy.workspaceDeleteFailed;
+        setLifecycleError(message);
+        setLifecycleWorkspaceId(workspace.id);
+        setLifecycleMode("inspect");
+        toast.error(message);
+        return;
+      }
+      await listQuery.refetch();
+      if (result.pending) {
+        setLifecycleWorkspaceId(workspace.id);
+        setLifecycleMode("inspect");
+        toast.show(localizedCopy.workspaceDeleteQueued, { variant: "warning" });
+      } else {
+        if (selectedWorkspaceId === workspace.id) preferences.selectWorkspace("main");
+        setLifecycleWorkspaceId("");
+        toast.show(localizedCopy.workspaceDeleteSuccess, { variant: "success" });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : localizedCopy.workspaceDeleteFailed;
+      setLifecycleError(message);
+      toast.error(message);
+    } finally {
+      setLifecycleBusyWorkspaceId("");
+    }
+  }, [lifecycleRpc, listQuery, localizedCopy, preferences, projectConfig, selectedWorkspaceId, toast]);
+
+  const restoreWorkspace = useCallback(async (workspace: WorkspaceSummary): Promise<void> => {
+    setLifecycleBusyWorkspaceId(workspace.id);
+    try {
+      const result = await lifecycleRpc({ projectConfig, workspaceId: workspace.id, action: "restore" });
+      if (!result.ok) {
+        const message = result.error?.message || localizedCopy.workspaceDeleteFailed;
+        setLifecycleError(message);
+        toast.error(message);
+        return;
+      }
+      await listQuery.refetch();
+      setLifecycleWorkspaceId("");
+      toast.show(localizedCopy.workspaceRestoreSuccess, { variant: "success" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : localizedCopy.workspaceDeleteFailed;
+      setLifecycleError(message);
+      toast.error(message);
+    } finally {
+      setLifecycleBusyWorkspaceId("");
+    }
+  }, [lifecycleRpc, listQuery, localizedCopy, projectConfig, toast]);
+
+  const permanentDeleteWorkspace = useCallback(async (): Promise<void> => {
+    if (!lifecycleWorkspaceId) return;
+    setLifecycleBusyWorkspaceId(lifecycleWorkspaceId);
+    setLifecycleError(null);
+    try {
+      const result = await lifecycleRpc({ projectConfig, workspaceId: lifecycleWorkspaceId, action: "delete", confirm: true });
+      setLifecycleResponse(result);
+      if (!result.ok) {
+        const message = result.error?.message || localizedCopy.workspaceDeleteFailed;
+        setLifecycleError(message);
+        toast.error(message);
+        return;
+      }
+      await listQuery.refetch();
+      if (selectedWorkspaceId === lifecycleWorkspaceId) preferences.selectWorkspace("main");
+      setLifecycleWorkspaceId("");
+      toast.show(localizedCopy.workspacePermanentDeleteSuccess, { variant: "success" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : localizedCopy.workspaceDeleteFailed;
+      setLifecycleError(message);
+      toast.error(message);
+    } finally {
+      setLifecycleBusyWorkspaceId("");
+    }
+  }, [lifecycleRpc, lifecycleWorkspaceId, listQuery, localizedCopy, preferences, projectConfig, selectedWorkspaceId, toast]);
+
+  const openWorkspaceTask = useCallback((task: WorkspaceTask) => {
+    if (task.kind === "agent" && task.id && props.navigation) {
+      props.navigation.openAgent({ agentId: task.id });
+      return;
+    }
+    if (task.kind === "review") {
+      setTab("review");
+      setReviewTab("agent");
+      setReviewSessionId(task.id || "");
+      closeLifecycle();
+    }
+  }, [closeLifecycle, props.navigation]);
 
   function selectWorkspace(id: string): void {
     if (newlyCreatedWorkspace.current !== id) newlyCreatedWorkspace.current = null;
@@ -1031,12 +1163,17 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         onOpen={() => setSelectorOpen((current) => !current)}
         onFilter={setWorkspaceFilter}
         onSelect={(id) => { selectWorkspace(id); setSelectorOpen(false); }}
+        onRemoveWorkspace={listResult?.capabilities?.remove ? (workspace) => { void removeWorkspace(workspace); } : undefined}
+        onRestoreWorkspace={listResult?.capabilities?.restore ? (workspace) => { void restoreWorkspace(workspace); } : undefined}
+        onPermanentDeleteWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { inspectWorkspaceLifecycle(workspace, "permanent"); } : undefined}
+        onInspectWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { inspectWorkspaceLifecycle(workspace); } : undefined}
+        lifecycleBusyWorkspaceId={lifecycleBusyWorkspaceId}
         theme={theme}
         styles={styles}
       />
       {!selectedWorkspaceIsMain && listResult?.capabilities?.agent ? (
         <View>
-        {parentAgentId && agentContextAvailable && !binding?.agentId ? <View style={styles.targetRow}>
+        {parentAgentId && agentContextAvailable && !selectedWorkspaceBlocksTasks && !binding?.agentId ? <View style={styles.targetRow}>
           <TextInput value={handoffGoal} onChangeText={setHandoffGoal} placeholder={localizedCopy.text_1b37d56f7a} style={styles.targetInput} />
           <View style={styles.briefActions}>
             {(["default", "independent", "child"] as const).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: handoffRelationship === relationship }} onPress={() => setHandoffRelationship(relationship)} style={[styles.secondaryButton, handoffRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "default" ? localizedCopy.reviewSettingsFollowDefault : relationship === "independent" ? localizedCopy.reviewSettingsIndependentShort : localizedCopy.reviewSettingsChildAgent}</Text></Pressable>)}
@@ -1050,7 +1187,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           loading={Boolean(selectedWorkspaceId && bindingQuery.isFetching && !bindingQuery.data)}
           refreshing={manualRefreshing && bindingQuery.isFetching}
           error={bindingFailure}
-          canDelegate={Boolean(parentAgentId && agentContextAvailable)}
+          canDelegate={Boolean(parentAgentId && agentContextAvailable && !selectedWorkspaceBlocksTasks)}
           agentContextState={agentContextState}
           delegating={delegating}
           onDelegate={delegateSelectedWorkspace}
@@ -1165,6 +1302,27 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         onRetry={() => { void storageQuery.refetch(); }}
         compact={compact}
         theme={theme}
+      />
+      <WorkspaceDeletionPanel
+        open={Boolean(lifecycleWorkspaceId)}
+        workspace={observedWorkspaces.find((workspace) => workspace.id === lifecycleWorkspaceId)}
+        mode={lifecycleMode}
+        response={lifecycleResponse}
+        busy={Boolean(lifecycleBusyWorkspaceId)}
+        error={lifecycleError}
+        onClose={closeLifecycle}
+        onRemove={() => {
+          const target = observedWorkspaces.find((workspace) => workspace.id === lifecycleWorkspaceId);
+          if (target) void removeWorkspace(target);
+        }}
+        onRestore={() => {
+          const target = observedWorkspaces.find((workspace) => workspace.id === lifecycleWorkspaceId);
+          if (target) void restoreWorkspace(target);
+        }}
+        onConfirmPermanent={() => { void permanentDeleteWorkspace(); }}
+        onOpenTask={openWorkspaceTask}
+        theme={theme}
+        styles={styles}
       />
       <LayoutMenu
         onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}

@@ -130,6 +130,48 @@ class Regressions(unittest.TestCase):
             finally:
                 service.close()
 
+    def test_safe_workspace_removal_supports_dirty_restore_pending_and_explicit_delete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = make_repository(root, "api")
+            config = root / "project.json"
+            write_config(config, root, [{"id": "api", "path": "api"}])
+            service = ObserverService(load_config(config))
+            try:
+                created = service.handle("workspace.create", {"name": "safe-delete"})
+                target = Path(created["repositories"][0]["worktreePath"])
+                branch = created["repositories"][0]["branch"]
+                (target / "keep.txt").write_text("retain until explicit deletion\n", encoding="utf-8")
+
+                removed = service.handle("workspace.remove", {"workspaceId": "safe-delete"})
+                self.assertEqual(removed["state"], "removed")
+                self.assertTrue(target.is_dir())
+                self.assertEqual(service.provider.get("safe-delete")["state"], "removed")
+                self.assertEqual([item["id"] for item in service.handle("workspace.list")["workspaces"]], ["main"])
+                self.assertIn("safe-delete", [item["id"] for item in service.handle("workspace.list", {"includeRemoved": True})["workspaces"]])
+
+                restored = service.handle("workspace.restore", {"workspaceId": "safe-delete"})
+                self.assertEqual(restored["state"], "active")
+                pending = service.handle("workspace.remove", {"workspaceId": "safe-delete", "activeTasks": [{"kind": "agent", "id": "agent-1", "status": "running"}]})
+                self.assertEqual(pending["state"], "deletion_pending")
+                with self.assertRaises(WorkbenchError) as error:
+                    service.handle("workspace.delete", {"workspaceId": "safe-delete", "confirm": True})
+                self.assertEqual(error.exception.code, "workspace_task_active")
+                self.assertEqual(service.handle("workspace.restore", {"workspaceId": "safe-delete"})["state"], "active")
+
+                service.handle("workspace.remove", {"workspaceId": "safe-delete"})
+                preview = service.handle("workspace.delete", {"workspaceId": "safe-delete"})
+                self.assertTrue(preview["preview"])
+                self.assertEqual(preview["dirtyRepositories"], 1)
+                deleted = service.handle("workspace.delete", {"workspaceId": "safe-delete", "confirm": True})
+                self.assertTrue(deleted["deleted"])
+                self.assertFalse(target.exists())
+                self.assertIn(branch, run_git(repo, "branch", "--list"))
+                with self.assertRaises(WorkbenchError):
+                    service.provider.get("safe-delete")
+            finally:
+                service.close()
+
     def test_cache_revalidate_partial_and_reopen(self):
         with tempfile.TemporaryDirectory() as directory:
             kwargs = dict(sqlite_path=Path(directory) / "cache.sqlite3", max_entries=20, max_bytes=4096, sqlite_max_entries=20, ttl_seconds=0.5)

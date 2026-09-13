@@ -35,7 +35,14 @@ READ_METHODS = frozenset({
     "review-set.compare",
     "review-set.brief",
 })
-MANAGEMENT_METHODS = frozenset({"workspace.create", "workspace.prepare", "workspace.cleanup"})
+MANAGEMENT_METHODS = frozenset({
+    "workspace.create",
+    "workspace.prepare",
+    "workspace.cleanup",
+    "workspace.remove",
+    "workspace.restore",
+    "workspace.delete",
+})
 
 
 def _now() -> str:
@@ -155,6 +162,20 @@ class ObserverService:
             if not self.config.management_enabled or not self.provider.capabilities().get("cleanup"):
                 raise WorkbenchError("workspace management is disabled for this project", code="capability_unavailable")
             return self.provider.cleanup(str(values.get("workspaceId") or ""), confirm=values.get("confirm") is True)
+        if method == "workspace.remove":
+            if not self.config.management_enabled or not self.provider.capabilities().get("remove"):
+                raise WorkbenchError("workspace removal is disabled for this project", code="capability_unavailable")
+            raw_tasks = values.get("activeTasks")
+            active_tasks = [dict(task) for task in raw_tasks if isinstance(task, Mapping)] if isinstance(raw_tasks, list) else None
+            return self.provider.remove(str(values.get("workspaceId") or ""), active_tasks=active_tasks, lock_only=values.get("lockOnly") is True)
+        if method == "workspace.restore":
+            if not self.config.management_enabled or not self.provider.capabilities().get("restore"):
+                raise WorkbenchError("workspace restore is disabled for this project", code="capability_unavailable")
+            return self.provider.restore(str(values.get("workspaceId") or ""))
+        if method == "workspace.delete":
+            if not self.config.management_enabled or not self.provider.capabilities().get("permanentDelete"):
+                raise WorkbenchError("permanent workspace deletion is disabled for this project", code="capability_unavailable")
+            return self.provider.permanent_delete(str(values.get("workspaceId") or ""), confirm=values.get("confirm") is True)
         if method == "repository.graph":
             return self.repository_graph(values)
         if method == "repository.changes":
@@ -453,6 +474,7 @@ class ObserverService:
             "managed": bool(workspace.get("managed", True)),
             "description": workspace.get("description") or "",
             "state": workspace.get("state") or "active",
+            **({"deletion": _json(workspace.get("deletion"))} if isinstance(workspace.get("deletion"), Mapping) else {}),
             "sourceRoot": workspace.get("sourceRoot"),
             "treePath": workspace.get("treePath"),
             "repositoryCount": len(observed),
@@ -477,6 +499,9 @@ class ObserverService:
         parts = [self.config.digest]
         for workspace in self.provider.list():
             parts.append(str(workspace.get("id")))
+            parts.append(str(workspace.get("state") or "active"))
+            parts.append(str(workspace.get("updatedAt") or ""))
+            parts.append(json.dumps(_json(workspace.get("deletion")), sort_keys=True))
             for repository in workspace.get("repositories", []):
                 if not isinstance(repository, Mapping):
                     continue
@@ -524,7 +549,10 @@ class ObserverService:
         workspace_id = str(params.get("workspaceId") or "")
         workspace = self._workspace(workspace_id)
         key = f"{self.config.digest}:workspace.detail:{workspace_id}:{json.dumps(_json(params), sort_keys=True)}"
-        fingerprints = [self._repository_fingerprint(repository) for repository in workspace.get("repositories", []) if isinstance(repository, Mapping)]
+        fingerprints = [
+            f"state:{workspace.get('state') or 'active'}:{workspace.get('updatedAt') or ''}:{json.dumps(_json(workspace.get('deletion')), sort_keys=True)}",
+            *[self._repository_fingerprint(repository) for repository in workspace.get("repositories", []) if isinstance(repository, Mapping)],
+        ]
         fingerprint = hashlib.sha256("\n".join(fingerprints).encode()).hexdigest()
 
         def produce() -> dict[str, Any]:

@@ -142,6 +142,11 @@ export function WorkspaceSelector({
   onOpen,
   onFilter,
   onSelect,
+  onRemoveWorkspace,
+  onRestoreWorkspace,
+  onPermanentDeleteWorkspace,
+  onInspectWorkspace,
+  lifecycleBusyWorkspaceId,
   onOpenLayoutMenu,
   statusControl,
   theme,
@@ -160,6 +165,11 @@ export function WorkspaceSelector({
   onOpen: () => void;
   onFilter: (filter: WorkspaceFilter) => void;
   onSelect: (id: string) => void;
+  onRemoveWorkspace?: (workspace: WorkspaceSummary) => void;
+  onRestoreWorkspace?: (workspace: WorkspaceSummary) => void;
+  onPermanentDeleteWorkspace?: (workspace: WorkspaceSummary) => void;
+  onInspectWorkspace?: (workspace: WorkspaceSummary) => void;
+  lifecycleBusyWorkspaceId?: string;
   onOpenLayoutMenu?: () => void;
   statusControl?: ReactNode;
   theme: PanelProps["theme"];
@@ -233,6 +243,11 @@ export function WorkspaceSelector({
                 styles={styles}
                 theme={theme}
                 workspace={workspace}
+                onRemove={onRemoveWorkspace}
+                onRestore={onRestoreWorkspace}
+                onPermanentDelete={onPermanentDeleteWorkspace}
+                onInspect={onInspectWorkspace}
+                busy={lifecycleBusyWorkspaceId === workspace.id}
               />
             )}
             showsVerticalScrollIndicator={visibleWorkspaces.length > 7}
@@ -246,16 +261,27 @@ export function WorkspaceSelector({
   );
 }
 
-function WorkspaceOption({ workspace, selected, onSelect, theme, styles }: {
+function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, onPermanentDelete, onInspect, busy, theme, styles }: {
   workspace: WorkspaceSummary;
   selected: boolean;
   onSelect: (id: string) => void;
+  onRemove?: (workspace: WorkspaceSummary) => void;
+  onRestore?: (workspace: WorkspaceSummary) => void;
+  onPermanentDelete?: (workspace: WorkspaceSummary) => void;
+  onInspect?: (workspace: WorkspaceSummary) => void;
+  busy: boolean;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
   const localizedCopy = useWorkbenchCopy();
+  const removed = workspace.state === "removed";
+  const pending = workspace.state === "deletion_pending";
   const status = isMainWorkspace(workspace)
     ? ""
+    : pending
+      ? localizedCopy.workspaceStateDeletionPending
+      : removed
+        ? localizedCopy.workspaceStateRemoved
     : workspace.dirty
     ? localizedCopy.workspaceStatusDirty
     : workspace.unpushed
@@ -267,24 +293,37 @@ function WorkspaceOption({ workspace, selected, onSelect, theme, styles }: {
           : "";
   const statusTone = isMainWorkspace(workspace)
     ? observerAccent(theme)
+    : pending
+    ? theme.colors.statusWarning
+    : removed
+    ? theme.colors.foregroundMuted
     : workspace.dirty || workspace.unpushed || workspace.blockerCount > 0
     ? theme.colors.statusWarning
     : workspace.observationStale || workspace.dirty === null
     ? theme.colors.foregroundMuted
     : theme.colors.statusSuccess;
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={() => onSelect(workspace.id)}
-      style={[styles.workspaceOption, selected && styles.workspaceOptionActive]}
-    >
-      <View style={[styles.workspaceStatusDot, { backgroundColor: statusTone }]} />
-      <View style={styles.workspaceOptionCopy}>
-        <Text numberOfLines={1} style={styles.workspaceOptionTitle}>{workspaceDisplayName(workspace, localizedCopy)}</Text>
-        <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{repositoryCountLabel(workspace.repositoryCount, localizedCopy)}</Text>
-      </View>
-      {status && status !== "active" ? <Text style={[styles.workspaceOptionState, { color: statusTone }]}>{status}</Text> : null}
-    </Pressable>
+    <View style={[styles.workspaceOption, selected && styles.workspaceOptionActive]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ selected }}
+        onPress={() => onSelect(workspace.id)}
+        style={{ alignItems: "center", flex: 1, flexDirection: "row", gap: 7, minWidth: 0 }}
+      >
+        <View style={[styles.workspaceStatusDot, { backgroundColor: statusTone }]} />
+        <View style={styles.workspaceOptionCopy}>
+          <Text numberOfLines={1} style={styles.workspaceOptionTitle}>{workspaceDisplayName(workspace, localizedCopy)}</Text>
+          <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{repositoryCountLabel(workspace.repositoryCount, localizedCopy)}</Text>
+        </View>
+        {status && status !== "active" ? <Text numberOfLines={1} style={[styles.workspaceOptionState, { color: statusTone }]}>{status}</Text> : null}
+      </Pressable>
+      {!isMainWorkspace(workspace) ? <View style={styles.workspaceOptionActions}>
+        {onInspect ? <Pressable accessibilityLabel={localizedCopy.workspaceDeleteImpact} accessibilityRole="button" disabled={busy} onPress={() => onInspect(workspace)} style={styles.workspaceOptionAction}><Text style={styles.workspaceOptionActionText}>i</Text></Pressable> : null}
+        {pending && onRestore ? <Pressable accessibilityLabel={localizedCopy.workspaceRestore} accessibilityRole="button" disabled={busy} onPress={() => onRestore(workspace)} style={styles.workspaceOptionAction}><Text style={[styles.workspaceOptionActionText, { color: observerAccent(theme) }]}>↩</Text></Pressable> : null}
+        {!removed && !pending && onRemove ? <Pressable accessibilityLabel={localizedCopy.workspaceDelete} accessibilityRole="button" disabled={busy} onPress={() => onRemove(workspace)} style={styles.workspaceOptionAction}><Text style={[styles.workspaceOptionActionText, { color: observerAccent(theme) }]}>×</Text></Pressable> : null}
+        {removed && onRestore ? <Pressable accessibilityLabel={localizedCopy.workspaceRestore} accessibilityRole="button" disabled={busy} onPress={() => onRestore(workspace)} style={styles.workspaceOptionAction}><Text style={[styles.workspaceOptionActionText, { color: observerAccent(theme) }]}>↩</Text></Pressable> : null}
+        {removed && onPermanentDelete ? <Pressable accessibilityLabel={localizedCopy.workspacePermanentDelete} accessibilityRole="button" disabled={busy} onPress={() => onPermanentDelete(workspace)} style={styles.workspaceOptionAction}><Text style={[styles.workspaceOptionActionText, { color: theme.colors.statusDanger }]}>⌫</Text></Pressable> : null}
+      </View> : null}
+    </View>
   );
 }

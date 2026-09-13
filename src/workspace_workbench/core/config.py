@@ -14,6 +14,8 @@ from .models import RepositoryConfig
 
 CONFIG_SCHEMA_VERSION = 1
 DEFAULT_EXCLUDES = (".git", "node_modules", "vendor", ".venv", "__pycache__", "dist", "build")
+DEFAULT_GIT_TIMEOUT_SECONDS = 3.0
+DEFAULT_WORKSPACE_OPERATION_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass(frozen=True)
@@ -40,7 +42,8 @@ class ProjectConfig:
     management_enabled: bool = True
     toolchain: Mapping[str, Any] | None = None
     agent_enabled: bool = False
-    git_timeout_seconds: float = 3.0
+    git_timeout_seconds: float = DEFAULT_GIT_TIMEOUT_SECONDS
+    workspace_operation_timeout_seconds: float = DEFAULT_WORKSPACE_OPERATION_TIMEOUT_SECONDS
     max_diff_bytes: int = 256 * 1024
     cache_max_entries: int = 500
     cache_max_bytes: int = 32 * 1024 * 1024
@@ -242,7 +245,14 @@ def load_config(config_path: str | Path) -> ProjectConfig:
         )
     limits = raw.get("limits") if isinstance(raw.get("limits"), Mapping) else {}
     try:
-        git_timeout = max(0.5, min(float(limits.get("gitTimeoutSeconds", 3.0)), 30.0))
+        git_timeout = max(0.5, min(float(limits.get("gitTimeoutSeconds", DEFAULT_GIT_TIMEOUT_SECONDS)), 30.0))
+        workspace_operation_timeout = max(
+            5.0,
+            min(
+                float(limits.get("workspaceOperationTimeoutSeconds", DEFAULT_WORKSPACE_OPERATION_TIMEOUT_SECONDS)),
+                600.0,
+            ),
+        )
         max_diff = max(16 * 1024, min(int(limits.get("maxDiffBytes", 256 * 1024)), 4 * 1024 * 1024))
         cache_entries = max(20, min(int(limits.get("cacheMaxEntries", 500)), 10_000))
         cache_bytes = max(1 * 1024 * 1024, min(int(limits.get("cacheMaxBytes", 32 * 1024 * 1024)), 512 * 1024 * 1024))
@@ -276,6 +286,7 @@ def load_config(config_path: str | Path) -> ProjectConfig:
         toolchain=raw.get("toolchain") if isinstance(raw.get("toolchain"), Mapping) else None,
         agent_enabled=isinstance(raw.get("agent"), Mapping) and raw["agent"].get("provider") == "paseo",
         git_timeout_seconds=git_timeout,
+        workspace_operation_timeout_seconds=workspace_operation_timeout,
         max_diff_bytes=max_diff,
         cache_max_entries=cache_entries,
         cache_max_bytes=cache_bytes,

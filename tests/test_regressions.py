@@ -12,12 +12,75 @@ from concurrent.futures import ThreadPoolExecutor
 from test_workbench import make_repository, run_git, write_config
 from workspace_workbench.core.cache import ObservationCache
 from workspace_workbench.core.config import load_config
-from workspace_workbench.core.errors import WorkbenchError
+from workspace_workbench.core.errors import GitCommandError, WorkbenchError
 from workspace_workbench.core.git import GitClient
 from workspace_workbench.core.service import ObserverService
 
 
 class Regressions(unittest.TestCase):
+    def test_workspace_operation_timeout_is_separate_from_observation_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_repository(root, "api")
+            config = root / "project.json"
+            write_config(config, root, [{"id": "api", "path": "api"}])
+            value = json.loads(config.read_text(encoding="utf-8"))
+            value["limits"] = {"gitTimeoutSeconds": 3, "workspaceOperationTimeoutSeconds": 180}
+            config.write_text(json.dumps(value), encoding="utf-8")
+
+            loaded = load_config(config)
+            self.assertEqual(loaded.git_timeout_seconds, 3)
+            self.assertEqual(loaded.workspace_operation_timeout_seconds, 180)
+
+    def test_timeout_after_worktree_add_is_reconciled_as_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = make_repository(root, "api")
+            config = root / "project.json"
+            write_config(config, root, [{"id": "api", "path": "api"}])
+            service = ObserverService(load_config(config))
+            original = GitClient.run
+
+            def timeout_after_add(git, args, *positional, **keywords):
+                result = original(git, args, *positional, **keywords)
+                if tuple(args[:2]) == ("worktree", "add"):
+                    raise GitCommandError("simulated timeout after Git completed", code="git_timeout")
+                return result
+
+            try:
+                with patch.object(GitClient, "run", timeout_after_add):
+                    created = service.handle("workspace.create", {"name": "slow-create"})
+                self.assertEqual(created["state"], "active")
+                worktree = Path(created["repositories"][0]["worktreePath"])
+                self.assertTrue(worktree.is_dir())
+                self.assertIn(str(worktree), run_git(repo, "worktree", "list", "--porcelain"))
+                self.assertIn(created["repositories"][0]["branch"], run_git(repo, "branch", "--list"))
+            finally:
+                service.close()
+
+    def test_same_request_recovers_a_complete_failed_creation_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_repository(root, "api")
+            config = root / "project.json"
+            write_config(config, root, [{"id": "api", "path": "api"}])
+            service = ObserverService(load_config(config))
+            try:
+                params = {"name": "recoverable"}
+                created = service.handle("workspace.create", params)
+                failed = dict(service.provider.get("recoverable"))
+                failed["state"] = "create_failed"
+                failed["issues"] = [{"code": "git_timeout", "message": "simulated"}]
+                service.provider._write_record(failed)
+
+                recovered = service.handle("workspace.create", params)
+                self.assertEqual(recovered["state"], "active")
+                self.assertEqual(recovered["id"], created["id"])
+                self.assertNotIn("issues", service.provider.get("recoverable"))
+                self.assertEqual(json.loads((Path(created["treePath"]) / ".workspace/manifest.json").read_text())["state"], "active")
+            finally:
+                service.close()
+
     def test_failed_multi_repository_creation_rolls_back_and_retains_record(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

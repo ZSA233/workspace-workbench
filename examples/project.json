@@ -33,5 +33,9 @@
   ],
   "mainWorkspace": {
     "displayName": "Main workspace"
+  },
+  "limits": {
+    "gitTimeoutSeconds": 3,
+    "workspaceOperationTimeoutSeconds": 120
   }
 }

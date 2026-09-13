@@ -242,6 +242,145 @@ class GitWorktreeProvider:
         except OSError:
             temporary.unlink(missing_ok=True)
 
+    @staticmethod
+    def _parse_worktree_entries(output: str) -> list[dict[str, str]]:
+        entries: list[dict[str, str]] = []
+        current: dict[str, str] = {}
+        for line in [*output.splitlines(), ""]:
+            if not line.strip():
+                if current:
+                    entries.append(current)
+                current = {}
+                continue
+            key, separator, value = line.partition(" ")
+            if separator:
+                current[key] = value.strip()
+        return entries
+
+    def _worktree_entries(self, git: GitClient) -> list[dict[str, str]]:
+        result = git.run(["worktree", "list", "--porcelain"], check=False)
+        if result.returncode != 0:
+            raise GitCommandError(
+                result.stderr.strip() or "Git worktree registrations could not be checked",
+                code="git_worktree_check_failed",
+                details={"repository": str(git.repository), "returncode": result.returncode},
+            )
+        return self._parse_worktree_entries(result.stdout)
+
+    def _registered_worktree(self, git: GitClient, worktree_path: Path) -> dict[str, str] | None:
+        target = worktree_path.resolve()
+        for entry in self._worktree_entries(git):
+            value = entry.get("worktree")
+            if value and Path(value).expanduser().resolve() == target:
+                return entry
+        return None
+
+    def _creation_was_completed(self, git: GitClient, worktree_path: Path, branch: str, base_sha: str) -> bool:
+        try:
+            entry = self._registered_worktree(git, worktree_path)
+        except WorkbenchError:
+            return False
+        return bool(
+            worktree_path.is_dir()
+            and entry
+            and not entry.get("locked")
+            and entry.get("branch") == f"refs/heads/{branch}"
+            and entry.get("HEAD") == base_sha
+        )
+
+    def _rollback_creation_entry(self, operation: Mapping[str, Any]) -> list[dict[str, Any]]:
+        git = operation["git"]
+        worktree = operation["worktree"]
+        branch = str(operation["branch"])
+        base_sha = str(operation["baseSha"])
+        branch_ref = f"refs/heads/{branch}"
+        issues: list[dict[str, Any]] = []
+
+        def issue(code: str, message: str) -> None:
+            issues.append({"code": code, "path": str(worktree), "message": message})
+
+        try:
+            registered = self._registered_worktree(git, worktree)
+            if registered is not None:
+                if registered.get("branch") != branch_ref:
+                    issue("rollback_identity_mismatch", "managed worktree registration changed; preserved for safety")
+                    return issues
+                if registered.get("locked"):
+                    if registered.get("locked") != "initializing" or registered.get("HEAD") != base_sha:
+                        issue("rollback_identity_mismatch", "worktree is locked for an unexpected reason; preserved for safety")
+                        return issues
+                    git.run(["worktree", "unlock", str(worktree)])
+                try:
+                    git.run(["worktree", "remove", str(worktree)])
+                except GitCommandError as error:
+                    if error.code != "git_timeout":
+                        raise
+                remaining = self._registered_worktree(git, worktree)
+                if remaining is not None or worktree.exists():
+                    issue("rollback_incomplete", "managed worktree could not be confirmed removed; preserved for safety")
+                    return issues
+            elif worktree.exists():
+                issue("rollback_incomplete", "unregistered worktree path exists; preserved for safety")
+                return issues
+
+            branch_result = git.run(["show-ref", "--verify", branch_ref], check=False)
+            if branch_result.returncode != 0:
+                return issues
+            branch_sha = branch_result.stdout.strip().split()[0] if branch_result.stdout.strip() else ""
+            if branch_sha != base_sha:
+                issue("branch_preserved", "branch changed after creation started; preserved for safety")
+                return issues
+            if any(entry.get("branch") == branch_ref for entry in self._worktree_entries(git)):
+                issue("branch_preserved", "branch is still registered to another worktree; preserved for safety")
+                return issues
+            git.run(["branch", "-D", branch])
+        except Exception as error:
+            issue("rollback_incomplete", str(error))
+        return issues
+
+    def _recover_creation_record(self, workspace: Mapping[str, Any], params: Mapping[str, Any]) -> dict[str, Any] | None:
+        repository_ids = workspace.get("repositoryIds")
+        repositories = workspace.get("repositories")
+        tree_value = workspace.get("treePath")
+        if not isinstance(repository_ids, list) or not isinstance(repositories, list) or not tree_value:
+            return None
+        if sorted(str(value) for value in repository_ids) != sorted(
+            str(item.get("id") or "") for item in repositories if isinstance(item, Mapping)
+        ):
+            return None
+        tree_path = Path(str(tree_value)).expanduser().resolve()
+        if tree_path == self.trees_root or not _inside(tree_path, self.trees_root) or not tree_path.is_dir():
+            return None
+        for repository in repositories:
+            if not isinstance(repository, Mapping):
+                return None
+            source_value = repository.get("sourcePath")
+            worktree_value = repository.get("worktreePath")
+            branch = str(repository.get("branch") or "")
+            base_sha = str(repository.get("baseSha") or "")
+            if not source_value or not worktree_value or not branch or not base_sha:
+                return None
+            source_path = Path(str(source_value)).expanduser().resolve()
+            worktree_path = Path(str(worktree_value)).expanduser().resolve()
+            if not _inside(source_path, self.config.source_root) or not _inside(worktree_path, tree_path):
+                return None
+            try:
+                git = GitClient(source_path, timeout=self.config.workspace_operation_timeout_seconds)
+                if not self._creation_was_completed(git, worktree_path, branch, base_sha):
+                    return None
+            except (OSError, WorkbenchError):
+                return None
+        record = dict(workspace)
+        record["state"] = "active"
+        record["description"] = str(params.get("description") or record.get("description") or "")
+        record["createdAt"] = str(record.get("createdAt") or _now())
+        record.pop("issues", None)
+        manifest_root = tree_path / ".workspace"
+        manifest_root.mkdir(mode=0o700, exist_ok=True)
+        manifest_path = manifest_root / "manifest.json"
+        manifest_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        return self._write_record(record)
+
     def _deletion_impact(self, workspace: Mapping[str, Any]) -> dict[str, Any]:
         repositories: list[dict[str, Any]] = []
         dirty_repositories = 0
@@ -357,6 +496,10 @@ class GitWorktreeProvider:
             existing = self._read_record(record_path)
             if existing and existing.get("requestHash") == request_hash and existing.get("state") == "active":
                 return existing
+            if existing and existing.get("requestHash") == request_hash and existing.get("state") in {"creating", "create_failed"}:
+                recovered = self._recover_creation_record(existing, params)
+                if recovered is not None:
+                    return recovered
             raise WorkbenchError(f"workspace already exists: {workspace_id}", code="workspace_exists")
         requested_repositories = params.get("repositories")
         if requested_repositories is not None and not isinstance(requested_repositories, list):
@@ -396,7 +539,10 @@ class GitWorktreeProvider:
         # Resolve every starting point before creating any directories or branches.
         resolved_bases: dict[str, tuple[str, str]] = {}
         for repository in selected:
-            git = GitClient(self.config.repository_path(repository), timeout=self.config.git_timeout_seconds)
+            git = GitClient(
+                self.config.repository_path(repository),
+                timeout=self.config.workspace_operation_timeout_seconds,
+            )
             if not git.is_repository():
                 raise WorkbenchError(f"configured repository is not a Git checkout: {repository.id}", code="repository_invalid")
             record = self._configured_repository_record(repository)
@@ -412,9 +558,9 @@ class GitWorktreeProvider:
         if not _inside(tree_root, self.trees_root):
             raise WorkbenchError("workspace tree path is invalid", code="path_invalid")
         tree_root.mkdir(parents=True, exist_ok=False)
-        created: list[tuple[GitClient, Path, str]] = []
+        created: list[dict[str, Any]] = []
         repositories: list[dict[str, Any]] = []
-        journal = {"schemaVersion": MANIFEST_VERSION, "id": workspace_id, "displayName": name, "kind": "managed", "managed": True, "state": "creating", "treePath": str(tree_root), "sourceRoot": str(self.config.source_root), "repositories": repositories, "requestHash": request_hash}
+        journal = {"schemaVersion": MANIFEST_VERSION, "id": workspace_id, "displayName": name, "description": str(params.get("description") or ""), "kind": "managed", "managed": True, "state": "creating", "treePath": str(tree_root), "sourceRoot": str(self.config.source_root), "repositoryIds": [repository.id for repository in selected], "repositories": repositories, "requestHash": request_hash}
         def save_journal() -> None:
             temporary = record_path.with_suffix(f".{os.getpid()}.tmp")
             temporary.write_text(json.dumps(journal, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -424,7 +570,7 @@ class GitWorktreeProvider:
         try:
             for repository in selected:
                 source = self.config.repository_path(repository)
-                git = GitClient(source, timeout=self.config.git_timeout_seconds)
+                git = GitClient(source, timeout=self.config.workspace_operation_timeout_seconds)
                 if not git.is_repository():
                     raise WorkbenchError(f"configured repository is not a Git checkout: {repository.id}", code="repository_invalid")
                 base_ref, base_sha = resolved_bases[repository.id]
@@ -440,7 +586,13 @@ class GitWorktreeProvider:
                 git.run(["check-ref-format", "--branch", branch])
                 if git.run(["show-ref", "--verify", f"refs/heads/{branch}"], check=False).returncode == 0:
                     raise WorkbenchError("workspace branch already exists", code="branch_exists")
-                created.append((git, worktree, branch))
+                operation = {
+                    "git": git,
+                    "worktree": worktree,
+                    "branch": branch,
+                    "baseSha": base_sha,
+                }
+                created.append(operation)
                 repositories.append({
                     "id": repository.id,
                     "name": repository.name,
@@ -454,17 +606,19 @@ class GitWorktreeProvider:
                     "role": repository.role,
                 })
                 save_journal()
-                git.run(["worktree", "add", "-b", branch, str(worktree), base_sha])
+                try:
+                    git.run(["worktree", "add", "-b", branch, str(worktree), base_sha])
+                except GitCommandError as error:
+                    # Git can finish the mutation just as the process timeout
+                    # fires. Confirm the exact path, branch, and base before
+                    # deciding that creation failed.
+                    if error.code != "git_timeout" or not self._creation_was_completed(git, worktree, branch, base_sha):
+                        raise
+                operation["created"] = True
         except Exception as cause:
             rollback_issues = []
-            for git, worktree, branch in reversed(created):
-                try:
-                    if worktree.exists():
-                        git.run(["worktree", "remove", str(worktree)])
-                    if git.run(["show-ref", "--verify", f"refs/heads/{branch}"], check=False).returncode == 0:
-                        git.run(["branch", "-d", branch])
-                except Exception as error:
-                    rollback_issues.append({"code": "rollback_incomplete", "path": str(worktree), "message": str(error)})
+            for operation in reversed(created):
+                rollback_issues.extend(self._rollback_creation_entry(operation))
             if tree_root.exists() and not any(tree_root.iterdir()):
                 tree_root.rmdir()
             journal.update(state="create_failed", issues=[{"code": getattr(cause, "code", "create_failed"), "message": str(cause)}, *rollback_issues])
@@ -481,6 +635,7 @@ class GitWorktreeProvider:
             "state": "active",
             "sourceRoot": str(self.config.source_root),
             "treePath": str(tree_root),
+            "repositoryIds": [repository.id for repository in selected],
             "repositories": repositories,
             "createdAt": _now(),
             "updatedAt": _now(),
@@ -517,12 +672,12 @@ class GitWorktreeProvider:
                 worktree_path = Path(str(worktree)).expanduser().resolve()
                 if not _inside(source_path, self.config.source_root) or not _inside(worktree_path, tree_path):
                     raise WorkbenchError("workspace repository path is outside the provider root", code="path_invalid")
-                target = GitClient(worktree_path, timeout=self.config.git_timeout_seconds)
+                target = GitClient(worktree_path, timeout=self.config.workspace_operation_timeout_seconds)
                 if target.root() != worktree_path or target.branch() != repository.get("branch"):
                     raise WorkbenchError("worktree identity changed", code="worktree_identity_changed")
                 if target.status_porcelain():
                     raise WorkbenchError("worktree has uncommitted files", code="workspace_dirty")
-                source_git = GitClient(source_path, timeout=self.config.git_timeout_seconds)
+                source_git = GitClient(source_path, timeout=self.config.workspace_operation_timeout_seconds)
                 registered = source_git.run(["worktree", "list", "--porcelain"]).stdout
                 if f"worktree {worktree_path}\n" not in registered:
                     raise WorkbenchError("worktree registration changed", code="worktree_identity_changed")
@@ -676,7 +831,7 @@ class GitWorktreeProvider:
                     raise WorkbenchError("workspace repository path is outside the provider root", code="path_invalid")
                 source_value = repository.get("sourcePath")
                 if source_value:
-                    source_git = GitClient(source_value, timeout=self.config.git_timeout_seconds)
+                    source_git = GitClient(source_value, timeout=self.config.workspace_operation_timeout_seconds)
                     registered = source_git.run(["worktree", "list", "--porcelain"], check=False).stdout
                     if f"worktree {worktree_path}\n" in registered:
                         if (worktree_path / ".git").exists():

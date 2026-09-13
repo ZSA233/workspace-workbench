@@ -187,7 +187,7 @@ export function CommitGraph({
   const laneCount = Math.max(1, ...rows.map((row) => row.laneCount));
   const railWidth = laneCount * GRAPH_LANE_WIDTH + 8;
   const workingFileCount = Math.max(repository.workingChanges.files, repository.dirtyPaths?.length || 0);
-  const showWorktree = !selectedCommit && (repository.dirty || workingFileCount > 0);
+  const showWorktree = Boolean(repository.dirty || workingFileCount > 0);
   const graphHeight = (rows.length + (showWorktree ? 1 : 0)) * GRAPH_ROW_HEIGHT;
   const branchScopeAvailable = repository.branchScopeAvailable !== false;
   const graphScope = selectedCommit
@@ -220,7 +220,7 @@ export function CommitGraph({
               {showWorktree ? <ScopeButton label={formatCopyFrom(copy, "text_22c7a14625", [workingFileCount])} active={changeScope === "working"} onPress={() => onScope("working")} styles={styles} /> : null}
               {branchScopeAvailable ? <ScopeButton label={formatCopyFrom(copy, "text_46b798f402", [repository.changes.files])} active={changeScope === "branch"} onPress={() => onScope("branch")} styles={styles} /> : null}
             </View>
-          ) : <IconButton label={copy.text_62b4069970} icon="Undo2" color={theme.colors.foregroundMuted} onPress={() => onCommit("")} />}
+          ) : <IconButton label={copy.text_62b4069970} icon="ArrowLeft" color={theme.colors.foregroundMuted} onPress={() => onCommit("")} />}
           <IconButton label={copy.text_4f55ee1e68} icon="Info" active={detailsOpen} color={theme.colors.foregroundMuted} onPress={onToggleDetails} />
           {graph?.hasOlder && graphViewLimit(graph) >= 200 ? <IconButton label={copy.text_f9d6d6a329} icon="Ellipsis" color={theme.colors.statusWarning} onPress={onToggleDetails} /> : null}
         </View>
@@ -249,7 +249,10 @@ export function CommitGraph({
                   <WorkingTreeRow
                     repository={repository}
                     selected={changeScope === "working"}
-                    onPress={() => onScope("working")}
+                    onPress={() => {
+                      onCommit("");
+                      onScope("working");
+                    }}
                     railWidth={railWidth}
                     theme={theme}
                     styles={styles}

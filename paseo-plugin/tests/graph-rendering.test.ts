@@ -89,3 +89,11 @@ test("commit graph keeps details in a bounded bottom panel without changing the 
   assert.ok(source.includes("graphReferenceTags(row, theme, false)"));
   assert.ok(!styles.includes("graphRow: { alignItems: \"center\", borderBottomColor: theme.colors.border, borderBottomWidth: 1, borderLeftColor: \"transparent\""));
 });
+
+test("commit selection keeps the dirty worktree visible and lets it restore the current scope", () => {
+  const source = readFileSync(new URL("../client/components/graph.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("const showWorktree = Boolean(repository.dirty || workingFileCount > 0);"));
+  assert.ok(!source.includes("const showWorktree = !selectedCommit"));
+  assert.ok(source.includes('icon="ArrowLeft"'));
+  assert.ok(source.includes('onCommit("");\n                      onScope("working");'));
+});

@@ -42,3 +42,5 @@
 ## 补充审核要求
 
 本文件追加验收，不修改冻结 handoff：核对无快照恢复、重复恢复无投递、终止后重启保留 criterion、错误身份拒绝、原安全边界及协议差异。正式 Reviewer 结论仍待获取。此前终止流程的晚报告拒收不应通过直接改文件绕过；新版正常恢复入口生效需要相应实例加载本分支插件。
+
+实现提交：`c9a1253`。提交后再次调用 `workbench_execution_report(ready_for_review)`，旧实例仍以 `execution_report_late` 拒收。返回的正式历史确认用户两次恢复均因 `review_snapshot_unavailable` 失败，当前状态为 failed、round 0、snapshot null，与本轮修复的根因吻合。这是旧实例的实际记录证据；不代表新版真实 Reviewer 已经验证。

@@ -70,3 +70,11 @@ NUL 未跟踪文件改为二进制分类，这是对旧文本计数错误的显�
 - 正式 Reviewer 流程由 ready_for_review 报告交接；本记录包含实现自审与回归，不冒充已获 Reviewer 批准。
 
 机器可读验证摘要：[workspace-evolution-20260914.json](verification/workspace-evolution-20260914.json)。
+
+## 审核交接状态
+
+实现提交为 `7f5f82b`，工作区已完成全部实现与验证。已调用正式报告接口提交
+`ready_for_review`，但被以 `execution_report_late` 拒收：前一次 `needs_input` 已将旧流程
+结束为 blocked。未绕过终态保护或直接修改审核状态文件。现有公开审核启动接口要求执行
+Agent 没有活动 turn，因此应在本回合结束后，通过 Workspace 的恢复/重新开始审核入口继续。
+此项是审核流程交接限制，不是 Node 重构未完成；正式 Reviewer 尚未给出结论。

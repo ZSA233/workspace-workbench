@@ -29,5 +29,13 @@
     "actualPaseo": "0.8.0",
     "actualDaemonNode": "22.14.0"
   },
-  "supplementalReview": "Mode consistency criteria are documented in docs/workspace-evolution.md; the frozen handoff is unchanged"
+  "supplementalReview": "Mode consistency criteria are documented in docs/workspace-evolution.md; the frozen handoff is unchanged",
+  "implementationCommit": "7f5f82b",
+  "reviewHandoff": {
+    "requestedStatus": "ready_for_review",
+    "accepted": false,
+    "code": "execution_report_late",
+    "reason": "The earlier needs_input report ended the original review flow. Existing public start-review API requires the execution turn to be idle.",
+    "nextAction": "After this execution turn ends, restore or start the Workspace review through the normal UI/API; do not rewrite the frozen handoff or state files."
+  }
 }

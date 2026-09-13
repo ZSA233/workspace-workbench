@@ -11,6 +11,7 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
   assert.equal(result.status, 0, result.stderr);
   const response = JSON.parse(result.stdout.trim()) as { result: { tools: Array<{ name: string; description: string; inputSchema: { required: string[] } }> } };
   assert.deepEqual(response.result.tools.map((tool) => tool.name), [
+    "workbench_artifact_register",
     "workbench_workspace_preview",
     "workbench_workspace_execute",
     "workbench_workspace_status",
@@ -22,6 +23,7 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
   ]);
   for (const tool of response.result.tools) {
     assert.ok(tool.description.length < 70);
+    if (tool.name === "workbench_artifact_register") assert.deepEqual(tool.inputSchema.required, ["artifact"]);
     if (["workbench_workspace_preview", "workbench_workspace_execute"].includes(tool.name)) assert.deepEqual(tool.inputSchema.required, ["requestId", "handoff"]);
     if (tool.name === "workbench_workspace_status") assert.deepEqual(tool.inputSchema.required, ["requestId"]);
     if (["workbench_review_preview", "workbench_review_status", "workbench_review_stop", "workbench_review_resume"].includes(tool.name)) assert.deepEqual(tool.inputSchema.required, ["workspaceId"]);

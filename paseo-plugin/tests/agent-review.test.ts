@@ -23,6 +23,7 @@ import {
   startReview,
 } from "../server/agent-review.ts";
 import { resolveReviewPreferences } from "../shared/agent-review.ts";
+import { handoffSchema } from "../shared/handoff.ts";
 import type { AgentContext } from "../server/agent-provider.ts";
 import { writeState } from "../server/orchestration-state.ts";
 
@@ -146,6 +147,57 @@ async function withFixture<T>(fixture: Harness, callback: () => T | Promise<T>):
   }
 }
 
+test("the frozen review packet and referenced image reach the Reviewer", async () => {
+  const fixture = harness();
+  try {
+    await withFixture(fixture, async () => {
+      writeFileSync(join(fixture.root, "draft.png"), Buffer.from("draft-image"));
+      const handoff = handoffSchema.parse({
+        goal: "Implement the draft",
+        reviewPacket: {
+          requirementUnderstanding: "Match the supplied draft in the target Workspace.",
+          plan: ["Update the implementation", "Run the relevant tests"],
+          acceptanceCriteria: [{ id: "AC-1", text: "The implementation matches the draft", required: true }],
+          references: [{ id: "REF-1", kind: "image", title: "Draft", purpose: "Visual source of truth", path: "draft.png", required: true }],
+          instructions: "Compare the result with the draft before approving.",
+        },
+      });
+      const recorded = recordExecutionHandoff({ workspaceId: "managed-fixture", projectConfig: fixture.config, executionAgentId: "execution-fixture", handoff });
+      assert.equal(recorded.handoff?.reviewPacket.requirementUnderstanding, "Match the supplied draft in the target Workspace.");
+      const session = await startReview({ projectConfig: fixture.config, workspaceId: "managed-fixture", executionAgentId: "execution-fixture" }, fixture.context);
+      assert.equal(session.snapshot?.artifacts[0]?.status, "ready");
+      assert.equal(session.snapshot?.artifacts[0]?.path, "draft.png");
+      assert.equal(session.snapshot?.artifacts[0]?.assetId?.startsWith("review-"), true);
+      assert.match(String(fixture.reviewerCreate[0]?.prompt), /Match the supplied draft/);
+      assert.match(String(fixture.reviewerCreate[0]?.prompt), /AC-1/);
+      const images = fixture.reviewerCreate[0]?.images as Array<{ data: string; mimeType: string }> | undefined;
+      assert.deepEqual(images, [{ data: Buffer.from("draft-image").toString("base64"), mimeType: "image/png" }]);
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("approval requires coverage for every required acceptance criterion", async () => {
+  const fixture = harness();
+  try {
+    await withFixture(fixture, async () => {
+      const handoff = handoffSchema.parse({ goal: "Implement the requirement", reviewPacket: { acceptanceCriteria: [{ id: "AC-1", text: "The requirement is implemented", required: true }] } });
+      recordExecutionHandoff({ workspaceId: "managed-fixture", projectConfig: fixture.config, executionAgentId: "execution-fixture", handoff });
+      const session = await startReview({ projectConfig: fixture.config, workspaceId: "managed-fixture", executionAgentId: "execution-fixture" }, fixture.context);
+      const baseResult = { verdict: "approved" as const, summary: "Looks good", findings: [], checks: [], unreviewed: [], snapshotId: session.snapshotId!, diffId: session.diffId! };
+      const missing = await recordReviewerResult({ workspaceId: session.workspaceId, sessionId: session.id, reviewerAgentId: session.reviewerAgentId!, token: reviewAuthToken(session.id)!, result: { ...baseResult, criterionChecks: [{ id: "AC-1", status: "not_verifiable" as const }] }, finalize: true }, fixture.context);
+      assert.equal(missing.accepted, false);
+      assert.equal(missing.error?.code, "reviewer_invalid_result");
+      const approved = await recordReviewerResult({ workspaceId: session.workspaceId, sessionId: session.id, reviewerAgentId: session.reviewerAgentId!, token: reviewAuthToken(session.id)!, result: { ...baseResult, criterionChecks: [{ id: "AC-1", status: "passed" as const, evidence: "Verified in the reviewed snapshot" }] }, finalize: true }, fixture.context);
+      assert.equal(approved.accepted, true);
+      assert.equal(approved.session?.status, "approved");
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("review preferences resolve field by field and preserve project config", () => {
   const resolved = resolveReviewPreferences({ mode: "automatic", autoFix: false, maxRounds: 5 }, { autoFix: true }, { reviewerModel: "model-b" });
   assert.equal(resolved.mode, "automatic");
@@ -167,6 +219,7 @@ test("execution handoff creates the durable review timeline before completion", 
       acceptance: ["The fixture test passes"],
       constraints: [],
       ambiguities: [],
+      reviewPacket: { requirementUnderstanding: "", plan: [], acceptanceCriteria: [], references: [], instructions: "" },
       startMode: "adaptive" as const,
       policy: { placementGuard: true },
       expected: { branchByRepository: {}, baseByRepository: {} },

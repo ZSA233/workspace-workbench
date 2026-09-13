@@ -27,6 +27,8 @@ const instructions = [
   "For direct execution, execute before the first target-file mutation and include repositories, base refs and the approved handoff.",
   "Repository references may be IDs or paths; reuse preview's canonical request for execute.",
   "Retry the identical requestId and payload; if repository resolution fails, report it instead of inventing a replacement request.",
+  "When a task depends on a generated image or other visual reference, register only the relevant asset with workbench_artifact_register (prefer its local path; use image data only when the provider supplies it) and include the returned assetId in handoff.reviewPacket.references. If the image exists only as unaddressable chat media, ask for a saved/attached copy; do not include unrelated conversation media or invent an assetId.",
+  "Before execution, include the requirement understanding, plan, stable acceptance criteria, references and task-specific review instructions in handoff.reviewPacket when they are known.",
   "After execute returns, report the created execution session. In the default independent mode, the execution session owns edits: do not continue editing the target checkout or wait for it before returning the creation result. If child mode was explicitly selected, retain the existing parent-child coordination and lifecycle notifications.",
 ].join("\n");
 

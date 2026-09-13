@@ -13,13 +13,16 @@ import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,Vie
 import { copy, getWorkbenchCopy, localizedReviewError } from "../shared/copy";
 
 import {
-agentContextQuery,
-workspaceBindingQuery,
-workspaceDelegate,
-type AgentContextResponse,
-type WorkspaceBindingResponse,
-type WorkspaceDelegateResponse,
+  agentContextQuery,
+  workspaceBindingQuery,
+  workspaceDelegate,
+  type AgentContextResponse,
+  type WorkspaceBindingResponse,
+  type WorkspaceDelegateResponse,
 } from "../shared/handoff";
+import type { Handoff } from "../shared/handoff";
+import type { ReviewPacket } from "../shared/review-packet";
+import { artifactList } from "../shared/artifacts";
 import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpdate, type AgentRelationship, type AgentSessionPatch } from "../shared/agent-session";
 import { observerQuery } from "../shared/observer";
 import { projectsQuery, type ProjectInfo } from "../shared/projects";
@@ -119,6 +122,46 @@ function observationAreaDetail(area: ObservationArea, strings = copy): string {
 
 const PREFERENCE_SCOPE_FALLBACK = "global";
 const noSectionDragState = () => {};
+
+function nonEmptyLines(value: string): string[] {
+  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+function referenceKind(path: string): "file" | "document" | "prototype" | "image" | "pdf" {
+  const lower = path.toLowerCase();
+  if (/\.(png|jpe?g|webp|gif)$/.test(lower)) return "image";
+  if (lower.endsWith(".pdf")) return "pdf";
+  if (/\.(md|markdown|txt|json|html?)$/.test(lower)) return "document";
+  return "file";
+}
+
+function reviewPacketFromEditor(input: { understanding: string; plan: string; acceptance: string; references: string; instructions: string }): ReviewPacket {
+  const acceptanceCriteria = nonEmptyLines(input.acceptance).map((text, index) => ({ id: `AC-${index + 1}`, text, required: true }));
+  const references = nonEmptyLines(input.references).map((value, index) => {
+    if (value.startsWith("asset:")) {
+      const assetId = value.slice("asset:".length).trim();
+      return { id: `REF-${index + 1}`, kind: "image" as const, title: assetId || `Asset ${index + 1}`, assetId, required: true };
+    }
+    const separator = value.indexOf(":");
+    const hasRepositoryPrefix = separator > 0 && !value.startsWith("./") && !value.startsWith("../") && !value.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(value);
+    const repositoryId = hasRepositoryPrefix ? value.slice(0, separator).trim() : undefined;
+    const path = hasRepositoryPrefix ? value.slice(separator + 1).trim() : value;
+    return { id: `REF-${index + 1}`, kind: referenceKind(path), title: path, required: true, ...(repositoryId ? { repositoryId } : {}), path };
+  }).filter((reference) => Boolean(reference.assetId || ("path" in reference && reference.path)));
+  return {
+    requirementUnderstanding: input.understanding.trim(),
+    plan: nonEmptyLines(input.plan),
+    acceptanceCriteria,
+    references,
+    instructions: input.instructions.trim(),
+  };
+}
+
+function appendAssetReference(current: string, assetId: string): string {
+  const line = `asset:${assetId}`;
+  if (nonEmptyLines(current).some((value) => value === line)) return current;
+  return current.trim() ? `${current.trim()}\n${line}` : line;
+}
 
 function comparablePath(value: string): string {
   const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "") || "/";
@@ -292,6 +335,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const bindingRpc = (input: Parameters<typeof rawBindingRpc>[0]) => rawBindingRpc({ ...input, projectConfig });
   const rawDelegateRpc = useRpc(workspaceDelegate);
   const delegateRpc = (input: Parameters<typeof rawDelegateRpc>[0]) => rawDelegateRpc({ ...input, projectConfig });
+  const artifactListRpc = useRpc(artifactList);
   const toast = useToast();
   const selectedWorkspaceId = preferences.selectedWorkspaceId;
   const [selectionResolved, setSelectionResolved] = useState(false);
@@ -312,6 +356,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [targetOverrides, setTargetOverrides] = useState<Record<string, string>>({});
   const [handoffGoal, setHandoffGoal] = useState("");
   const [handoffRelationship, setHandoffRelationship] = useState<"default" | AgentRelationship>("default");
+  const [handoffPacketOpen, setHandoffPacketOpen] = useState(false);
+  const [handoffPreviewOpen, setHandoffPreviewOpen] = useState(false);
+  const [handoffUnderstanding, setHandoffUnderstanding] = useState("");
+  const [handoffPlan, setHandoffPlan] = useState("");
+  const [handoffAcceptance, setHandoffAcceptance] = useState("");
+  const [handoffReferences, setHandoffReferences] = useState("");
+  const [handoffReviewInstructions, setHandoffReviewInstructions] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const newlyCreatedWorkspace = useRef<string | null>(null);
   const [delegating, setDelegating] = useState(false);
@@ -322,8 +373,17 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     setSelectedCommit("");
     setSelectedFile("");
     setReviewSessionId("");
+    setHandoffGoal("");
+    setHandoffRelationship("default");
+    setHandoffPacketOpen(false);
+    setHandoffPreviewOpen(false);
+    setHandoffUnderstanding("");
+    setHandoffPlan("");
+    setHandoffAcceptance("");
+    setHandoffReferences("");
+    setHandoffReviewInstructions("");
     scopeRepositoryIdentity.current = "";
-  }, [preferenceScopeKey]);
+  }, [preferenceScopeKey, selectedWorkspaceId]);
 
   const listQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "workspace-list"],
@@ -404,6 +464,14 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   });
   const binding = (bindingQuery.data?.binding || null) as WorkspaceBindingResponse["binding"];
   const savedHandoff = bindingQuery.data?.handoff || null;
+  const artifactListQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "handoff-artifacts"],
+    queryFn: () => artifactListRpc({ projectConfig }),
+    enabled: Boolean(projectConfig && handoffPacketOpen),
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 5_000,
+  });
   const boundAgent = (bindingQuery.data?.agent || null) as WorkspaceBindingResponse["agent"];
   const bindingFailure = bindingQuery.data?.error?.message || queryErrorMessage(bindingQuery.error, localizedCopy);
   const identifyQuery = useQuery({
@@ -837,7 +905,36 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       ? theme.colors.statusWarning
       : theme.colors.foregroundMuted;
 
-  async function delegateSelectedWorkspace(): Promise<void> {
+  function buildSelectedHandoff(): Handoff | null {
+    const goal = handoffGoal.trim();
+    if (!selectedWorkspaceId || (!savedHandoff && !goal && !binding?.agentId)) return null;
+    if (savedHandoff) return savedHandoff;
+    return {
+      version: "workspace.workbench.handoff/v1",
+      goal: goal || localizedCopy.text_36cdf2a07a,
+      decisions: [],
+      inScope: [],
+      outOfScope: [],
+      steps: [],
+      acceptance: [],
+      constraints: [],
+      ambiguities: [],
+      reviewPacket: reviewPacketFromEditor({
+        understanding: handoffUnderstanding,
+        plan: handoffPlan,
+        acceptance: handoffAcceptance,
+        references: handoffReferences,
+        instructions: handoffReviewInstructions,
+      }),
+      startMode: "adaptive",
+      reviewLocale: locale,
+      ...(handoffRelationship === "default" ? {} : { relationship: handoffRelationship }),
+      policy: { placementGuard: true },
+      expected: { branchByRepository: {}, baseByRepository: {} },
+    };
+  }
+
+  function delegateSelectedWorkspace(): void {
     if (selectedWorkspaceIsMain) {
       toast.show(localizedCopy.text_bb57803d41, { variant: "warning" });
       return;
@@ -846,40 +943,16 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       toast.show(localizedCopy.text_d7dd46e5e3, { variant: "warning" });
       return;
     }
-    const goal = handoffGoal.trim();
-    if (!savedHandoff && !goal && !binding?.agentId) {
+    if (!buildSelectedHandoff()) {
       toast.show(localizedCopy.text_afa9beb681, { variant: "warning" });
       return;
     }
-    const handoff = savedHandoff || (binding?.agentId ? {
-      version: "workspace.workbench.handoff/v1" as const,
-      goal: localizedCopy.text_36cdf2a07a,
-      decisions: [],
-      inScope: [],
-      outOfScope: [],
-      steps: [],
-      acceptance: [],
-      constraints: [],
-      ambiguities: [],
-      startMode: "adaptive" as const,
-      reviewLocale: locale,
-      ...(handoffRelationship === "default" ? {} : { relationship: handoffRelationship }),
-      expected: { branchByRepository: {}, baseByRepository: {} },
-    } : {
-      version: "workspace.workbench.handoff/v1" as const,
-      goal,
-      decisions: [],
-      inScope: [],
-      outOfScope: [],
-      steps: [],
-      acceptance: [],
-      constraints: [],
-      ambiguities: [],
-      startMode: "adaptive" as const,
-      reviewLocale: locale,
-      ...(handoffRelationship === "default" ? {} : { relationship: handoffRelationship }),
-      expected: { branchByRepository: {}, baseByRepository: {} },
-    });
+    setHandoffPreviewOpen(true);
+  }
+
+  async function submitSelectedWorkspace(): Promise<void> {
+    const handoff = buildSelectedHandoff();
+    if (!handoff || !selectedWorkspaceId || !parentAgentId) return;
     setDelegating(true);
     try {
       const result: WorkspaceDelegateResponse = await delegateRpc({
@@ -896,6 +969,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               ? localizedCopy.text_050246dd54
               : localizedCopy.text_962c002fa2;
         toast.show(actionLabel, { variant: "success" });
+        setHandoffPreviewOpen(false);
       } else {
         toast.show(result.error ? localizedReviewError(result.error, localizedCopy) : localizedCopy.text_b4f57a0af8, { variant: result.action === "blocked" ? "warning" : "error" });
       }
@@ -1002,6 +1076,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const expandAll = useCallback(() => { animateSectionLayout(); preferences.setAllSectionsCollapsed(false); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.setAllSectionsCollapsed]);
   const resetLayout = useCallback(() => { animateSectionLayout(); preferences.resetLayout(); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.resetLayout]);
   const BodyContainer = tab === "review" || allocation.outerScroll ? ScrollView : View;
+  const draftHandoff = buildSelectedHandoff();
+  const draftPacket = draftHandoff?.reviewPacket || null;
+  const handoffAssetOptions = useMemo(
+    () => (artifactListQuery.data?.artifacts || []).filter((artifact) => artifact.kind === "image" || artifact.mimeType.startsWith("image/")),
+    [artifactListQuery.data?.artifacts],
+  );
   return (
     <View
       style={styles.screen}
@@ -1012,6 +1092,47 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       }}
     >
       {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await listQuery.refetch(); newlyCreatedWorkspace.current = id; selectWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
+      {handoffPacketOpen ? <Modal open onOpenChange={(open) => { if (!open) setHandoffPacketOpen(false); }} title={localizedCopy.handoffPacket}>
+        <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
+          <Text style={styles.layoutMenuHint}>{localizedCopy.handoffPacketHint}</Text>
+          <Text style={styles.reviewEntryMeta}>{localizedCopy.handoffUnderstanding}</Text>
+          <TextInput accessibilityLabel={localizedCopy.handoffUnderstanding} multiline placeholder={localizedCopy.handoffUnderstandingPlaceholder} placeholderTextColor={theme.colors.foregroundMuted} value={handoffUnderstanding} onChangeText={setHandoffUnderstanding} style={[styles.targetInput, { minHeight: 58 }]} />
+          <Text style={styles.reviewEntryMeta}>{localizedCopy.handoffPlan}</Text>
+          <TextInput accessibilityLabel={localizedCopy.handoffPlan} multiline placeholder={localizedCopy.handoffPlanPlaceholder} placeholderTextColor={theme.colors.foregroundMuted} value={handoffPlan} onChangeText={setHandoffPlan} style={[styles.targetInput, { minHeight: 70 }]} />
+          <Text style={styles.reviewEntryMeta}>{localizedCopy.handoffAcceptance}</Text>
+          <TextInput accessibilityLabel={localizedCopy.handoffAcceptance} multiline placeholder={localizedCopy.handoffAcceptancePlaceholder} placeholderTextColor={theme.colors.foregroundMuted} value={handoffAcceptance} onChangeText={setHandoffAcceptance} style={[styles.targetInput, { minHeight: 70 }]} />
+          <Text style={styles.reviewEntryMeta}>{localizedCopy.handoffReferences}</Text>
+          <TextInput accessibilityLabel={localizedCopy.handoffReferences} multiline placeholder={localizedCopy.handoffReferencesPlaceholder} placeholderTextColor={theme.colors.foregroundMuted} value={handoffReferences} onChangeText={setHandoffReferences} style={[styles.targetInput, { minHeight: 70 }]} />
+          {handoffAssetOptions.length ? <View>
+            <Text style={styles.reviewEntryMeta}>{localizedCopy.handoffAvailableAssets}</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.briefActions}>
+              {handoffAssetOptions.map((asset) => <Pressable key={asset.id} accessibilityRole="button" accessibilityLabel={`${asset.title} ${asset.id}`} onPress={() => setHandoffReferences((current) => appendAssetReference(current, asset.id))} style={styles.secondaryButton}>
+                <Text style={styles.secondaryButtonText}>{asset.title}</Text>
+              </Pressable>)}
+            </ScrollView>
+          </View> : null}
+          <Text style={styles.reviewEntryMeta}>{localizedCopy.handoffReviewInstructions}</Text>
+          <TextInput accessibilityLabel={localizedCopy.handoffReviewInstructions} multiline placeholder={localizedCopy.handoffReviewInstructionsPlaceholder} placeholderTextColor={theme.colors.foregroundMuted} value={handoffReviewInstructions} onChangeText={setHandoffReviewInstructions} style={[styles.targetInput, { minHeight: 70 }]} />
+          <Pressable accessibilityRole="button" onPress={() => setHandoffPacketOpen(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.handoffDone}</Text></Pressable>
+        </Modal.Content>
+      </Modal> : null}
+      {handoffPreviewOpen && draftHandoff ? <Modal open onOpenChange={(open) => { if (!open && !delegating) setHandoffPreviewOpen(false); }} title={localizedCopy.handoffPreviewTitle}>
+        <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
+          <Text style={styles.layoutMenuHint}>{localizedCopy.handoffPreviewHint}</Text>
+          <Text style={styles.reviewEntryMeta}>{localizedCopy.text_1b37d56f7a}</Text>
+          <Text selectable style={styles.reviewDetailText}>{draftHandoff.goal}</Text>
+          {draftPacket?.requirementUnderstanding ? <><Text style={styles.reviewEntryMeta}>{localizedCopy.handoffUnderstanding}</Text><Text selectable style={styles.reviewDetailText}>{draftPacket.requirementUnderstanding}</Text></> : null}
+          {draftPacket?.plan.length ? <><Text style={styles.reviewEntryMeta}>{localizedCopy.handoffPlan}</Text><Text selectable style={styles.reviewDetailText}>{draftPacket.plan.map((item, index) => `${index + 1}. ${item}`).join("\n")}</Text></> : null}
+          {draftPacket?.acceptanceCriteria.length ? <><Text style={styles.reviewEntryMeta}>{localizedCopy.handoffAcceptance}</Text><Text selectable style={styles.reviewDetailText}>{draftPacket.acceptanceCriteria.map((item) => `${item.id}. ${item.text}`).join("\n")}</Text></> : null}
+          {draftPacket?.references.length ? <><Text style={styles.reviewEntryMeta}>{localizedCopy.handoffReferences}</Text><Text selectable style={styles.reviewDetailText}>{draftPacket.references.map((item) => `${item.title || item.path || item.assetId || item.id}${item.path ? ` · ${item.repositoryId ? `${item.repositoryId}:` : ""}${item.path}` : item.assetId ? ` · asset:${item.assetId}` : ""}`).join("\n")}</Text></> : <Text style={styles.layoutMenuHint}>{localizedCopy.handoffNoPacket}</Text>}
+          {draftPacket?.instructions ? <><Text style={styles.reviewEntryMeta}>{localizedCopy.handoffReviewInstructions}</Text><Text selectable style={styles.reviewDetailText}>{draftPacket.instructions}</Text></> : null}
+          <Text style={styles.layoutMenuHint}>{localizedCopy.handoffReferenceCount.replace("{0}", String(draftPacket?.references.length || 0))} · {localizedCopy.handoffAcceptanceCount.replace("{0}", String(draftPacket?.acceptanceCriteria.length || 0))}</Text>
+          <View style={styles.briefActions}>
+            <Pressable accessibilityRole="button" disabled={delegating} onPress={() => { setHandoffPreviewOpen(false); setHandoffPacketOpen(true); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.handoffEdit}</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={delegating} onPress={() => { void submitSelectedWorkspace(); }} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{localizedCopy.handoffConfirm}</Text></Pressable>
+          </View>
+        </Modal.Content>
+      </Modal> : null}
       <WorkspaceSelector
         onOpenLayoutMenu={openLayoutMenu}
         statusControl={<IconButton label={observationLabel} icon={observationIcon}
@@ -1041,7 +1162,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           <View style={styles.briefActions}>
             {(["default", "independent", "child"] as const).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: handoffRelationship === relationship }} onPress={() => setHandoffRelationship(relationship)} style={[styles.secondaryButton, handoffRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "default" ? localizedCopy.reviewSettingsFollowDefault : relationship === "independent" ? localizedCopy.reviewSettingsIndependentShort : localizedCopy.reviewSettingsChildAgent}</Text></Pressable>)}
           </View>
-          <Pressable disabled={delegating || !handoffGoal.trim()} onPress={delegateSelectedWorkspace} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.text_99ad8551f2}</Text></Pressable>
+          <Pressable onPress={() => setHandoffPacketOpen(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.handoffPacket}</Text></Pressable>
+          <Pressable disabled={delegating || !handoffGoal.trim()} onPress={delegateSelectedWorkspace} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.handoffPreview}</Text></Pressable>
         </View> : null}
         <ExecutionBindingCard
           workspaceId={selectedWorkspaceId}

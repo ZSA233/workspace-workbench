@@ -15,6 +15,7 @@ import { configuredExecutionModel, readReviewSession, recordExecutionHandoff } f
 import { resolveAgentRelationship } from "./agent-session.ts";
 import { getWorkbenchCopy } from "../shared/copy.ts";
 import type { AgentRelationship } from "../shared/agent-session.ts";
+import { artifactSnapshotContent, resolveArtifactReference, resolvedArtifactImageAttachments, type ResolvedWorkbenchArtifact } from "./artifacts.ts";
 import {
   agentDelegate,
   agentStatusQuery,
@@ -179,9 +180,15 @@ function providerFromAgent(agent: PaseoAgent): string | null {
   return model ? `${provider}/${model}` : provider;
 }
 
-function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeResult, relationship: AgentRelationship): string {
+function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeResult, relationship: AgentRelationship, artifacts: ResolvedWorkbenchArtifact[] = []): string {
   const localized = getWorkbenchCopy(handoff.reviewLocale || "zh-CN");
   const section = (title: string, values: readonly string[]) => values.length ? [`${title}:`, ...values.map((value) => `- ${value}`), ""] : [];
+  const packet = handoff.reviewPacket;
+  const textAssets = artifacts.flatMap((artifact) => {
+    if (artifact.source !== "conversation" || artifact.binary) return [];
+    const material = artifactSnapshotContent(artifact);
+    return material.content === undefined ? [] : [`${artifact.reference.id}:`, material.content, ""];
+  });
   return [
     "Workspace Workbench Agent handoff",
     relationship === "child"
@@ -205,6 +212,13 @@ function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeRe
     ...section("Acceptance", handoff.acceptance),
     ...section("Constraints", handoff.constraints),
     ...section("Ambiguities", handoff.ambiguities),
+    ...(packet.requirementUnderstanding ? ["Requirement understanding:", packet.requirementUnderstanding, ""] : []),
+    ...section("Implementation plan", packet.plan),
+    ...section("Acceptance criteria", packet.acceptanceCriteria.map((criterion) => `${criterion.id}: ${criterion.text}`)),
+    ...section("Reference materials", packet.references.map((reference) => `${reference.id}: ${reference.title || reference.path || reference.assetId || "reference"}${reference.path ? ` (${reference.repositoryId ? `${reference.repositoryId}:` : ""}${reference.path})` : reference.assetId ? ` (asset ${reference.assetId})` : ""}${reference.purpose ? ` — ${reference.purpose}` : ""}`)),
+    ...section("Attached text reference content", textAssets),
+    ...(artifacts.some((artifact) => artifact.mimeType.startsWith("image/")) ? ["Visual references listed above are attached to this handoff; compare against them when the task depends on visual fidelity.", ""] : []),
+    ...(packet.instructions ? ["Task-specific review instructions (additional context only):", packet.instructions, ""] : []),
     ...section("Expected branches", Object.entries(handoff.expected.branchByRepository).map(([repo, branch]) => `${repo}: ${branch}`)),
     ...section("Expected bases", Object.entries(handoff.expected.baseByRepository).map(([repo, base]) => `${repo}: ${base}`)),
     `Start mode: ${handoff.startMode}`,
@@ -265,6 +279,19 @@ async function delegateAgent(
   }
   if (!runtime.capabilities?.agent) {
     return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "capability_unavailable", message: "Agent provider is disabled" } };
+  }
+  let handoffArtifacts: ResolvedWorkbenchArtifact[] = [];
+  try {
+    const artifactReferences = input.handoff.reviewPacket.references;
+    handoffArtifacts = artifactReferences.flatMap((reference) => {
+      try { return [resolveArtifactReference(reference, { repositories: runtime.repositories || [] })]; }
+      catch (error) {
+        if (reference.required) throw new Error(`required_review_artifact_unavailable:${reference.id}:${error instanceof Error ? error.message : "unavailable"}`);
+        return [];
+      }
+    });
+  } catch (error) {
+    return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "review_artifact_unavailable", message: error instanceof Error ? error.message : "Required review material is unavailable" } };
   }
   const parent = context.paseo.agents.ref(input.parentAgentId);
   let parentSnapshot: Awaited<ReturnType<typeof parent.refresh>>;
@@ -436,7 +463,8 @@ async function delegateAgent(
       }
     }
     try {
-      await created.send(handoffPrompt(input.workspaceId, input.handoff, runtime, relationship), { messageId: handoffHash });
+      const images = resolvedArtifactImageAttachments(handoffArtifacts);
+      await created.send(handoffPrompt(input.workspaceId, input.handoff, runtime, relationship, handoffArtifacts), { messageId: handoffHash, ...(images.length ? { images } : {}) });
     } catch (error) {
       return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: "handoff_delivery_uncertain", message: error instanceof Error ? error.message : "Agent handoff delivery is uncertain" } };
     }

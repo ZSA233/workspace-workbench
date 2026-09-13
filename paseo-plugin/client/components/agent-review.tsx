@@ -101,6 +101,7 @@ type FindingLike = {
 };
 
 type CheckLike = { name?: unknown; status?: unknown; evidence?: unknown };
+type CriterionCheckLike = { id?: unknown; status?: unknown; evidence?: unknown };
 
 function findingSeverityLabel(value: unknown, copy: WorkbenchCopy): string {
   if (value === "error") return copy.reviewSeverityError;
@@ -137,11 +138,12 @@ function ReviewDetails({ event, copy, theme, styles }: { event: ReviewEvent; cop
   const verdict = typeof details.verdict === "string" ? details.verdict : null;
   const findings = (Array.isArray(details.findings) ? details.findings : []).filter((item): item is FindingLike => Boolean(item && typeof item === "object"));
   const checks = (Array.isArray(details.checks) ? details.checks : []).filter((item): item is CheckLike => Boolean(item && typeof item === "object"));
+  const criterionChecks = (Array.isArray(details.criterionChecks) ? details.criterionChecks : []).filter((item): item is CriterionCheckLike => Boolean(item && typeof item === "object"));
   const unreviewed = Array.isArray(details.unreviewed) ? details.unreviewed.filter((item): item is string => typeof item === "string") : [];
   const changes = Array.isArray(details.changes) ? details.changes.filter((item): item is string => typeof item === "string") : [];
   const tests = Array.isArray(details.tests) ? details.tests.filter((item): item is string => typeof item === "string") : [];
   const limitations = Array.isArray(details.knownLimitations) ? details.knownLimitations.filter((item): item is string => typeof item === "string") : [];
-  const hidden = new Set(["snapshot", "diff", "snapshotId", "diffId", "findings", "checks", "unreviewed", "changes", "tests", "knownLimitations", "verdict"]);
+  const hidden = new Set(["snapshot", "diff", "snapshotId", "diffId", "findings", "checks", "criterionChecks", "unreviewed", "changes", "tests", "knownLimitations", "verdict"]);
   const technical = Object.fromEntries(Object.entries(details).filter(([key]) => !hidden.has(key)));
   return <View style={styles.reviewDetails}>
     {verdict ? <Text style={styles.reviewDetailMeta}>{copy.reviewLatestResult}: {statusLabel(resultStatus(event) || "reviewing", copy)}</Text> : null}
@@ -186,6 +188,18 @@ function ReviewDetails({ event, copy, theme, styles }: { event: ReviewEvent; cop
             </View>
           </View>;
         })}
+      </View>
+    </View> : null}
+    {criterionChecks.length ? <View style={styles.reviewDetailSection}>
+      <Text style={styles.reviewDetailMeta}>{copy.handoffAcceptance}</Text>
+      <View style={styles.reviewCheckList}>
+        {criterionChecks.map((check, index) => <View key={`${String(check.id || "criterion")}-${index}`} style={styles.reviewCheckRow}>
+          <MiniTag label={String(check.status || "not_verifiable")} color={check.status === "passed" ? theme.colors.statusSuccess : theme.colors.statusDanger} styles={styles} />
+          <View style={styles.reviewFindingCopy}>
+            <Text style={styles.reviewFindingMessage}>{String(check.id || "")}</Text>
+            {typeof check.evidence === "string" && check.evidence ? <Text style={styles.reviewFindingSuggestion}>{copy.reviewCheckEvidence}: {check.evidence}</Text> : null}
+          </View>
+        </View>)}
       </View>
     </View> : null}
     {unreviewed.length ? <Text style={styles.reviewDetailMeta}>{copy.reviewUnreviewed}: {unreviewed.join(" · ")}</Text> : null}
@@ -243,6 +257,20 @@ function ReviewProgress({ session, copy, theme, styles }: { session: ReviewSessi
       })}
     </View>
   </ScrollView>;
+}
+
+function ReviewBasis({ session, copy, styles }: { session: ReviewSession; copy: WorkbenchCopy; styles: ReturnType<typeof makeStyles> }) {
+  const packet = session.handoff?.reviewPacket;
+  if (!packet || (!packet.requirementUnderstanding && !packet.plan.length && !packet.acceptanceCriteria.length && !packet.references.length && !packet.instructions)) return null;
+  const artifactStatus = new Map((session.snapshot?.artifacts || []).map((artifact) => [artifact.id, artifact.status]));
+  return <View style={styles.reviewDetails}>
+    <Text style={styles.reviewDetailMeta}>{copy.handoffPacket}</Text>
+    {packet.requirementUnderstanding ? <Text selectable style={styles.reviewDetailText}>{packet.requirementUnderstanding}</Text> : null}
+    {packet.plan.length ? <Text selectable style={styles.reviewDetailText}>{packet.plan.map((item, index) => `${index + 1}. ${item}`).join("\n")}</Text> : null}
+    {packet.acceptanceCriteria.length ? <Text selectable style={styles.reviewDetailText}>{packet.acceptanceCriteria.map((item) => `${item.id}. ${item.text}`).join("\n")}</Text> : null}
+    {packet.references.length ? <Text selectable style={styles.reviewDetailText}>{packet.references.map((item) => `${item.title || item.path || item.assetId || item.id} · ${item.path || (item.assetId ? `asset:${item.assetId}` : item.id)} · ${artifactStatus.get(item.id) || "pending"}`).join("\n")}</Text> : null}
+    {packet.instructions ? <Text selectable style={styles.reviewDetailText}>{packet.instructions}</Text> : null}
+  </View>;
 }
 
 function ReviewMessage({ event, session, copy, theme, styles, expanded, onToggle }: { event: ReviewEvent; session: ReviewSession; copy: WorkbenchCopy; theme: PanelProps["theme"]; styles: ReturnType<typeof makeStyles>; expanded: boolean; onToggle: () => void }) {
@@ -328,6 +356,7 @@ export function AgentReviewView({
     <Text style={styles.reviewEntryMeta}>{copy.reviewExecutionAgent} · {session.executionModelId || session.preferences.executionModel || copy.reviewSettingsFollowExecution}</Text>
     <Text style={styles.reviewEntryMeta}>{copy.reviewReviewer} · {session.reviewerModelId || session.preferences.reviewerModel || copy.reviewSettingsFollowExecution}</Text>
     <ReviewProgress session={session} copy={copy} theme={theme} styles={styles} />
+    <ReviewBasis session={session} copy={copy} styles={styles} />
     {history.length > 1 ? <View style={styles.reviewHistoryRow}>
       <Text style={styles.reviewEntryMeta}>{copy.reviewHistory.replace("{0}", String(history.length))}</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.briefActions}>{history.slice().reverse().map((item) => <Pressable key={item.id} accessibilityRole="button" accessibilityState={{ selected: item.id === session.id }} onPress={() => onSelectHistory(item.id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{item.id.slice(0, 8)} · {statusLabel(item.status, copy)}</Text></Pressable>)}</ScrollView>

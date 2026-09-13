@@ -57,5 +57,10 @@ workspace-workbench serve --config /path/to/project/workbench.json
 Reviewer 才会读取固定代码快照并给出结构化结论；`changes_requested` 可以把问题交回同一个执行
 Agent。时间线和历史轮次会保存在项目的 `stateRoot/reviews` 下，审核通过不代表自动合并。
 
+交接时可在 `Handoff materials` 中填写需求理解、计划、验收标准、参考路径和本次审核要求；点击预览确认后，
+这份资料会随任务冻结并同时交给执行 Agent 和 Reviewer。参考路径使用 `repo:path`；主控 Agent 注册的图片
+使用返回的 `assetId`（界面也会列出已注册的图片供点击加入）。图片注册只保存必要的资产内容和读取信息，
+不计算内容哈希；如果图片只存在于无法寻址的聊天展示中，需要先保存为本地文件或重新附加。
+
 发布压缩包适合固定版本或离线安装，包含匹配平台的后端 worker。压缩包不包含项目
 配置、缓存、Socket、Agent 绑定或 secret。

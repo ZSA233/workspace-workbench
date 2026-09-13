@@ -1,6 +1,7 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { agentRelationshipSchema } from "./agent-session.ts";
+import { reviewArtifactKindSchema, reviewPacketSchema } from "./review-packet.ts";
 
 export const reviewModeSchema = z.enum(["off", "manual", "automatic"]);
 export const reviewerSessionModeSchema = z.enum(["reuse", "new_per_round"]);
@@ -89,6 +90,11 @@ const reviewResultInputSchema = z.object({
   summary: z.string().trim().min(1),
   findings: z.array(reviewFindingSchema).default([]),
   checks: z.array(reviewCheckSchema).default([]),
+  criterionChecks: z.array(z.object({
+    id: z.string().trim().min(1),
+    status: z.enum(["passed", "failed", "not_verifiable"]),
+    evidence: z.string().trim().optional(),
+  })).default([]),
   unreviewed: z.array(z.string().trim().min(1)).default([]),
   snapshotId: z.string().trim().min(1),
   diffId: z.string().trim().min(1),
@@ -111,6 +117,24 @@ export const reviewSnapshotFileSchema = z.object({
   diff: z.string().optional(),
   content: z.string().optional(),
 });
+export const reviewSnapshotArtifactSchema = z.object({
+  id: z.string().trim().min(1),
+  kind: reviewArtifactKindSchema,
+  title: z.string().trim().min(1),
+  purpose: z.string().trim().optional(),
+  required: z.boolean().default(true),
+  source: z.enum(["workspace", "conversation"]),
+  repositoryId: z.string().trim().min(1).optional(),
+  path: z.string().trim().min(1).optional(),
+  assetId: z.string().trim().min(1).optional(),
+  mimeType: z.string().trim().min(1),
+  size: z.number().int().nonnegative(),
+  status: z.enum(["ready", "missing", "changed", "unsupported"]),
+  binary: z.boolean().default(false),
+  truncated: z.boolean().default(false),
+  content: z.string().optional(),
+});
+export type ReviewSnapshotArtifact = z.infer<typeof reviewSnapshotArtifactSchema>;
 export const reviewSnapshotRepositorySchema = z.object({
   id: z.string().trim().min(1),
   repoPath: z.string().trim().min(1),
@@ -132,6 +156,7 @@ export const reviewSnapshotSchema = z.object({
   capturedAt: z.string().datetime(),
   repositories: z.array(reviewSnapshotRepositorySchema),
   files: z.array(reviewSnapshotFileSchema),
+  artifacts: z.array(reviewSnapshotArtifactSchema).default([]),
   unreviewed: z.array(z.string()),
 });
 export type ReviewSnapshot = z.infer<typeof reviewSnapshotSchema>;
@@ -176,6 +201,7 @@ export const reviewSessionSchema = z.object({
     acceptance: z.array(z.string()),
     constraints: z.array(z.string()).default([]),
     ambiguities: z.array(z.string()).default([]),
+    reviewPacket: reviewPacketSchema.default({ requirementUnderstanding: "", plan: [], acceptanceCriteria: [], references: [], instructions: "" }),
     startMode: z.enum(["adaptive", "plan-first"]).default("adaptive"),
     handoffId: z.string().optional(),
     relationship: agentRelationshipSchema.optional(),

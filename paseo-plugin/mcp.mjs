@@ -10,6 +10,7 @@ const endpoint = process.env.WORKBENCH_PASEO_ENDPOINT;
 const projectConfig = process.env.WORKBENCH_PROJECT_CONFIG;
 const token = process.env.WORKBENCH_AGENT_TOKEN;
 const publicTools = [
+  { name: "workbench_artifact_register", description: "Register a handoff asset from a local path or image data." },
   { name: "workbench_workspace_preview", description: "Preview an isolated handoff; returns canonical repository IDs." },
   { name: "workbench_workspace_execute", description: "Execute an approved isolated Workspace handoff." },
   { name: "workbench_workspace_status", description: "Read isolated Workspace handoff status." },
@@ -53,6 +54,33 @@ const schema = {
         acceptance: { type: "array", items: { type: "string" } },
         constraints: { type: "array", items: { type: "string" } },
         ambiguities: { type: "array", items: { type: "string" } },
+        reviewPacket: {
+          type: "object", additionalProperties: false,
+          properties: {
+            requirementUnderstanding: { type: "string" },
+            plan: { type: "array", items: { type: "string" } },
+            acceptanceCriteria: { type: "array", items: { type: "object", required: ["id", "text"], additionalProperties: false, properties: { id: { type: "string", minLength: 1 }, text: { type: "string", minLength: 1 }, required: { type: "boolean" } } } },
+            references: { type: "array", items: { type: "object", required: ["id"], additionalProperties: false, properties: { id: { type: "string", minLength: 1 }, kind: { enum: ["file", "document", "prototype", "image", "pdf"] }, title: { type: "string" }, purpose: { type: "string" }, required: { type: "boolean" }, repositoryId: { type: "string" }, path: { type: "string" }, assetId: { type: "string" }, mimeType: { type: "string" } } } },
+            instructions: { type: "string" },
+          },
+        },
+      },
+    },
+  },
+};
+const artifactRegisterSchema = {
+  type: "object", required: ["artifact"], additionalProperties: false,
+  properties: {
+    artifact: {
+      type: "object", required: ["title"], additionalProperties: false,
+      properties: {
+        id: { type: "string", minLength: 1 },
+        title: { type: "string", minLength: 1 },
+        purpose: { type: "string", minLength: 1 },
+        kind: { enum: ["file", "document", "prototype", "image", "pdf"] },
+        mimeType: { type: "string", minLength: 1 },
+        data: { type: "string", minLength: 1 },
+        path: { type: "string", minLength: 1 },
       },
     },
   },
@@ -79,6 +107,7 @@ const reviewerResultSchema = {
         summary: { type: "string", minLength: 1 },
         findings: { type: "array", items: { type: "object", required: ["id", "severity", "repositoryId", "path", "message", "needsFix"], additionalProperties: false, properties: { id: { type: "string", minLength: 1 }, severity: { enum: ["info", "warning", "error"] }, repositoryId: { type: "string", minLength: 1 }, path: { type: "string", minLength: 1 }, line: { type: "integer", minimum: 1 }, side: { enum: ["old", "new"] }, message: { type: "string", minLength: 1 }, suggestion: { type: "string" }, needsFix: { type: "boolean" } } } },
         checks: { type: "array", items: { type: "object", required: ["name", "status"], additionalProperties: false, properties: { name: { type: "string", minLength: 1 }, status: { enum: ["passed", "failed", "not_run", "unavailable"] }, evidence: { type: "string" } } } },
+        criterionChecks: { type: "array", items: { type: "object", required: ["id", "status"], additionalProperties: false, properties: { id: { type: "string", minLength: 1 }, status: { enum: ["passed", "failed", "not_verifiable"] }, evidence: { type: "string" } } } },
         unreviewed: { type: "array", items: { type: "string" } },
         snapshotId: { type: "string", minLength: 1 },
         diffId: { type: "string", minLength: 1 },
@@ -121,10 +150,10 @@ let client;
 async function handle(message) {
   if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version } };
   if (message.method === "ping") return {};
-  if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name === "workbench_workspace_status" ? workspaceStatusSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema, annotations: { readOnlyHint: !["workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: false } })) };
+  if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: tool.name === "workbench_artifact_register" ? artifactRegisterSchema : tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name === "workbench_workspace_status" ? workspaceStatusSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema, annotations: { readOnlyHint: !["workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: false } })) };
   if (message.method !== "tools/call") throw new Error("method_not_found");
   const tool = tools.find((value) => message.params?.name === value.name);
-  const action = tool?.name === "workbench_execution_report" ? "execution_report" : tool ? reviewerActions.get(tool.name) || tool.name.replace("workbench_workspace_", "") : null;
+  const action = tool?.name === "workbench_artifact_register" ? "artifact_register" : tool?.name === "workbench_execution_report" ? "execution_report" : tool ? reviewerActions.get(tool.name) || tool.name.replace("workbench_workspace_", "") : null;
   const reviewerAction = action === "reviewer_read" || action === "reviewer_result";
   const reviewTool = Boolean(tool && reviewToolNames.has(tool.name));
   if ((!action && !reviewTool) || !endpoint || !projectConfig || (reviewerAction ? !process.env.WORKBENCH_REVIEW_TOKEN : !token)) throw new Error("workbench_context_unavailable");
@@ -146,6 +175,8 @@ async function handle(message) {
             reviewerAgentId: message.params.arguments?.reviewerAgentId || process.env.WORKBENCH_REVIEW_AGENT || "pending",
             token: process.env.WORKBENCH_REVIEW_TOKEN,
           })
+        : action === "artifact_register"
+          ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.artifact.register", { ...message.params.arguments, projectConfig, token })
         : action === "execution_report"
           ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.execution-report", {
               ...message.params.arguments,
@@ -173,7 +204,7 @@ async function handle(message) {
 for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
   let message;
   try {
-    if (line.length > 1_048_576) throw new Error("request_too_large");
+    if (line.length > 12 * 1_048_576) throw new Error("request_too_large");
     message = JSON.parse(line);
     if (message.id === undefined) continue;
     const result = await handle(message);

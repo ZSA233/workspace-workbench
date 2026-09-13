@@ -1,6 +1,7 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { agentRelationshipSchema } from "./agent-session.ts";
+import { reviewPacketSchema } from "./review-packet.ts";
 
 /** Generic, provider-neutral handoff payload used by the optional Agent provider. */
 export const handoffSchema = z.object({
@@ -13,6 +14,7 @@ export const handoffSchema = z.object({
   acceptance: z.array(z.string().trim().min(1)).default([]),
   constraints: z.array(z.string().trim().min(1)).default([]),
   ambiguities: z.array(z.string().trim().min(1)).default([]),
+  reviewPacket: reviewPacketSchema.default({ requirementUnderstanding: "", plan: [], acceptanceCriteria: [], references: [], instructions: "" }),
   startMode: z.enum(["adaptive", "plan-first"]).default("adaptive"),
   handoffId: z.string().trim().min(1).optional(),
   providerModel: z.string().trim().min(1).optional(),
@@ -119,6 +121,7 @@ export const agentContextQuery = defineRpc({
 });
 
 export type Handoff = z.infer<typeof handoffSchema>;
+export type { ReviewPacket } from "./review-packet.ts";
 export type WorkspaceBinding = z.infer<typeof workspaceBindingSchema>;
 export type WorkspaceBindingResponse = z.infer<typeof workspaceBindingQuery.output>;
 export type WorkspaceDelegateInput = z.infer<typeof workspaceDelegate.input>;

@@ -25,7 +25,8 @@ const instructions = [
   "WORKBENCH_ORCHESTRATION_V1",
   "Only when the user explicitly requests an isolated Workspace: preview before edits; in plan mode preview only, then execute after approval and leaving plan mode.",
   "For direct execution, execute before the first target-file mutation and include repositories, base refs and the approved handoff.",
-  "Retry the identical requestId and payload; use status for uncertainty and never create a replacement manually.",
+  "Repository references may be IDs or paths; reuse preview's canonical request for execute.",
+  "Retry the identical requestId and payload; if repository resolution fails, report it instead of inventing a replacement request.",
   "After execute returns, report the created execution session. In the default independent mode, the execution session owns edits: do not continue editing the target checkout or wait for it before returning the creation result. If child mode was explicitly selected, retain the existing parent-child coordination and lifecycle notifications.",
 ].join("\n");
 

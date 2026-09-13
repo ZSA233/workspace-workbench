@@ -31,13 +31,16 @@ test("preview is read-only; execute prepares, creates one child, retries without
     calls.push(input.method);
     if (input.method === "workspace.list") return { ok: true, result: { capabilities: { create: true, agent: true, prepare: true } } };
     if (input.method === "workspace.runtime") return { ok: true, result: { workspaceId: "sample", managed: true, treePath: root + "/tree", capabilities: { agent: true } } };
-    if (input.method === "workspace.detail") return { ok: true, result: { repositories: [{ id: "api" }] } };
+    if (input.method === "workspace.detail") return { ok: true, result: { workspace: { sourceRoot: root }, repositories: [{ id: "api", name: "API", repoPath: ".", sourcePath: root, worktreePath: root }] } };
     return { ok: true, result: { id: "sample" } };
   };
-  const request = workflowRequest.parse({ requestId: "one", name: "sample", repositories: ["api"], handoff: { goal: "Edit fixture" } });
-  const run = (action: "preview" | "execute") => withProject({ projectConfig: config }, () => orchestrate(action, request, "parent", { paseo, query }));
+  const request = workflowRequest.parse({ requestId: "one", name: "sample", repositories: [root], baseRefs: { [root]: "main" }, handoff: { goal: "Edit fixture" } });
+  const canonicalRequest = workflowRequest.parse({ requestId: "one", name: "sample", repositories: ["api"], baseRefs: { api: "main" }, handoff: { goal: "Edit fixture" } });
+  const run = (action: "preview" | "execute", currentRequest = request) => withProject({ projectConfig: config }, () => orchestrate(action, currentRequest, "parent", { paseo, query }));
   try {
-    await run("preview");
+    const preview = await run("preview");
+    assert.deepEqual((preview as { request: { repositories?: string[]; baseRefs: Record<string, string> } }).request.repositories, ["api"]);
+    assert.deepEqual((preview as { request: { baseRefs: Record<string, string> } }).request.baseRefs, { api: "main" });
     assert.deepEqual(calls, ["workspace.list", "workspace.detail"]);
     await assert.rejects(run("execute"), /mode_unconfirmed/);
     assert.equal(creates, 0);
@@ -45,7 +48,7 @@ test("preview is read-only; execute prepares, creates one child, retries without
     await run("execute");
     assert.equal(creates, 1);
     assert.ok(calls.indexOf("workspace.create") < calls.indexOf("workspace.prepare"));
-    await run("execute");
+    await run("execute", canonicalRequest);
     assert.equal(creates, 1);
     assert.equal(calls.filter((method) => method === "workspace.create").length, 1);
     const status = await withProject({ projectConfig: config }, () => orchestrate("status", workflowStatusRequest.parse({ requestId: "one", workspaceId: "sample" }), "parent", { paseo, query }));
@@ -53,6 +56,37 @@ test("preview is read-only; execute prepares, creates one child, retries without
     const normalizedStatus = await withProject({ projectConfig: config }, () => orchestrate("status", workflowStatusRequest.parse({ requestId: "one" }), "parent", { paseo, query }));
     assert.equal((normalizedStatus as { ok?: boolean }).ok, true);
     await assert.rejects(withProject({ projectConfig: config }, () => orchestrate("execute", { ...request, name: "conflict" }, "parent", { paseo, query })), /identity_conflict/);
+    const invalid = workflowRequest.parse({ requestId: "invalid", name: "invalid", repositories: [root + "/missing"], handoff: { goal: "Invalid fixture" } });
+    const invalidPreview = await run("preview", invalid);
+    assert.equal((invalidPreview as { ok?: boolean }).ok, false);
+    assert.equal((invalidPreview as { error?: { code?: string } }).error?.code, "repository_invalid");
+    assert.equal(creates, 1);
+  } finally {
+    if (prior === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = prior;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("repository aliases fail closed when a name is ambiguous", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "workbench-alias-")));
+  const config = join(root, "project.json");
+  writeFileSync(config, JSON.stringify({ sourceRoot: root, workspaceRoot: root, stateRoot: root, agent: { provider: "paseo" } }));
+  const prior = process.env.WORKSPACE_WORKBENCH_CONFIG;
+  process.env.WORKSPACE_WORKBENCH_CONFIG = config;
+  const paseo = { agents: { ref: () => ({ refresh: async () => ({ agent: parent(root) }) }) } } as unknown as PaseoApi;
+  const query = async (input: { method: string }) => {
+    if (input.method === "workspace.list") return { ok: true, result: { capabilities: { create: true, agent: true, prepare: false } } };
+    if (input.method === "workspace.detail") return { ok: true, result: { workspace: { sourceRoot: root }, repositories: [
+      { id: "one", name: "same-name", repoPath: "one", sourcePath: join(root, "one"), worktreePath: join(root, "one") },
+      { id: "two", name: "same-name", repoPath: "two", sourcePath: join(root, "two"), worktreePath: join(root, "two") },
+    ] } };
+    return { ok: true, result: { id: "unused" } };
+  };
+  const request = workflowRequest.parse({ requestId: "ambiguous", name: "ambiguous", repositories: ["same-name"], handoff: { goal: "Ambiguous fixture" } });
+  try {
+    const result = await withProject({ projectConfig: config }, () => orchestrate("preview", request, "parent", { paseo, query }));
+    assert.equal((result as { ok?: boolean }).ok, false);
+    assert.equal((result as { error?: { code?: string } }).error?.code, "repository_ambiguous");
   } finally {
     if (prior === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = prior;
     rmSync(root, { recursive: true, force: true });

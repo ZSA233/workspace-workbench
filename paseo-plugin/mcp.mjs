@@ -10,7 +10,7 @@ const endpoint = process.env.WORKBENCH_PASEO_ENDPOINT;
 const projectConfig = process.env.WORKBENCH_PROJECT_CONFIG;
 const token = process.env.WORKBENCH_AGENT_TOKEN;
 const publicTools = [
-  { name: "workbench_workspace_preview", description: "Preview an isolated Workspace handoff (read-only)." },
+  { name: "workbench_workspace_preview", description: "Preview an isolated handoff; returns canonical repository IDs." },
   { name: "workbench_workspace_execute", description: "Execute an approved isolated Workspace handoff." },
   { name: "workbench_workspace_status", description: "Read isolated Workspace handoff status." },
   { name: "workbench_review_preview", description: "Preview review context without starting a Reviewer." },

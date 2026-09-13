@@ -146,7 +146,11 @@ class ObserverService:
         if method == "workspace.prepare":
             if not self.config.management_enabled or self.toolchain is None:
                 raise WorkbenchError("prepare is unavailable", code="capability_unavailable")
-            return self.toolchain.prepare(self._workspace(str(values.get("workspaceId") or "")), str(values.get("repositoryId") or values.get("repoPath") or ""))
+            workspace_id = str(values.get("workspaceId") or "")
+            workspace = self._workspace(workspace_id)
+            requested_repository = str(values.get("repositoryId") or values.get("repoPath") or "")
+            repository = self.provider.repository(workspace_id, requested_repository)
+            return self.toolchain.prepare(workspace, str(repository.get("id") or ""))
         if method == "workspace.cleanup":
             if not self.config.management_enabled or not self.provider.capabilities().get("cleanup"):
                 raise WorkbenchError("workspace management is disabled for this project", code="capability_unavailable")

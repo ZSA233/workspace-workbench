@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import type { AgentContext } from "./agent-provider.ts";
 import { handleAgentDelegate, handleWorkspaceBinding } from "./agent-provider.ts";
 import { childExecutionConfig } from "./execution-policy.ts";
@@ -6,8 +8,122 @@ import { currentProject, resolveProject } from "./projects.ts";
 import { digest, readState, writeState } from "./orchestration-state.ts";
 import { workflowRequest, type WorkflowRequest, type WorkflowStatusRequest } from "../shared/orchestration.ts";
 
-type Progress = { identity: string; workspaceId?: string; stage: string; result?: Awaited<ReturnType<typeof handleAgentDelegate>> };
+type Progress = { identity: string; identityVersion?: 2; workspaceId?: string; stage: string; result?: Awaited<ReturnType<typeof handleAgentDelegate>> };
 const flights = new Map<string, Promise<unknown>>();
+
+type CatalogRepository = {
+  id: string;
+  name?: string;
+  repoPath?: string;
+  sourcePath?: string;
+  worktreePath?: string;
+};
+
+type RepositoryCatalog = {
+  workspace?: { sourceRoot?: string };
+  sourceRoot?: string;
+  repositories?: CatalogRepository[];
+};
+
+type NormalizedRequest =
+  | { ok: true; request: WorkflowRequest }
+  | { ok: false; error: { code: string; message: string; details?: unknown } };
+
+function canonicalPath(value: string, root?: string): string | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  const candidate = isAbsolute(raw) ? raw : root ? resolve(root, raw) : null;
+  if (!candidate) return null;
+  try { return realpathSync(candidate); }
+  catch { return resolve(candidate); }
+}
+
+function repositoryAliases(repository: CatalogRepository, sourceRoot?: string): { values: Set<string>; paths: Set<string> } {
+  const values = new Set<string>();
+  const paths = new Set<string>();
+  for (const value of [repository.id, repository.name, repository.repoPath, repository.sourcePath, repository.worktreePath]) {
+    if (typeof value !== "string" || !value.trim()) continue;
+    values.add(value.trim());
+  }
+  if (repository.repoPath) {
+    const path = canonicalPath(repository.repoPath, sourceRoot);
+    if (path) paths.add(path);
+  }
+  for (const value of [repository.sourcePath, repository.worktreePath]) {
+    if (!value) continue;
+    const path = canonicalPath(value);
+    if (path) paths.add(path);
+  }
+  return { values, paths };
+}
+
+function resolveRepositoryReference(reference: string, catalog: RepositoryCatalog): { ok: true; id: string } | { ok: false; error: { code: string; message: string; details: unknown } } {
+  const raw = reference.trim();
+  const repositories = catalog.repositories || [];
+  const sourceRoot = catalog.workspace?.sourceRoot || catalog.sourceRoot;
+  const exactIds = repositories.filter((repository) => repository.id === raw);
+  if (exactIds.length === 1) return { ok: true, id: exactIds[0].id };
+  const matches = repositories.filter((repository) => {
+    const aliases = repositoryAliases(repository, sourceRoot);
+    const path = canonicalPath(raw, sourceRoot);
+    return aliases.values.has(raw) || Boolean(path && aliases.paths.has(path));
+  });
+  if (!matches.length) {
+    return {
+      ok: false,
+      error: {
+        code: "repository_invalid",
+        message: `Unknown or disabled repository reference: ${raw}`,
+        details: { requested: raw, known: repositories.map((repository) => repository.id).sort() },
+      },
+    };
+  }
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      error: {
+        code: "repository_ambiguous",
+        message: `Repository reference matches more than one configured repository: ${raw}`,
+        details: { requested: raw, matches: matches.map((repository) => repository.id).sort() },
+      },
+    };
+  }
+  return { ok: true, id: matches[0].id };
+}
+
+function normalizeWorkflowRequest(request: WorkflowRequest, value: unknown): NormalizedRequest {
+  const catalog = value && typeof value === "object" ? value as RepositoryCatalog : {};
+  if (!Array.isArray(catalog.repositories) || !catalog.repositories.length) {
+    return { ok: false, error: { code: "workspace_repositories_unavailable", message: "Workspace repository catalog is unavailable" } };
+  }
+  const resolveReference = (reference: string) => resolveRepositoryReference(reference, catalog);
+  try {
+    const repositories: string[] | undefined = request.repositories
+      ? [...new Set(request.repositories.map((reference) => {
+          const resolved = resolveReference(reference);
+          if (!resolved.ok) throw resolved.error;
+          return resolved.id;
+        }))]
+      : undefined;
+    const baseRefs: Record<string, string> = {};
+    for (const [reference, base] of Object.entries(request.baseRefs)) {
+      const resolved = resolveReference(reference);
+      if (!resolved.ok) throw resolved.error;
+      if (repositories && !repositories.includes(resolved.id)) {
+        return { ok: false, error: { code: "request_invalid", message: `baseRefs must reference selected repositories: ${resolved.id}` } };
+      }
+      const previous = baseRefs[resolved.id];
+      if (previous !== undefined && previous !== base) {
+        return { ok: false, error: { code: "request_invalid", message: `Conflicting base refs for repository ${resolved.id}` } };
+      }
+      baseRefs[resolved.id] = base;
+    }
+    return { ok: true, request: { ...request, ...(repositories ? { repositories } : {}), baseRefs } };
+  } catch (error) {
+    const failure = error as { code?: string; message?: string; details?: unknown };
+    return { ok: false, error: { code: failure.code || "repository_invalid", message: failure.message || "Repository reference is invalid", ...(failure.details === undefined ? {} : { details: failure.details }) } };
+  }
+}
 
 export async function orchestrate(action: "preview" | "execute" | "status", request: WorkflowRequest | WorkflowStatusRequest, parentAgentId: string, context: AgentContext) {
   const query = context.query || queryObserver;
@@ -26,26 +142,38 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
     }
     return { ok: true, progress: previous, execution: previous.workspaceId ? await handleWorkspaceBinding({ workspaceId: previous.workspaceId }, context) : null };
   }
-  const fullRequest = workflowRequest.parse(request);
-  const identity = digest({ request: fullRequest, parentAgentId });
-  if (previous && previous.identity !== identity) throw new Error("request_identity_conflict");
+  const rawRequest = workflowRequest.parse(request);
   const listing = await query({ method: "workspace.list", params: { includeRemoved: true } });
   if (!listing.ok) return listing;
   const capabilities = (listing.result as { capabilities?: { create?: boolean; agent?: boolean; prepare?: boolean } }).capabilities;
-  if (!capabilities?.agent || !fullRequest.workspaceId && !capabilities?.create) throw new Error("capability_unavailable");
-  if (!fullRequest.workspaceId && (!fullRequest.name || !fullRequest.repositories?.length)) throw new Error("workspace_selection_required");
+  if (!capabilities?.agent || !rawRequest.workspaceId && !capabilities?.create) throw new Error("capability_unavailable");
+  if (!rawRequest.workspaceId && (!rawRequest.name || !rawRequest.repositories?.length)) throw new Error("workspace_selection_required");
+  if (action === "execute") childExecutionConfig(parent, rawRequest.handoff.startMode === "plan-first");
+  const catalog = await query({ method: "workspace.detail", params: { workspaceId: rawRequest.workspaceId || "main", summary: true } });
+  if (!catalog.ok) return catalog;
+  const normalized = normalizeWorkflowRequest(rawRequest, catalog.result);
+  if (!normalized.ok) return normalized;
+  const fullRequest = normalized.request;
+  const identity = digest({ request: fullRequest, parentAgentId });
+  let compatiblePrevious = previous;
+  if (compatiblePrevious && compatiblePrevious.identity !== identity) {
+    const legacyRetry = compatiblePrevious.identityVersion === undefined
+      && compatiblePrevious.stage === "validated"
+      && !compatiblePrevious.workspaceId
+      && !compatiblePrevious.result;
+    if (!legacyRetry) throw new Error("request_identity_conflict");
+    compatiblePrevious = { ...compatiblePrevious, identity, identityVersion: 2 };
+  }
   if (action === "preview") {
-    const catalog = await query({ method: "workspace.detail", params: { workspaceId: fullRequest.workspaceId || "main", summary: true } });
-    if (!catalog.ok) return catalog;
     return { ok: true, action: fullRequest.workspaceId ? "reuse" : "create", request: fullRequest, catalog: catalog.result, sideEffects: [], requiresExecution: true };
   }
-  childExecutionConfig(parent, fullRequest.handoff.startMode === "plan-first");
   if (previous?.stage === "handed-off") return previous.result;
   const flightKey = `${project.configPath}:${key}`;
   const active = flights.get(flightKey);
   if (active) return active;
   const run = (async () => {
-    let progress: Progress = previous || { identity, workspaceId: fullRequest.workspaceId, stage: "validated" };
+    let progress: Progress = compatiblePrevious || { identity, identityVersion: 2, workspaceId: fullRequest.workspaceId, stage: "validated" };
+    if (progress.identity !== identity) progress = { ...progress, identity, identityVersion: 2 };
     writeState(key, progress);
     if (!progress.workspaceId) {
       const response = await query({ method: "workspace.create", params: { name: fullRequest.name, repositories: fullRequest.repositories, baseRefs: fullRequest.baseRefs } });

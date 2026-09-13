@@ -178,7 +178,9 @@ class Regressions(unittest.TestCase):
                     return CompletedProcess(command, 0, "go version go1.26.4 fixture" if command[-1] == "version" else str(install_path), "")
                 with patch("workspace_workbench.providers.toolchain.shutil.which", return_value="/fixture/mise"), patch("workspace_workbench.providers.toolchain.subprocess.run", side_effect=installed):
                     prepared = service.handle("workspace.prepare", {"workspaceId": "one", "repositoryId": "api"})
+                    prepared_alias = service.handle("workspace.prepare", {"workspaceId": "one", "repoPath": str((root / "api").resolve())})
                 self.assertEqual(prepared["resolved"]["go"], "1.26.4")
+                self.assertEqual(prepared_alias["repositoryId"], "api")
                 self.assertEqual(service.handle("workspace.runtime", {"workspaceId": "one"})["toolchain"]["status"], "ready")
             finally:
                 service.close()

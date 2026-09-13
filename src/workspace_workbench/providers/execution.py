@@ -20,9 +20,7 @@ def execute(service: ObserverService, workspace_id: str, repository_id: str, com
     workspace = service.provider.get(workspace_id)
     if not workspace.get("managed"):
         raise WorkbenchError("live workspace is not managed", code="workspace_not_managed")
-    repository = next((r for r in workspace["repositories"] if repository_id in {r["id"], r["repoPath"]}), None)
-    if repository is None:
-        raise WorkbenchError("repository is unavailable", code="repository_missing")
+    repository = service.provider.repository(workspace_id, repository_id)
     cwd = Path(repository["worktreePath"]).resolve()
     if not cwd.is_dir() or not cwd.is_relative_to(Path(workspace["treePath"]).resolve()):
         raise WorkbenchError("worktree is unavailable", code="worktree_missing")

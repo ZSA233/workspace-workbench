@@ -87,6 +87,26 @@ class WorkbenchTests(unittest.TestCase):
             finally:
                 service.close()
 
+    def test_workspace_create_accepts_absolute_repository_alias_and_keeps_canonical_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = make_repository(root, "api")
+            config_path = root / "observer.json"
+            write_config(config_path, root, [{"id": "api", "path": "api"}])
+            service = ObserverService(load_config(config_path))
+            try:
+                absolute = str(repository.resolve())
+                created = service.handle("workspace.create", {
+                    "name": "absolute-alias",
+                    "repositories": [absolute],
+                    "baseRefs": {absolute: "HEAD"},
+                })
+                self.assertEqual(created["repositories"][0]["id"], "api")
+                self.assertEqual(created["repositories"][0]["repoPath"], "api")
+                self.assertEqual(service.provider.repository("absolute-alias", absolute)["id"], "api")
+            finally:
+                service.close()
+
     def test_accept_explicitly_promotes_a_discovered_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

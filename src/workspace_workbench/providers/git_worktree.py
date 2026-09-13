@@ -92,6 +92,47 @@ class GitWorktreeProvider:
             })
         return result
 
+    @staticmethod
+    def _canonical_path(value: Any, root: Path | None = None) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute() and root is not None:
+            candidate = root / candidate
+        try:
+            return str(candidate.resolve())
+        except OSError:
+            return str(candidate.absolute())
+
+    def _repository_aliases(self, repository: Mapping[str, Any], *, source_root: Path | None = None) -> set[str]:
+        aliases = {
+            str(repository.get(key)).strip()
+            for key in ("id", "name", "repoPath", "sourcePath", "worktreePath")
+            if str(repository.get(key) or "").strip()
+        }
+        for key in ("repoPath", "sourcePath", "worktreePath"):
+            path = self._canonical_path(repository.get(key), source_root)
+            if path:
+                aliases.add(path)
+        return aliases
+
+    def _repository_reference_matches(self, repository: Mapping[str, Any], requested: Any, *, source_root: Path | None = None) -> bool:
+        raw = str(requested or "").strip()
+        aliases = self._repository_aliases(repository, source_root=source_root)
+        if raw in aliases:
+            return True
+        canonical = self._canonical_path(raw, source_root)
+        return bool(canonical and canonical in aliases)
+
+    def _configured_repository_record(self, repository: RepositoryConfig) -> dict[str, Any]:
+        return {
+            "id": repository.id,
+            "name": repository.name,
+            "repoPath": repository.path,
+            "sourcePath": str(self.config.repository_path(repository)),
+        }
+
     def _record_paths(self) -> list[Path]:
         if not self.records_root.is_dir():
             return []
@@ -174,9 +215,15 @@ class GitWorktreeProvider:
     def repository(self, workspace_id: str, repository_id: str) -> dict[str, Any]:
         workspace = self.get(workspace_id)
         requested = str(repository_id).strip()
-        for repository in workspace.get("repositories", []):
-            if isinstance(repository, Mapping) and requested in {str(repository.get("id")), str(repository.get("repoPath")), str(repository.get("name"))}:
-                return dict(repository)
+        source_root = Path(str(workspace.get("sourceRoot") or "")).resolve() if workspace.get("sourceRoot") else None
+        matches = [
+            repository for repository in workspace.get("repositories", [])
+            if isinstance(repository, Mapping) and self._repository_reference_matches(repository, requested, source_root=source_root)
+        ]
+        if len(matches) == 1:
+            return dict(matches[0])
+        if len(matches) > 1:
+            raise WorkbenchError(f"repository reference is ambiguous in workspace: {requested}", code="repository_ambiguous", details=[item.get("id") for item in matches])
         raise WorkbenchError(f"repository does not exist in workspace: {requested}", code="repository_missing")
 
     def create(self, params: Mapping[str, Any]) -> dict[str, Any]:
@@ -202,26 +249,52 @@ class GitWorktreeProvider:
         requested_repositories = params.get("repositories")
         if requested_repositories is not None and not isinstance(requested_repositories, list):
             raise WorkbenchError("repositories must be an array", code="request_invalid")
-        requested_ids = {str(value) for value in requested_repositories} if isinstance(requested_repositories, list) else None
         branch_template = str(params.get("branchTemplate") or "obs/{workspace}/{repository}")
         bases = params.get("baseRefs") if isinstance(params.get("baseRefs"), Mapping) else {}
         if "baseRefs" in params and not isinstance(params["baseRefs"], Mapping):
             raise WorkbenchError("baseRefs must be an object", code="request_invalid")
-        selected = [repository for repository in self._enabled_repositories() if requested_ids is None or repository.id in requested_ids or repository.path in requested_ids]
-        known = {value for repository in selected for value in (repository.id, repository.path)}
-        if requested_ids is not None and requested_ids - known:
-            raise WorkbenchError("unknown or disabled repositories", code="repository_invalid", details=sorted(requested_ids - known))
-        if set(bases) - known or any(not isinstance(value, str) or not value.strip() for value in bases.values()):
+        configured = [(repository, self._configured_repository_record(repository)) for repository in self._enabled_repositories()]
+        if requested_repositories is None:
+            selected = [repository for repository, _ in configured]
+        else:
+            selected = []
+            for requested in requested_repositories:
+                value = str(requested).strip()
+                matches = [repository for repository, record in configured if self._repository_reference_matches(record, value, source_root=self.config.source_root)]
+                if not matches:
+                    raise WorkbenchError("unknown or disabled repositories", code="repository_invalid", details=[value])
+                if len(matches) > 1:
+                    raise WorkbenchError("repository reference is ambiguous", code="repository_ambiguous", details=[repository.id for repository in matches])
+                if matches[0] not in selected:
+                    selected.append(matches[0])
+        if any(not isinstance(value, str) or not value.strip() for value in bases.values()):
             raise WorkbenchError("baseRefs must reference selected repositories with non-empty refs", code="request_invalid")
         if not selected:
             raise WorkbenchError("workspace must contain at least one configured repository", code="repositories_empty")
+        selected_records = [(repository, self._configured_repository_record(repository)) for repository in selected]
+        for key in bases:
+            matches = [
+                repository for repository, record in selected_records
+                if self._repository_reference_matches(record, key, source_root=self.config.source_root)
+            ]
+            if not matches:
+                raise WorkbenchError("baseRefs must reference selected repositories", code="request_invalid", details=[key])
+            if len(matches) > 1:
+                raise WorkbenchError("baseRefs repository reference is ambiguous", code="repository_ambiguous", details=[repository.id for repository in matches])
         # Resolve every starting point before creating any directories or branches.
         resolved_bases: dict[str, tuple[str, str]] = {}
         for repository in selected:
             git = GitClient(self.config.repository_path(repository), timeout=self.config.git_timeout_seconds)
             if not git.is_repository():
                 raise WorkbenchError(f"configured repository is not a Git checkout: {repository.id}", code="repository_invalid")
-            ref = str(bases.get(repository.id) or bases.get(repository.path) or repository.default_base or git.branch() or "HEAD")
+            record = self._configured_repository_record(repository)
+            matching_bases = [
+                value for key, value in bases.items()
+                if self._repository_reference_matches(record, key, source_root=self.config.source_root)
+            ]
+            if len(set(matching_bases)) > 1:
+                raise WorkbenchError(f"conflicting base refs for repository: {repository.id}", code="request_invalid")
+            ref = str((matching_bases[0] if matching_bases else None) or repository.default_base or git.branch() or "HEAD")
             resolved_bases[repository.id] = (ref, git.resolve_commit(ref))
         tree_root = (self.trees_root / workspace_id).resolve()
         if not _inside(tree_root, self.trees_root):

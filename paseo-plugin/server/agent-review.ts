@@ -10,7 +10,7 @@ import { nativeWebSocketFactory } from "@getpaseo/client/internal/daemon-client-
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { currentProject, registeredProjects, withProject } from "./projects.ts";
 import { getAgentBinding } from "./agent-store.ts";
-import { readReviewState, readState, writeReviewState, writeState, digest } from "./orchestration-state.ts";
+import { readReviewState, readState, removeReviewState, writeReviewState, writeState, digest } from "./orchestration-state.ts";
 import type { AgentContext } from "./agent-provider.ts";
 import { queryObserver } from "./observer.ts";
 import { artifactImageAttachments, artifactSnapshotContent, materializeReviewArtifact, resolveArtifactReference } from "./artifacts.ts";
@@ -329,6 +329,65 @@ function readSession(workspaceId: string, id?: string): ReviewSession | null {
 
 export function readReviewSession(workspaceId: string, id?: string): ReviewSession | null {
   return readSession(workspaceId, id);
+}
+
+export type ReviewWorkspaceState = {
+  sessionCount: number;
+  activeSessionId: string | null;
+};
+
+function reviewSessionIdsForWorkspace(workspaceId: string): Set<string> {
+  const ids = new Set<string>();
+  const index = sessionIndex(workspaceId);
+  for (const id of index.sessionIds) if (typeof id === "string" && id) ids.add(id);
+  const project = currentProject();
+  if (!project) return ids;
+  try {
+    for (const entry of readdirSync(join(project.stateRoot, "reviews"), { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      try {
+        const parsed = reviewSessionSchema.safeParse(JSON.parse(readFileSync(join(project.stateRoot, "reviews", entry.name), "utf8")));
+        if (parsed.success && parsed.data.workspaceId === workspaceId) ids.add(parsed.data.id);
+      } catch {
+        // Ignore unrelated or partially written review records.
+      }
+    }
+  } catch {
+    // The state directory may not exist for a workspace without Review history.
+  }
+  return ids;
+}
+
+export function getReviewWorkspaceState(workspaceId: string): ReviewWorkspaceState {
+  const index = sessionIndex(workspaceId);
+  const ids = reviewSessionIdsForWorkspace(workspaceId);
+  return {
+    sessionCount: ids.size,
+    activeSessionId: typeof index.activeSessionId === "string" && ids.has(index.activeSessionId) ? index.activeSessionId : null,
+  };
+}
+
+export function clearReviewWorkspaceState(workspaceId: string): { sessionsRemoved: number; indexRemoved: boolean; authRecordsRemoved: number; runtimeRecordsRemoved: number } {
+  const ids = reviewSessionIdsForWorkspace(workspaceId);
+  let sessionsRemoved = 0;
+  let authRecordsRemoved = 0;
+  let runtimeRecordsRemoved = 0;
+  for (const id of ids) {
+    let session: ReviewSession | null = null;
+    try {
+      const parsed = reviewSessionSchema.safeParse(readReviewState<unknown>(sessionKey(workspaceId, id)));
+      if (parsed.success) session = parsed.data;
+    } catch { /* cleanup remains best effort for malformed records */ }
+    if (session?.executionAgentId) {
+      if (removeReviewState(reportKey(session.executionAgentId))) runtimeRecordsRemoved += 1;
+      if (session.executionTurnId && removeReviewState(turnKey(session.executionAgentId, session.executionTurnId))) runtimeRecordsRemoved += 1;
+    }
+    if (session?.reviewerAgentId && session.reviewerTurnId && removeReviewState(turnKey(session.reviewerAgentId, session.reviewerTurnId))) runtimeRecordsRemoved += 1;
+    if (removeReviewState(sessionKey(workspaceId, id))) sessionsRemoved += 1;
+    if (removeReviewState(authKey(id))) authRecordsRemoved += 1;
+  }
+  const indexRemoved = removeReviewState(indexKey(workspaceId));
+  return { sessionsRemoved, indexRemoved, authRecordsRemoved, runtimeRecordsRemoved };
 }
 
 /** Used by the local integration harness; the token is never returned by a UI RPC. */

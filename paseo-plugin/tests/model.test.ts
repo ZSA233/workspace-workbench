@@ -34,6 +34,7 @@ test("workspace sorting and filters preserve the main workspace and activity ord
   ]);
   assert.deepEqual(sorted.map((item) => item.id), ["main", "new", "old"]);
   assert.equal(matchesWorkspaceFilter(workspace("dirty", { dirty: true }), "attention"), true);
+  assert.equal(matchesWorkspaceFilter(workspace("pending", { state: "deletion_pending" }), "attention"), true);
   assert.equal(matchesWorkspaceFilter(workspace("gone", { state: "removed" }), "all"), false);
 });
 
@@ -42,6 +43,7 @@ test("saved workspace selection wins over auto detection and falls back safely",
   assert.deepEqual(resolveWorkspaceSelection({ savedWorkspaceId: "saved", identifiedWorkspaceId: "identified", workspaces }), { workspaceId: "saved", source: "saved" });
   assert.deepEqual(resolveWorkspaceSelection({ savedWorkspaceId: "gone", identifiedWorkspaceId: "identified", workspaces }), { workspaceId: "identified", source: "identified" });
   assert.deepEqual(resolveWorkspaceSelection({ savedWorkspaceId: "gone", workspaces }), { workspaceId: "saved", source: "first" });
+  assert.deepEqual(resolveWorkspaceSelection({ savedWorkspaceId: "removed", workspaces: [workspace("removed", { state: "removed" }), workspace("live")] }), { workspaceId: "live", source: "first" });
 });
 
 test("tree rows stay compact and expand only the selected directory", () => {

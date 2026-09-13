@@ -17,6 +17,8 @@ import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpd
 import { handleAgentSessionProviders, handleAgentSessionSettingsGet, handleAgentSessionSettingsUpdate } from "./server/agent-session";
 import { artifactList, artifactRegister } from "./shared/artifacts";
 import { listArtifacts, registerArtifact } from "./server/artifacts";
+import { handleWorkspaceLifecycle } from "./server/workspace-lifecycle";
+import { workspaceLifecycle } from "./shared/workspace-lifecycle";
 import {
   executionReport,
   reviewModels,
@@ -85,5 +87,6 @@ export default function contribute(server: PluginServerContext) {
     try { return workspaceDelegate.output.parse(await orchestrate("execute", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)); }
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
+  server.handle(workspaceLifecycle, (input, context) => withProject(input, () => handleWorkspaceLifecycle(input, context)));
   return () => { cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); closeBackends(); };
 }

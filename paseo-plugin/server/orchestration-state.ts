@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { currentProject } from "./projects.ts";
@@ -37,4 +37,11 @@ export function writeReviewState(key: string, value: unknown): void {
   const temp = `${path}.${randomUUID()}.tmp`;
   writeFileSync(temp, JSON.stringify(value), { mode: 0o600 });
   renameSync(temp, path);
+}
+
+export function removeReviewState(key: string): boolean {
+  const path = statePath(key, "reviews");
+  if (!existsSync(path)) return false;
+  rmSync(path, { force: true });
+  return true;
 }

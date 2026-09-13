@@ -58,6 +58,9 @@ class GitWorktreeProvider:
             "prepare": self.config.management_enabled and self.config.toolchain is not None,
             "agent": self.config.agent_enabled,
             "cleanup": self.config.management_enabled,
+            "remove": self.config.management_enabled,
+            "restore": self.config.management_enabled,
+            "permanentDelete": self.config.management_enabled,
         }
 
     @contextmanager
@@ -195,6 +198,115 @@ class GitWorktreeProvider:
         if record is None or str(record.get("id")) != value:
             raise WorkbenchError(f"workspace unavailable: {value}", code="record_invalid" if path.exists() else "workspace_missing")
         return record
+
+    def _record_path(self, workspace_id: str) -> Path:
+        return self.records_root / f"{_slug(workspace_id)}.json"
+
+    def _write_record(self, workspace: Mapping[str, Any]) -> dict[str, Any]:
+        value = dict(workspace)
+        value["updatedAt"] = _now()
+        record_path = self._record_path(str(value.get("id") or ""))
+        temporary = record_path.with_suffix(f".{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.chmod(0o600)
+        os.replace(temporary, record_path)
+        self._write_manifest(value)
+        return value
+
+    def _write_manifest(self, workspace: Mapping[str, Any]) -> None:
+        tree_value = workspace.get("treePath")
+        if not tree_value:
+            return
+        tree_path = Path(str(tree_value)).expanduser().resolve()
+        if tree_path == self.trees_root or not _inside(tree_path, self.trees_root):
+            return
+        manifest_path = tree_path / ".workspace" / "manifest.json"
+        if not manifest_path.is_file():
+            return
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(manifest, dict) or manifest.get("id") != workspace.get("id"):
+            return
+        manifest["state"] = workspace.get("state")
+        if "deletion" in workspace:
+            manifest["deletion"] = workspace["deletion"]
+        else:
+            manifest.pop("deletion", None)
+        temporary = manifest_path.with_suffix(f".{os.getpid()}.tmp")
+        try:
+            temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.chmod(0o600)
+            os.replace(temporary, manifest_path)
+        except OSError:
+            temporary.unlink(missing_ok=True)
+
+    def _deletion_impact(self, workspace: Mapping[str, Any]) -> dict[str, Any]:
+        repositories: list[dict[str, Any]] = []
+        dirty_repositories = 0
+        external_references: list[dict[str, str]] = []
+        for repository in workspace.get("repositories", []):
+            if not isinstance(repository, Mapping):
+                continue
+            worktree_value = repository.get("worktreePath")
+            worktree_path = Path(str(worktree_value)).expanduser().resolve() if worktree_value else None
+            worktree_exists = bool(worktree_path and worktree_path.is_dir())
+            dirty_paths: list[str] = []
+            if worktree_exists and worktree_path is not None:
+                try:
+                    dirty_paths = [path for _, path in GitClient(worktree_path, timeout=self.config.git_timeout_seconds).status_porcelain()]
+                except WorkbenchError:
+                    dirty_paths = []
+            dirty = bool(dirty_paths)
+            if dirty:
+                dirty_repositories += 1
+            branch = str(repository.get("branch") or "")
+            source_value = repository.get("sourcePath")
+            if branch and source_value:
+                try:
+                    source_refs = GitClient(source_value, timeout=self.config.git_timeout_seconds).refs()
+                    local_name = f"refs/heads/{branch}"
+                    for ref in source_refs:
+                        name = str(ref.get("name") or "")
+                        if name and name != local_name and (name.endswith(f"/{branch}") or name == branch):
+                            external_references.append({
+                                "repository": str(repository.get("id") or repository.get("repoPath") or ""),
+                                "ref": name,
+                            })
+                except WorkbenchError:
+                    external_references.append({
+                        "repository": str(repository.get("id") or repository.get("repoPath") or ""),
+                        "ref": "unavailable",
+                    })
+            repositories.append({
+                "id": repository.get("id"),
+                "repoPath": repository.get("repoPath"),
+                "branch": branch or None,
+                "worktreePath": str(worktree_path) if worktree_path else None,
+                "worktreeExists": worktree_exists,
+                "dirty": dirty,
+                "dirtyPaths": dirty_paths,
+                "branchPreserved": bool(branch),
+            })
+        losses = ["workspace record"]
+        if any(item.get("worktreeExists") for item in repositories):
+            losses.append("managed worktree files")
+        if dirty_repositories:
+            losses.append("uncommitted changes")
+        return {
+            "workspaceId": workspace.get("id"),
+            "preview": True,
+            "irreversible": True,
+            "repositories": repositories,
+            "dirtyRepositories": dirty_repositories,
+            "externalReferences": external_references,
+            "branchesPreserved": [
+                item["branch"] for item in repositories if item.get("branch")
+            ],
+            "preserves": ["commits", "local branches", "external references"],
+            "loses": losses,
+        }
 
     def identify(self, directory: str | Path) -> dict[str, Any]:
         candidate = Path(directory).expanduser().resolve()
@@ -434,3 +546,126 @@ class GitWorktreeProvider:
         temporary.write_text(json.dumps(workspace, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temporary, record_path)
         return {"workspaceId": workspace_id, "removed": True}
+
+    def remove(self, workspace_id: str, *, active_tasks: list[Mapping[str, Any]] | None = None, lock_only: bool = False) -> dict[str, Any]:
+        if not self.capabilities()["remove"]:
+            raise WorkbenchError("workspace removal is disabled", code="capability_unavailable")
+        with self._mutation():
+            workspace = self.get(workspace_id)
+            if not workspace.get("managed"):
+                raise WorkbenchError("live workspace cannot be removed", code="workspace_not_managed")
+            state = str(workspace.get("state") or "active")
+            if state not in {"active", "deletion_pending", "removed"}:
+                raise WorkbenchError("workspace is not removable in its current state", code="workspace_state_invalid")
+            tasks = [dict(task) for task in (active_tasks or []) if isinstance(task, Mapping)]
+            if lock_only:
+                if state == "removed":
+                    return {"workspaceId": workspace_id, "removed": True, "pending": False, "state": "removed", "activeTasks": []}
+                next_workspace = dict(workspace)
+                next_workspace["state"] = "deletion_pending"
+                next_workspace["deletion"] = {
+                    "requestedAt": str((workspace.get("deletion") or {}).get("requestedAt") or _now()),
+                    "activeTasks": [],
+                    "blocksNewTasks": True,
+                }
+                saved = self._write_record(next_workspace)
+                return {"workspaceId": workspace_id, "removed": False, "pending": True, "state": saved.get("state"), "activeTasks": []}
+            if state == "removed" and not tasks:
+                return {"workspaceId": workspace_id, "removed": True, "pending": False, "state": "removed"}
+            next_workspace = dict(workspace)
+            if tasks:
+                next_workspace["state"] = "deletion_pending"
+                next_workspace["deletion"] = {
+                    "requestedAt": str((workspace.get("deletion") or {}).get("requestedAt") or _now()),
+                    "activeTasks": tasks,
+                    "blocksNewTasks": True,
+                }
+            else:
+                next_workspace["state"] = "removed"
+                next_workspace.pop("deletion", None)
+            saved = self._write_record(next_workspace)
+            return {
+                "workspaceId": workspace_id,
+                "removed": saved.get("state") == "removed",
+                "pending": saved.get("state") == "deletion_pending",
+                "state": saved.get("state"),
+                "activeTasks": tasks,
+            }
+
+    def restore(self, workspace_id: str) -> dict[str, Any]:
+        if not self.capabilities()["restore"]:
+            raise WorkbenchError("workspace restore is disabled", code="capability_unavailable")
+        with self._mutation():
+            workspace = self.get(workspace_id)
+            if not workspace.get("managed"):
+                raise WorkbenchError("live workspace does not need restore", code="workspace_not_managed")
+            state = str(workspace.get("state") or "active")
+            if state == "active":
+                return {"workspaceId": workspace_id, "restored": True, "state": "active"}
+            if state not in {"removed", "deletion_pending"}:
+                raise WorkbenchError("workspace cannot be restored in its current state", code="workspace_state_invalid")
+            tree_value = workspace.get("treePath")
+            tree_path = Path(str(tree_value)).expanduser().resolve() if tree_value else None
+            if tree_path is None or not tree_path.is_dir():
+                raise WorkbenchError("workspace worktree is no longer available", code="workspace_restore_unavailable")
+            next_workspace = dict(workspace)
+            next_workspace["state"] = "active"
+            next_workspace.pop("deletion", None)
+            saved = self._write_record(next_workspace)
+            return {"workspaceId": workspace_id, "restored": True, "state": saved.get("state")}
+
+    def permanent_delete(self, workspace_id: str, *, confirm: bool = False) -> dict[str, Any]:
+        if not self.capabilities()["permanentDelete"]:
+            raise WorkbenchError("permanent workspace deletion is disabled", code="capability_unavailable")
+        with self._mutation():
+            workspace = self.get(workspace_id)
+            if not workspace.get("managed"):
+                raise WorkbenchError("live workspace cannot be permanently deleted", code="workspace_not_managed")
+            state = str(workspace.get("state") or "active")
+            impact = self._deletion_impact(workspace)
+            if state == "deletion_pending":
+                if not confirm:
+                    return {**impact, "canDelete": False, "state": state, "blockedReason": "workspace_task_active", "deleted": False}
+                raise WorkbenchError("stop or finish active workspace tasks before permanent deletion", code="workspace_task_active", details=workspace.get("deletion"))
+            if state != "removed":
+                if not confirm:
+                    return {**impact, "canDelete": False, "state": state, "requiresRemoval": True, "deleted": False}
+                raise WorkbenchError("remove the workspace before permanently deleting it", code="workspace_must_be_removed")
+            if not confirm:
+                return {**impact, "canDelete": True, "deleted": False}
+            tree_value = workspace.get("treePath")
+            tree_path = Path(str(tree_value)).expanduser().resolve() if tree_value else None
+            if tree_path is None or tree_path == self.trees_root or not _inside(tree_path, self.trees_root):
+                raise WorkbenchError("workspace tree path is outside the provider root", code="path_invalid")
+            for repository in workspace.get("repositories", []):
+                if not isinstance(repository, Mapping):
+                    continue
+                worktree_value = repository.get("worktreePath")
+                if not worktree_value:
+                    continue
+                worktree_path = Path(str(worktree_value)).expanduser().resolve()
+                if not _inside(worktree_path, tree_path):
+                    raise WorkbenchError("workspace repository path is outside the provider root", code="path_invalid")
+                if not worktree_path.exists():
+                    continue
+                source_value = repository.get("sourcePath")
+                if source_value:
+                    source_git = GitClient(source_value, timeout=self.config.git_timeout_seconds)
+                    registered = source_git.run(["worktree", "list", "--porcelain"], check=False).stdout
+                    if f"worktree {worktree_path}\n" in registered:
+                        source_git.run(["worktree", "remove", "--force", str(worktree_path)])
+                    elif worktree_path.is_dir():
+                        shutil.rmtree(worktree_path)
+                elif worktree_path.is_dir():
+                    shutil.rmtree(worktree_path)
+            if tree_path.exists():
+                shutil.rmtree(tree_path)
+            record_path = self._record_path(workspace_id)
+            record_path.unlink(missing_ok=True)
+            return {
+                "workspaceId": workspace_id,
+                "preview": False,
+                "deleted": True,
+                "branchesPreserved": impact["branchesPreserved"],
+                "externalReferences": impact["externalReferences"],
+            }

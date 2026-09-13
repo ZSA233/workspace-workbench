@@ -264,6 +264,13 @@ async function delegateAgent(
   context: AgentContext,
 ) {
   const handoffHash = digest(input.handoff);
+  const lifecycle = await (context.query || queryObserver)({ method: "workspace.list", params: { includeRemoved: true } });
+  if (lifecycle.ok) {
+    const workspace = (lifecycle.result as { workspaces?: Array<{ id?: string; state?: string }> } | undefined)?.workspaces?.find((item) => item.id === input.workspaceId);
+    if (workspace?.state === "deletion_pending" || workspace?.state === "removed") {
+      return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "workspace_deletion_pending", message: "This Workspace is pending deletion and cannot receive a new task" } };
+    }
+  }
   let existingReview = null;
   try { existingReview = readReviewSession(input.workspaceId); } catch { /* Direct provider tests may not have a project context. */ }
   if (existingReview && existingReview.preferences.mode !== "off" && ["waiting_execution", "ready_for_review", "queued", "reviewing", "changes_requested", "fixing", "stopping"].includes(existingReview.status) && existingReview.handoffHash && existingReview.handoffHash !== handoffHash) {

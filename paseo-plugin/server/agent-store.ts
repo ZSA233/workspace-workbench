@@ -107,3 +107,14 @@ export function putAgentBinding(binding: AgentBinding): void {
   value.bindings.push(binding);
   save(value);
 }
+
+export function removeAgentBinding(workspaceId: string): boolean {
+  const path = filePath();
+  if (!existsSync(path)) return false;
+  const value = load();
+  const previousLength = value.bindings.length;
+  value.bindings = value.bindings.filter((item) => item.workspaceId !== workspaceId);
+  if (value.bindings.length === previousLength) return false;
+  save(value);
+  return true;
+}

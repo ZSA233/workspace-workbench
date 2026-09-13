@@ -153,7 +153,9 @@ export function workspaceSignals(workspace: WorkspaceSummary, strings: Workbench
 export function workspaceMeta(workspace: WorkspaceSummary, strings: WorkbenchCopy = copy): string {
   const parts: string[] = [];
   if (isMainWorkspace(workspace)) return workspaceSignals(workspace, strings).join(" · ");
-  if (workspace.state && workspace.state !== "active") parts.push(workspace.state);
+  if (workspace.state && workspace.state !== "active") {
+    parts.push(workspace.state === "removed" ? strings.workspaceStateRemoved : workspace.state === "deletion_pending" ? strings.workspaceStateDeletionPending : workspace.state);
+  }
   if (workspace.repositoryCount > 1) parts.push(formatCopyFrom(strings, "repoCountLabel", [workspace.repositoryCount]));
   parts.push(...workspaceSignals(workspace, strings));
   const claim = workspaceClaim(workspace);
@@ -483,7 +485,10 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     workspaceOptionCopy: { flex: 1, minWidth: 0 },
     workspaceOptionTitle: { color: theme.colors.foreground, fontSize: 11, fontWeight: "500" },
     workspaceOptionMeta: { color: theme.colors.foregroundMuted, fontSize: 10, marginTop: 2 },
-    workspaceOptionState: { fontFamily: "monospace", fontSize: 10 },
+    workspaceOptionState: { flexShrink: 1, fontFamily: "monospace", fontSize: 10, maxWidth: compact ? 82 : 110 },
+    workspaceOptionActions: { alignItems: "center", flexDirection: "row", flexShrink: 0, gap: 3 },
+    workspaceOptionAction: { alignItems: "center", borderColor: theme.colors.border, borderRadius: 4, borderWidth: 1, height: 24, justifyContent: "center", width: 24 },
+    workspaceOptionActionText: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 12, fontWeight: "700" },
     tabsScroll: { alignSelf: "stretch", backgroundColor: theme.colors.surface1, borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexGrow: 0, flexShrink: 0 },
     tabs: { flexDirection: "row", flexGrow: 0, flexShrink: 0, paddingHorizontal: compact ? 13 : 15 },
     tabButton: { borderBottomColor: "transparent", borderBottomWidth: 2, flexShrink: 0, marginRight: compact ? 14 : 22, paddingBottom: 8, paddingTop: 9 },
@@ -496,6 +501,17 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     warningCard: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.statusWarning, borderRadius: 7, borderWidth: 1, padding: 9 },
     warningTitle: { color: theme.colors.statusWarning, fontSize: 12, fontWeight: "700" },
     warningText: { color: theme.colors.statusWarning, fontSize: 11, lineHeight: 15, marginTop: 4 },
+    deletionModalContent: { alignSelf: "center", flexGrow: 0, flexShrink: 1, maxHeight: 560, maxWidth: 560, minHeight: 0, width: "100%" },
+    deletionModalBody: { gap: 8, minHeight: 0, padding: 12 },
+    deletionModalTitle: { color: theme.colors.foreground, fontSize: 14, fontWeight: "700" },
+    deletionModalText: { color: theme.colors.foregroundMuted, fontSize: 11, lineHeight: 16 },
+    deletionModalSection: { backgroundColor: theme.colors.surface2, borderColor: theme.colors.border, borderRadius: 6, borderWidth: 1, gap: 4, padding: 8 },
+    deletionModalSectionTitle: { color: theme.colors.foreground, fontSize: 11, fontWeight: "700" },
+    deletionModalRow: { alignItems: "flex-start", flexDirection: "row", gap: 6 },
+    deletionModalBullet: { color: theme.colors.foregroundMuted, fontSize: 11, width: 10 },
+    deletionModalRowText: { color: theme.colors.foregroundMuted, flex: 1, fontSize: 10, lineHeight: 14 },
+    deletionModalDanger: { color: theme.colors.statusDanger, fontSize: 11, lineHeight: 16 },
+    deletionModalActions: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" },
     staleNotice: { color: theme.colors.foregroundMuted, fontSize: 10, lineHeight: 14, marginTop: 4 },
     repositoryIssueDetail: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 9, lineHeight: 13, marginTop: 3 },
     executionBar: { alignItems: "center", backgroundColor: theme.colors.surface1, borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", gap: 8, justifyContent: "space-between", minHeight: 36, paddingHorizontal: compact ? 13 : 15, paddingVertical: 6 },

@@ -40,7 +40,7 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
     assert.throws(() => hooks.get("agent.session_open")!({ request: { ...open, agentId: "another" } }), /context_changed/);
     const worker = { ...request, env: { WORKBENCH_WORKER_WORKSPACE: "sample" } };
     assert.equal(hooks.get("agent.create")!({ request: worker }), worker);
-    withProject({ projectConfig: config }, () => putAgentBinding({ workspaceId: "fixture", agentId: "fixture-worker", parentAgentId: "fixture-parent", paseoWorkspaceId: "paseo-fixture", cwd: root, provider: "codex/fixture", createdAt: "now", updatedAt: "now" }));
+    withProject({ projectConfig: config }, () => putAgentBinding({ workspaceId: "fixture", agentId: "fixture-worker", relationship: "child", parentAgentId: "fixture-parent", paseoWorkspaceId: "paseo-fixture", cwd: root, provider: "codex/fixture", createdAt: "now", updatedAt: "now" }));
     let attempts = 0;
     const event = { agent: { id: "fixture-worker" }, turnId: "one", outcome: { kind: "completed" } };
     const context = { paseo: { agents: { ref: () => ({ send: async (_message: string, options: { activeTurnBehavior: string }) => {
@@ -53,6 +53,10 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
     await events.get("agent.turn_ended")!(event, context);
     assert.equal(attempts, 2);
     assert.equal(withProject({ projectConfig: config }, () => getAgentBinding("fixture"))?.pendingNotifications?.length, 0);
+    withProject({ projectConfig: config }, () => putAgentBinding({ workspaceId: "independent-fixture", agentId: "independent-worker", relationship: "independent", requestedByAgentId: "fixture-parent", paseoWorkspaceId: "paseo-fixture", cwd: root, provider: "codex/fixture", createdAt: "now", updatedAt: "now" }));
+    await events.get("agent.turn_ended")!({ agent: { id: "independent-worker" }, turnId: "independent", outcome: { kind: "completed" } }, context);
+    assert.equal(attempts, 2, "independent sessions do not steer the requesting Agent");
+    assert.equal(withProject({ projectConfig: config }, () => getAgentBinding("independent-fixture"))?.pendingNotifications?.length, 0);
   } finally {
     cleanup();
     if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = previous;

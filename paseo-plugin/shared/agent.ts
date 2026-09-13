@@ -2,6 +2,7 @@ import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
 import { handoffSchema, type Handoff } from "./handoff.ts";
+import { agentRelationshipSchema } from "./agent-session.ts";
 
 export { handoffSchema } from "./handoff.ts";
 
@@ -17,6 +18,7 @@ export const agentStatusQuery = defineRpc({
       provider: z.string(),
       model: z.string().nullable(),
       status: z.string().nullable(),
+      relationship: agentRelationshipSchema,
       parentAgentId: z.string().nullable(),
     }).nullable().optional(),
     error: z.object({ code: z.string(), message: z.string() }).optional(),
@@ -38,6 +40,7 @@ export const agentDelegate = defineRpc({
     action: z.enum(["created", "reused", "already-running", "blocked", "failed"]),
     workspaceId: z.string(),
     agentId: z.string().optional(),
+    relationship: agentRelationshipSchema.optional(),
     status: z.string().optional(),
     error: z.object({ code: z.string(), message: z.string() }).optional(),
   }),

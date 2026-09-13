@@ -48,8 +48,12 @@ workspace-workbench serve --config /path/to/project/workbench.json
 如需 Agent 交接，请按[根目录 README](../README.md) 配置 `agent.provider` 和
 `agent.bridge`，然后新建 coordinator Agent。已经存在的 Agent 会话不会被静默修改。
 
+执行会话默认创建为独立 Paseo 会话。可从顶部三个点菜单的 Agent session settings 按项目和 provider
+选择独立会话或子 Agent；Reviewer 始终使用独立只读会话，同一个 Review 默认复用 Reviewer，并把
+修复交回执行 Agent。
+
 完成交接后，在对应的非主 Workspace 中打开 `Agent Review` 页签。顶部三个点菜单可配置项目或全局
-审核模式、自动修复、审核要求、轮次和 Codex 模型。执行 Agent 必须提交 `ready_for_review` 报告，
+会话关系、审核模式、自动修复、审核要求、轮次和 Codex 模型。执行 Agent 必须提交 `ready_for_review` 报告，
 Reviewer 才会读取固定代码快照并给出结构化结论；`changes_requested` 可以把问题交回同一个执行
 Agent。时间线和历史轮次会保存在项目的 `stateRoot/reviews` 下，审核通过不代表自动合并。
 

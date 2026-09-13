@@ -13,6 +13,8 @@ import { handleProjectBackendStart, handleProjectBackendStatus, handleProjectSet
 import { registerAgentIntegration } from "./server/agent-integration";
 import { orchestrate } from "./server/orchestrator";
 import { digest } from "./server/orchestration-state";
+import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpdate } from "./shared/agent-session";
+import { handleAgentSessionProviders, handleAgentSessionSettingsGet, handleAgentSessionSettingsUpdate } from "./server/agent-session";
 import {
   executionReport,
   reviewModels,
@@ -50,6 +52,9 @@ export default function contribute(server: PluginServerContext) {
   server.handle(reviewSessionEvents, (input) => withProject(input, () => handleReviewSessionEvents(input)));
   server.handle(reviewSettingsGet, (input) => withProject(input, () => handleReviewSettingsGet(input)));
   server.handle(reviewSettingsUpdate, (input) => withProject(input, () => handleReviewSettingsUpdate(input)));
+  server.handle(agentSessionSettingsGet, (input) => withProject(input, () => handleAgentSessionSettingsGet()));
+  server.handle(agentSessionSettingsUpdate, (input) => withProject(input, () => handleAgentSessionSettingsUpdate(input)));
+  server.handle(agentSessionProviders, (input, context) => withProject(input, () => handleAgentSessionProviders(context)));
   server.handle(reviewModels, (input, context) => withProject(input, () => handleReviewModels(input, context)));
   server.handle(reviewPreview, (input, context) => withProject(input, () => handleReviewPreview(input, context)));
   server.handle(reviewSessionStart, (input, context) => withProject(input, () => handleReviewSessionStart(input, context)));

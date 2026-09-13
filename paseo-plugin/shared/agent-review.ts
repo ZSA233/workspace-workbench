@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { agentRelationshipSchema } from "./agent-session.ts";
 
 export const reviewModeSchema = z.enum(["off", "manual", "automatic"]);
 export const reviewerSessionModeSchema = z.enum(["reuse", "new_per_round"]);
@@ -170,6 +171,7 @@ export const reviewSessionSchema = z.object({
     ambiguities: z.array(z.string()).default([]),
     startMode: z.enum(["adaptive", "plan-first"]).default("adaptive"),
     handoffId: z.string().optional(),
+    relationship: agentRelationshipSchema.optional(),
     expected: z.object({
       branchByRepository: z.record(z.string(), z.string()).default({}),
       baseByRepository: z.record(z.string(), z.string()).default({}),

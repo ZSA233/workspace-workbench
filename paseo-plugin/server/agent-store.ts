@@ -2,12 +2,15 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { Handoff } from "../shared/handoff.ts";
+import type { AgentRelationship } from "../shared/agent-session.ts";
 import { currentProject } from "./projects.ts";
 
 export type AgentBinding = {
   workspaceId: string;
   agentId: string;
-  parentAgentId: string;
+  relationship: AgentRelationship;
+  parentAgentId?: string;
+  requestedByAgentId?: string;
   paseoWorkspaceId: string;
   cwd: string;
   provider: string;
@@ -22,11 +25,12 @@ export type AgentBinding = {
 };
 
 type AgentBindingFile = {
-  schemaVersion: "workspace.workbench.agent-bindings/v1";
+  schemaVersion: "workspace.workbench.agent-bindings/v2";
   bindings: AgentBinding[];
 };
 
-const schemaVersion = "workspace.workbench.agent-bindings/v1" as const;
+const legacySchemaVersion = "workspace.workbench.agent-bindings/v1" as const;
+const schemaVersion = "workspace.workbench.agent-bindings/v2" as const;
 
 function filePath(): string {
   const project = currentProject();
@@ -41,24 +45,42 @@ function empty(): AgentBindingFile {
   return { schemaVersion, bindings: [] };
 }
 
+function normalizeBinding(item: Partial<AgentBinding> & { parentAgentId?: unknown }): AgentBinding | null {
+  if (!item || typeof item.workspaceId !== "string" || typeof item.agentId !== "string"
+    || typeof item.paseoWorkspaceId !== "string" || typeof item.cwd !== "string"
+    || typeof item.provider !== "string" || typeof item.createdAt !== "string" || typeof item.updatedAt !== "string") return null;
+  const relationship = item.relationship === "independent" || item.relationship === "child"
+    ? item.relationship
+    : "child";
+  return {
+    ...item,
+    workspaceId: item.workspaceId,
+    agentId: item.agentId,
+    relationship,
+    ...(typeof item.parentAgentId === "string" && item.parentAgentId ? { parentAgentId: item.parentAgentId } : {}),
+    ...(typeof item.requestedByAgentId === "string" && item.requestedByAgentId ? { requestedByAgentId: item.requestedByAgentId } : {}),
+    paseoWorkspaceId: item.paseoWorkspaceId,
+    cwd: item.cwd,
+    provider: item.provider,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  };
+}
+
 function load(): AgentBindingFile {
   const path = filePath();
   if (!existsSync(path)) return empty();
   try {
     const value = JSON.parse(readFileSync(path, "utf8")) as Partial<AgentBindingFile>;
-    if (value.schemaVersion !== schemaVersion || !Array.isArray(value.bindings)) throw new Error("agent_bindings_invalid");
-    if (value.bindings.some((item) => !item || typeof item.workspaceId !== "string" || typeof item.agentId !== "string" || typeof item.parentAgentId !== "string" || typeof item.cwd !== "string")) throw new Error("agent_bindings_invalid");
+    if (value.schemaVersion !== schemaVersion && value.schemaVersion !== legacySchemaVersion) throw new Error("agent_bindings_invalid");
+    if (!Array.isArray(value.bindings)) throw new Error("agent_bindings_invalid");
+    const bindings = value.bindings.flatMap((item) => {
+      const normalized = normalizeBinding(item as Partial<AgentBinding> & { parentAgentId?: unknown });
+      return normalized ? [normalized] : [];
+    });
     return {
       schemaVersion,
-      bindings: value.bindings.filter((item): item is AgentBinding => Boolean(item)
-        && typeof item.workspaceId === "string"
-        && typeof item.agentId === "string"
-        && typeof item.parentAgentId === "string"
-        && typeof item.paseoWorkspaceId === "string"
-        && typeof item.cwd === "string"
-        && typeof item.provider === "string"
-        && typeof item.createdAt === "string"
-        && typeof item.updatedAt === "string"),
+      bindings,
     };
   } catch {
     throw new Error("agent_bindings_unreadable");

@@ -45,6 +45,7 @@ const schema = {
       properties: {
         goal: { type: "string", minLength: 1 },
         startMode: { enum: ["adaptive", "plan-first"] },
+        relationship: { enum: ["independent", "child"] },
         decisions: { type: "array", items: { type: "string" } },
         inScope: { type: "array", items: { type: "string" } },
         outOfScope: { type: "array", items: { type: "string" } },

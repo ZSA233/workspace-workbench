@@ -20,6 +20,7 @@ type AgentContextResponse,
 type WorkspaceBindingResponse,
 type WorkspaceDelegateResponse,
 } from "../shared/handoff";
+import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpdate, type AgentRelationship, type AgentSessionPatch } from "../shared/agent-session";
 import { observerQuery } from "../shared/observer";
 import { projectsQuery, type ProjectInfo } from "../shared/projects";
 import { projectBackendStart, projectStorageQuery } from "../shared/setup";
@@ -245,7 +246,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [executionModel, setExecutionModel] = useState("");
   const [reviewerModel, setReviewerModel] = useState("");
   const reviewDirtyFields = useRef(new Set<string>());
+  const sessionDirtyFields = useRef(new Set<string>());
+  const [sessionDefaultRelationship, setSessionDefaultRelationship] = useState<AgentRelationship>("independent");
+  const [sessionProviderRelationships, setSessionProviderRelationships] = useState<Record<string, AgentRelationship>>({});
   const markReviewField = useCallback((field: string) => { reviewDirtyFields.current.add(field); }, []);
+  const markSessionField = useCallback((field: string) => { sessionDirtyFields.current.add(field); }, []);
   const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setStorageMenuOpen(false); setLayoutMenuOpen(true); }, []);
   const openStorageMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setStorageMenuOpen(true); }, []);
   const compact = layout.compact || (panelWidth > 0 && panelWidth < 480);
@@ -300,6 +305,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [reviewIds, setReviewIds] = useState<string[]>([]);
   const [targetOverrides, setTargetOverrides] = useState<Record<string, string>>({});
   const [handoffGoal, setHandoffGoal] = useState("");
+  const [handoffRelationship, setHandoffRelationship] = useState<"default" | AgentRelationship>("default");
   const [createOpen, setCreateOpen] = useState(false);
   const newlyCreatedWorkspace = useRef<string | null>(null);
   const [delegating, setDelegating] = useState(false);
@@ -585,6 +591,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const reviewSettingsGetRpc = useRpc(reviewSettingsGet);
   const reviewSettingsUpdateRpc = useRpc(reviewSettingsUpdate);
   const reviewModelsRpc = useRpc(reviewModels);
+  const agentSessionSettingsGetRpc = useRpc(agentSessionSettingsGet);
+  const agentSessionSettingsUpdateRpc = useRpc(agentSessionSettingsUpdate);
+  const agentSessionProvidersRpc = useRpc(agentSessionProviders);
   const agentReviewQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "agent-review", selectedWorkspaceId, reviewSessionId],
     queryFn: () => reviewSessionRpc({ projectConfig, workspaceId: selectedWorkspaceId, ...(reviewSessionId ? { sessionId: reviewSessionId } : {}) }),
@@ -600,6 +609,16 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryFn: () => reviewSettingsGetRpc({ projectConfig }),
     enabled: Boolean(projectConfig), refetchOnWindowFocus: false, retry: false,
   });
+  const agentSessionSettingsQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "agent-session-settings"],
+    queryFn: () => agentSessionSettingsGetRpc({ projectConfig }),
+    enabled: Boolean(projectConfig), refetchOnWindowFocus: false, retry: false,
+  });
+  const agentSessionProvidersQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "agent-session-providers"],
+    queryFn: () => agentSessionProvidersRpc({ projectConfig }),
+    enabled: Boolean(projectConfig), staleTime: 5 * 60_000, refetchOnWindowFocus: false, retry: false,
+  });
   const reviewModelsQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "agent-review-models", selectedWorkspaceId],
     queryFn: () => reviewModelsRpc({ projectConfig, workspaceId: selectedWorkspaceId }),
@@ -607,20 +626,30 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   });
   const agentReview = (agentReviewQuery.data?.session || null) as ReviewSession | null;
   const reviewPreferences = reviewSettingsQuery.data?.effective;
+  const agentSessionPreferences = agentSessionSettingsQuery.data?.effective;
   const syncReviewEditor = useCallback(() => {
-    if (!reviewPreferences) return;
-    reviewDirtyFields.current.clear();
-    setReviewMode(reviewPreferences.mode);
-    setAutoFix(reviewPreferences.autoFix);
-    setMaxRounds(String(reviewPreferences.maxRounds));
-    setReviewerTimeoutMinutes(String(Math.max(1, Math.round(reviewPreferences.reviewerTimeoutMs / 60_000))));
-    setRepairTimeoutMinutes(String(Math.max(1, Math.round(reviewPreferences.repairTimeoutMs / 60_000))));
-    setReviewerRole(reviewPreferences.reviewerRole);
-    setReviewInstructions(reviewPreferences.instructions);
-    setReviewerSession(reviewPreferences.reviewerSession);
-    setExecutionModel(reviewPreferences.executionModel || "");
-    setReviewerModel(reviewPreferences.reviewerModel || "");
-  }, [reviewPreferences]);
+    if (reviewPreferences) {
+      reviewDirtyFields.current.clear();
+      setReviewMode(reviewPreferences.mode);
+      setAutoFix(reviewPreferences.autoFix);
+      setMaxRounds(String(reviewPreferences.maxRounds));
+      setReviewerTimeoutMinutes(String(Math.max(1, Math.round(reviewPreferences.reviewerTimeoutMs / 60_000))));
+      setRepairTimeoutMinutes(String(Math.max(1, Math.round(reviewPreferences.repairTimeoutMs / 60_000))));
+      setReviewerRole(reviewPreferences.reviewerRole);
+      setReviewInstructions(reviewPreferences.instructions);
+      setReviewerSession(reviewPreferences.reviewerSession);
+      setExecutionModel(reviewPreferences.executionModel || "");
+      setReviewerModel(reviewPreferences.reviewerModel || "");
+    }
+    if (agentSessionPreferences) {
+      sessionDirtyFields.current.clear();
+      const sessionPatch = reviewSettingsScope === "project"
+        ? agentSessionSettingsQuery.data?.project
+        : agentSessionSettingsQuery.data?.global;
+      setSessionDefaultRelationship(sessionPatch?.defaultRelationship || agentSessionPreferences.defaultRelationship);
+      setSessionProviderRelationships(sessionPatch?.providerRelationships || {});
+    }
+  }, [agentSessionPreferences, agentSessionSettingsQuery.data?.global, agentSessionSettingsQuery.data?.project, reviewPreferences, reviewSettingsScope]);
   useEffect(() => { syncReviewEditor(); }, [syncReviewEditor]);
   const saveReviewSettings = useCallback(async () => {
     try {
@@ -638,20 +667,26 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       const modelReset: string[] = [];
       if (dirty.has("executionModel")) executionModel.trim() ? models.executionModel = executionModel.trim() : modelReset.push("executionModel");
       if (dirty.has("reviewerModel")) reviewerModel.trim() ? models.reviewerModel = reviewerModel.trim() : modelReset.push("reviewerModel");
+      const sessionPatch: AgentSessionPatch = {};
+      if (sessionDirtyFields.current.has("defaultRelationship")) sessionPatch.defaultRelationship = sessionDefaultRelationship;
+      if (sessionDirtyFields.current.has("providerRelationships")) sessionPatch.providerRelationships = sessionProviderRelationships;
       if (reviewSettingsScope === "project") {
         if (Object.keys(shared).length) await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: shared, resetFields: [] });
         if (Object.keys(models).length || modelReset.length) await reviewSettingsUpdateRpc({ projectConfig, scope: "project-model", patch: models, resetFields: modelReset });
       } else if (Object.keys(shared).length || Object.keys(models).length || modelReset.length) {
         await reviewSettingsUpdateRpc({ projectConfig, scope: "global", patch: { ...shared, ...models }, resetFields: modelReset });
       }
+      if (Object.keys(sessionPatch).length) await agentSessionSettingsUpdateRpc({ projectConfig, scope: reviewSettingsScope, patch: sessionPatch, resetFields: [] });
       reviewDirtyFields.current.clear();
+      sessionDirtyFields.current.clear();
       setReviewSettingsOpen(false);
       await reviewSettingsQuery.refetch();
+      await agentSessionSettingsQuery.refetch();
       await agentReviewQuery.refetch();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "审核设置保存失败");
     }
-  }, [agentReviewQuery, autoFix, executionModel, maxRounds, projectConfig, repairTimeoutMinutes, reviewInstructions, reviewerModel, reviewerRole, reviewerSession, reviewerTimeoutMinutes, reviewMode, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, toast]);
+  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, autoFix, executionModel, maxRounds, projectConfig, repairTimeoutMinutes, reviewInstructions, reviewerModel, reviewerRole, reviewerSession, reviewerTimeoutMinutes, reviewMode, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, sessionDefaultRelationship, sessionProviderRelationships, toast]);
   const closeReviewSettings = useCallback(() => {
     syncReviewEditor();
     setReviewSettingsOpen(false);
@@ -672,16 +707,27 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     try {
       await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["mode", "autoFix", "maxRounds", "reviewerRole", "instructions", "reviewerSession", "reviewerTimeoutMs", "repairTimeoutMs"] });
       await reviewSettingsUpdateRpc({ projectConfig, scope: "project-model", patch: {}, resetFields: ["executionModel", "reviewerModel"] });
+      await agentSessionSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["defaultRelationship", "providerRelationships"] });
       reviewDirtyFields.current.clear();
+      sessionDirtyFields.current.clear();
       await reviewSettingsQuery.refetch();
+      await agentReviewQuery.refetch();
+      await agentSessionSettingsQuery.refetch();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "恢复继承失败");
     }
-  }, [projectConfig, reviewSettingsQuery, reviewSettingsUpdateRpc, toast]);
+  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, projectConfig, reviewSettingsQuery, reviewSettingsUpdateRpc, toast]);
   const reviewSources = reviewSettingsQuery.data?.sources || {};
   const reviewProject = reviewSettingsQuery.data?.project || {};
   const reviewGlobal = reviewSettingsQuery.data?.global || {};
   const reviewProjectModels = reviewSettingsQuery.data?.models || {};
+  const sessionSources = agentSessionSettingsQuery.data?.sources;
+  const sessionProviders = useMemo(() => {
+    const values = new Set((agentSessionProvidersQuery.data?.providers || []).map((item) => item.provider));
+    const current = boundAgent?.provider?.split("/")[0];
+    if (current) values.add(current);
+    return [...values].sort();
+  }, [agentSessionProvidersQuery.data?.providers, boundAgent?.provider]);
   const sourceLabel = (field: string) => {
     const source = reviewSources[field];
     return source === "project" || source === "project-model" ? "本项目" : source === "global" || source === "global-model" ? "全局" : "默认/跟随";
@@ -691,6 +737,14 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       ? field === "executionModel" || field === "reviewerModel" ? reviewProjectModels : reviewProject
       : reviewGlobal;
     return Object.prototype.hasOwnProperty.call(source, field);
+  };
+  const sessionSourceLabel = (field: "defaultRelationship" | string) => {
+    if (field === "defaultRelationship") {
+      const source = sessionSources?.defaultRelationship;
+      return source === "project" ? "本项目" : source === "global" ? "全局" : "默认";
+    }
+    const source = sessionSources?.providerRelationships?.[field];
+    return source === "project" ? "本项目" : source === "global" ? "全局" : "默认";
   };
   const startAgentReview = useCallback(() => {
     if (!selectedWorkspaceId) return;
@@ -799,6 +853,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       constraints: [],
       ambiguities: [],
       startMode: "adaptive" as const,
+      ...(handoffRelationship === "default" ? {} : { relationship: handoffRelationship }),
       expected: { branchByRepository: {}, baseByRepository: {} },
     } : {
       version: "workspace.workbench.handoff/v1" as const,
@@ -811,6 +866,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       constraints: [],
       ambiguities: [],
       startMode: "adaptive" as const,
+      ...(handoffRelationship === "default" ? {} : { relationship: handoffRelationship }),
       expected: { branchByRepository: {}, baseByRepository: {} },
     });
     setDelegating(true);
@@ -971,6 +1027,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <View>
         {parentAgentId && agentContextAvailable && !binding?.agentId ? <View style={styles.targetRow}>
           <TextInput value={handoffGoal} onChangeText={setHandoffGoal} placeholder={copy.text_1b37d56f7a} style={styles.targetInput} />
+          <View style={styles.briefActions}>
+            {(["default", "independent", "child"] as const).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: handoffRelationship === relationship }} onPress={() => setHandoffRelationship(relationship)} style={[styles.secondaryButton, handoffRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "default" ? "默认" : relationship === "independent" ? "独立" : "子 Agent"}</Text></Pressable>)}
+          </View>
           <Pressable disabled={delegating || !handoffGoal.trim()} onPress={delegateSelectedWorkspace} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.text_99ad8551f2}</Text></Pressable>
         </View> : null}
         <ExecutionBindingCard
@@ -1111,12 +1170,27 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       />
       <AnchoredMenu open={reviewSettingsOpen} onClose={closeReviewSettings} theme={theme} width={compact ? 270 : 330}>
         <ScrollView style={{ maxHeight: compact ? 420 : 600 }} contentContainerStyle={{ gap: 6 }}>
-        <Text style={styles.layoutMenuHint}>Agent Review 设置</Text>
+        <Text style={styles.layoutMenuHint}>Agent 会话设置</Text>
         <View style={styles.briefActions}>
           <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewSettingsScope === "project" }} onPress={() => { reviewDirtyFields.current.clear(); setReviewSettingsScope("project"); }} style={[styles.secondaryButton, reviewSettingsScope === "project" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>本项目</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewSettingsScope === "global" }} onPress={() => { reviewDirtyFields.current.clear(); setReviewSettingsScope("global"); }} style={[styles.secondaryButton, reviewSettingsScope === "global" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>全局默认</Text></Pressable>
         </View>
         <Text style={styles.layoutMenuHint}>未单独设置的字段继承全局默认。</Text>
+        <Text style={styles.layoutMenuHint}>执行会话关系 · {sessionSourceLabel("defaultRelationship")}</Text>
+        <View style={styles.briefActions}>
+          {(["independent", "child"] as AgentRelationship[]).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: sessionDefaultRelationship === relationship }} onPress={() => { markSessionField("defaultRelationship"); setSessionDefaultRelationship(relationship); }} style={[styles.secondaryButton, sessionDefaultRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "independent" ? "独立会话" : "子 Agent"}</Text></Pressable>)}
+        </View>
+        <Text style={styles.layoutMenuHint}>Provider 覆盖</Text>
+        {sessionProviders.map((provider) => {
+          const selected = sessionProviderRelationships[provider];
+          return <View key={provider} style={{ gap: 4 }}>
+            <Text style={styles.reviewEntryMeta}>{provider} · {sessionSourceLabel(provider)}</Text>
+            <View style={styles.briefActions}>
+              <Pressable accessibilityRole="button" accessibilityState={{ selected: !selected }} onPress={() => { markSessionField("providerRelationships"); setSessionProviderRelationships((current) => { const next = { ...current }; delete next[provider]; return next; }); }} style={[styles.secondaryButton, !selected && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>跟随默认</Text></Pressable>
+              {(["independent", "child"] as AgentRelationship[]).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: selected === relationship }} onPress={() => { markSessionField("providerRelationships"); setSessionProviderRelationships((current) => ({ ...current, [provider]: relationship })); }} style={[styles.secondaryButton, selected === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "independent" ? "独立" : "子 Agent"}</Text></Pressable>)}
+            </View>
+          </View>;
+        })}
         <Text style={styles.layoutMenuHint}>审核模式 · {sourceLabel("mode")}</Text>
         <View style={styles.briefActions}>
           {["off", "manual", "automatic"].map((mode) => <Pressable key={mode} accessibilityRole="button" accessibilityState={{ selected: reviewMode === mode }} onPress={() => { markReviewField("mode"); setReviewMode(mode as "off" | "manual" | "automatic"); }} style={[styles.secondaryButton, reviewMode === mode && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{mode === "off" ? "关闭" : mode === "manual" ? "手动" : "自动"}</Text></Pressable>)}

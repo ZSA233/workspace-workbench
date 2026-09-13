@@ -34,13 +34,23 @@ workbench_review_resume
 1. 用户明确要求创建隔离 Workspace。
 2. 规划模式下，主控 Agent 只能调用 `workbench_workspace_preview`。
 3. 用户批准并退出规划模式后，调用 `workbench_workspace_execute`，请求身份保持不变。
-4. Workbench 创建或复用选中的 Workspace，准备声明的运行时，校验路径和 Git 身份，然后在
-   该 Workspace 中创建或复用子 Agent。
-5. 主控 Agent 继续负责协调，子 Agent 负责修改文件。
+4. Workbench 创建或复用选中的 Workspace，准备声明的运行时，校验路径和 Git 身份，然后按
+   Agent 会话设置创建执行会话。默认是独立会话；只有项目/provider 设置或本次 handoff 明确选择
+   时才创建子 Agent。
+5. 独立执行会话拥有自己的 Paseo 对话和生命周期；主控 Agent 只接收创建结果，不等待执行会话。
+   子 Agent 模式保留原来的父子协作行为。
 6. 结果不确定时，主控 Agent 使用 `workbench_workspace_status` 查询状态。
 
 重试必须保持相同的 `requestId` 和完整请求内容。重复请求会从已记录的阶段继续，不会再次
-创建 Workspace 或子 Agent。
+创建 Workspace 或执行会话。
+
+## Agent 会话设置
+
+顶部三个点菜单中的“Agent session settings”提供项目和全局两级设置。默认执行关系是独立会话，
+也可以按 provider 覆盖为子 Agent；单次 handoff 可以在高级选项中覆盖默认关系。
+
+独立会话不会设置 Paseo `parent`，不会接收父对话的 `steer` 通知，也不会因为父会话结束而自动归档。
+子 Agent 仅在明确选择后启用。相同 handoff 的重试保持幂等，不同任务不会静默发送给旧执行会话。
 
 ## Agent Review
 
@@ -53,8 +63,9 @@ workbench_review_resume
 覆盖基准之后的提交、暂存/未暂存变更和未忽略的新文件，并返回 `approved`、`changes_requested`
 或 `blocked`。代码变化后旧结果会过期，不能代表新版本通过。
 
-Reviewer Agent 由独立的 Codex 会话运行，使用只读沙箱、禁止权限提升，并只加载读取快照和提交结果
-两个 Workbench 工具。若宿主无法确认该边界，审核会停在错误状态，不会用提示词代替运行约束。
+Reviewer Agent 始终由独立会话运行，使用只读沙箱、禁止权限提升，并只加载读取快照和提交结果
+两个 Workbench 工具。Reviewer 只审核，不修改文件；`changes_requested` 会把带 finding ID 的修复
+交回执行 Agent。默认同一个 Review 复用同一个 Reviewer，修复完成后由它继续复审。
 
 `changes_requested` 可以把带 finding ID 的修复交接发送回原执行 Agent，默认最多三轮；停止、断线、
 插件重载和 daemon 重启都会保留流程记录。审核通过后仍需用户自行查看差异并明确合并。

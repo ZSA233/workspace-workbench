@@ -81,6 +81,7 @@ export function ExecutionBindingCard({
 }) {
   if (!workspaceId) return null;
   const bindingStatus = binding?.status;
+  const relationshipLabel = binding?.relationship === "child" ? "子 Agent" : binding?.relationship === "independent" ? "独立会话" : "执行会话";
   const status = bindingStatus && ["completed", "blocked", "permission", "error", "archived"].includes(bindingStatus)
     ? bindingStatus
     : agent?.status || bindingStatus || "not-started";
@@ -101,7 +102,7 @@ export function ExecutionBindingCard({
     <View style={styles.executionBar} accessibilityLabel={formatCopy("text_f41a05dfe8", [statusText])}>
       <View style={styles.executionSummary}>
         <View style={[styles.executionStatusDot, { backgroundColor: statusColor }]} />
-        <Text style={styles.executionLabel}>{copy.text_5ce2e6f402}</Text>
+        <Text style={styles.executionLabel}>{relationshipLabel}</Text>
         <View style={[styles.executionStatus, { borderColor: statusColor }]}>
           <Text style={[styles.executionStatusText, { color: statusColor }]}>{statusText}</Text>
         </View>

@@ -76,6 +76,12 @@ paseo plugin update workspace-workbench-paseo --json
     "bridge": {
       "script": "../workspace-workbench/paseo-plugin/mcp.mjs",
       "endpoint": "auto"
+    },
+    "session": {
+      "defaultRelationship": "independent",
+      "providerRelationships": {
+        "codex": "independent"
+      }
     }
   }
 }
@@ -90,9 +96,13 @@ workbench_workspace_execute
 workbench_workspace_status
 ```
 
+执行会话默认是独立的 Paseo 会话。可以在 Workbench 顶部三个点菜单的“Agent session settings”中
+按项目和 provider 选择“独立会话”或“子 Agent”，也可以在单次交接时覆盖。独立会话不会跟随主控会话
+结束，也不会把状态用 `steer` 回灌主控对话。
+
 完成交接后，执行 Agent 可以提交明确的 `ready_for_review` 报告；普通对话结束不会自动触发审核。
 在非主 Workspace 的面板中打开 `Agent Review` 页签即可手动开始审核。审核设置从顶部三个点菜单进入，
-可以分别设置审核模式、自动修复、审核轮次、Reviewer 要求和 Codex 模型；项目设置优先于全局默认。
+可以分别设置会话关系、审核模式、自动修复、审核轮次、Reviewer 要求和 Codex 模型；项目设置优先于全局默认。
 审核期间会在当前 Workspace 的时间线中显示执行、审核、修复和结果。Reviewer 使用独立的只读沙箱，
 只能读取固定快照并提交结构化结果。`approved` 只代表对应代码版本通过审核，不会自动合并或发布。
 

@@ -12,6 +12,8 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { queryObserver } from "./observer.ts";
 import { getAgentBinding, putAgentBinding, type AgentBinding } from "./agent-store.ts";
 import { configuredExecutionModel, readReviewSession, recordExecutionHandoff } from "./agent-review.ts";
+import { resolveAgentRelationship } from "./agent-session.ts";
+import type { AgentRelationship } from "../shared/agent-session.ts";
 import {
   agentDelegate,
   agentStatusQuery,
@@ -81,6 +83,7 @@ function compactAgent(agent: PaseoAgent | null, binding: AgentBinding | null) {
     provider: agent.runtimeInfo?.provider || agent.provider,
     model: agent.runtimeInfo?.model || agent.model || null,
     status: agent.status || null,
+    relationship: binding?.relationship || (agent.labels?.["workspace-workbench.parent"] ? "child" : "independent"),
     parentAgentId: binding?.parentAgentId || null,
   };
 }
@@ -117,6 +120,7 @@ export async function handleWorkspaceBinding(
     paseoWorkspaceId: saved.paseoWorkspaceId,
     treePath: saved.cwd,
     agentId: saved.agentId,
+    relationship: saved.relationship,
     parentAgentId: saved.parentAgentId,
     providerModel: saved.provider,
     status: agent?.pendingPermissions?.length ? "permission" : agent ? bindingStatus(agent.status) : "error",
@@ -142,6 +146,7 @@ export async function handleWorkspaceDelegate(
     action: result.action,
     workspaceId: result.workspaceId,
     agentId: result.agentId,
+    relationship: result.relationship,
     status: result.status,
     error: result.error,
   };
@@ -173,11 +178,13 @@ function providerFromAgent(agent: PaseoAgent): string | null {
   return model ? `${provider}/${model}` : provider;
 }
 
-function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeResult): string {
+function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeResult, relationship: AgentRelationship): string {
   const section = (title: string, values: readonly string[]) => values.length ? [`${title}:`, ...values.map((value) => `- ${value}`), ""] : [];
   return [
     "Workspace Workbench Agent handoff",
-    "You are the execution child, not the coordinator. The Workspace has already been created and prepared. Execute this approved task; do not create or delegate another Workspace or Agent, and do not repeat planning unless start mode is plan-first.",
+    relationship === "child"
+      ? "You are the execution child, not the coordinator. The Workspace has already been created and prepared. Execute this approved task; do not create or delegate another Workspace or Agent, and do not repeat planning unless start mode is plan-first."
+      : "You are an independent execution session. The Workspace has already been created and prepared. Execute this approved task; do not create or delegate another Workspace or Agent, and do not repeat planning unless start mode is plan-first.",
     "",
     `Workspace: ${workspaceId}`,
     `Assigned directory: ${runtime.treePath}`,
@@ -199,7 +206,7 @@ function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeRe
     ...section("Expected branches", Object.entries(handoff.expected.branchByRepository).map(([repo, branch]) => `${repo}: ${branch}`)),
     ...section("Expected bases", Object.entries(handoff.expected.baseByRepository).map(([repo, base]) => `${repo}: ${base}`)),
     `Start mode: ${handoff.startMode}`,
-    "The workspace root is a multi-repository container. Verify the supplied worktree paths and Git branches before editing. The coordinator already completed the runtime preflight; do not delegate or call execute again.",
+    "The workspace root is a multi-repository container. Verify the supplied worktree paths and Git branches before editing. The requesting session already completed the runtime preflight; do not delegate or call execute again.",
     "Respect the host permission and sandbox policy. Verify configured runtimes before executing build commands.",
     "When the approved implementation work is complete, call workbench_execution_report with ready_for_review, a concise change summary, tests and known limitations. A normal turn ending alone is not a completion signal. If input is needed or the task fails, report needs_input or failed instead.",
   ].join("\n");
@@ -290,6 +297,11 @@ async function delegateAgent(
   if (!configuredProvider && selectedProvider !== childConfig.provider) return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_provider_mismatch", message: "Selected provider does not match the verified coordinator" } };
   if (configuredProvider) childConfig = { ...childConfig, provider: configuredProvider };
   let saved = getAgentBinding(input.workspaceId);
+  // An existing binding owns the relationship for that execution session.
+  // This keeps legacy v1 child bindings compatible even after the project
+  // default changes to independent, and prevents settings edits from
+  // mutating a live session's identity.
+  const relationship = saved?.relationship || resolveAgentRelationship(selectedProvider, input.handoff.relationship);
   const project = currentProject();
   const creationKey = `agent-create:${input.workspaceId}`;
   // Recover a created worker before considering another create. Listing failure
@@ -308,11 +320,12 @@ async function delegateAgent(
       if (candidates.length > 1) throw new Error("agent_candidates_ambiguous");
       const recovered = candidates[0];
       if (recovered) {
-        if (!runtimeAgentCwdMatches(runtime, recovered.cwd) || recovered.labels["workspace-workbench.parent"] !== input.parentAgentId || recovered.labels["workspace-workbench.handoff"] !== handoffHash) throw new Error("agent_identity_changed");
+        const recoveredRelationship = recovered.labels["workspace-workbench.relationship"] === "child" || recovered.labels["workspace-workbench.parent"] ? "child" : "independent";
+        if (!runtimeAgentCwdMatches(runtime, recovered.cwd) || recoveredRelationship !== relationship || (relationship === "child" && recovered.labels["workspace-workbench.parent"] !== input.parentAgentId) || recovered.labels["workspace-workbench.handoff"] !== handoffHash) throw new Error("agent_identity_changed");
         const now = new Date().toISOString();
         const creation = readState<{ agentId?: string; stage?: string }>(creationKey);
         const delivery = creation?.agentId === recovered.id && creation.stage === "sent" ? "sent" : "pending";
-        saved = { workspaceId: input.workspaceId, agentId: recovered.id, parentAgentId: input.parentAgentId, paseoWorkspaceId: recovered.workspaceId || "", cwd: recovered.cwd, provider: selectedProvider, createdAt: now, updatedAt: now, handoff: input.handoff, handoffHash, delivery };
+        saved = { workspaceId: input.workspaceId, agentId: recovered.id, relationship, ...(relationship === "child" ? { parentAgentId: input.parentAgentId } : { requestedByAgentId: input.parentAgentId }), paseoWorkspaceId: recovered.workspaceId || "", cwd: recovered.cwd, provider: selectedProvider, createdAt: now, updatedAt: now, handoff: input.handoff, handoffHash, delivery };
         putAgentBinding(saved);
       } else if (readState(creationKey)) throw new Error("agent_creation_uncertain");
     } catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_recovery_required", message: (error as Error).message } }; }
@@ -321,7 +334,7 @@ async function delegateAgent(
     try {
       const current = await context.paseo.agents.ref(saved.agentId).refresh();
       if (current?.agent && current.agent.status !== "closed" && !current.agent.archivedAt) {
-        if (saved.parentAgentId !== input.parentAgentId || current.agent.id !== saved.agentId || !runtimeAgentCwdMatches(runtime, current.agent.cwd) || !runtimeAgentCwdMatches(runtime, saved.cwd) || saved.workspaceId !== input.workspaceId) {
+        if (saved.relationship !== relationship || (relationship === "child" && saved.parentAgentId !== input.parentAgentId) || current.agent.id !== saved.agentId || !runtimeAgentCwdMatches(runtime, current.agent.cwd) || !runtimeAgentCwdMatches(runtime, saved.cwd) || saved.workspaceId !== input.workspaceId) {
           return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_identity_changed", message: "Agent placement does not match the workspace" } };
         }
         if (saved.delivery === "pending") throw new Error("handoff_delivery_uncertain");
@@ -331,13 +344,10 @@ async function delegateAgent(
         }
         if (current.agent.status === "running" || current.agent.status === "initializing") {
           if (saved.handoffHash !== handoffHash) return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_busy_different_task", message: copy.agentBusyOtherTask } };
-          return { ok: true, action: "already-running" as const, workspaceId: input.workspaceId, agentId: current.agent.id, status: current.agent.status };
+          return { ok: true, action: "already-running" as const, workspaceId: input.workspaceId, agentId: current.agent.id, relationship: saved.relationship, status: current.agent.status };
         }
-        if (saved.handoffHash === handoffHash) return { ok: true, action: "reused" as const, workspaceId: input.workspaceId, agentId: current.agent.id, status: current.agent.status };
-        putAgentBinding({ ...saved, handoff: input.handoff, handoffHash, delivery: "pending", updatedAt: new Date().toISOString() });
-        await context.paseo.agents.ref(saved.agentId).send(handoffPrompt(input.workspaceId, input.handoff, runtime), { messageId: handoffHash });
-        putAgentBinding({ ...saved, handoff: input.handoff, handoffHash, delivery: "sent", updatedAt: new Date().toISOString() });
-        return { ok: true, action: "reused" as const, workspaceId: input.workspaceId, agentId: current.agent.id, status: current.agent.status || "idle" };
+        if (saved.handoffHash === handoffHash) return { ok: true, action: "reused" as const, workspaceId: input.workspaceId, agentId: current.agent.id, relationship: saved.relationship, status: current.agent.status };
+        return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "workspace_session_exists", message: "This Workspace already has a different execution session; create a new Workspace for another task" } };
       }
       if (!current?.agent) throw new Error("agent unavailable");
       return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_closed", message: copy.agentClosedRecovery } };
@@ -348,7 +358,7 @@ async function delegateAgent(
   let paseoWorkspace;
   try {
     paseoWorkspace = await context.paseo.workspaces.open(runtime.treePath);
-    if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, stage: "creating" });
+    if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, relationship, stage: "creating" });
     const reportToken = randomUUID();
     const bridge = project ? workerBridge(project.configPath) : null;
     const workerEnv: Record<string, string> = {
@@ -373,7 +383,7 @@ async function delegateAgent(
       } : {}),
     };
     const created = await paseoWorkspace.agents.create({
-      parent: input.parentAgentId,
+      ...(relationship === "child" ? { parent: input.parentAgentId } : {}),
       env: workerEnv,
       title: input.title || `${input.workspaceId} worker`,
       config: workerConfig,
@@ -382,17 +392,19 @@ async function delegateAgent(
         "workspace-workbench.role": "workspace-worker",
         "workspace-workbench.workspace-id": input.workspaceId,
         "workspace-workbench.project": digest(project?.configPath || ""),
-        "workspace-workbench.parent": input.parentAgentId,
+        "workspace-workbench.relationship": relationship,
+        ...(relationship === "child" ? { "workspace-workbench.parent": input.parentAgentId } : {}),
         "workspace-workbench.handoff": handoffHash,
       },
     });
     if (project && bridge) writeState(`context:${reportToken}`, { agentId: created.id, cwd: runtime.treePath, workspaceId: input.workspaceId });
-    if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, stage: "created", agentId: created.id });
+    if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, relationship, stage: "created", agentId: created.id });
     const now = new Date().toISOString();
     const binding: AgentBinding = {
       workspaceId: input.workspaceId,
       agentId: created.id,
-      parentAgentId: input.parentAgentId,
+      relationship,
+      ...(relationship === "child" ? { parentAgentId: input.parentAgentId } : { requestedByAgentId: input.parentAgentId }),
       paseoWorkspaceId: paseoWorkspace.id,
       cwd: runtime.treePath,
       provider: selectedProvider,
@@ -414,13 +426,13 @@ async function delegateAgent(
       }
     }
     try {
-      await created.send(handoffPrompt(input.workspaceId, input.handoff, runtime), { messageId: handoffHash });
+      await created.send(handoffPrompt(input.workspaceId, input.handoff, runtime, relationship), { messageId: handoffHash });
     } catch (error) {
       return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: "handoff_delivery_uncertain", message: error instanceof Error ? error.message : "Agent handoff delivery is uncertain" } };
     }
-    if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, stage: "sent", agentId: created.id });
+    if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, relationship, stage: "sent", agentId: created.id });
     putAgentBinding({ ...binding, delivery: "sent", updatedAt: new Date().toISOString() });
-    return { ok: true, action: "created" as const, workspaceId: input.workspaceId, agentId: created.id, status: created.current()?.status || "initializing" };
+    return { ok: true, action: "created" as const, workspaceId: input.workspaceId, agentId: created.id, relationship, status: created.current()?.status || "initializing" };
   } catch (error) {
     return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: "agent_create_failed", message: error instanceof Error ? error.message : "Agent creation failed" } };
   }

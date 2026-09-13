@@ -187,6 +187,9 @@ test("start creates a real read-only Reviewer from a server snapshot and include
   await withFixture(fixture, async () => {
     const session = await startReview({ projectConfig: fixture.config, workspaceId: "managed-fixture", executionAgentId: "execution-fixture" }, fixture.context);
     assert.equal(session.status, "reviewing");
+    assert.equal(fixture.reviewerCreate[0].parent, undefined);
+    assert.equal((fixture.reviewerCreate[0].labels as Record<string, string>)["workspace-workbench.relationship"], "independent");
+    assert.equal((fixture.reviewerCreate[0].labels as Record<string, string>)["workspace-workbench.parent"], undefined);
     assert.equal(session.round, 1);
     assert.equal(session.snapshot?.files.some((file) => file.path === "new-file.txt"), true);
     const created = fixture.reviewerCreate[0];

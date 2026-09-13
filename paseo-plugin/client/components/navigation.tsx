@@ -94,7 +94,7 @@ export function LayoutMenu({
     {onCreate ? <LayoutMenuItem label={copy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
     {onSwitchProject ? <LayoutMenuItem label={copy.switchProject} onPress={onSwitchProject} styles={styles} /> : null}
     {onOpenStorage ? <LayoutMenuItem label={copy.storageMenu} onPress={onOpenStorage} styles={styles} /> : null}
-    {onOpenReviewSettings ? <LayoutMenuItem label="Agent Review settings" onPress={onOpenReviewSettings} styles={styles} /> : null}
+    {onOpenReviewSettings ? <LayoutMenuItem label="Agent session settings" onPress={onOpenReviewSettings} styles={styles} /> : null}
     <LayoutMenuItem label={copy.text_5f6a1bf190} onPress={onCollapseAll} styles={styles} />
     <LayoutMenuItem label={copy.text_66c98ab6d8} onPress={onExpandAll} styles={styles} />
     <LayoutMenuItem label={copy.text_e003f209ca} onPress={onReset} styles={styles} />

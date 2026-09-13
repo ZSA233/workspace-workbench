@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { agentRelationshipSchema } from "./agent-session.ts";
 
 /** Generic, provider-neutral handoff payload used by the optional Agent provider. */
 export const handoffSchema = z.object({
@@ -15,6 +16,8 @@ export const handoffSchema = z.object({
   startMode: z.enum(["adaptive", "plan-first"]).default("adaptive"),
   handoffId: z.string().trim().min(1).optional(),
   providerModel: z.string().trim().min(1).optional(),
+  /** Optional per-task override; project/provider settings remain the default. */
+  relationship: agentRelationshipSchema.optional(),
   policy: z.object({
     placementGuard: z.boolean().default(true),
     providerSandbox: z.boolean().optional(),
@@ -31,6 +34,7 @@ export const workspaceBindingSchema = z.object({
   paseoWorkspaceId: z.string(),
   treePath: z.string(),
   agentId: z.string().optional(),
+  relationship: agentRelationshipSchema.default("child"),
   parentAgentId: z.string().optional(),
   providerModel: z.string().optional(),
   handoffId: z.string().optional(),
@@ -52,6 +56,7 @@ const agentShape = z.object({
   provider: z.string(),
   model: z.string().nullable(),
   status: z.string().nullable(),
+  relationship: agentRelationshipSchema,
   parentAgentId: z.string().nullable(),
   lastUsage: z.object({
     inputTokens: z.number().optional(),
@@ -92,6 +97,7 @@ export const workspaceDelegate = defineRpc({
     paseoWorkspaceId: z.string().optional(),
     treePath: z.string().optional(),
     agentId: z.string().optional(),
+    relationship: agentRelationshipSchema.optional(),
     parentAgentId: z.string().optional(),
     providerModel: z.string().optional(),
     status: z.string().optional(),

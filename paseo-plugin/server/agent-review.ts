@@ -93,6 +93,10 @@ type StoredGlobalSettings = {
   version: 1;
   defaults: Partial<ReviewPreferences>;
   projects: Record<string, ReviewModelOverride>;
+  agentSession?: {
+    defaults?: unknown;
+    projects?: Record<string, unknown>;
+  };
 };
 type ExecutionReportRecord = {
   workspaceId: string;
@@ -167,6 +171,7 @@ function handoffSnapshot(handoff: Handoff): NonNullable<ReviewSession["handoff"]
     ambiguities: [...handoff.ambiguities],
     startMode: handoff.startMode,
     ...(handoff.handoffId ? { handoffId: handoff.handoffId } : {}),
+    ...(handoff.relationship ? { relationship: handoff.relationship } : {}),
     expected: {
       branchByRepository: { ...handoff.expected.branchByRepository },
       baseByRepository: { ...handoff.expected.baseByRepository },
@@ -210,10 +215,11 @@ function readGlobalSettings(): StoredGlobalSettings {
     const value = JSON.parse(readFileSync(reviewSettingsPath(), "utf8")) as Partial<StoredGlobalSettings>;
     const defaults = value.defaults && typeof value.defaults === "object" ? value.defaults : {};
     const projects = value.projects && typeof value.projects === "object" ? value.projects : {};
+    const agentSession = value.agentSession && typeof value.agentSession === "object" ? value.agentSession : undefined;
     return { version: 1, defaults: reviewGlobalPatchSchema.parse(defaults), projects: Object.fromEntries(Object.entries(projects).flatMap(([key, item]) => {
       const parsed = zModelOverride().safeParse(item);
       return parsed.success ? [[key, parsed.data]] : [];
-    })) };
+    })), ...(agentSession ? { agentSession } : {}) };
   } catch {
     return { version: 1, defaults: {}, projects: {} };
   }
@@ -831,6 +837,7 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
         "workspace-workbench.review-round": String(session.round),
         "workspace-workbench.workspace-id": session.workspaceId,
         "workspace-workbench.project": digest(project.configPath),
+        "workspace-workbench.relationship": "independent",
         "workspace-workbench.read-only": "true",
         "workspace-workbench.model": model.model,
       },

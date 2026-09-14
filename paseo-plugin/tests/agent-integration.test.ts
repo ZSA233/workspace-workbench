@@ -24,6 +24,23 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
     const request: PluginBeforeRequests["agent.create"] = { config: { provider: "codex", cwd: root, modeId: "auto", toolPolicy: { preapproved: [] } } };
     const injected = hooks.get("agent.create")!({ request }) as typeof request;
     assert.deepEqual(injected.config.toolPolicy, request.config.toolPolicy);
+    assert.equal(Object.hasOwn(injected.config, "systemPrompt"), false);
+    // Preserve caller-owned prompts and mode/model settings without inserting
+    // Workbench text into any provider setting, including on repeated creation.
+    for (const provider of ["codex", "claude"]) {
+      for (const planning of [true, false]) {
+        const original = { ...request, config: { ...request.config, provider, model: "fixture",
+          systemPrompt: "Caller instructions", featureValues: { plan_mode: planning },
+          providerOptions: { custom: "preserved" } } };
+        const once = hooks.get("agent.create")!({ request: original }) as typeof original;
+        const twice = hooks.get("agent.create")!({ request: once }) as typeof original;
+        for (const result of [once, twice]) {
+          const { mcpServers: _mcp, ...settings } = result.config;
+          assert.deepEqual(settings, original.config);
+          assert.doesNotMatch(JSON.stringify(settings), /WORKBENCH_ORCHESTRATION/);
+        }
+      }
+    }
     const bridge = injected.config.mcpServers?.["workspace-workbench"];
     assert.equal(bridge?.type, "stdio");
     assert.equal(bridge?.alwaysLoad, true);

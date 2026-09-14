@@ -21,16 +21,6 @@ function bridgeConfig(configPath: string) {
   if (!endpoint) throw new Error("paseo_local_endpoint_required");
   return { script: resolve(dirname(configPath), bridge.script), endpoint };
 }
-const instructions = [
-  "WORKBENCH_ORCHESTRATION_V1",
-  "Only when the user explicitly requests an isolated Workspace: preview before edits; in plan mode preview only, then execute after approval and leaving plan mode.",
-  "For direct execution, execute before the first target-file mutation and include repositories, base refs and the approved handoff.",
-  "Repository references may be IDs or paths; reuse preview's canonical request for execute.",
-  "Retry the identical requestId and payload; if repository resolution fails, report it instead of inventing a replacement request.",
-  "When a task depends on a generated image or other visual reference, register only the relevant asset with workbench_artifact_register (prefer its local path; use image data only when the provider supplies it) and include the returned assetId in handoff.reviewPacket.references. If the image exists only as unaddressable chat media, ask for a saved/attached copy; do not include unrelated conversation media or invent an assetId.",
-  "Before execution, include the requirement understanding, plan, stable acceptance criteria, references and task-specific review instructions in handoff.reviewPacket when they are known.",
-  "After execute returns, report the created execution session. In the default independent mode, the execution session owns edits: do not continue editing the target checkout or wait for it before returning the creation result. If child mode was explicitly selected, retain the existing parent-child coordination and lifecycle notifications.",
-].join("\n");
 
 export function registerAgentIntegration(server: PluginServerContext): () => void {
   let api: import("@getpaseo/client").PaseoApi | null = null;
@@ -43,8 +33,8 @@ export function registerAgentIntegration(server: PluginServerContext): () => voi
     const token = randomUUID();
     const environment = { WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath, WORKBENCH_PASEO_ENDPOINT: bridge.endpoint };
     withProject({ projectConfig: project.configPath }, () => writeState(`context:${token}`, { agentId: "", cwd: request.config.cwd }));
+    // Paseo also copies systemPrompt into mode overrides; keep tool guidance in MCP.
     return { ...request, env: { ...request.env, ...environment }, config: { ...request.config,
-      systemPrompt: `${request.config.systemPrompt || ""}\n\n${instructions}`,
       mcpServers: { ...request.config.mcpServers, "workspace-workbench": { type: "stdio" as const, command: process.execPath, args: [bridge.script], env: environment, alwaysLoad: true } },
     } };
   }), server.before("agent.session_open", ({ request }) => {

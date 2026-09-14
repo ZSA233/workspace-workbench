@@ -7,6 +7,7 @@ import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
 import { childExecutionConfig } from "../server/execution-policy.ts";
 import { orchestrate } from "../server/orchestrator.ts";
 import { withProject } from "../server/projects.ts";
+import { readState } from "../server/orchestration-state.ts";
 import { workflowRequest, workflowStatusRequest } from "../shared/orchestration.ts";
 
 const parent = (cwd: string, plan = false) => ({ id: "parent", cwd, provider: "codex", model: "fixture", currentModeId: "auto", availableModes: [{ id: "auto" }, { id: "full-access" }], pendingPermissions: [], features: [{ id: "plan_mode", type: "toggle", value: plan }] }) as unknown as PaseoAgent;
@@ -37,11 +38,20 @@ test("preview is read-only; execute prepares, creates one child, retries without
   };
   const request = workflowRequest.parse({ requestId: "one", name: "sample", repositories: [root], baseRefs: { [root]: "main" }, handoff: { goal: "Edit fixture" } });
   const canonicalRequest = workflowRequest.parse({ requestId: "one", name: "sample", repositories: ["api"], baseRefs: { api: "main" }, handoff: { goal: "Edit fixture" } });
+  const directRequest = workflowRequest.parse({ requestId: "direct", name: "direct", repositories: [root], baseRefs: { [root]: "main" }, handoff: { goal: "Direct fixture" } });
   const run = (action: "preview" | "execute", currentRequest = request) => withProject({ projectConfig: config }, () => orchestrate(action, currentRequest, "parent", { paseo, query }));
   try {
+    planning = false;
+    const direct = await run("execute", directRequest);
+    assert.equal((direct as { ok?: boolean }).ok, false);
+    assert.equal((direct as { error?: { code?: string } }).error?.code, "preview_required");
+    planning = true;
     const preview = await run("preview");
     assert.deepEqual((preview as { request: { repositories?: string[]; baseRefs: Record<string, string> } }).request.repositories, ["api"]);
     assert.deepEqual((preview as { request: { baseRefs: Record<string, string> } }).request.baseRefs, { api: "main" });
+    const savedPreview = withProject({ projectConfig: config }, () => readState<{ stage?: string; identity?: string }>("workflow:parent:one"));
+    assert.equal(savedPreview?.stage, "previewed");
+    assert.equal(typeof savedPreview?.identity, "string");
     assert.deepEqual(calls, ["workspace.list", "workspace.detail"]);
     await assert.rejects(run("execute"), /主控仍在计划模式/);
     assert.equal(creates, 0);

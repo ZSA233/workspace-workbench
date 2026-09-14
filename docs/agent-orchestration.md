@@ -5,8 +5,9 @@ Agent 编排是可选能力。它由项目配置开启，并继续使用 Paseo �
 ## Bridge 工作方式
 
 Paseo 创建新的主控 Agent 时，插件 hook 会根据 Agent 的工作目录匹配已登记的 Workbench
-项目。如果项目配置了 Paseo bridge，hook 会注入本地 `mcp.mjs` 进程、项目身份和简短的
-系统指引。这个进程由 Paseo 为 Agent 启动，不需要用户另外执行创建子 Agent 的脚本。
+项目。如果项目配置了 Paseo bridge，hook 只会注入本地 `mcp.mjs` 进程和项目身份。
+它不会修改 Agent 的 `systemPrompt`、Plan 状态、权限模式或用户提示。这个进程由 Paseo
+为 Agent 启动，不需要用户另外执行创建子 Agent 的脚本。
 
 Bridge 只暴露以下公开工具：
 
@@ -26,17 +27,19 @@ workbench_review_stop
 workbench_review_resume
 ```
 
-这些工具和面板使用同一个 Workbench 编排器。为了兼容不执行工具搜索的 provider，新建的
-主控 Agent 会常驻加载这个 bridge；工具 schema 和说明保持精简，也不会暴露项目专属仓库名。
+这些工具和面板使用同一个 Workbench 编排器。新建的主控 Agent 会常驻加载这个 bridge，
+工具 schema 和说明保持精简，也不会暴露项目专属仓库名。流程约束由服务端状态机和每次
+handoff 的结构化结果执行；不会通过全局系统提示词教会话记住 Workbench 流程。
 
 ## 标准流程
 
 1. 用户明确要求创建隔离 Workspace。
 2. 规划模式下，主控 Agent 只能调用 `workbench_workspace_preview`。
 3. 用户批准并退出规划模式后，调用 `workbench_workspace_execute`，请求身份保持不变。
+   服务端会拒绝没有同一请求预览检查点的 execute 请求。
 4. Workbench 创建或复用选中的 Workspace，准备声明的运行时，校验路径和 Git 身份，然后按
-   Agent 会话设置创建执行会话。默认是独立会话；只有项目/provider 设置或本次 handoff 明确选择
-   时才创建子 Agent。
+   Agent 会话设置创建执行会话。Workspace 的默认上下文和本次 handoff 只发送给这个执行会话。
+   默认是独立会话；只有项目/provider 设置或本次 handoff 明确选择时才创建子 Agent。
 5. 独立执行会话拥有自己的 Paseo 对话和生命周期；主控 Agent 只接收创建结果，不等待执行会话。
    子 Agent 模式保留原来的父子协作行为。
 6. 结果不确定时，主控 Agent 使用 `workbench_workspace_status` 查询状态。

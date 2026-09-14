@@ -6,9 +6,18 @@ import { childExecutionConfig, assertCoordinatorExecution } from "./execution-po
 import { queryObserver } from "./observer.ts";
 import { currentProject, resolveProject } from "./projects.ts";
 import { digest, readState, writeState } from "./orchestration-state.ts";
+import { getWorkbenchCopy } from "../shared/copy.ts";
 import { workflowRequest, type WorkflowRequest, type WorkflowStatusRequest } from "../shared/orchestration.ts";
 
-type Progress = { identity: string; identityVersion?: 2; workspaceId?: string; stage: string; result?: Awaited<ReturnType<typeof handleAgentDelegate>> };
+type Progress = {
+  identity: string;
+  identityVersion?: 2;
+  workspaceId?: string;
+  stage: string;
+  previewedAt?: string;
+  result?: Awaited<ReturnType<typeof handleAgentDelegate>>;
+};
+const resumableWorkflowStages = new Set(["previewed", "validated", "created", "prepare-failed", "delegating", "handoff-blocked"]);
 const flights = new Map<string, Promise<unknown>>();
 
 type CatalogRepository = {
@@ -143,6 +152,9 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
     return { ok: true, progress: previous, execution: previous.workspaceId ? await handleWorkspaceBinding({ workspaceId: previous.workspaceId }, context) : null };
   }
   const rawRequest = workflowRequest.parse(request);
+  if (action === "execute" && !previous) {
+    return { ok: false, action: "blocked", sideEffects: [], requiresExecution: false, error: { code: "preview_required", message: getWorkbenchCopy(rawRequest.handoff.reviewLocale).workspacePreviewRequired } };
+  }
   const listing = await query({ method: "workspace.list", params: { includeRemoved: true } });
   if (!listing.ok) return listing;
   const capabilities = (listing.result as { capabilities?: { create?: boolean; agent?: boolean; prepare?: boolean } }).capabilities;
@@ -164,9 +176,21 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
     compatiblePrevious = { ...compatiblePrevious, identity, identityVersion: 2 };
   }
   if (action === "preview") {
+    // Persist the canonical, side-effect-free checkpoint so execute can be
+    // guarded by the same request identity. A retry never needs to rely on a
+    // model remembering that preview happened.
+    if (!previous || !resumableWorkflowStages.has(previous.stage)) {
+      writeState(key, { identity, identityVersion: 2, workspaceId: fullRequest.workspaceId, stage: "previewed", previewedAt: new Date().toISOString() });
+    }
     return { ok: true, action: fullRequest.workspaceId ? "reuse" : "create", request: fullRequest, catalog: catalog.result, sideEffects: [], requiresExecution: true };
   }
   if (previous?.stage === "handed-off") return previous.result;
+  // The preview is the approval boundary for Workspace creation. Existing
+  // progress stages remain resumable, but a new identity must first establish
+  // a canonical preview checkpoint; no prompt can substitute for this guard.
+  if (!previous || !resumableWorkflowStages.has(previous.stage)) {
+    return { ok: false, action: "blocked", request: fullRequest, catalog: catalog.result, sideEffects: [], requiresExecution: false, error: { code: "preview_required", message: getWorkbenchCopy(fullRequest.handoff.reviewLocale).workspacePreviewRequired } };
+  }
   const flightKey = `${project.configPath}:${key}`;
   const active = flights.get(flightKey);
   if (active) return active;

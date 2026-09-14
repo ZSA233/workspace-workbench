@@ -30,11 +30,13 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
   ]);
   const preview = response.result.tools.find((tool) => tool.name === "workbench_workspace_preview")!;
   const execute = response.result.tools.find((tool) => tool.name === "workbench_workspace_execute")!;
-  assert.match(preview.description, /Plan mode allows preview only/);
-  assert.match(execute.description, /approval and leaving Plan mode/);
+  const status = response.result.tools.find((tool) => tool.name === "workbench_workspace_status")!;
+  assert.match(preview.description, /Read-only/);
+  assert.match(preview.description, /canonical request/);
+  assert.match(execute.description, /canonical previewed Workspace/);
+  assert.match(status.description, /request ID/);
   for (const tool of response.result.tools) {
-    const workspaceAction = ["workbench_workspace_preview", "workbench_workspace_execute"].includes(tool.name);
-    assert.ok(tool.description.length < (workspaceAction ? 220 : 70));
+    assert.ok(tool.description.length < 180);
     if (tool.name === "workbench_artifact_register") assert.deepEqual(tool.inputSchema.required, ["artifact"]);
     if (["workbench_workspace_preview", "workbench_workspace_execute"].includes(tool.name)) assert.deepEqual(tool.inputSchema.required, ["requestId", "handoff"]);
     if (tool.name === "workbench_workspace_status") assert.deepEqual(tool.inputSchema.required, ["requestId"]);
@@ -53,7 +55,7 @@ test("review and execution MCP processes expose only their role tools", () => {
   assert.deepEqual(JSON.parse(execution.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_execution_report"]);
 });
 
-test("MCP initialization delivers orchestration guidance only to interactive agents", () => {
+test("MCP initialization carries transport metadata, not session-wide orchestration instructions", () => {
   for (const role of ["interactive", "WORKBENCH_REVIEW_ONLY", "WORKBENCH_EXECUTION_REPORT_ONLY"]) {
     const result = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], {
       encoding: "utf8", timeout: 10_000,
@@ -63,11 +65,6 @@ test("MCP initialization delivers orchestration guidance only to interactive age
     assert.equal(result.status, 0, result.stderr);
     const response = JSON.parse(result.stdout.trim()).result;
     assert.equal(response.protocolVersion, "2024-11-05");
-    if (role === "interactive") {
-      assert.match(response.instructions, /WORKBENCH_ORCHESTRATION_V1/);
-      assert.match(response.instructions, /in plan mode preview only/);
-      assert.match(response.instructions, /approval and leaving plan mode/);
-      assert.match(response.instructions, /reviewPacket.references/);
-    } else assert.equal(response.instructions, undefined);
+    assert.equal(response.instructions, undefined);
   }
 });

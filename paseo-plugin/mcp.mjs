@@ -9,22 +9,11 @@ const packageMetadata = require("./package.json");
 const endpoint = process.env.WORKBENCH_PASEO_ENDPOINT;
 const projectConfig = process.env.WORKBENCH_PROJECT_CONFIG;
 const token = process.env.WORKBENCH_AGENT_TOKEN;
-// Tool guidance belongs to MCP, never to the host collaboration-mode prompt.
-const orchestrationInstructions = [
-  "WORKBENCH_ORCHESTRATION_V1",
-  "Only when the user explicitly requests an isolated Workspace: preview before edits; in plan mode preview only, then execute after approval and leaving plan mode.",
-  "For direct execution, execute before the first target-file mutation and include repositories, base refs and the approved handoff.",
-  "Repository references may be IDs or paths; reuse preview's canonical request for execute.",
-  "Retry the identical requestId and payload; if repository resolution fails, report it instead of inventing a replacement request.",
-  "When a task depends on a generated image or other visual reference, register only the relevant asset with workbench_artifact_register (prefer its local path; use image data only when the provider supplies it) and include the returned assetId in handoff.reviewPacket.references. If the image exists only as unaddressable chat media, ask for a saved/attached copy; do not include unrelated conversation media or invent an assetId.",
-  "Before execution, include the requirement understanding, plan, stable acceptance criteria, references and task-specific review instructions in handoff.reviewPacket when they are known.",
-  "After execute returns, report the created execution session. In the default independent mode, the execution session owns edits: do not continue editing the target checkout or wait for it before returning the creation result. If child mode was explicitly selected, retain the existing parent-child coordination and lifecycle notifications.",
-].join("\n");
 const publicTools = [
   { name: "workbench_artifact_register", description: "Register a handoff asset from a local path or image data." },
-  { name: "workbench_workspace_preview", description: "Preview an explicitly requested isolated Workspace before edits. Plan mode allows preview only; use the canonical request for execute." },
-  { name: "workbench_workspace_execute", description: "Execute the canonical preview request only after approval and leaving Plan mode, before target edits. Report the created session; independent sessions own subsequent edits." },
-  { name: "workbench_workspace_status", description: "Read isolated Workspace handoff status." },
+  { name: "workbench_workspace_preview", description: "Read-only validation for an explicitly requested isolated Workspace; returns the canonical request and no writes." },
+  { name: "workbench_workspace_execute", description: "Create or reuse the canonical previewed Workspace and start its execution Agent; preserves request identity and server checks." },
+  { name: "workbench_workspace_status", description: "Read the saved status for an uncertain Workspace handoff using its request ID." },
   { name: "workbench_review_preview", description: "Preview review context without starting a Reviewer." },
   { name: "workbench_review_execute", description: "Start or continue the Workspace Agent Review orchestration." },
   { name: "workbench_review_status", description: "Read the current and historical Agent Review status." },
@@ -159,7 +148,7 @@ const reviewerActions = new Map([
 ]);
 let client;
 async function handle(message) {
-  if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version }, ...(tools === publicTools ? { instructions: orchestrationInstructions } : {}) };
+  if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version } };
   if (message.method === "ping") return {};
   if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: tool.name === "workbench_artifact_register" ? artifactRegisterSchema : tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name === "workbench_workspace_status" ? workspaceStatusSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema, annotations: { readOnlyHint: !["workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: false } })) };
   if (message.method !== "tools/call") throw new Error("method_not_found");

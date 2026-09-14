@@ -2,11 +2,13 @@ import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { agentRelationshipSchema } from "./agent-session.ts";
 import { reviewPacketSchema } from "./review-packet.ts";
+import { bundleRefSchema, handoffContextSchema } from "./handoff-materials.ts";
 
 /** Generic, provider-neutral handoff payload used by the optional Agent provider. */
 export const handoffSchema = z.object({
   version: z.literal("workspace.workbench.handoff/v1").default("workspace.workbench.handoff/v1"),
   goal: z.string().trim().min(1),
+  context: handoffContextSchema.optional(),
   decisions: z.array(z.string().trim().min(1)).default([]),
   inScope: z.array(z.string().trim().min(1)).default([]),
   outOfScope: z.array(z.string().trim().min(1)).default([]),
@@ -34,6 +36,7 @@ export const handoffSchema = z.object({
 });
 
 export const workspaceBindingSchema = z.object({
+  handoffBundle: bundleRefSchema.optional(),
   workspaceId: z.string(),
   paseoWorkspaceId: z.string(),
   treePath: z.string(),
@@ -123,6 +126,9 @@ export const agentContextQuery = defineRpc({
 });
 
 export type Handoff = z.infer<typeof handoffSchema>;
+export const workspaceHandoffPreview = defineRpc({
+  name: "workspace.workbench.handoff-preview", input: z.object({ projectConfig: z.string(), workspaceId: z.string(), parentAgentId: z.string(), handoff: handoffSchema }), output: z.unknown(),
+});
 export type { ReviewPacket } from "./review-packet.ts";
 export type WorkspaceBinding = z.infer<typeof workspaceBindingSchema>;
 export type WorkspaceBindingResponse = z.infer<typeof workspaceBindingQuery.output>;

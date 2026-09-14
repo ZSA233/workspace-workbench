@@ -8,8 +8,8 @@ import { readState } from "./orchestration-state.ts";
 import type { ReviewArtifactReference, ReviewArtifactKind } from "../shared/review-packet.ts";
 import type { ArtifactListResponse, ArtifactRegisterResponse } from "../shared/artifacts.ts";
 
-const MAX_REGISTERED_BYTES = 8 * 1024 * 1024;
-const MAX_TEXT_BYTES = 512 * 1024;
+export const MAX_REGISTERED_BYTES = 8 * 1024 * 1024;
+export const MAX_TEXT_BYTES = 512 * 1024;
 const ASSET_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 
 export type RuntimeRepository = { id: string; worktreePath: string };

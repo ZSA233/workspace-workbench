@@ -1,5 +1,7 @@
 import { realpathSync } from "node:fs";
 import { coordinatorGuidance, handoffOutcome } from "../shared/handoff-guidance.mjs";
+import { createPreviewBundle, readBundle, assertBundleReady, writeBundleEnvironment } from "./handoff-bundles.ts";
+import type { BundleRef } from "../shared/handoff-materials.ts";
 import { isAbsolute, resolve } from "node:path";
 import type { AgentContext } from "./agent-provider.ts";
 import { handleAgentDelegate, handleWorkspaceBinding } from "./agent-provider.ts";
@@ -11,6 +13,7 @@ import { getWorkbenchCopy } from "../shared/copy.ts";
 import { workflowRequest, type WorkflowRequest, type WorkflowStatusRequest } from "../shared/orchestration.ts";
 
 type Progress = {
+  bundle?: BundleRef;
   identity: string;
   identityVersion?: 2;
   workspaceId?: string;
@@ -180,12 +183,17 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
     // Persist the canonical, side-effect-free checkpoint so execute can be
     // guarded by the same request identity. A retry never needs to rely on a
     // model remembering that preview happened.
-    if (!previous || !resumableWorkflowStages.has(previous.stage)) {
-      writeState(key, { identity, identityVersion: 2, workspaceId: fullRequest.workspaceId, stage: "previewed", previewedAt: new Date().toISOString() });
-    }
-    return { ok: true, action: fullRequest.workspaceId ? "reuse" : "create", request: fullRequest, catalog: catalog.result, sideEffects: [], requiresExecution: true, instructions: coordinatorGuidance };
+    const repos = (catalog.result as { repositories?: Array<{ id: string; worktreePath?: string; sourcePath?: string }> }).repositories || [];
+    const material = previous?.bundle ? readBundle(previous.bundle) : !previous ? await createPreviewBundle({ ownerAgentId: parentAgentId, ownerCwd: parent.cwd, identity,
+      handoff: fullRequest.handoff, runtime: { repositories: repos.flatMap(repo => repo.worktreePath || repo.sourcePath ? [{ id: repo.id, worktreePath: (repo.worktreePath || repo.sourcePath)! }] : []) }, context }) : null;
+    if (!previous) writeState(key, { identity, identityVersion: 2, workspaceId: fullRequest.workspaceId, stage: "previewed", previewedAt: new Date().toISOString(), ...(material ? { bundle: material.bundle } : {}) });
+    return { ok: true, action: fullRequest.workspaceId ? "reuse" : "create", request: fullRequest, catalog: catalog.result,
+      sideEffects: material ? ["handoff.bundle"] : [], requiresExecution: true,
+      materials: material ? { bundle: material.bundle, ready: !material.blockers.length, blockers: material.blockers, warnings: material.warnings, sourceCount: material.sources.length, requiredSources: material.sources.filter(s => s.required).map(s => s.id), conversation: material.conversation } : null,
+      instructions: coordinatorGuidance };
   }
   if (previous?.stage === "handed-off") return handoffOutcome(previous.result);
+  if (previous?.bundle) assertBundleReady(previous.bundle);
   // The preview is the approval boundary for Workspace creation. Existing
   // progress stages remain resumable, but a new identity must first establish
   // a canonical preview checkpoint; no prompt can substitute for this guard.
@@ -240,7 +248,8 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
     }
     progress = { ...progress, stage: "delegating" };
     writeState(key, progress);
-    const result = await handleAgentDelegate({ workspaceId: progress.workspaceId!, parentAgentId, handoff: fullRequest.handoff }, context);
+    if (progress.bundle) writeBundleEnvironment(progress.bundle, runtime.result);
+    const result = await handleAgentDelegate({ workspaceId: progress.workspaceId!, parentAgentId, handoff: fullRequest.handoff, bundle: progress.bundle }, context);
     writeState(key, { ...progress, stage: result.ok ? "handed-off" : "handoff-blocked", result });
     return handoffOutcome(result);
   })().finally(() => flights.delete(flightKey));

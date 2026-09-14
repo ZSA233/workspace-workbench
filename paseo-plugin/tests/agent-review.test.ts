@@ -405,6 +405,7 @@ test("start creates a real read-only Reviewer from a server snapshot and include
     assert.deepEqual((config.toolPolicy as { preapproved: unknown[] }).preapproved, [
       { kind: "mcp", server: "workbench-review", tool: "workbench_reviewer_read" },
       { kind: "mcp", server: "workbench-review", tool: "workbench_reviewer_result" },
+      ...["workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp", server: "workbench-review", tool })),
     ]);
     assert.equal((config.mcpServers as Record<string, unknown>)["workspace-workbench"], undefined);
     assert.ok(reviewAuthToken(session.id));

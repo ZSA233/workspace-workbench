@@ -1,5 +1,6 @@
 import { withWorkspaceScope } from "./workspace-scope.ts";
 import { sessionLimits, coordinatorReview } from "../shared/session-tools.ts";
+import { assertBundleReady } from "./handoff-bundles.ts";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, utimesSync } from "node:fs";
@@ -119,6 +120,7 @@ type ExecutionReportRecord = {
     tests: string[];
     knownLimitations: string[];
     handoffId?: string;
+    materialsVersion?: number;
   };
   createdAt: string;
   consumedAt?: string;
@@ -453,6 +455,7 @@ function newSession(input: { workspaceId: string; projectConfig: string; executi
   const handoff = input.handoff === undefined ? boundHandoff(input.workspaceId) : input.handoff;
   return reviewSessionSchema.parse({
     version: 2,
+    materials: getAgentBinding(input.workspaceId)?.handoffBundle,
     roundTarget: input.preferences.reviewerTarget,
     id: randomUUID(),
     revision: 0,
@@ -762,6 +765,9 @@ async function captureReferencedArtifacts(before: Runtime, references: ReviewArt
 async function captureSnapshot(workspaceId: string, before: Runtime, context: AgentContext, references: ReviewArtifactReference[] = []): Promise<ReviewSnapshot> {
   const supplements = readState<Array<{ attachments?: ReviewArtifactReference[] }>>(`session-supplements:${workspaceId}:${getAgentBinding(workspaceId)?.agentId}`) || [];
   references = [...new Map([...references, ...supplements.flatMap(item => item.attachments || [])].map(reference => [reference.id, reference])).values()];
+  // New tasks read immutable originals through their authorized bundle tools.
+  // Do not re-resolve previewed source paths against a different worktree.
+  if (getAgentBinding(workspaceId)?.handoffBundle) references = [];
   const files = new Map<string, { repositoryId: string; path: string; oldPath?: string; status: string; binary: boolean; truncated: boolean; diff?: string; content?: string }>();
   const capturedArtifacts = await captureReferencedArtifacts(before, references);
   const unreviewed: string[] = [...capturedArtifacts.unreviewed];
@@ -912,6 +918,7 @@ function reviewerPrompt(session: ReviewSession): string {
   const packet = session.handoff?.reviewPacket || null;
   const acceptanceCriteria = acceptanceCriteriaFor(session);
   return [
+    ...(session.materials ? [`Required: use workbench_handoff_read with bundle=${JSON.stringify(session.materials)} to read HANDOFF.md, SOURCES.md and original required sources; this is the version used by execution.`] : []),
     formatCopyFrom(localized, "reviewPromptIntro", [session.id, session.round]),
     localized.reviewPromptRead,
     formatCopyFrom(localized, "reviewPromptIdentity", [session.snapshotId, session.diffId]),
@@ -1014,6 +1021,7 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
         toolPolicy: { preapproved: [
           { kind: "mcp", server: "workbench-review", tool: "workbench_reviewer_read" },
           { kind: "mcp", server: "workbench-review", tool: "workbench_reviewer_result" },
+          ...["workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp" as const, server: "workbench-review", tool })),
         ] },
         mcpServers: { "workbench-review": { type: "stdio", command: process.execPath, args: [bridge.script], env: reviewMcpEnvironment(session, "pending", token, bridge), alwaysLoad: true } },
       systemPrompt: [
@@ -1151,6 +1159,7 @@ async function startReviewer(session: ReviewSession, context: AgentContext): Pro
 }
 
 async function createOrUpdateReadySession(input: { workspaceId: string; projectConfig: string; executionAgentId: string; executionTurnId: string | null; report: ExecutionReportRecord["report"] }, context: AgentContext): Promise<ReviewSession> {
+  validateReportMaterials(input.workspaceId, input.report.materialsVersion);
   const layers = preferenceLayers();
   const existing = readSession(input.workspaceId);
   if (existing && ["approved", "blocked", "failed", "stopped", "limit_reached", "stopping"].includes(existing.status)) return existing;
@@ -1167,7 +1176,7 @@ async function createOrUpdateReadySession(input: { workspaceId: string; projectC
     return persistSession({ ...session, status: "blocked", lastError: { code: "repair_no_progress", message: "修复后代码快照没有变化" } }, { kind: "blocked", summary: "Repair produced no new code snapshot", details: { snapshotId: snapshot.snapshotId, diffId: snapshot.diffId } });
   }
   session = persistSession({ ...session, executionTurnId: input.executionTurnId }, { kind: "execution_turn_ended", summary: "Execution turn completed", details: { turnId: input.executionTurnId, executionAgentId: input.executionAgentId } });
-  session = { ...session, status: "ready_for_review", coordinator: null, roundTarget: session.preferences.reviewerTarget, executionTurnId: input.executionTurnId, round: Math.max(1, session.round + (session.status === "fixing" ? 1 : 0)), snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, snapshot, latestResult: null, pendingOperation: null, lastError: null };
+  session = { ...session, materials: getAgentBinding(input.workspaceId)?.handoffBundle, status: "ready_for_review", coordinator: null, roundTarget: session.preferences.reviewerTarget, executionTurnId: input.executionTurnId, round: Math.max(1, session.round + (session.status === "fixing" ? 1 : 0)), snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, snapshot, latestResult: null, pendingOperation: null, lastError: null };
   session = persistSession(session, { kind: "ready_for_review", summary: input.report.summary, details: { executionAgentId: input.executionAgentId, turnId: input.executionTurnId, changes: input.report.changes, tests: input.report.tests, knownLimitations: input.report.knownLimitations, snapshotId: snapshot.snapshotId, diffId: snapshot.diffId } });
   if (session.preferences.mode === "automatic") return startReviewer(session, context);
   return session;
@@ -1209,8 +1218,17 @@ function validateExecutionToken(input: { token: string; executionAgentId: string
   return agentId;
 }
 
+export function validateReportMaterials(workspaceId: string, version?: number) {
+  const binding = getAgentBinding(workspaceId);
+  if (!binding?.handoffBundle) return;
+  if (binding.pendingHandoffBundle) throw new Error("handoff_supplement_delivery_pending");
+  if (version !== binding.handoffBundle.version) throw new Error(`handoff_materials_version_required:${binding.handoffBundle.version}`);
+  assertBundleReady(binding.handoffBundle);
+}
+
 export async function acceptExecutionReport(input: { projectConfig: string; workspaceId: string; executionAgentId: string; token: string; turnId?: string; report: ExecutionReportRecord["report"] }, context: AgentContext): Promise<{ ok: boolean; session: ReviewSession | null; accepted: boolean; error?: { code: string; message: string } }> {
   const executionAgentId = validateExecutionToken(input);
+  if (input.report.status === "ready_for_review") validateReportMaterials(input.workspaceId, input.report.materialsVersion);
   const agent = await context.paseo.agents.ref(executionAgentId).refresh();
   if (!agent?.agent || agent.agent.cwd === null) throw new Error("execution_agent_unavailable");
   const runtime = await currentRuntime(input.workspaceId, context);
@@ -1259,6 +1277,7 @@ async function sendRepair(session: ReviewSession, context: AgentContext): Promis
   const messageId = digest({ sessionId: session.id, round: session.round, snapshotId: session.snapshotId, diffId: session.diffId, findingIds: findings.map((finding) => finding.id) });
   const pending = persistSession({ ...session, status: "fixing", pendingOperation: { kind: "send_repair", requestId: messageId, messageId, createdAt: now() } }, { kind: "repair_requested", summary: "Repair requested from the execution Agent", details: { findingIds: findings.map((finding) => finding.id), snapshotId: session.snapshotId, diffId: session.diffId } });
   const prompt = [
+    ...(session.materials ? [`Read required handoff materials ${JSON.stringify(session.materials)} using workbench_handoff_read; include materialsVersion=${session.materials.version} in the execution report.`] : []),
     "Workspace Workbench repair handoff",
     `Review session: ${session.id}`,
     `Round: ${session.round}`,
@@ -1338,6 +1357,7 @@ export async function stopReview(session: ReviewSession, context: AgentContext):
 
 async function startReviewInternal(input: { workspaceId: string; projectConfig: string; executionAgentId?: string; locale?: ReviewLocale }, context: AgentContext): Promise<ReviewSession> {
   const existing = readSession(input.workspaceId);
+  if (getAgentBinding(input.workspaceId)?.pendingHandoffBundle || existing?.materials && existing.status === "waiting_execution") throw new Error("execution_not_ready");
   const interruptedReviewerOperation = existing?.status === "queued" && (existing.pendingOperation?.kind === "create_reviewer" || existing.pendingOperation?.kind === "send_reviewer");
   if (existing && !interruptedReviewerOperation && existing.status === "ready_for_review") return startReviewer(existing, context);
   if (existing && !interruptedReviewerOperation && ["reviewing", "queued", "fixing", "changes_requested", "stopping"].includes(existing.status)) return existing;
@@ -1393,6 +1413,7 @@ async function recordReviewerResultInternal(input: { workspaceId: string; sessio
   const auth = readReviewState<ReviewAuth>(authKey(session.id));
   if (!reviewerContextMatches(session, auth, { token: input.token, workspaceId: input.workspaceId, reviewerAgentId: input.reviewerAgentId })) throw new Error("reviewer_context_invalid");
   if (session.status !== "reviewing") return { ok: true, session, accepted: false, error: { code: "review_not_active", message: "This Reviewer result arrived after the review stopped or completed" } };
+  if (session.materials) validateReportMaterials(session.workspaceId, session.materials.version);
   const parsed = reviewResultSchema.safeParse(input.result);
   if (!parsed.success) return { ok: false, session, accepted: false, error: { code: "reviewer_invalid_result", message: parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ") } };
   const result = parsed.data;
@@ -1672,8 +1693,8 @@ export async function handleCoordinatorReview(input: typeof coordinatorReview.in
         session = persistSession({ ...session, status: "reviewing", reviewerAgentId: identity.agentId, reviewerTurnId: turnId,
           coordinator: { ...session.coordinator, phase: "accepted", acceptedAt: now() } }, { kind: "review_started", summary: "Coordinator accepted review", details: { turnId } });
       }
-      return { ok: true, snapshot: session.snapshot, handoff: session.handoff, supplements: readState(`session-supplements:${session.workspaceId}:${session.executionAgentId}`) || [],
-        instructions: "Review only. Do not edit files. Submit workbench_review_result for this round, then end this turn; the worker handles required repairs." };
+      return { ok: true, snapshot: session.snapshot, handoff: session.handoff, materials: session.materials, supplements: session.materials ? [] : readState(`session-supplements:${session.workspaceId}:${session.executionAgentId}`) || [],
+        instructions: `${session.materials ? "First use workbench_handoff_read with the returned materials bundle to read HANDOFF.md, SOURCES.md and required originals. " : ""}Review only. Do not edit files. Submit workbench_review_result for this round, then end this turn; the worker handles required repairs.` };
     }
     if (session.coordinator.phase !== "accepted") throw new Error("read_review_before_result");
     const auth = readReviewState<ReviewAuth>(authKey(session.id));

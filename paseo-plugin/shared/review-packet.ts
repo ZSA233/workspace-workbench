@@ -14,6 +14,8 @@ export const reviewArtifactReferenceSchema = z.object({
   title: z.string().trim().min(1).optional(),
   purpose: z.string().trim().min(1).optional(),
   required: z.boolean().default(true),
+  reading: z.string().max(4096).optional(),
+  readableAlternativeIds: z.array(z.string().min(1)).max(20).optional(),
   repositoryId: z.string().trim().min(1).optional(),
   path: z.string().trim().min(1).optional(),
   assetId: z.string().trim().min(1).optional(),

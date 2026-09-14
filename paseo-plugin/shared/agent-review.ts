@@ -1,6 +1,7 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { agentRelationshipSchema } from "./agent-session.ts";
+import { bundleRefSchema } from "./handoff-materials.ts";
 import { reviewArtifactKindSchema, reviewPacketSchema } from "./review-packet.ts";
 
 export const reviewModeSchema = z.enum(["off", "manual", "automatic"]);
@@ -187,6 +188,7 @@ export const reviewSessionStatusSchema = z.enum([
 ]);
 
 export const reviewSessionSchema = z.object({
+  materials: bundleRefSchema.optional(),
   version: z.literal(2),
   coordinator: z.object({
     agentId: z.string().nullable(), phase: z.enum(["waiting", "uncertain", "sent", "accepted", "revoked"]),
@@ -309,6 +311,7 @@ export const executionReport = defineRpc({
     token: z.string().trim().min(1),
     turnId: z.string().trim().min(1).optional(),
     report: z.object({
+      materialsVersion: z.number().int().positive().optional(),
       status: z.enum(["ready_for_review", "needs_input", "failed"]),
       summary: z.string().trim().min(1),
       changes: z.array(z.string()).default([]),

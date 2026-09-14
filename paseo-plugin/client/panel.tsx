@@ -16,6 +16,7 @@ import {
   agentContextQuery,
   workspaceBindingQuery,
   workspaceDelegate,
+  workspaceHandoffPreview,
   type AgentContextResponse,
   type WorkspaceBindingResponse,
   type WorkspaceDelegateResponse,
@@ -171,6 +172,7 @@ import { WorkspaceView } from "./components/repositories";
 
 import { ReviewView } from "./components/review";
 import { AgentReviewView } from "./components/agent-review";
+import { HandoffMaterialsCard } from "./components/handoff-materials";
 import { reviewModels, reviewSessionControl, reviewSessionList, reviewSessionQuery, reviewSessionStart, reviewSettingsGet, reviewSettingsUpdate, type ReviewModelOverride, type ReviewPreferencePatch, type ReviewSession } from "../shared/agent-review";
 
 export function WorkbenchPanel(props: PanelProps) {
@@ -343,6 +345,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [handoffRelationship, setHandoffRelationship] = useState<"default" | AgentRelationship>("default");
   const [handoffPacketOpen, setHandoffPacketOpen] = useState(false);
   const [handoffPreviewOpen, setHandoffPreviewOpen] = useState(false);
+  const previewHandoffRpc = useRpc(workspaceHandoffPreview);
+  const handoffPreviewEpoch = useRef(0);
+  const [materialPreview, setMaterialPreview] = useState<{ ok: boolean; signature: string; materials?: { ready: boolean; sourceCount: number; blockers: string[]; warnings: string[]; conversation: { state: string } } | null } | null>(null);
   const [handoffUnderstanding, setHandoffUnderstanding] = useState("");
   const [handoffPlan, setHandoffPlan] = useState("");
   const [handoffAcceptance, setHandoffAcceptance] = useState("");
@@ -370,6 +375,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     setHandoffRelationship("default");
     setHandoffPacketOpen(false);
     setHandoffPreviewOpen(false);
+    handoffPreviewEpoch.current++; setMaterialPreview(null);
     setHandoffUnderstanding("");
     setHandoffPlan("");
     setHandoffAcceptance("");
@@ -988,7 +994,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     };
   }
 
-  function delegateSelectedWorkspace(): void {
+  async function delegateSelectedWorkspace(): Promise<void> {
     if (selectedWorkspaceBlocksTasks) {
       toast.show(localizedCopy.workspaceDeleteQueued, { variant: "warning" });
       return;
@@ -1006,11 +1012,19 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       return;
     }
     setHandoffPreviewOpen(true);
+    setMaterialPreview(null);
+    const epoch = ++handoffPreviewEpoch.current;
+    const handoff = buildSelectedHandoff()!;
+    try {
+      const response = await previewHandoffRpc({ projectConfig, workspaceId: selectedWorkspaceId, parentAgentId, handoff }) as Omit<NonNullable<typeof materialPreview>, "signature">;
+      if (epoch === handoffPreviewEpoch.current) setMaterialPreview({ ...response, signature: JSON.stringify(handoff) });
+    } catch { if (epoch === handoffPreviewEpoch.current) toast.error(localizedCopy.handoffMaterialsUnavailable); }
   }
 
   async function submitSelectedWorkspace(): Promise<void> {
     const handoff = buildSelectedHandoff();
     if (!handoff || !selectedWorkspaceId || !parentAgentId) return;
+    if (!materialPreview?.ok || materialPreview.materials?.ready === false || materialPreview.signature !== JSON.stringify(handoff)) return;
     setDelegating(true);
     try {
       const result: WorkspaceDelegateResponse = await delegateRpc({
@@ -1297,6 +1311,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       {handoffPreviewOpen && draftHandoff ? <Modal open onOpenChange={(open) => { if (!open && !delegating) setHandoffPreviewOpen(false); }} title={localizedCopy.handoffPreviewTitle}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
           <Text style={styles.layoutMenuHint}>{localizedCopy.handoffPreviewHint}</Text>
+          {materialPreview?.materials ? <><Text style={styles.reviewEntryMeta}>{localizedCopy.handoffMaterials}: {materialPreview.materials.sourceCount} · {localizedCopy.handoffConversation}: {materialPreview.materials.conversation.state}</Text><Text style={styles.warningText}>{[...materialPreview.materials.blockers, ...materialPreview.materials.warnings].join("\n")}</Text></> : null}
           <Text style={styles.reviewEntryMeta}>{localizedCopy.text_1b37d56f7a}</Text>
           <Text selectable style={styles.reviewDetailText}>{draftHandoff.goal}</Text>
           {draftPacket?.requirementUnderstanding ? <><Text style={styles.reviewEntryMeta}>{localizedCopy.handoffUnderstanding}</Text><Text selectable style={styles.reviewDetailText}>{draftPacket.requirementUnderstanding}</Text></> : null}
@@ -1307,7 +1322,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           <Text style={styles.layoutMenuHint}>{localizedCopy.handoffReferenceCount.replace("{0}", String(draftPacket?.references.length || 0))} · {localizedCopy.handoffAcceptanceCount.replace("{0}", String(draftPacket?.acceptanceCriteria.length || 0))}</Text>
           <View style={styles.briefActions}>
             <Pressable accessibilityRole="button" disabled={delegating} onPress={() => { setHandoffPreviewOpen(false); setHandoffPacketOpen(true); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.handoffEdit}</Text></Pressable>
-            <Pressable accessibilityRole="button" disabled={delegating} onPress={() => { void submitSelectedWorkspace(); }} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{localizedCopy.handoffConfirm}</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={delegating || !materialPreview?.ok || materialPreview.materials?.ready === false} onPress={() => { void submitSelectedWorkspace(); }} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{localizedCopy.handoffConfirm}</Text></Pressable>
           </View>
         </Modal.Content>
       </Modal> : null}
@@ -1363,6 +1378,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           theme={theme}
           styles={styles}
         />
+        {binding?.handoffBundle ? <HandoffMaterialsCard key={`${binding.handoffBundle.id}:${binding.handoffBundle.version}`} projectConfig={projectConfig} workspaceId={selectedWorkspaceId} bundle={binding.handoffBundle} styles={styles} /> : null}
         </View>
       ) : null}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabs}>

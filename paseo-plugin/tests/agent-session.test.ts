@@ -122,6 +122,7 @@ test("default execution creates an independent Agent without a parent", async ()
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.parent"], undefined);
     assert.deepEqual((creates[0].config as { toolPolicy: { preapproved: unknown[] } }).toolPolicy.preapproved, [
       { kind: "mcp", server: "workspace-workbench-report", tool: "workbench_execution_report" },
+      ...["workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp", server: "workspace-workbench-report", tool })),
     ]);
   } finally {
     if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS;

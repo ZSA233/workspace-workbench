@@ -1,4 +1,6 @@
 import { withWorkspaceScope } from "./workspace-scope.ts";
+import type { BundleRef } from "../shared/handoff-materials.ts";
+import { assertBundleReady } from "./handoff-bundles.ts";
 import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -139,6 +141,7 @@ export async function handleWorkspaceBinding(
   const agent = await currentAgent(context, saved);
   const compact = agent ? compactAgent(agent, saved) : null;
   const binding: WorkspaceBinding = {
+    handoffBundle: saved.handoffBundle,
     workspaceId: saved.workspaceId,
     paseoWorkspaceId: saved.paseoWorkspaceId,
     treePath: saved.cwd,
@@ -201,7 +204,18 @@ function providerFromAgent(agent: PaseoAgent): string | null {
   return model ? `${provider}/${model}` : provider;
 }
 
-function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeResult, relationship: AgentRelationship, artifacts: ResolvedWorkbenchArtifact[] = []): string {
+function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeResult, relationship: AgentRelationship, artifacts: ResolvedWorkbenchArtifact[] = [], bundle?: BundleRef): string {
+  if (bundle) return [
+    "Workspace Workbench execution handoff", `Workspace: ${workspaceId}`, `Directory: ${runtime.treePath}`,
+    `Repositories: ${(runtime.repositories || []).map(repo => `${repo.id}: ${repo.worktreePath} (${repo.branch})`).join("; ")}`,
+    `Goal: ${handoff.goal.slice(0, 2000)}`, `Start mode: ${handoff.startMode}`,
+    `First call workbench_handoff_read with bundle=${JSON.stringify(bundle)}. Read HANDOFF.md, SOURCES.md and all required sources before implementation; search conversation history when context is unclear.`,
+    "The Workspace and runtime are prepared. Verify your working directory. Do not create or delegate another Workspace or Agent.",
+    "Implementation details may be improved using source material and code evidence. Confirm changes to goals, scope, explicit decisions or acceptance with the coordinator.",
+    handoff.startMode === "plan-first" ? "Planning only: do not edit or change host mode; wait for explicit execution authorization." : "Implement the approved task and its constraints from HANDOFF.md.",
+    `Report completion through workbench_execution_report with materialsVersion: ${bundle.version}, ready_for_review, changes, tests and limitations. If blocked, report needs_input or failed.`,
+    getWorkbenchCopy(handoff.reviewLocale || "zh-CN").reviewPromptLanguage,
+  ].join("\n");
   const localized = getWorkbenchCopy(handoff.reviewLocale || "zh-CN");
   const section = (title: string, values: readonly string[]) => values.length ? [`${title}:`, ...values.map((value) => `- ${value}`), ""] : [];
   const packet = handoff.reviewPacket;
@@ -253,10 +267,10 @@ function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeRe
 
 const delegates = new Map<string, { identity: string; promise: Promise<Awaited<ReturnType<typeof delegateAgent>>> }>();
 
-export async function handleAgentDelegate(input: AgentDelegateInput, context: AgentContext) {
+export async function handleAgentDelegate(input: AgentDelegateInput & { bundle?: BundleRef }, context: AgentContext) {
   return withWorkspaceScope(input.workspaceId, () => handleAgentDelegateLocked(input, context));
 }
-async function handleAgentDelegateLocked(input: AgentDelegateInput, context: AgentContext) {
+async function handleAgentDelegateLocked(input: AgentDelegateInput & { bundle?: BundleRef }, context: AgentContext) {
   const projectKey = `${currentProject()?.configPath || ""}:${input.workspaceId}`;
   const active = delegates.get(projectKey);
   const identity = JSON.stringify(input);
@@ -285,7 +299,7 @@ async function handleAgentDelegateLocked(input: AgentDelegateInput, context: Age
 }
 
 async function delegateAgent(
-  input: AgentDelegateInput,
+  input: AgentDelegateInput & { bundle?: BundleRef },
   context: AgentContext,
 ) {
   const handoffHash = digest(input.handoff);
@@ -315,7 +329,8 @@ async function delegateAgent(
   }
   let handoffArtifacts: ResolvedWorkbenchArtifact[] = [];
   try {
-    const artifactReferences = input.handoff.reviewPacket.references;
+    if (input.bundle) assertBundleReady(input.bundle);
+    const artifactReferences = input.bundle ? [] : input.handoff.reviewPacket.references;
     handoffArtifacts = artifactReferences.flatMap((reference) => {
       try { return [resolveArtifactReference(reference, { repositories: runtime.repositories || [] })]; }
       catch (error) {
@@ -389,7 +404,7 @@ async function delegateAgent(
         const now = new Date().toISOString();
         const creation = readState<{ agentId?: string; stage?: string }>(creationKey);
         const delivery = creation?.agentId === recovered.id && creation.stage === "sent" ? "sent" : "pending";
-        saved = { workspaceId: input.workspaceId, agentId: recovered.id, relationship, ...(relationship === "child" ? { parentAgentId: input.parentAgentId } : { requestedByAgentId: input.parentAgentId }), paseoWorkspaceId: recovered.workspaceId || "", cwd: recovered.cwd, provider: selectedProvider, createdAt: now, updatedAt: now, handoff: input.handoff, handoffHash, delivery };
+        saved = { workspaceId: input.workspaceId, agentId: recovered.id, handoffBundle: input.bundle, relationship, ...(relationship === "child" ? { parentAgentId: input.parentAgentId } : { requestedByAgentId: input.parentAgentId }), paseoWorkspaceId: recovered.workspaceId || "", cwd: recovered.cwd, provider: selectedProvider, createdAt: now, updatedAt: now, handoff: input.handoff, handoffHash, delivery };
         putAgentBinding(saved);
       } else if (readState(creationKey)) throw new Error("agent_creation_uncertain");
     } catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_recovery_required", message: (error as Error).message } }; }
@@ -447,6 +462,7 @@ async function delegateAgent(
           preapproved: [
             ...(childConfig.toolPolicy?.preapproved || []),
             { kind: "mcp" as const, server: "workspace-workbench-report", tool: "workbench_execution_report" },
+            ...["workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp" as const, server: "workspace-workbench-report", tool })),
           ],
         },
         mcpServers: {
@@ -481,6 +497,7 @@ async function delegateAgent(
     if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, relationship, stage: "created", agentId: created.id });
     const now = new Date().toISOString();
     const binding: AgentBinding = {
+      handoffBundle: input.bundle,
       workspaceId: input.workspaceId,
       agentId: created.id,
       relationship,
@@ -513,7 +530,7 @@ async function delegateAgent(
       assertInitialWorkerMode(worker, input.handoff.startMode === "plan-first");
       await verifyCoordinator();
       const images = resolvedArtifactImageAttachments(handoffArtifacts);
-      await created.send(handoffPrompt(input.workspaceId, input.handoff, runtime, relationship, handoffArtifacts), { messageId: handoffHash, ...(images.length ? { images } : {}) });
+      await created.send(handoffPrompt(input.workspaceId, input.handoff, runtime, relationship, handoffArtifacts, input.bundle), { messageId: handoffHash, ...(images.length ? { images } : {}) });
     } catch (error) {
       return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: error instanceof ExecutionPolicyError ? error.code : "handoff_delivery_uncertain", message: error instanceof Error ? error.message : "Agent handoff delivery is uncertain" } };
     }

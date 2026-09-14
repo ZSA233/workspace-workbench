@@ -1,5 +1,7 @@
 # Workspace Workbench Paseo 插件
 
+原始需求、会话归档、图片和版本化交接见 [交接资料包](HANDOFF-MATERIALS.md)。
+
 会话消息、进度查询、交接停止指引和主控审核的使用方式见 [会话与审核流程](SESSION-WORKFLOW.md)。
 
 插件把 Workspace Workbench 放在 Paseo Explorer 中。普通用户不需要单独启动服务；插件

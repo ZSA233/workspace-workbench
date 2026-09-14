@@ -1,11 +1,13 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { sessionOperation, coordinatorReview } from "./shared/session-tools";
 import { handleSessionOperation } from "./server/session-tools";
+import { handoffMaterials } from "./shared/handoff-materials";
+import { handleHandoffMaterials } from "./server/handoff-access";
 
 import { handleAgentDelegate, handleAgentStatus, handleWorkspaceBinding, handleWorkspaceDelegate } from "./server/agent-provider";
 import { closeObserverBridge, handleObserver, observerQuery } from "./server/observer";
 import { agentDelegate, agentStatusQuery } from "./shared/agent";
-import { workspaceBindingQuery, workspaceDelegate } from "./shared/handoff";
+import { workspaceBindingQuery, workspaceDelegate, workspaceHandoffPreview } from "./shared/handoff";
 import { observerSettings } from "./shared/settings";
 import { projectsQuery } from "./shared/projects";
 import { projectBackendStart, projectBackendStatus, projectRuntimeSettingsGet, projectRuntimeSettingsUpdate, projectSetupSave, projectSetupScan, projectStorageQuery } from "./shared/setup";
@@ -54,6 +56,8 @@ import {
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(observerSettings);
+  server.handle(workspaceHandoffPreview, (input, context) => withProject(input, () => orchestrate("preview", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)));
+  server.handle(handoffMaterials, (input, context) => withProject(input, () => handleHandoffMaterials(input, context)));
   server.handle(sessionOperation, (input, context) => withProject(input, () => handleSessionOperation(input, context)));
   server.handle(coordinatorReview, (input, context) => withProject(input, () => handleCoordinatorReview(input, context)));
   // Start all registered projects through one generation-owned supervisor.

@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
+import { deflateSync } from "node:zlib";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import WebSocket from "ws";
 const plugin = resolve(import.meta.dirname, ".."),
@@ -277,12 +278,20 @@ try {
   report.checks.push("actual public Graph/Changes RPC keeps ready semantics during stale cache refresh");
   if (process.env.WORKBENCH_LIVE_AGENTS === "1") {
     const cwd = resolve(configs[0], "..");
+    // Original sources are deliberately untracked: only the frozen bundle
+    // makes them available inside the newly created worker worktree.
+    writeFileSync(join(cwd, "one", "bundle-spec.md"), "# Original requirement\nThe required button color is BLUE. The coordinator's RED assumption is unconfirmed and conflicts with this document. Inspect the blue reference image, report the conflict and source evidence, and do not edit files.\n");
+    const crc = data => { let value = 0xffffffff; for (const byte of data) { value ^= byte; for (let n = 0; n < 8; n++) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0); } return (value ^ 0xffffffff) >>> 0; };
+    const pngChunk = (name, data) => { const type = Buffer.from(name), size = Buffer.alloc(4), checksum = Buffer.alloc(4); size.writeUInt32BE(data.length); checksum.writeUInt32BE(crc(Buffer.concat([type, data]))); return Buffer.concat([size, type, data, checksum]); };
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(64, 0); ihdr.writeUInt32BE(64, 4); ihdr[8] = 8; ihdr[9] = 2;
+    const pixels = Buffer.alloc(64 * (1 + 64 * 3)); for (let row = 0; row < 64; row++) for (let col = 0; col < 64; col++) pixels[row * 193 + 1 + col * 3 + 2] = 255;
+    writeFileSync(join(cwd, "one", "bundle-image.png"), Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), pngChunk("IHDR", ihdr), pngChunk("IDAT", deflateSync(pixels)), pngChunk("IEND", Buffer.alloc(0))]));
     const catalog = await client.listProviderModels("codex", { cwd });
     const model = process.env.WORKBENCH_LIVE_MODEL || catalog.models.find(item => item.isDefault && item.isSelectable !== false)?.id || catalog.models.find(item => item.isSelectable !== false)?.id;
     if (!model) throw new Error("live_codex_model_unavailable");
     const parent = await client.createAgent({ config: { provider: "codex", model, cwd, modeId: "auto", featureValues: { plan_mode: false },
-      toolPolicy: { preapproved: ["workbench_workspace_preview", "workbench_workspace_execute", "workbench_workspace_status", "workbench_review_read", "workbench_review_result"].map(tool => ({ kind: "mcp", server: "workspace-workbench", tool })) } },
-      initialPrompt: "Use Workspace Workbench MCP to delegate this task to an isolated Workspace named coordinator-smoke, repository one. Task: read README and report what it contains; do not change any files. This task is approved for execution. Preview then execute with a stable requestId and handoff goal. Use the worker execution report for completion. When subsequently assigned a review, inspect its frozen material and submit the structured review result." });
+      toolPolicy: { preapproved: ["workbench_workspace_preview", "workbench_workspace_execute", "workbench_workspace_status", "workbench_review_read", "workbench_review_result", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp", server: "workspace-workbench", tool })) } },
+      initialPrompt: "Use Workspace Workbench MCP to delegate an approved inspection to a new isolated Workspace named coordinator-smoke, repository one. Required original references: REQ (repositoryId one, path bundle-spec.md), IMG (repositoryId one, path bundle-image.png). Record the deliberately unconfirmed coordinator assumption 'the button is RED' in handoff.context.assumptions. The worker must read the originals from the frozen bundle, fetch the image with workbench_handoff_asset, and explicitly report any conflict between the assumption, original requirement and image. No file changes. Completion should report ready_for_review with materialsVersion and source evidence. Preview then execute using a stable requestId. When assigned a review, read the handoff materials and submit a structured review result. Identifying the conflict completes this inspection; no implementation or user clarification is needed for this inspection-only task." });
     report.modelEvidence = { model, coordinatorAgentId: parent.id, status: "running" };
     const review = await wait(async () => {
       const bindingPath = join(cwd, "state", "agent-bindings.json");
@@ -297,8 +306,16 @@ try {
     const executeEntry = timeline.entries.find(entry => entry.item.type === "tool_call" && JSON.stringify(entry.item).includes("workbench_workspace_execute"));
     if (!executeEntry?.turnId) throw new Error("live_handoff_turn_unavailable");
     assert.notEqual(executeEntry.turnId, review.reviewerTurnId, "Coordinator must finish the handoff turn before reviewing");
+    assert.ok(review.materials, "Review must bind the execution materials version");
+    const manifest = JSON.parse(readFileSync(join(cwd, "state", "handoff-bundles", review.materials.id, String(review.materials.version), "manifest.json"), "utf8"));
+    assert.ok(manifest.conversation.messages > 0, "The actual host must export public conversation messages");
+    const workerTimeline = await client.fetchAgentTimeline(review.executionAgentId, { limit: 100 });
+    assert.ok(workerTimeline.entries.some(entry => entry.item.type === "tool_call" && entry.item.status === "completed" && entry.item.name.includes("workbench_handoff_asset")), "Worker must actually fetch the reference image");
+    const reportText = JSON.stringify(review.events.filter(event => event.kind === "ready_for_review"));
+    assert.match(reportText, /blue|蓝/i); assert.match(reportText, /red|红/i);
     report.modelEvidence = { ...report.modelEvidence, status: "passed", handoffTurnId: executeEntry.turnId, reviewTurnId: review.reviewerTurnId, workspaceId: review.workspaceId };
     report.checks.push("real Codex delegated inspection, ended the handoff turn, and approved in a later coordinator review turn");
+    report.checks.push("worker retrieved frozen originals and image, identified conflicting coordinator assumption, and reported the materials version");
   }
   const removed = await rpc(configs[0], "workspace.remove", { workspaceId: "sample" });
   assert.equal(removed.ok, true, JSON.stringify(removed));

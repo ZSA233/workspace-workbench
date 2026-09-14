@@ -1,6 +1,8 @@
 import type { AgentContext } from "./agent-provider.ts";
 import { setTimeout as delay } from "node:timers/promises";
-import { getAgentBinding } from "./agent-store.ts";
+import { getAgentBinding, putAgentBinding } from "./agent-store.ts";
+import { appendBundle, assertBundleReady } from "./handoff-bundles.ts";
+import type { BundleRef } from "../shared/handoff-materials.ts";
 import { digest, readState, writeState } from "./orchestration-state.ts";
 import { sessionLimits, type SessionOperation } from "../shared/session-tools.ts";
 import { withWorkspaceScope } from "./workspace-scope.ts";
@@ -110,6 +112,12 @@ async function perform(input: SessionOperation, context: AgentContext, signal?: 
   const acknowledgeSupplement = (messageId: string) => {
     const items = readState<Array<Record<string, unknown>>>(supplementKey) || [];
     writeState(supplementKey, items.map(item => item.messageId === messageId ? { ...item, delivery: "accepted" } : item));
+    const receipt = readState<{ bundle?: BundleRef }>(key);
+    if (receipt?.bundle) {
+      const current = getAgentBinding(input.workspaceId);
+      if (!current || current.agentId !== binding.agentId) throw new Error("session_worker_changed");
+      if (current.pendingHandoffBundle?.id === receipt.bundle.id && current.pendingHandoffBundle.version === receipt.bundle.version) putAgentBinding({ ...current, handoffBundle: receipt.bundle, pendingHandoffBundle: undefined });
+    }
   };
   const identity = digest({ text: input.text, attachments: input.attachments, behavior: input.behavior });
   const prior = readState<{ identity: string; delivery: string; messageId: string }>(key);
@@ -129,14 +137,18 @@ async function perform(input: SessionOperation, context: AgentContext, signal?: 
     if (!reference.assetId) throw new Error("registered_attachment_required");
     return resolveArtifactReference(reference, { repositories: [] });
   });
+  if (binding.pendingHandoffBundle) throw new Error("handoff_supplement_delivery_pending");
+  const material = binding.handoffBundle && binding.handoff ? await appendBundle(binding.handoffBundle, { requestId: input.requestId, text: input.text, sender: coordinatorId || "host-user", references: input.attachments, handoff: binding.handoff }) : null;
+  if (material) assertBundleReady(material.bundle);
   await prepareSessionSupplement(input.workspaceId);
   const messageId = digest({ agentId: binding.agentId, requestId: input.requestId });
-  const record = { identity, messageId, delivery: "uncertain", text: input.text, attachments: input.attachments, createdAt: new Date().toISOString() };
+  const record = { identity, messageId, delivery: "uncertain", text: input.text, attachments: input.attachments, ...(material ? { bundle: material.bundle } : {}), createdAt: new Date().toISOString() };
   writeState(key, record);
+  if (material) putAgentBinding({ ...binding, pendingHandoffBundle: material.bundle });
   writeState(supplementKey, [...(readState<unknown[]>(supplementKey) || []), record]);
   try {
-    const text = [input.text, ...assets.map(asset => artifactSnapshotContent(asset).content || "")].join("\n\n");
-    await handle.send(text, { messageId, activeTurnBehavior: input.behavior, images: resolvedArtifactImageAttachments(assets) } as Parameters<typeof handle.send>[1]);
+    const text = material ? `Task supplement available: bundle=${JSON.stringify(material.bundle)}. Read HANDOFF.md and supplements/${material.bundle.version}.md using workbench_handoff_read, plus required sources. Include materialsVersion=${material.bundle.version} in the next execution report. Existing scope and host mode remain in effect.` : [input.text, ...assets.map(asset => artifactSnapshotContent(asset).content || "")].join("\n\n");
+    await handle.send(text, { messageId, activeTurnBehavior: input.behavior, images: material ? [] : resolvedArtifactImageAttachments(assets) } as Parameters<typeof handle.send>[1]);
     writeState(key, { ...record, delivery: "accepted" });
     acknowledgeSupplement(messageId);
     return { ok: true, messageId, delivery: "accepted", readConfirmed: false };

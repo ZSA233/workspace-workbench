@@ -3,9 +3,12 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { Handoff } from "../shared/handoff.ts";
 import type { AgentRelationship } from "../shared/agent-session.ts";
+import type { BundleRef } from "../shared/handoff-materials.ts";
 import { currentProject } from "./projects.ts";
 
 export type AgentBinding = {
+  handoffBundle?: BundleRef;
+  pendingHandoffBundle?: BundleRef;
   workspaceId: string;
   agentId: string;
   relationship: AgentRelationship;

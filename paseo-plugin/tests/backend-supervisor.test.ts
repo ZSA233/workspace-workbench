@@ -8,6 +8,7 @@ import {
   rmSync,
   existsSync,
   mkdirSync,
+  readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -20,6 +21,9 @@ import { loadConfig } from "../server/backend/config.ts";
 import type { ProjectRoute } from "../server/projects.ts";
 
 const entry = resolve(import.meta.dirname, "../server/backend/main.ts");
+const pluginVersion = JSON.parse(
+  readFileSync(resolve(import.meta.dirname, "../package.json"), "utf8"),
+).version as string;
 function fixture(name: string) {
   // Keep Unix socket addresses short on macOS.
   const root = realpathSync(mkdtempSync(join("/tmp", `wb-${name}-`)));
@@ -56,9 +60,9 @@ test("real Node processes: concurrent starts, two projects, generation reload an
     second = new BackendSupervisor(entry);
   try {
     await Promise.all([
-      first.ensure(a.route, "0.1.3"),
-      first.ensure(a.route, "0.1.3"),
-      first.ensure(b.route, "0.1.3"),
+      first.ensure(a.route, pluginVersion),
+      first.ensure(a.route, pluginVersion),
+      first.ensure(b.route, pluginVersion),
     ]);
     const oldA = (await backendRequest(a.route.socketPath, "observer.health"))!
       .result.process;
@@ -71,7 +75,7 @@ test("real Node processes: concurrent starts, two projects, generation reload an
       { token: "wrong" },
     );
     assert.equal(denied?.ok, false);
-    await second.ensure(a.route, "0.1.3");
+    await second.ensure(a.route, pluginVersion);
     const next = (await backendRequest(a.route.socketPath, "observer.health"))!
       .result.process;
     assert.notEqual(next.pid, oldA.pid);
@@ -98,7 +102,7 @@ test("a crashed owned backend is restarted and its stale socket is reclaimed", a
   const f = fixture("crash"),
     supervisor = new BackendSupervisor(entry);
   try {
-    await supervisor.ensure(f.route, "0.1.3");
+    await supervisor.ensure(f.route, pluginVersion);
     const pid = (await backendRequest(f.route.socketPath, "observer.health"))!
       .result.process.pid;
     process.kill(pid, "SIGKILL");
@@ -110,7 +114,7 @@ test("a crashed owned backend is restarted and its stale socket is reclaimed", a
         return true;
       }
     });
-    await supervisor.ensure(f.route, "0.1.3");
+    await supervisor.ensure(f.route, pluginVersion);
     const health = await backendRequest(f.route.socketPath, "observer.health");
     assert.notEqual(health!.result.process.pid, pid);
     assert.equal(health!.result.implementation, "node");
@@ -132,7 +136,7 @@ test("unrelated Unix service is neither killed nor unlinked", async () => {
   });
   await new Promise<void>((r) => server.listen(f.route.socketPath, r));
   try {
-    await assert.rejects(supervisor.ensure(f.route, "0.1.3"), /unrelated/);
+    await assert.rejects(supervisor.ensure(f.route, pluginVersion), /unrelated/);
     assert.ok(existsSync(f.route.socketPath));
     assert.equal(
       (await backendRequest(f.route.socketPath, "observer.health"))?.result
@@ -150,7 +154,7 @@ test("unload racing startup does not leave an orphan backend", async () => {
   const f = fixture("unload"),
     supervisor = new BackendSupervisor(entry);
   try {
-    const start = supervisor.ensure(f.route, "0.1.3").catch(() => {});
+    const start = supervisor.ensure(f.route, pluginVersion).catch(() => {});
     await supervisor.close();
     await start;
     await until(() => !existsSync(f.route.socketPath));
@@ -168,7 +172,7 @@ test("backend starts with no Python on PATH", async () => {
     const bin = join(f.root, "empty-bin");
     mkdirSync(bin);
     process.env.PATH = bin;
-    await supervisor.ensure(f.route, "0.1.3");
+    await supervisor.ensure(f.route, pluginVersion);
     assert.equal(
       (await backendRequest(f.route.socketPath, "observer.health"))?.result
         .implementation,
@@ -242,7 +246,7 @@ test("replacement waits for an in-flight real Git operation to drain", async () 
     { mode: 0o755 },
   );
   try {
-    await a.ensure(f.route, "0.1.3");
+    await a.ensure(f.route, pluginVersion);
     const create = backendRequest(
       f.route.socketPath,
       "workspace.create",
@@ -254,7 +258,7 @@ test("replacement waits for an in-flight real Git operation to drain", async () 
         ((await backendRequest(f.route.socketPath, "observer.health"))?.result
           .process.activeRequests || 0) > 0,
     );
-    await b.ensure(f.route, "0.1.3");
+    await b.ensure(f.route, pluginVersion);
     assert.equal((await create)?.ok, true);
     const runtime = await backendRequest(
       f.route.socketPath,
@@ -273,7 +277,7 @@ test("a second socket cannot create another writer for the same records", async 
   const f = fixture("single-owner"),
     supervisor = new BackendSupervisor(entry);
   try {
-    await supervisor.ensure(f.route, "0.1.3");
+    await supervisor.ensure(f.route, pluginVersion);
     const second = spawnSync(
       process.execPath,
       [
@@ -305,10 +309,10 @@ test("ownership publication failure closes the socket and project lease", async 
   const owner = `${f.route.socketPath}.owner.json`;
   mkdirSync(owner);
   try {
-    await assert.rejects(supervisor.ensure(f.route, "0.1.3"));
+    await assert.rejects(supervisor.ensure(f.route, pluginVersion));
     await until(() => !existsSync(f.route.socketPath));
     rmSync(owner, { recursive: true });
-    await supervisor.ensure(f.route, "0.1.3");
+    await supervisor.ensure(f.route, pluginVersion);
     assert.equal(
       (await backendRequest(f.route.socketPath, "observer.health"))?.ok,
       true,

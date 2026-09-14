@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildDiffDisplayRows,
   buildDiffOverviewMarkers,
   buildTreeRows,
   defaultTreeMode,
+  diffDisplayRowMetrics,
   formatDiffReferences,
   layoutGraph,
   languageForPath,
@@ -74,7 +76,65 @@ test("diff parser creates split pairs and overview markers", () => {
   assert.equal(parsed.hunks.length, 2);
   assert.equal(pairDiffLines(parsed.hunks[0].lines)[0].left?.content, "old");
   assert.equal(pairDiffLines(parsed.hunks[0].lines)[0].right?.content, "new");
-  assert.deepEqual(buildDiffOverviewMarkers(parsed).map((marker) => marker.kind), ["modified", "removed"]);
+  assert.deepEqual(buildDiffOverviewMarkers(buildDiffDisplayRows(parsed, "split")).map((marker) => marker.kind), ["modified", "removed"]);
+});
+
+test("diff overview markers use the rendered row coordinate instead of source line numbers", () => {
+  const parsed = parseUnifiedPatch([
+    "@@ -100,4 +100,4 @@",
+    " context before",
+    "-old",
+    "+new",
+    " context after",
+    "@@ -500,4 +500,4 @@",
+    " context before",
+    "-old later",
+    "+new later",
+    " context after",
+  ].join("\n"));
+  const rows = buildDiffDisplayRows(parsed, "unified");
+  const metrics = diffDisplayRowMetrics(rows);
+  const markers = buildDiffOverviewMarkers(rows);
+  const changedRows = rows.flatMap((row, index) => row.kind === "unified" && row.line.kind !== "context" ? [index] : []);
+
+  assert.equal(markers.length, 2);
+  assert.equal(markers[0].position, metrics.offsets[changedRows[0]] / metrics.contentHeight);
+  assert.equal(markers[1].position, metrics.offsets[changedRows[2]] / metrics.contentHeight);
+  assert.equal(
+    markers[0].extent,
+    (metrics.lengths[changedRows[0]] + metrics.lengths[changedRows[0] + 1]) / metrics.contentHeight,
+  );
+  assert.equal(markers[0].startLine, 101);
+  assert.equal(markers[0].endLine, 101);
+  assert.ok(markers[1].position < 1);
+  assert.ok(markers.every((marker) => marker.position >= 0 && marker.position <= 1 && marker.extent > 0 && marker.extent <= 1));
+});
+
+test("diff overview markers follow unified and split row compression", () => {
+  const parsed = parseUnifiedPatch([
+    "@@ -10,3 +10,1 @@",
+    "-old one",
+    "-old two",
+    "-old three",
+    "+new one",
+    "@@ -50,1 +50,2 @@",
+    "-old later",
+    "+new later one",
+    "+new later two",
+  ].join("\n"));
+  const unifiedRows = buildDiffDisplayRows(parsed, "unified");
+  const splitRows = buildDiffDisplayRows(parsed, "split");
+  const unifiedMarkers = buildDiffOverviewMarkers(unifiedRows);
+  const splitMarkers = buildDiffOverviewMarkers(splitRows);
+
+  assert.deepEqual(unifiedMarkers.map((marker) => marker.kind), ["modified", "modified"]);
+  assert.deepEqual(splitMarkers.map((marker) => marker.kind), ["modified", "modified"]);
+  assert.notEqual(
+    unifiedMarkers[1].position,
+    splitMarkers[1].position,
+    "split rows must be mapped independently from unified rows",
+  );
+  assert.ok(diffDisplayRowMetrics(unifiedRows).contentHeight > diffDisplayRowMetrics(splitRows).contentHeight);
 });
 
 test("language mapping covers the bundled editor grammars and keeps unknown files plain", () => {

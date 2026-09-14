@@ -764,6 +764,16 @@ export type ParsedPatch = {
   hunks: DiffHunk[];
 };
 
+export type DiffDisplayMode = "split" | "unified";
+
+export type DiffDisplayRow =
+  | { kind: "hunk"; hunk: DiffHunk; hunkIndex: number; key: string }
+  | { kind: "unified"; hunkIndex: number; line: DiffLine; key: string }
+  | { kind: "split"; hunkIndex: number; left: DiffLine | null; right: DiffLine | null; key: string };
+
+export const DIFF_HUNK_ROW_HEIGHT = 27;
+export const DIFF_LINE_ROW_HEIGHT = 22;
+
 export type DiffOverviewMarkerKind = "added" | "removed" | "modified";
 
 export type DiffOverviewMarker = {
@@ -771,9 +781,9 @@ export type DiffOverviewMarker = {
   kind: DiffOverviewMarkerKind;
   startLine: number;
   endLine: number;
-  /** Start position in the complete file, normalized to the inclusive [0, 1] range. */
+  /** Start position in the rendered diff content, normalized to the inclusive [0, 1] range. */
   position: number;
-  /** Marker height in the complete file, normalized to the inclusive [0, 1] range. */
+  /** Marker height in the rendered diff content, normalized to the inclusive [0, 1] range. */
   extent: number;
 };
 
@@ -855,8 +865,61 @@ export function pairDiffLines(lines: DiffLine[]): SplitDiffPair[] {
   return pairs;
 }
 
+export function buildDiffDisplayRows(parsed: ParsedPatch, mode: DiffDisplayMode): DiffDisplayRow[] {
+  return parsed.hunks.flatMap((hunk, hunkIndex) => [
+    { kind: "hunk" as const, hunk, hunkIndex, key: `hunk-${hunkIndex}` },
+    ...(mode === "split"
+      ? pairDiffLines(hunk.lines).map((pair, lineIndex) => ({
+          kind: "split" as const,
+          hunkIndex,
+          left: pair.left,
+          right: pair.right,
+          key: `pair-${hunkIndex}-${lineIndex}`,
+        }))
+      : hunk.lines.map((line, lineIndex) => ({
+          kind: "unified" as const,
+          hunkIndex,
+          line,
+          key: `line-${hunkIndex}-${lineIndex}`,
+        }))),
+  ]);
+}
+
+export function diffDisplayRowHeight(row: DiffDisplayRow): number {
+  return row.kind === "hunk" ? DIFF_HUNK_ROW_HEIGHT : DIFF_LINE_ROW_HEIGHT;
+}
+
+export type DiffDisplayRowMetrics = {
+  offsets: number[];
+  lengths: number[];
+  contentHeight: number;
+};
+
+export function diffDisplayRowMetrics(rows: DiffDisplayRow[]): DiffDisplayRowMetrics {
+  const offsets: number[] = [];
+  const lengths: number[] = [];
+  let contentHeight = 0;
+  for (const row of rows) {
+    offsets.push(contentHeight);
+    const length = diffDisplayRowHeight(row);
+    lengths.push(length);
+    contentHeight += length;
+  }
+  return { offsets, lengths, contentHeight };
+}
+
 function changedLineNumber(line: DiffLine): number {
   return line.newLine ?? line.oldLine ?? 1;
+}
+
+function changedLinesForDisplayRow(row: DiffDisplayRow): DiffLine[] {
+  if (row.kind === "unified") return row.line.kind === "context" ? [] : [row.line];
+  if (row.kind === "split") {
+    return [row.left, row.right].filter(
+      (line): line is DiffLine => Boolean(line && line.kind !== "context"),
+    );
+  }
+  return [];
 }
 
 /**
@@ -865,45 +928,61 @@ function changedLineNumber(line: DiffLine): number {
  * A contiguous removed + added block is represented as one modified range so
  * the overview matches how a side-by-side editor presents a changed hunk.
  */
-export function buildDiffOverviewMarkers(parsed: ParsedPatch): DiffOverviewMarker[] {
-  const maxLine = Math.max(
-    1,
-    ...parsed.hunks.flatMap((hunk) => hunk.lines.map((line) => changedLineNumber(line))),
-  );
-  const denominator = Math.max(1, maxLine - 1);
+export function buildDiffOverviewMarkers(rows: DiffDisplayRow[]): DiffOverviewMarker[] {
+  const metrics = diffDisplayRowMetrics(rows);
   const markers: DiffOverviewMarker[] = [];
 
-  parsed.hunks.forEach((hunk, hunkIndex) => {
-    let index = 0;
-    while (index < hunk.lines.length) {
-      if (hunk.lines[index].kind === "context") {
-        index += 1;
-        continue;
-      }
-      const changed: DiffLine[] = [];
-      while (index < hunk.lines.length && hunk.lines[index].kind !== "context") {
-        changed.push(hunk.lines[index]);
-        index += 1;
-      }
-      const startLine = Math.min(...changed.map(changedLineNumber));
-      const endLine = Math.max(...changed.map(changedLineNumber));
-      const hasAdded = changed.some((line) => line.kind === "added");
-      const hasRemoved = changed.some((line) => line.kind === "removed");
-      const kind: DiffOverviewMarkerKind = hasAdded && hasRemoved
-        ? "modified"
-        : hasAdded
-          ? "added"
-          : "removed";
-      markers.push({
-        hunkIndex,
-        kind,
-        startLine,
-        endLine,
-        position: Math.min(1, Math.max(0, (startLine - 1) / denominator)),
-        extent: Math.min(1, Math.max(1 / maxLine, (endLine - startLine + 1) / maxLine)),
-      });
+  if (!rows.length || !metrics.contentHeight) return markers;
+
+  let active: {
+    endOffset: number;
+    hunkIndex: number;
+    lines: DiffLine[];
+    startOffset: number;
+  } | null = null;
+
+  const flush = () => {
+    if (!active) return;
+    const startLine = Math.min(...active.lines.map(changedLineNumber));
+    const endLine = Math.max(...active.lines.map(changedLineNumber));
+    const hasAdded = active.lines.some((line) => line.kind === "added");
+    const hasRemoved = active.lines.some((line) => line.kind === "removed");
+    const kind: DiffOverviewMarkerKind = hasAdded && hasRemoved
+      ? "modified"
+      : hasAdded
+        ? "added"
+        : "removed";
+    markers.push({
+      hunkIndex: active.hunkIndex,
+      kind,
+      startLine,
+      endLine,
+      position: Math.min(1, Math.max(0, active.startOffset / metrics.contentHeight)),
+      extent: Math.min(1, Math.max(1 / metrics.contentHeight, (active.endOffset - active.startOffset) / metrics.contentHeight)),
+    });
+    active = null;
+  };
+
+  rows.forEach((row, index) => {
+    const changed = changedLinesForDisplayRow(row);
+    if (!changed.length) {
+      flush();
+      return;
     }
+    if (!active || active.hunkIndex !== row.hunkIndex) {
+      flush();
+      active = {
+        endOffset: metrics.offsets[index] + metrics.lengths[index],
+        hunkIndex: row.hunkIndex,
+        lines: [...changed],
+        startOffset: metrics.offsets[index],
+      };
+      return;
+    }
+    active.endOffset = metrics.offsets[index] + metrics.lengths[index];
+    active.lines.push(...changed);
   });
+  flush();
   return markers;
 }
 

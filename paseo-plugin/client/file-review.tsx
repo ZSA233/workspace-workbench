@@ -11,16 +11,19 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { copy, formatCopyFrom, type WorkbenchCopy } from "../shared/copy";
 import { observerQuery, type ObserverResponse } from "../shared/observer";
 import {
+  buildDiffDisplayRows,
   buildDiffOverviewMarkers,
+  DIFF_HUNK_ROW_HEIGHT,
+  DIFF_LINE_ROW_HEIGHT,
+  diffDisplayRowMetrics,
   type DiffHunk,
   type DiffLine,
+  type DiffDisplayRow,
   type DiffOverviewMarker,
   type DiffResult,
-  type ParsedPatch,
   formatDiffReferences,
   isTransientIssueCode,
   issueDisplayLabel,
-  pairDiffLines,
   parseUnifiedPatch,
 } from "./model";
 import {
@@ -266,7 +269,8 @@ function DiffViewer({
 }) {
   const copy = useWorkbenchCopy();
   const parsed = useMemo(() => parseUnifiedPatch(diff.patch), [diff.patch]);
-  const rows = useMemo(() => displayRows(parsed, mode), [mode, parsed]);
+  const rows = useMemo(() => buildDiffDisplayRows(parsed, mode), [mode, parsed]);
+  const rowMetrics = useMemo(() => diffDisplayRowMetrics(rows), [rows]);
   const references = useMemo(() => formatDiffReferences({
     scope: selection.scope,
     baseSha: diff.baseSha || selection.baseSha,
@@ -274,17 +278,13 @@ function DiffViewer({
     commitSha: selection.commitSha,
     branch: selection.branch,
   }), [diff, selection]);
-  const overviewMarkers = useMemo(() => buildDiffOverviewMarkers(parsed), [parsed]);
+  const overviewMarkers = useMemo(() => buildDiffOverviewMarkers(rows), [rows]);
   const hunkRowIndexes = useMemo(
     () => rows.flatMap((item, index) => (item.kind === "hunk" ? [index] : [])),
     [rows],
   );
   const rowHunkIndexes = useMemo(() => {
-    let hunkIndex = 0;
-    return rows.map((item) => {
-      if (item.kind === "hunk") return hunkIndex++;
-      return Math.max(0, hunkIndex - 1);
-    });
+    return rows.map((item) => item.hunkIndex);
   }, [rows]);
   const rowHunkIndexesRef = useRef(rowHunkIndexes);
   rowHunkIndexesRef.current = rowHunkIndexes;
@@ -293,6 +293,11 @@ function DiffViewer({
   const [viewportHeight, setViewportHeight] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [contentHeight, setContentHeight] = useState(0);
+
+  const onListLayout = useCallback((event: any) => {
+    const nextHeight = Number(event.nativeEvent?.layout?.height) || 0;
+    setViewportHeight((previous) => previous === nextHeight ? previous : nextHeight);
+  }, []);
 
   useEffect(() => {
     setCurrentHunk(0);
@@ -383,10 +388,7 @@ function DiffViewer({
           ) : null}
         </View>
       </View>
-      <View
-        onLayout={(event) => setViewportHeight(event.nativeEvent.layout.height)}
-        style={styles.diffViewport}
-      >
+      <View style={styles.diffViewport}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator
@@ -397,15 +399,21 @@ function DiffViewer({
             <FlatList
               ref={listRef}
               data={rows}
+              getItemLayout={(_, index) => ({
+                index,
+                length: rowMetrics.lengths[index] || DIFF_LINE_ROW_HEIGHT,
+                offset: rowMetrics.offsets[index] || 0,
+              })}
               initialNumToRender={100}
-              keyExtractor={(item: DiffListItem) => item.key}
+              keyExtractor={(item: DiffDisplayRow) => item.key}
+              onLayout={onListLayout}
               onContentSizeChange={(_, height) => setContentHeight(height)}
               onScroll={(event: any) => setScrollOffset(Number(event.nativeEvent?.contentOffset?.y) || 0)}
               onScrollToIndexFailed={({ index }: { index: number }) => {
-                listRef.current?.scrollToOffset?.({ offset: Math.max(0, index * 24), animated: true });
+                listRef.current?.scrollToOffset?.({ offset: Math.max(0, rowMetrics.offsets[index] || 0), animated: true });
               }}
               onViewableItemsChanged={onViewableItemsChanged as any}
-              renderItem={({ item }: { item: DiffListItem }) =>
+              renderItem={({ item }: { item: DiffDisplayRow }) =>
                 item.kind === "hunk" ? (
                   <HunkRow
                     active={item.hunkIndex === currentHunk}
@@ -421,7 +429,7 @@ function DiffViewer({
               }
               removeClippedSubviews
               scrollEventThrottle={16}
-              showsVerticalScrollIndicator
+              showsVerticalScrollIndicator={false}
               style={styles.diffList}
               viewabilityConfig={viewabilityConfig}
               windowSize={11}
@@ -429,7 +437,7 @@ function DiffViewer({
           </View>
         </ScrollView>
         <OverviewRail
-          contentHeight={contentHeight}
+          contentHeight={contentHeight || rowMetrics.contentHeight}
           currentHunk={currentHunk}
           markers={overviewMarkers}
           onSelectHunk={jumpToHunk}
@@ -442,29 +450,6 @@ function DiffViewer({
       </View>
     </View>
   );
-}
-
-type DiffListItem =
-  | { kind: "hunk"; hunk: DiffHunk; hunkIndex: number; key: string }
-  | { kind: "unified"; line: DiffLine; key: string }
-  | { kind: "split"; left: DiffLine | null; right: DiffLine | null; key: string };
-
-function displayRows(parsed: ParsedPatch, mode: ReviewMode): DiffListItem[] {
-  return parsed.hunks.flatMap((hunk, hunkIndex) => [
-    { kind: "hunk" as const, hunk, hunkIndex, key: `hunk-${hunkIndex}` },
-    ...(mode === "split"
-      ? pairDiffLines(hunk.lines).map((pair, lineIndex) => ({
-          kind: "split" as const,
-          left: pair.left,
-          right: pair.right,
-          key: `pair-${hunkIndex}-${lineIndex}`,
-        }))
-      : hunk.lines.map((line, lineIndex) => ({
-          kind: "unified" as const,
-          line,
-          key: `line-${hunkIndex}-${lineIndex}`,
-        }))),
-  ]);
 }
 
 function HunkRow({
@@ -519,13 +504,22 @@ function OverviewRail({
 type OverviewRailProps = Omit<Parameters<typeof OverviewRail>[0], "platform">;
 
 function overviewRailMetrics(contentHeight: number, height: number, scrollOffset: number) {
-  const thumbHeight = contentHeight > height
-    ? Math.max(18, (height / contentHeight) * height)
+  const scrollable = height > 0 && contentHeight > height;
+  const thumbHeight = scrollable
+    ? Math.min(height, Math.max(18, (height / contentHeight) * height))
     : height;
-  const thumbTop = contentHeight > height
-    ? Math.min(height - thumbHeight, (scrollOffset / Math.max(1, contentHeight - height)) * (height - thumbHeight))
+  const maxThumbTop = Math.max(0, height - thumbHeight);
+  const thumbTop = scrollable
+    ? Math.min(maxThumbTop, Math.max(0, (scrollOffset / Math.max(1, contentHeight - height)) * maxThumbTop))
     : 0;
   return { thumbHeight, thumbTop };
+}
+
+function overviewMarkerMetrics(marker: DiffOverviewMarker, height: number) {
+  const markerHeight = Math.min(height, Math.max(3, marker.extent * height));
+  const maxTop = Math.max(0, height - markerHeight);
+  const markerTop = Math.min(maxTop, Math.max(0, marker.position * height));
+  return { height: markerHeight, top: markerTop };
 }
 
 function overviewMarkerColor(marker: DiffOverviewMarker, currentHunk: number, theme: FilePanelProps["theme"]): string {
@@ -548,9 +542,11 @@ function OverviewRailNative({
   if (!height) return null;
   const { thumbHeight, thumbTop } = overviewRailMetrics(contentHeight, height, scrollOffset);
   return (
-    <View accessibilityLabel={copy.diffOverview} style={styles.overviewRail}>
+    <View accessibilityLabel={copy.diffOverview} style={[styles.overviewRail, { height }]}>
       <View pointerEvents="none" style={[styles.overviewBackground, { height }]} />
-      {markers.map((marker, index) => (
+      {markers.map((marker, index) => {
+        const frame = overviewMarkerMetrics(marker, height);
+        return (
           <Pressable
             key={`${marker.hunkIndex}-${marker.kind}-${marker.startLine}-${index}`}
             accessibilityLabel={formatCopyFrom(copy, "diffHunk", [marker.hunkIndex + 1])}
@@ -558,11 +554,12 @@ function OverviewRailNative({
             onPress={() => onSelectHunk(marker.hunkIndex)}
             style={[styles.overviewMarker, {
               backgroundColor: overviewMarkerColor(marker, currentHunk, theme),
-              height: Math.max(3, marker.extent * height),
-              top: Math.min(height - 2, Math.max(0, marker.position * height)),
+              height: frame.height,
+              top: frame.top,
             }]}
           />
-      ))}
+        );
+      })}
       {contentHeight > height ? <View pointerEvents="none" style={[styles.overviewThumb, { height: thumbHeight, top: thumbTop }]} /> : null}
     </View>
   );
@@ -581,21 +578,24 @@ function OverviewRailWeb({
   if (!height) return null;
   const { thumbHeight, thumbTop } = overviewRailMetrics(contentHeight, height, scrollOffset);
   return (
-    <View accessibilityLabel={copy.diffOverview} style={styles.overviewRail}>
+    <View accessibilityLabel={copy.diffOverview} style={[styles.overviewRail, { height }]}>
       <Svg height={height} style={styles.overviewSvg} width={12}>
         <Rect fill={theme.colors.surface2} height={height} width={12} x={0} y={0} />
-        {markers.map((marker, index) => (
-          <Rect
-            key={`${marker.hunkIndex}-${marker.kind}-${marker.startLine}-${index}`}
-            fill={overviewMarkerColor(marker, currentHunk, theme)}
-            height={Math.max(3, marker.extent * height)}
-            onPress={() => onSelectHunk(marker.hunkIndex)}
-            rx={1.5}
-            width={7}
-            x={2}
-            y={Math.min(height - 2, Math.max(0, marker.position * height))}
-          />
-        ))}
+        {markers.map((marker, index) => {
+          const frame = overviewMarkerMetrics(marker, height);
+          return (
+            <Rect
+              key={`${marker.hunkIndex}-${marker.kind}-${marker.startLine}-${index}`}
+              fill={overviewMarkerColor(marker, currentHunk, theme)}
+              height={frame.height}
+              onPress={() => onSelectHunk(marker.hunkIndex)}
+              rx={1.5}
+              width={7}
+              x={2}
+              y={frame.top}
+            />
+          );
+        })}
         {contentHeight > height ? (
           <Rect
             fill={`${theme.colors.foregroundMuted}88`}
@@ -744,12 +744,12 @@ function makeStyles(theme: FilePanelProps["theme"]) {
     diffList: { flex: 1, minHeight: 0, minWidth: "100%" },
     preludeBar: { backgroundColor: theme.colors.surface2, borderBottomColor: theme.colors.border, borderBottomWidth: 1, paddingHorizontal: 12, paddingVertical: 5 },
     preludeText: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 10 },
-    hunkRow: { alignItems: "center", backgroundColor: theme.colors.surface2, borderBottomColor: theme.colors.border, borderBottomWidth: 1, borderTopColor: theme.colors.border, borderTopWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 27, paddingHorizontal: 10 },
+    hunkRow: { alignItems: "center", backgroundColor: theme.colors.surface2, borderBottomColor: theme.colors.border, borderBottomWidth: 1, borderTopColor: theme.colors.border, borderTopWidth: 1, flexDirection: "row", height: DIFF_HUNK_ROW_HEIGHT, justifyContent: "space-between", paddingHorizontal: 10 },
     hunkRowActive: { backgroundColor: `${theme.colors.statusWarning}18`, borderLeftColor: theme.colors.statusWarning, borderLeftWidth: 2 },
     hunkText: { color: accent, flex: 1, fontFamily: "monospace", fontSize: 11 },
     warningText: { backgroundColor: theme.colors.surface2, color: theme.colors.statusWarning, fontSize: 11, paddingHorizontal: 12, paddingVertical: 6 },
-    diffRow: { alignItems: "stretch", borderBottomColor: `${theme.colors.border}38`, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", minHeight: 22 },
-    splitRow: { alignItems: "stretch", borderBottomColor: `${theme.colors.border}38`, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", minHeight: 22 },
+    diffRow: { alignItems: "stretch", borderBottomColor: `${theme.colors.border}38`, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", height: DIFF_LINE_ROW_HEIGHT },
+    splitRow: { alignItems: "stretch", borderBottomColor: `${theme.colors.border}38`, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", height: DIFF_LINE_ROW_HEIGHT },
     diffCell: { alignItems: "stretch", flexDirection: "row", minWidth: 419, paddingVertical: 0, width: "50%" },
     emptyDiffCell: { backgroundColor: theme.colors.surface2, minWidth: 419, width: "50%" },
     splitDivider: { backgroundColor: theme.colors.border, width: 1 },
@@ -767,7 +767,7 @@ function makeStyles(theme: FilePanelProps["theme"]) {
     removedMarker: { color: theme.colors.statusDanger, fontWeight: "700" },
     codeText: { color: theme.colors.foreground, flexShrink: 0, fontFamily: editorCodeFontFamily, fontSize: 12, lineHeight: 20, paddingLeft: 8, paddingRight: 16 },
     codeSyntaxText: { color: theme.colors.foreground, flexShrink: 0, fontFamily: editorCodeFontFamily, fontSize: 12, lineHeight: 20 },
-    overviewRail: { backgroundColor: theme.colors.surface2, borderLeftColor: theme.colors.border, borderLeftWidth: 1, bottom: 0, position: "absolute", right: 0, top: 0, width: 14, zIndex: 5 },
+    overviewRail: { backgroundColor: theme.colors.surface2, borderLeftColor: theme.colors.border, borderLeftWidth: 1, position: "absolute", right: 0, top: 0, width: 14, zIndex: 5 },
     overviewSvg: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
     overviewBackground: { left: 0, position: "absolute", top: 0, width: 12 },
     overviewMarker: { borderRadius: 1.5, left: 2, position: "absolute", width: 7 },

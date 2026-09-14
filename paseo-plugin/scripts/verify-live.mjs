@@ -56,6 +56,7 @@ for (const project of ["a", "b"]) {
       discovery: { mode: "manual" },
       repositories: ["one", "two", "three"].map((id) => ({ id, path: id })),
       management: { enabled: true },
+      limits: { cacheTtlSeconds: 0.5 },
     }),
   );
 }
@@ -238,6 +239,31 @@ try {
     compatible(actual.result, expected.result, method);
   }
   report.checks.push("eight panel RPC payloads matched legacy Python fields on the same real repositories (timing/cache metadata excluded)");
+  const branchGraphQuery = {
+    workspaceId: "sample",
+    repositoryId: "one",
+    historyMode: "branch",
+    maxCommits: 50,
+  };
+  const branchChangesQuery = {
+    workspaceId: "sample",
+    repositoryId: "one",
+    scope: "branch",
+  };
+  assert.equal((await rpc(configs[0], "repository.graph", branchGraphQuery)).result.observation.state, "ready");
+  assert.equal((await rpc(configs[0], "repository.changes", branchChangesQuery)).result.observation.state, "ready");
+  // Keep this above the configured TTL even when the daemon is busy starting
+  // both project workers and servicing the compatibility probes.
+  await delay(3500);
+  const staleGraph = await rpc(configs[0], "repository.graph", branchGraphQuery);
+  const staleChanges = await rpc(configs[0], "repository.changes", branchChangesQuery);
+  for (const response of [staleGraph, staleChanges]) {
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.result.observation.state, "ready", JSON.stringify(response));
+    assert.equal(response.result.observation.cacheState, "refreshing", JSON.stringify(response));
+    assert.equal(response.result.cache.refreshing, true, JSON.stringify(response));
+  }
+  report.checks.push("actual public Graph/Changes RPC keeps ready semantics during stale cache refresh");
   const removed = await rpc(configs[0], "workspace.remove", { workspaceId: "sample" });
   assert.equal(removed.ok, true, JSON.stringify(removed));
   assert.equal(removed.result.state, "removed");

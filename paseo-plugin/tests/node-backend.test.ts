@@ -409,13 +409,131 @@ test("cache single-flight, refresh, persistence and bounds", async () => {
       (await cache.read("key", "two", producer)).cache.refreshing,
       true,
     );
+    const refreshing = await cache.read("key", "two", producer);
+    assert.equal(refreshing.observation.state, "ready");
+    assert.equal(refreshing.observation.cacheState, "refreshing");
+    assert.equal(refreshing.observation.refreshing, true);
     await new Promise((r) => setTimeout(r, 30));
-    assert.equal((await cache.read("key", "two", producer)).value, 2);
+    const fresh = await cache.read("key", "two", producer);
+    assert.equal(fresh.value, 2);
+    assert.equal(fresh.observation.state, "ready");
+    assert.equal(fresh.observation.cacheState, "fresh");
+    assert.equal(fresh.observation.refreshing, false);
     await cache.close();
     const reopened = new ObservationCache(f.config);
     assert.equal((await reopened.read("key", "two", producer)).value, 2);
     await reopened.close();
   } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("cache preserves stale data across transient refresh failures", async () => {
+  const f = fixture({ limits: { cacheTtlSeconds: 0.5 } });
+  const cache = new ObservationCache(f.config);
+  try {
+    await cache.read("failed-refresh", "one", async () => ({
+      value: "last-good",
+      observation: { state: "ready", observedAt: "2026-01-01T00:00:00Z" },
+    }));
+    await new Promise((r) => setTimeout(r, 550));
+    const stale = await cache.read("failed-refresh", "two", async () => {
+      throw new WorkbenchError("git_timeout", "injected refresh timeout");
+    });
+    assert.equal(stale.value, "last-good");
+    assert.equal(stale.observation.state, "ready");
+    assert.equal(stale.observation.cacheState, "refreshing");
+    await new Promise((r) => setTimeout(r, 30));
+
+    const afterFailure = await cache.read("failed-refresh", "two", async () => {
+      throw new WorkbenchError("git_timeout", "injected refresh timeout");
+    });
+    assert.equal(afterFailure.value, "last-good");
+    assert.equal(afterFailure.observation.state, "ready");
+    await new Promise((r) => setTimeout(r, 30));
+
+    await cache.read("failed-refresh", "three", async () => ({
+      value: "recovered",
+      observation: { state: "ready", observedAt: "2026-01-02T00:00:00Z" },
+    }));
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(
+      (await cache.read("failed-refresh", "three", async () => {
+        throw new Error("unexpected second recovery");
+      })).value,
+      "recovered",
+    );
+  } finally {
+    await cache.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("cache evicts stale data for durable refresh failures", async () => {
+  const f = fixture({ limits: { cacheTtlSeconds: 0.5 } });
+  const cache = new ObservationCache(f.config);
+  try {
+    await cache.read("durable-refresh", "one", async () => ({
+      value: "old",
+      observation: { state: "ready", observedAt: "2026-01-01T00:00:00Z" },
+    }));
+    await new Promise((r) => setTimeout(r, 550));
+    const stale = await cache.read("durable-refresh", "two", async () => {
+      throw new WorkbenchError("path_invalid", "injected invalid path");
+    });
+    assert.equal(stale.value, "old");
+    await new Promise((r) => setTimeout(r, 30));
+    await assert.rejects(
+      cache.read("durable-refresh", "two", async () => {
+        throw new WorkbenchError("path_invalid", "invalid path remains invalid");
+      }),
+      /invalid path remains invalid/,
+    );
+  } finally {
+    await cache.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("repository graph and changes keep ready state during stale branch refresh", async () => {
+  const f = fixture({ limits: { cacheTtlSeconds: 0.5 } });
+  const service = new Service(f.config);
+  try {
+    const workspace = await service.handle("workspace.create", {
+      name: "branch-refresh",
+      repositories: ["one"],
+    });
+    const graphParams = {
+      workspaceId: workspace.id,
+      repositoryId: "one",
+      historyMode: "branch",
+      maxCommits: 50,
+    };
+    const changesParams = {
+      workspaceId: workspace.id,
+      repositoryId: "one",
+      scope: "branch",
+    };
+    const graph = await service.handle("repository.graph", graphParams);
+    const changes = await service.handle("repository.changes", changesParams);
+    assert.equal(graph.observation.state, "ready");
+    assert.equal(changes.observation.state, "ready");
+    await new Promise((r) => setTimeout(r, 550));
+
+    const staleGraph = await service.handle("repository.graph", graphParams);
+    const staleChanges = await service.handle("repository.changes", changesParams);
+    assert.equal(staleGraph.observation.state, "ready");
+    assert.equal(staleGraph.observation.cacheState, "refreshing");
+    assert.equal(staleGraph.cache.refreshing, true);
+    assert.equal(staleChanges.observation.state, "ready");
+    assert.equal(staleChanges.observation.cacheState, "refreshing");
+    assert.equal(staleChanges.cache.refreshing, true);
+
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal((await service.handle("repository.graph", graphParams)).observation.state, "ready");
+    assert.equal((await service.handle("repository.changes", changesParams)).observation.state, "ready");
+  } finally {
+    await service.close();
     rmSync(f.root, { recursive: true, force: true });
   }
 });

@@ -346,6 +346,9 @@ export async function prepareSessionSupplement(workspaceId: string): Promise<voi
     persistSession({ ...session, status: "waiting_execution", snapshot: null, snapshotId: null, diffId: null,
       pendingReviewerResult: null, latestResult: null, pendingOperation: null, coordinator: null },
       { kind: "resumed", summary: "Supplement received; waiting for a new execution report", details: {} });
+    // A report submitted before the supplement must not start review at turn end
+    // or prevent the worker from submitting its updated report in the same turn.
+    if (session.executionAgentId) removeReviewState(reportKey(session.executionAgentId));
   });
 }
 
@@ -1592,7 +1595,10 @@ export async function handleReviewSessionControl(input: { projectConfig: string;
           const resumed = persistSession({ ...session, status: "waiting_execution", lastError: null }, { kind: "resumed", summary: "Waiting for a new execution report; no task was resent", details: { phase: "waiting_execution" } });
           return { ok: true, session: resumed };
         }
-        const resumed = persistSession({ ...session, status: "queued", lastError: null }, { kind: "resumed", summary: "Review resumed", details: {} });
+        if (session.roundTarget === "coordinator") removeReviewState(authKey(session.id));
+        const resumed = persistSession({ ...session, status: "queued", lastError: null,
+          ...(session.roundTarget === "coordinator" ? { coordinator: null, reviewerAgentId: null, reviewerTurnId: null, pendingReviewerResult: null } : {}),
+        }, { kind: "resumed", summary: "Review resumed", details: {} });
         return { ok: true, session: await startReviewer(resumed, context) };
       }
       return { ok: true, session };

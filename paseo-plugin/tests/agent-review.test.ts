@@ -31,7 +31,7 @@ import { clearWorkspaceRuntimeState, executePermanentWorkspaceDelete } from "../
 import { resolveReviewPreferences } from "../shared/agent-review.ts";
 import { handoffSchema } from "../shared/handoff.ts";
 import type { AgentContext } from "../server/agent-provider.ts";
-import { writeState } from "../server/orchestration-state.ts";
+import { writeState, writeReviewState, readReviewState } from "../server/orchestration-state.ts";
 import { handleSessionOperation } from "../server/session-tools.ts";
 import { sessionOperation } from "../shared/session-tools.ts";
 
@@ -161,13 +161,32 @@ async function withFixture<T>(fixture: Harness, callback: () => T | Promise<T>):
   }
 }
 
+test("a timed-out session wait does not continue polling after a slow refresh", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    putAgentBinding({ workspaceId: "managed-fixture", agentId: "execution-fixture", requestedByAgentId: "reviewer-fixture", relationship: "independent", paseoWorkspaceId: "managed-fixture", cwd: fixture.root, provider: "codex/model-a", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    let refreshes = 0;
+    let release!: (value: unknown) => void;
+    const pending = new Promise(resolve => { release = resolve; });
+    const context = { ...fixture.context, paseo: { agents: { ref: () => ({ refresh: () => { refreshes++; return pending; } }) } } } as unknown as AgentContext;
+    const result = await handleSessionOperation(sessionOperation.input.parse({ projectConfig: fixture.config, workspaceId: "managed-fixture", action: "wait", timeoutMs: 5 }), context);
+    assert.equal((result as { timedOut: boolean }).timedOut, true);
+    release({ agent: { id: "execution-fixture", cwd: fixture.root, workspaceId: "managed-fixture", status: "running", activeTurn: { turnId: "slow" } } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(refreshes, 1);
+  });
+});
+
 test("session messages authorize the original coordinator and deduplicate supplements", async () => {
   const fixture = harness();
   await withFixture(fixture, async () => {
     putAgentBinding({ workspaceId: "managed-fixture", agentId: "execution-fixture", requestedByAgentId: "reviewer-fixture", relationship: "independent", paseoWorkspaceId: "managed-fixture", cwd: fixture.root, provider: "codex/model-a", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     writeState("context:coordinator-test", { agentId: "reviewer-fixture", cwd: fixture.root });
     const input = sessionOperation.input.parse({ projectConfig: fixture.config, workspaceId: "managed-fixture", token: "coordinator-test", action: "message", requestId: "supplement-1", text: "Preserve keyboard navigation" });
+    recordExecutionHandoff({ workspaceId: input.workspaceId, projectConfig: fixture.config, executionAgentId: "execution-fixture", handoff: handoffSchema.parse({ goal: "Implement navigation" }) });
+    writeReviewState("agent-review:execution-report:execution-fixture", { turnId: "old-report", report: { status: "ready_for_review" } });
     await handleSessionOperation(input, fixture.context);
+    assert.equal(readReviewState("agent-review:execution-report:execution-fixture"), null);
     await handleSessionOperation(input, fixture.context);
     assert.equal(fixture.sent.length, 1);
     await assert.rejects(handleSessionOperation({ ...input, text: "different" }, fixture.context), /conflict/);
@@ -199,8 +218,17 @@ test("coordinator waits while busy, receives once, binds acceptance to turn and 
     await handleCoordinatorReview(input, fixture.context);
     assert.equal(readReviewSession(session.workspaceId)?.reviewerTurnId, "review-turn");
     await assert.rejects(handleCoordinatorReview({ ...input, round: session.round + 1 }, fixture.context), /not_authorized/);
+    // Failed/incomplete turns can retain their accepted phase in persisted state.
+    const accepted = readReviewSession(session.workspaceId)!;
+    writeReviewState(`agent-review:session:${accepted.workspaceId}:${accepted.id}`, { ...accepted, status: "failed" });
+    const resumed = await handleReviewSessionControl({ projectConfig: fixture.config, workspaceId: session.workspaceId, action: "resume" }, fixture.context);
+    assert.equal(resumed.ok, true);
+    assert.equal(resumed.session?.coordinator?.phase, "waiting");
+    assert.equal(resumed.session?.reviewerTurnId, null);
+    assert.notEqual(resumed.session?.coordinator?.messageId, input.assignmentId);
+    await assert.rejects(handleCoordinatorReview(input, fixture.context), /not_authorized/);
     await handleReviewSessionControl({ projectConfig: fixture.config, workspaceId: session.workspaceId, action: "stop" }, fixture.context);
-    await assert.rejects(handleCoordinatorReview(input, fixture.context), /revoked/);
+    await assert.rejects(handleCoordinatorReview({ ...input, assignmentId: resumed.session!.coordinator!.messageId }, fixture.context), /revoked/);
     const switched = await handleReviewSessionControl({ projectConfig: fixture.config, workspaceId: session.workspaceId, action: "independent" }, fixture.context);
     assert.equal(switched.ok, true);
     assert.equal(switched.session?.roundTarget, "independent");

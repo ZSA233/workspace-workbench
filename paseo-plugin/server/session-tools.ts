@@ -1,4 +1,5 @@
 import type { AgentContext } from "./agent-provider.ts";
+import { setTimeout as delay } from "node:timers/promises";
 import { getAgentBinding } from "./agent-store.ts";
 import { digest, readState, writeState } from "./orchestration-state.ts";
 import { sessionLimits, type SessionOperation } from "../shared/session-tools.ts";
@@ -6,7 +7,8 @@ import { withWorkspaceScope } from "./workspace-scope.ts";
 import { readReviewSession, prepareSessionSupplement, cancelAgentIfSupported } from "./agent-review.ts";
 import { resolveArtifactReference, resolvedArtifactImageAttachments, artifactSnapshotContent } from "./artifacts.ts";
 
-export async function authorizeSession(workspaceId: string, token: string | undefined, context: AgentContext) {
+export async function authorizeSession(workspaceId: string, token: string | undefined, context: AgentContext, signal?: AbortSignal) {
+  if (signal?.aborted) throw new Error("session_wait_finished");
   const binding = getAgentBinding(workspaceId);
   if (!binding) throw new Error("workspace_session_missing");
   const coordinatorId = binding.parentAgentId || binding.requestedByAgentId;
@@ -14,9 +16,11 @@ export async function authorizeSession(workspaceId: string, token: string | unde
     const identity = readState<{ agentId: string; cwd: string; revoked?: boolean }>(`context:${token}`);
     if (!identity || identity.revoked || !coordinatorId || identity.agentId !== coordinatorId) throw new Error("session_caller_not_coordinator");
     const caller = (await context.paseo.agents.ref(identity.agentId).refresh())?.agent;
+    if (signal?.aborted) throw new Error("session_wait_finished");
     if (!caller || caller.archivedAt || caller.cwd !== identity.cwd) throw new Error("session_caller_changed");
   }
   const worker = (await context.paseo.agents.ref(binding.agentId).refresh())?.agent;
+  if (signal?.aborted) throw new Error("session_wait_finished");
   if (!worker || worker.archivedAt || worker.cwd !== binding.cwd || worker.workspaceId !== binding.paseoWorkspaceId) throw new Error("session_worker_changed");
   return { binding, coordinatorId, worker };
 }
@@ -55,19 +59,20 @@ export function publicTimeline(items: unknown[], maxBytes = sessionLimits.histor
 export async function handleSessionOperation(input: SessionOperation, context: AgentContext): Promise<unknown> {
   if (input.action === "message" || input.action === "stop") return withWorkspaceScope(input.workspaceId, () => perform(input, context));
   if (input.action === "wait") {
+    const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    return Promise.race([perform(input, context), new Promise(resolve => {
-      timer = setTimeout(() => resolve({ ok: true, workspaceId: input.workspaceId, timedOut: true }), input.timeoutMs);
-    })]).finally(() => clearTimeout(timer));
+    return Promise.race([perform(input, context, controller.signal), new Promise(resolve => {
+      timer = setTimeout(() => { resolve({ ok: true, workspaceId: input.workspaceId, timedOut: true }); controller.abort(); }, input.timeoutMs);
+    })]).finally(() => { clearTimeout(timer); controller.abort(); });
   }
   return perform(input, context);
 }
 
-async function perform(input: SessionOperation, context: AgentContext): Promise<unknown> {
-  const { binding, coordinatorId, worker } = await authorizeSession(input.workspaceId, input.token, context);
+async function perform(input: SessionOperation, context: AgentContext, signal?: AbortSignal): Promise<unknown> {
+  const { binding, coordinatorId, worker } = await authorizeSession(input.workspaceId, input.token, context, signal);
   const handle = context.paseo.agents.ref(binding.agentId);
   const status = async () => {
-    const current = (await authorizeSession(input.workspaceId, input.token, context)).worker;
+    const current = (await authorizeSession(input.workspaceId, input.token, context, signal)).worker;
     const review = readReviewSession(input.workspaceId);
     return { ok: true, workspaceId: input.workspaceId, workerAgentId: current.id, coordinatorAgentId: coordinatorId || null,
       status: current.status, activeTurn: current.activeTurn || null, pendingPermissionCount: current.pendingPermissions?.length || 0,
@@ -86,7 +91,7 @@ async function perform(input: SessionOperation, context: AgentContext): Promise<
     const deadline = Date.now() + input.timeoutMs;
     if (!initial.activeTurn) return { ...initial, timedOut: false };
     while (Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, Math.min(sessionLimits.pollMs, deadline - Date.now())));
+      await delay(Math.max(0, Math.min(sessionLimits.pollMs, deadline - Date.now())), undefined, { signal });
       let timer: ReturnType<typeof setTimeout> | undefined;
       const next = await Promise.race([status(), new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now())); })]).finally(() => clearTimeout(timer));
       if (!next) return { ...initial, timedOut: true };

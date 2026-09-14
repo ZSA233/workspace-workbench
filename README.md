@@ -1,52 +1,14 @@
 # Workspace Workbench
 
-Workspace Workbench 用于观察和管理包含多个 Git 子仓库的工作区。它提供
-TypeScript/Node.js 服务和 Paseo 插件，用于查看仓库状态、提交历史、文件变化、Review set
-以及可选的 Agent 交接。
+Workspace Workbench 用于查看和管理包含多个 Git 仓库的项目。它提供 Workspace
+列表、提交历史、文件变化、Review set，以及可选的 Paseo Agent 交接。
 
-## 运行环境
+## 快速开始
 
-正式运行需要 Node.js 22.14+ 和 Git，不需要安装 Python 后端。安装并启用 Paseo 插件后，
-首次打开 Workbench 会展示项目初始化向导；插件统一启动所有已登记项目的 Node 后端，
-重载/卸载时负责退出与 socket 回收，异常退出后在下一次请求恢复。
+正式运行需要 **Node.js 22.14+**、Git 和 Paseo。Workbench 自己的服务使用 Node.js，
+不会安装或启动 Python 服务；项目本身仍可以声明 Go、Python 或 Node 运行时。
 
-开发者也可以使用 Node CLI：
-
-```sh
-node --experimental-strip-types paseo-plugin/server/backend/main.ts init --root /path/to/project --output /path/to/project/workbench.json
-node --experimental-strip-types paseo-plugin/server/backend/main.ts discover --config /path/to/project/workbench.json
-node --experimental-strip-types paseo-plugin/server/backend/main.ts accept --config /path/to/project/workbench.json --repository services/api
-node --experimental-strip-types paseo-plugin/server/backend/main.ts serve --config /path/to/project/workbench.json
-```
-
-`serve --stdio` 使用兼容 JSON 行协议；`exec --config ... --workspace ... --repo ... -- COMMAND`
-仅在本地显式调用，验证已准备的运行时后执行。RPC 不开放任意命令执行。
-Workbench 后端只有 Node.js 实现。项目仓库仍可以在 `toolchain.repositories` 中声明 Go、Python
-或 Node 运行时；这些是业务项目的执行环境，由 Node 后端验证和准备，不是 Workbench 后端。
-
-向导默认将当前 Git 根目录作为一个仓库（配置路径为 `.`），配置保存在项目内的
-`.workspace-workbench/project.json`。隔离 Git worktree 默认放在
-`.workspace-workbench/worktrees/`，运行状态和记录放在 `.workspace-workbench/state/`。
-配置默认通过 Git 的本地 `info/exclude` 忽略；运行状态、Socket、缓存和隔离 worktree
-不会进入提交。三个点菜单中的“项目存储位置”可以随时查看当前项目的实际路径。
-需要团队共享时，可以在向导的高级设置中打开“共享项目配置”，然后由用户自行提交配置文件。
-
-已有配置中的 `workspaceRoot`、`treesRoot`、`recordsRoot` 和 `stateRoot` 会继续按原路径使用，
-不会自动移动已有的 worktree。
-
-如果配置了 `toolchain`，`mode` 默认为 `auto`：Workbench 会先验证系统中已有的 Go、Python
-或 Node 版本，只有缺少匹配版本时才使用可选的 mise。`mise` 不需要写入 shell 启动脚本；也可以
-通过 `managerPath` 或 `runtimePaths` 为非标准安装位置提供明确路径。项目级共享缓存默认放在
-`stateRoot/cache`，用于 Go 编译/模块、NPM 和 pip 下载缓存；`node_modules`、`.venv` 和构建产物
-仍然属于各自 Workspace，不会跨 Workspace 共用。
-
-插件中可从顶部“三点菜单 → 项目运行时设置”修改运行时策略、mise/运行时路径和项目缓存位置；
-同一页面也可以编辑按仓库划分的运行时要求 JSON。保存后服务会热加载配置，已有 Workspace 需要
-再次点击“准备运行时”。
-
-## 安装 Paseo 插件
-
-直接从 GitHub 安装：
+### 安装插件
 
 ```sh
 paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
@@ -55,101 +17,56 @@ paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
   --json
 ```
 
-普通用户打开插件后即可开始使用。开发版本可以使用
-`--ref main`。更新 Git 管理的插件：
+在 Paseo 的“设置 → 插件”中启用插件。更新已安装插件：
 
 ```sh
 paseo plugin update workspace-workbench-paseo --json
 ```
 
-首次使用请在 Paseo 的“设置 → 插件”中打开“启用插件”全局开关；如果插件显示为已启用但尚未运行，再执行一次 `paseo plugin reload workspace-workbench-paseo --json`。
-
-`stable` 跟随已经验证过的发布版本。固定 tag（例如 `v0.1.0`）不会自动升级，
-需要手动切换到新的 tag。离线或需要审计的安装方式见
-[`docs/releasing.md`](docs/releasing.md)。
-
-## 可选的 Agent 交接
-
-从用户视角查看“直接在当前工作区执行”和“创建独立 Workspace 执行”的完整流程，见
-[`docs/agent-workspace-flow.md`](docs/agent-workspace-flow.md)。
-
-如果需要 Paseo Agent 编排，在项目 JSON 中加入：
-
-```json
-{
-  "management": { "enabled": true },
-  "agent": {
-    "provider": "paseo",
-    "bridge": {
-      "script": "../workspace-workbench/paseo-plugin/mcp.mjs",
-      "endpoint": "auto"
-    },
-    "session": {
-      "defaultRelationship": "independent",
-      "providerRelationships": {
-        "codex": "independent"
-      }
-    }
-  }
-}
-```
-
-`script` 路径相对于项目 JSON。插件加载后，新建 coordinator Agent 时才会注入
-bridge。已经存在的会话不会被静默修改。Agent 可使用以下工具：
-
-```text
-workbench_workspace_preview
-workbench_workspace_execute
-workbench_workspace_status
-```
-
-执行会话默认是独立的 Paseo 会话。可以在 Workbench 顶部三个点菜单的“Agent session settings”中
-按项目和 provider 选择“独立会话”或“子 Agent”，也可以在单次交接时覆盖。独立会话不会跟随主控会话
-结束，也不会把状态用 `steer` 回灌主控对话。
-
-完成交接后，执行 Agent 可以提交明确的 `ready_for_review` 报告；普通对话结束不会自动触发审核。
-在非主 Workspace 的面板中打开 `Agent Review` 页签即可手动开始审核。审核设置从顶部三个点菜单进入，
-可以分别设置会话关系、审核模式、自动修复、审核轮次、Reviewer 要求和 Codex 模型；项目设置优先于全局默认。
-审核期间会在当前 Workspace 的时间线中显示执行、审核、修复和结果。Reviewer 使用独立的只读沙箱，
-只能读取固定快照并提交结构化结果。`approved` 只代表对应代码版本通过审核，不会自动合并或发布。
-
-主控 Agent 还可以使用以下 Review 工具：
-
-```text
-workbench_review_preview
-workbench_review_execute
-workbench_review_status
-workbench_review_stop
-workbench_review_resume
-```
-
-`preview` 只读。`execute` 需要用户明确要求隔离 Workspace、批准计划，并继续遵守
-宿主的权限检查。从面板手动创建 Workspace 不会自动创建 Agent。
-
-## 配置与开发
-
-配置示例见 [`examples/project.json`](examples/project.json)，字段定义见
-[`schemas/project.schema.json`](schemas/project.schema.json)。SQLite 状态、Socket、
-Agent 绑定和其他运行数据应放在版本控制之外。
+开发版本可以把 `--ref stable` 换成 `--ref main`。插件显示已启用但没有运行时，执行：
 
 ```sh
-make version-check
-make check
-make package
+paseo plugin reload workspace-workbench-paseo --json
 ```
 
-Agent 流程和恢复规则见 [`docs/agent-orchestration.md`](docs/agent-orchestration.md)，
-版本管理与 GitHub 发布见 [`docs/releasing.md`](docs/releasing.md)。
+### 初始化项目
 
-## 给已有 Workspace 添加仓库
+在一个 Git 项目中打开 Workbench。首次打开时，插件会自动扫描当前 Git 根目录和常见的
+嵌套仓库，并在初始化向导中列出候选仓库。确认范围后，Workbench 会自动保存项目配置并
+启动后端；不需要编辑 JSON 或维护 `projects.json`。
 
-在活动的托管 Workspace 点击“添加仓库”，选择已登记但遗漏的仓库及 base ref。
-Workspace ID、原仓库和历史保持不变。活动执行/审核期间禁止扩展范围；失败保留逐库日志，
-使用相同选择重试可恢复，不重复创建已完成的 worktree。新增仓库使用现有运行时准备流程，
-并出现在后续 handoff 范围中。
+默认配置和运行数据位于项目的 `.workspace-workbench/` 目录，其中包括项目配置、隔离
+worktree、记录和缓存。运行数据默认由 Git 本地忽略。已有项目会继续使用原来的存储路径。
 
-计划模式、子会话启动意图与权限预设独立显示和校验。`full-access` 不代表执行模式，
-`running` 不代表模式未知；Workbench 在创建及首次投递前读取宿主模式，计划/未知状态下
-阻止执行，不自动切换模式，也不以最初 startMode 永久约束复用会话。
+## Workspace 和仓库
 
-架构、兼容限制和实际插件验证见 [Node 后端说明](paseo-plugin/backend/README.md)。
+- **新建 Workspace**：从自动发现的仓库中选择范围，系统创建隔离分支和 worktree。
+  base ref 默认使用源码当前 `HEAD`，需要时可以在对话框中指定。
+- **给已有 Workspace 添加仓库**：系统自动列出项目配置中尚未加入该 Workspace 的仓库，
+  用户只需确认要加入哪些仓库和 base ref。创建 worktree、更新 manifest、运行时准备、
+  失败恢复和重复请求都由 Workbench 自动完成，不需要用户手动执行 Git 命令。
+- 添加仓库会改变 Workspace 范围，因此执行或审核进行中会暂时禁止添加；任务结束后可继续。
+  失败时保留逐库记录，使用相同选择重试不会重复创建已完成的 worktree。
+- 删除会检查脏工作树、用户提交和身份变化；不满足安全条件时保留文件、分支和历史。
+
+“自动发现”负责找到可用仓库，“添加到已有 Workspace”需要一次明确确认，这是为了避免
+执行或审核范围被静默扩大。
+
+## 运行时和 Agent
+
+如果项目配置了 `toolchain`，在 Workbench 的“项目运行时设置”中准备所需版本和缓存。
+这些运行时属于业务仓库；Python 只在项目明确要求 Python 时使用。
+
+需要 Agent 交接时，参阅[Agent Workspace 流程](docs/agent-workspace-flow.md)。执行会话、
+计划/执行状态、权限预设和 Reviewer 生命周期彼此独立；Workbench 不会自动切换主控模式，
+也不会在复用会话时重复投递同一 handoff。
+
+## 进一步阅读
+
+- [Agent 编排和恢复](docs/agent-orchestration.md)
+- [验证记录](docs/verification/backend-parity-review-recovery-20260914.md)
+- [Node 后端职责和兼容性](paseo-plugin/backend/README.md)
+- [发布和固定版本安装](docs/releasing.md)
+
+开发者可以运行 `make check` 检查插件类型和测试，运行 `make package` 构建发布形态的
+插件压缩包。

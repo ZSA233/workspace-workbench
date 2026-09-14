@@ -307,6 +307,7 @@ export function AgentReviewView({
   onRepair,
   onStop,
   onResume,
+  onIndependent,
   onSelectHistory,
   onOpenAgent,
   theme,
@@ -320,6 +321,7 @@ export function AgentReviewView({
   onRepair: () => void;
   onStop: () => void;
   onResume: () => void;
+  onIndependent?: () => void;
   onSelectHistory: (sessionId: string) => void;
   onOpenAgent?: (agentId: string) => void;
   theme: PanelProps["theme"];
@@ -378,6 +380,9 @@ export function AgentReviewView({
       })}
     </View>
     <View style={styles.reviewActionBar}>
+      {session.roundTarget === "coordinator" ? <Text style={styles.reviewEntryMeta}>{session.coordinator?.phase === "waiting" ? copy.reviewCoordinatorWaiting : session.coordinator?.phase === "uncertain" ? copy.reviewCoordinatorUncertain : session.coordinator?.phase === "sent" ? copy.reviewCoordinatorSent : copy.reviewCoordinator}{session.coordinator ? ` · ${session.coordinator.queuedAt}` : ""}</Text> : null}
+      {onIndependent && session.roundTarget === "coordinator" && (session.coordinator?.phase === "waiting" || session.status === "stopped" || session.status === "ready_for_review") ? <Pressable accessibilityRole="button" onPress={onIndependent} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.reviewIndependentSwitch}</Text></Pressable> : null}
+      {session.coordinator?.agentId && onOpenAgent ? <Pressable accessibilityRole="button" onPress={() => onOpenAgent(session.coordinator!.agentId!)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.reviewCoordinatorOpen}</Text></Pressable> : null}
       {canReview ? <Pressable accessibilityRole="button" onPress={onReview} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{copy.reviewStart}</Text></Pressable> : null}
       {canManualStart ? <Pressable accessibilityRole="button" onPress={onStart} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{copy.reviewStart}</Text></Pressable> : null}
       {canRepair ? <Pressable accessibilityRole="button" onPress={onRepair} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{copy.reviewRepairAction}</Text></Pressable> : null}

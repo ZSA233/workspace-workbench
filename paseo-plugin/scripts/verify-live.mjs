@@ -1,6 +1,7 @@
 /** Opt-in integration evidence: an actual Paseo daemon loads this plugin.
  * Uses an isolated home, registry, Git repositories and loopback listener.
- * Never changes the user's installed plugin or starts an execution Agent.
+ * Never changes the user's installed plugin. WORKBENCH_LIVE_AGENTS=1 also
+ * invokes real Codex agents against only these temporary repositories.
  */
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
@@ -79,6 +80,12 @@ const listener = createServer();
 await new Promise((r) => listener.listen(0, "127.0.0.1", r));
 const port = listener.address().port;
 await new Promise((r) => listener.close(r));
+if (process.env.WORKBENCH_LIVE_AGENTS === "1") {
+  const value = JSON.parse(readFileSync(configs[0], "utf8"));
+  value.agent = { provider: "paseo", bridge: { script: join(plugin, "mcp.mjs"), endpoint: `127.0.0.1:${port}` } };
+  value.review = { mode: "automatic", reviewerTarget: "coordinator", autoFix: false };
+  writeFileSync(configs[0], JSON.stringify(value));
+}
 const env = {
   ...process.env,
   PASEO_HOME: home,
@@ -159,6 +166,14 @@ try {
     }
   });
   const health = [];
+  // Exercise the new RPC boundaries in the real host without invoking a model.
+  for (const [method, input] of [
+    ["workspace.workbench.session", { workspaceId: "missing", action: "status" }],
+    ["workspace.workbench.coordinator-review", { workspaceId: "missing", sessionId: "missing", assignmentId: "missing", round: 1, action: "read", token: "invalid-test-token" }],
+  ]) {
+    await assert.rejects(client.invokePluginRpc("workspace-workbench-paseo", method, { projectConfig: configs[0], ...input }), /workspace_session_missing|review_caller_context_invalid/);
+  }
+  report.checks.push("session and coordinator review RPC authorization boundaries");
   for (const config of configs)
     health.push(
       await wait(async () => {
@@ -260,6 +275,31 @@ try {
     assert.equal(response.result.cache.refreshing, true, JSON.stringify(response));
   }
   report.checks.push("actual public Graph/Changes RPC keeps ready semantics during stale cache refresh");
+  if (process.env.WORKBENCH_LIVE_AGENTS === "1") {
+    const cwd = resolve(configs[0], "..");
+    const catalog = await client.listProviderModels("codex", { cwd });
+    const model = process.env.WORKBENCH_LIVE_MODEL || catalog.models.find(item => item.isDefault && item.isSelectable !== false)?.id || catalog.models.find(item => item.isSelectable !== false)?.id;
+    if (!model) throw new Error("live_codex_model_unavailable");
+    const parent = await client.createAgent({ config: { provider: "codex", model, cwd, modeId: "auto", featureValues: { plan_mode: false },
+      toolPolicy: { preapproved: ["workbench_workspace_preview", "workbench_workspace_execute", "workbench_workspace_status", "workbench_review_read", "workbench_review_result"].map(tool => ({ kind: "mcp", server: "workspace-workbench", tool })) } },
+      initialPrompt: "Use Workspace Workbench MCP to delegate this task to an isolated Workspace named coordinator-smoke, repository one. Task: read README and report what it contains; do not change any files. This task is approved for execution. Preview then execute with a stable requestId and handoff goal. Use the worker execution report for completion. When subsequently assigned a review, inspect its frozen material and submit the structured review result." });
+    report.modelEvidence = { model, coordinatorAgentId: parent.id, status: "running" };
+    const review = await wait(async () => {
+      const bindingPath = join(cwd, "state", "agent-bindings.json");
+      if (!existsSync(bindingPath)) return false;
+      const binding = JSON.parse(readFileSync(bindingPath, "utf8")).bindings.find(item => item.requestedByAgentId === parent.id || item.parentAgentId === parent.id);
+      if (!binding) return false;
+      const response = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.session", { projectConfig: configs[0], workspaceId: binding.workspaceId });
+      if (["failed", "blocked"].includes(response.session?.status)) throw new Error(`live_review_${response.session.status}:${response.session.lastError?.code || "result"}`);
+      return response.session?.status === "approved" ? response.session : false;
+    }, 180_000);
+    const timeline = await client.fetchAgentTimeline(parent.id, { limit: 100 });
+    const executeEntry = timeline.entries.find(entry => entry.item.type === "tool_call" && JSON.stringify(entry.item).includes("workbench_workspace_execute"));
+    if (!executeEntry?.turnId) throw new Error("live_handoff_turn_unavailable");
+    assert.notEqual(executeEntry.turnId, review.reviewerTurnId, "Coordinator must finish the handoff turn before reviewing");
+    report.modelEvidence = { ...report.modelEvidence, status: "passed", handoffTurnId: executeEntry.turnId, reviewTurnId: review.reviewerTurnId, workspaceId: review.workspaceId };
+    report.checks.push("real Codex delegated inspection, ended the handoff turn, and approved in a later coordinator review turn");
+  }
   const removed = await rpc(configs[0], "workspace.remove", { workspaceId: "sample" });
   assert.equal(removed.ok, true, JSON.stringify(removed));
   assert.equal(removed.result.state, "removed");

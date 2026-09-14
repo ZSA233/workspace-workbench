@@ -1,5 +1,7 @@
 # Workspace Workbench Paseo 插件
 
+会话消息、进度查询、交接停止指引和主控审核的使用方式见 [会话与审核流程](SESSION-WORKFLOW.md)。
+
 插件把 Workspace Workbench 放在 Paseo Explorer 中。普通用户不需要单独启动服务；插件
 使用 Node.js 22.14+ 统一管理各项目的 TypeScript 后端，并在重载或卸载时回收属于自己的
 后端进程和 socket。

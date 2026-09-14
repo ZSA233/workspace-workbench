@@ -18,6 +18,7 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
   assert.equal(result.status, 0, result.stderr);
   const response = JSON.parse(result.stdout.trim()) as { result: { tools: Array<{ name: string; description: string; inputSchema: { required: string[] } }> } };
   assert.deepEqual(response.result.tools.map((tool) => tool.name), [
+    "workbench_session_status", "workbench_session_message", "workbench_session_history", "workbench_session_wait", "workbench_session_stop", "workbench_review_read", "workbench_review_result",
     "workbench_artifact_register",
     "workbench_workspace_preview",
     "workbench_workspace_execute",
@@ -55,7 +56,7 @@ test("review and execution MCP processes expose only their role tools", () => {
   assert.deepEqual(JSON.parse(execution.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_execution_report"]);
 });
 
-test("MCP initialization carries transport metadata, not session-wide orchestration instructions", () => {
+test("MCP initialization gives coordinator guidance only to interactive sessions", () => {
   for (const role of ["interactive", "WORKBENCH_REVIEW_ONLY", "WORKBENCH_EXECUTION_REPORT_ONLY"]) {
     const result = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], {
       encoding: "utf8", timeout: 10_000,
@@ -65,6 +66,7 @@ test("MCP initialization carries transport metadata, not session-wide orchestrat
     assert.equal(result.status, 0, result.stderr);
     const response = JSON.parse(result.stdout.trim()).result;
     assert.equal(response.protocolVersion, "2024-11-05");
-    assert.equal(response.instructions, undefined);
+    if (role === "interactive") assert.match(response.instructions, /end this turn/);
+    else assert.equal(response.instructions, undefined);
   }
 });

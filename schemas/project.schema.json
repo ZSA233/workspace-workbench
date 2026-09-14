@@ -140,6 +140,7 @@
         "reviewerRole": { "type": "string", "minLength": 1 },
         "instructions": { "type": "string" },
         "reviewerSession": { "enum": ["reuse", "new_per_round"] },
+        "reviewerTarget": { "enum": ["coordinator", "independent"], "default": "coordinator" },
         "reviewerTimeoutMs": { "type": "integer", "minimum": 30000, "maximum": 3600000 },
         "repairTimeoutMs": { "type": "integer", "minimum": 30000, "maximum": 7200000 }
       },

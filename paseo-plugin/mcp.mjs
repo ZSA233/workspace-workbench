@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import WebSocket from "ws";
+import { coordinatorGuidance } from "./shared/handoff-guidance.mjs";
 
 const require = createRequire(import.meta.url);
 const packageMetadata = require("./package.json");
@@ -10,9 +11,12 @@ const endpoint = process.env.WORKBENCH_PASEO_ENDPOINT;
 const projectConfig = process.env.WORKBENCH_PROJECT_CONFIG;
 const token = process.env.WORKBENCH_AGENT_TOKEN;
 const publicTools = [
+  ...["status", "message", "history", "wait", "stop"].map(action => ({ name: `workbench_session_${action}`, description: ({ status: "Read the bound worker status and review phase.", message: "Send a supplement to the bound worker; requestId deduplicates delivery. Default steer; use interrupt only when explicitly requested.", history: "Read bounded public worker conversation history.", wait: "Wait at most 30 seconds for worker progress. Do not automatically loop.", stop: "Explicitly cancel the bound worker current turn and check its state." })[action] })),
+  { name: "workbench_review_read", description: "Accept the assigned coordinator review and read its frozen material; do not edit." },
+  { name: "workbench_review_result", description: "Submit the assigned coordinator review result, then end this turn." },
   { name: "workbench_artifact_register", description: "Register a handoff asset from a local path or image data." },
   { name: "workbench_workspace_preview", description: "Read-only validation for an explicitly requested isolated Workspace; returns the canonical request and no writes." },
-  { name: "workbench_workspace_execute", description: "Create or reuse the canonical previewed Workspace and start its execution Agent; preserves request identity and server checks." },
+  { name: "workbench_workspace_execute", description: "Create or reuse the canonical previewed Workspace and start its worker. On success report the handoff and END this turn; the worker implements the plan." },
   { name: "workbench_workspace_status", description: "Read the saved status for an uncertain Workspace handoff using its request ID." },
   { name: "workbench_review_preview", description: "Preview review context without starting a Reviewer." },
   { name: "workbench_review_execute", description: "Start or continue the Workspace Agent Review orchestration." },
@@ -142,21 +146,39 @@ const reviewExecuteSchema = {
   properties: { workspaceId: { type: "string", minLength: 1 }, sessionId: { type: "string", minLength: 1 }, executionAgentId: { type: "string", minLength: 1 }, action: { enum: ["start", "review", "repair", "resume"] } },
 };
 const reviewToolNames = new Set(["workbench_review_preview", "workbench_review_execute", "workbench_review_status", "workbench_review_stop", "workbench_review_resume"]);
+const sessionSchema = { type: "object", required: ["workspaceId"], additionalProperties: false, properties: {
+  workspaceId: { type: "string", minLength: 1 }, requestId: { type: "string", minLength: 1 }, text: { type: "string", minLength: 1, maxLength: 32768 },
+  behavior: { enum: ["steer", "interrupt"] }, attachments: schema.properties.handoff.properties.reviewPacket.properties.references,
+  limit: { type: "integer", minimum: 1, maximum: 100 }, timeoutMs: { type: "integer", minimum: 0, maximum: 30000 },
+  cursor: { type: "object", required: ["epoch", "seq"], properties: { epoch: { type: "string" }, seq: { type: "integer" } } },
+} };
+function extraSchema(name) {
+  if (name.startsWith("workbench_session_")) {
+    const action = name.split("_").at(-1);
+    const fields = ["workspaceId", ...({ message: ["requestId", "text", "behavior", "attachments"], history: ["limit", "cursor"], wait: ["timeoutMs"] }[action] || [])];
+    return { ...sessionSchema, properties: Object.fromEntries(fields.map(field => [field, sessionSchema.properties[field]])), required: action === "message" ? ["workspaceId", "requestId", "text"] : ["workspaceId"] };
+  }
+  if (name === "workbench_review_read" || name === "workbench_review_result") return { type: "object", additionalProperties: false,
+    required: ["workspaceId", "sessionId", "round", "assignmentId", ...(name.endsWith("_result") ? ["result"] : [])],
+    properties: { workspaceId: { type: "string" }, sessionId: { type: "string" }, assignmentId: { type: "string" }, round: { type: "integer", minimum: 1 }, ...(name.endsWith("_result") ? reviewerResultSchema.properties : {}) } };
+  return null;
+}
 const reviewerActions = new Map([
   ["workbench_reviewer_read", "reviewer_read"],
   ["workbench_reviewer_result", "reviewer_result"],
 ]);
 let client;
 async function handle(message) {
-  if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version } };
+  if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version }, ...(tools === publicTools ? { instructions: coordinatorGuidance } : {}) };
   if (message.method === "ping") return {};
-  if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: tool.name === "workbench_artifact_register" ? artifactRegisterSchema : tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name === "workbench_workspace_status" ? workspaceStatusSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema, annotations: { readOnlyHint: !["workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: false } })) };
+  if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: extraSchema(tool.name) || (tool.name === "workbench_artifact_register" ? artifactRegisterSchema : tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name === "workbench_workspace_status" ? workspaceStatusSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema), annotations: { readOnlyHint: !["workbench_session_message", "workbench_session_stop", "workbench_review_read", "workbench_review_result", "workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: tool.name === "workbench_session_stop" } })) };
   if (message.method !== "tools/call") throw new Error("method_not_found");
   const tool = tools.find((value) => message.params?.name === value.name);
   const action = tool?.name === "workbench_artifact_register" ? "artifact_register" : tool?.name === "workbench_execution_report" ? "execution_report" : tool ? reviewerActions.get(tool.name) || tool.name.replace("workbench_workspace_", "") : null;
   const reviewerAction = action === "reviewer_read" || action === "reviewer_result";
   const reviewTool = Boolean(tool && reviewToolNames.has(tool.name));
-  if ((!action && !reviewTool) || !endpoint || !projectConfig || (reviewerAction ? !process.env.WORKBENCH_REVIEW_TOKEN : !token)) throw new Error("workbench_context_unavailable");
+  const extra = tool && extraSchema(tool.name);
+  if ((!action && !reviewTool && !extra) || !endpoint || !projectConfig || (reviewerAction ? !process.env.WORKBENCH_REVIEW_TOKEN : !token)) throw new Error("workbench_context_unavailable");
   {
     client = new DaemonClient({ url: endpoint, clientId: `workbench-mcp-${randomUUID()}`, clientType: "mcp", reconnect: { enabled: false },
       webSocketFactory: (url, options) => new WebSocket(url, options?.protocols, { headers: options?.headers }),
@@ -166,7 +188,9 @@ async function handle(message) {
   let timer;
   try {
     const result = await Promise.race([
-      reviewerAction
+      extra
+        ? client.invokePluginRpc("workspace-workbench-paseo", tool.name.startsWith("workbench_session_") ? "workspace.workbench.session" : "workspace.workbench.coordinator-review", { ...message.params.arguments, projectConfig, token, action: tool.name.split("_").at(-1) })
+        : reviewerAction
         ? client.invokePluginRpc("workspace-workbench-paseo", action === "reviewer_read" ? "workspace.workbench.agent-review.reviewer-read" : "workspace.workbench.agent-review.reviewer-result", {
             ...message.params.arguments,
             projectConfig,

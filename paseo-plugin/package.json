@@ -15,6 +15,7 @@
     "paseo-plugin.json",
     "tsconfig.json",
     "README.md",
+    "SESSION-WORKFLOW.md",
     "package-lock.json",
     "scripts"
   ],

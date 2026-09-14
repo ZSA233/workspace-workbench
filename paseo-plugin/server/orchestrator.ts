@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { coordinatorGuidance, handoffOutcome } from "../shared/handoff-guidance.mjs";
 import { isAbsolute, resolve } from "node:path";
 import type { AgentContext } from "./agent-provider.ts";
 import { handleAgentDelegate, handleWorkspaceBinding } from "./agent-provider.ts";
@@ -182,9 +183,9 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
     if (!previous || !resumableWorkflowStages.has(previous.stage)) {
       writeState(key, { identity, identityVersion: 2, workspaceId: fullRequest.workspaceId, stage: "previewed", previewedAt: new Date().toISOString() });
     }
-    return { ok: true, action: fullRequest.workspaceId ? "reuse" : "create", request: fullRequest, catalog: catalog.result, sideEffects: [], requiresExecution: true };
+    return { ok: true, action: fullRequest.workspaceId ? "reuse" : "create", request: fullRequest, catalog: catalog.result, sideEffects: [], requiresExecution: true, instructions: coordinatorGuidance };
   }
-  if (previous?.stage === "handed-off") return previous.result;
+  if (previous?.stage === "handed-off") return handoffOutcome(previous.result);
   // The preview is the approval boundary for Workspace creation. Existing
   // progress stages remain resumable, but a new identity must first establish
   // a canonical preview checkpoint; no prompt can substitute for this guard.
@@ -241,7 +242,7 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
     writeState(key, progress);
     const result = await handleAgentDelegate({ workspaceId: progress.workspaceId!, parentAgentId, handoff: fullRequest.handoff }, context);
     writeState(key, { ...progress, stage: result.ok ? "handed-off" : "handoff-blocked", result });
-    return result;
+    return handoffOutcome(result);
   })().finally(() => flights.delete(flightKey));
   flights.set(flightKey, run);
   return run;

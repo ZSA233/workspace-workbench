@@ -10,6 +10,7 @@ export type ReviewLocale = z.infer<typeof reviewLocaleSchema>;
 
 /** Fields stored in a project config. Models are deliberately not included. */
 export const reviewPreferencePatchSchema = z.object({
+  reviewerTarget: z.enum(["coordinator", "independent"]).optional(),
   mode: reviewModeSchema.optional(),
   autoFix: z.boolean().optional(),
   maxRounds: z.number().int().min(1).max(10).optional(),
@@ -29,6 +30,7 @@ export type ReviewModelOverride = z.infer<typeof reviewModelOverrideSchema>;
 export const reviewGlobalPatchSchema = reviewPreferencePatchSchema.merge(reviewModelOverrideSchema);
 
 export const reviewPreferencesSchema = z.object({
+  reviewerTarget: z.enum(["coordinator", "independent"]).default("coordinator"),
   mode: reviewModeSchema.default("manual"),
   autoFix: z.boolean().default(true),
   maxRounds: z.number().int().min(1).max(10).default(3),
@@ -186,6 +188,11 @@ export const reviewSessionStatusSchema = z.enum([
 
 export const reviewSessionSchema = z.object({
   version: z.literal(2),
+  coordinator: z.object({
+    agentId: z.string().nullable(), phase: z.enum(["waiting", "uncertain", "sent", "accepted", "revoked"]),
+    queuedAt: z.string(), messageId: z.string(), acceptedAt: z.string().nullable().default(null),
+  }).nullable().default(null),
+  roundTarget: z.enum(["coordinator", "independent"]).default("independent"),
   id: z.string().trim().min(1),
   revision: z.number().int().nonnegative().default(0),
   workspaceId: z.string().trim().min(1),
@@ -291,7 +298,7 @@ export const reviewPreview = defineRpc({
 });
 export const reviewSessionControl = defineRpc({
   name: "workspace.workbench.agent-review.control",
-  input: projectContext.extend({ sessionId: z.string().trim().min(1).optional(), action: z.enum(["stop", "resume", "review", "repair"]) }),
+  input: projectContext.extend({ sessionId: z.string().trim().min(1).optional(), action: z.enum(["stop", "resume", "review", "repair", "independent"]) }),
   output: z.object({ ok: z.boolean(), session: reviewSessionSchema, error: rpcError.optional() }),
 });
 

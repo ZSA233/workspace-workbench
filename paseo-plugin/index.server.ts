@@ -1,4 +1,6 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { sessionOperation, coordinatorReview } from "./shared/session-tools";
+import { handleSessionOperation } from "./server/session-tools";
 
 import { handleAgentDelegate, handleAgentStatus, handleWorkspaceBinding, handleWorkspaceDelegate } from "./server/agent-provider";
 import { closeObserverBridge, handleObserver, observerQuery } from "./server/observer";
@@ -35,6 +37,7 @@ import {
 } from "./shared/agent-review";
 import {
   handleExecutionReportRpc,
+  handleCoordinatorReview,
   handleReviewModels,
   handleReviewPreview,
   handleReviewSessionControl,
@@ -51,6 +54,8 @@ import {
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(observerSettings);
+  server.handle(sessionOperation, (input, context) => withProject(input, () => handleSessionOperation(input, context)));
+  server.handle(coordinatorReview, (input, context) => withProject(input, () => handleCoordinatorReview(input, context)));
   // Start all registered projects through one generation-owned supervisor.
   // Failure remains project-specific and is retried on the next request.
   void Promise.allSettled(registeredProjects().map(project => startBackend(project.configPath)));

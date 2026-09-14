@@ -22,6 +22,9 @@ import {
   recordReviewerResult,
   reviewAuthToken,
   startReview,
+  handleCoordinatorReview,
+  tickCoordinatorReviews,
+  registerReviewLifecycle,
 } from "../server/agent-review.ts";
 import { getAgentBinding, putAgentBinding } from "../server/agent-store.ts";
 import { clearWorkspaceRuntimeState, executePermanentWorkspaceDelete } from "../server/workspace-lifecycle.ts";
@@ -29,6 +32,8 @@ import { resolveReviewPreferences } from "../shared/agent-review.ts";
 import { handoffSchema } from "../shared/handoff.ts";
 import type { AgentContext } from "../server/agent-provider.ts";
 import { writeState } from "../server/orchestration-state.ts";
+import { handleSessionOperation } from "../server/session-tools.ts";
+import { sessionOperation } from "../shared/session-tools.ts";
 
 type Harness = {
   root: string;
@@ -57,6 +62,7 @@ function harness(): Harness {
   const config = join(root, "project.json");
   writeFileSync(config, JSON.stringify({
     schemaVersion: 1,
+    review: { reviewerTarget: "independent" },
     project: { id: "fixture", displayName: "Fixture" },
     sourceRoot: root,
     stateRoot: join(root, "state"),
@@ -76,6 +82,7 @@ function harness(): Harness {
   let models: Array<Record<string, unknown>> = [{ provider: "codex", id: "model-a", label: "Model A", isSelectable: true, isDefault: true }];
   const executionAgent = {
     id: "execution-fixture",
+    workspaceId: "managed-fixture",
     cwd: root,
     status: "idle",
     activeTurn: null as { turnId: string } | null,
@@ -136,12 +143,16 @@ function harness(): Harness {
 }
 
 async function withFixture<T>(fixture: Harness, callback: () => T | Promise<T>): Promise<T> {
+  const previousRegistry = process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY;
+  process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = join(fixture.root, "isolated-registry.json");
   const previous = process.env.WORKSPACE_WORKBENCH_REVIEW_SETTINGS;
   const previousConfig = process.env.WORKSPACE_WORKBENCH_CONFIG;
   process.env.WORKSPACE_WORKBENCH_REVIEW_SETTINGS = join(fixture.root, "review-settings.json");
   process.env.WORKSPACE_WORKBENCH_CONFIG = fixture.config;
   try { return await withProject({ projectConfig: fixture.config }, callback); }
   finally {
+    if (previousRegistry === undefined) delete process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY;
+    else process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = previousRegistry;
     if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_REVIEW_SETTINGS;
     else process.env.WORKSPACE_WORKBENCH_REVIEW_SETTINGS = previous;
     if (previousConfig === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG;
@@ -149,6 +160,53 @@ async function withFixture<T>(fixture: Harness, callback: () => T | Promise<T>):
     fixture.cleanup();
   }
 }
+
+test("session messages authorize the original coordinator and deduplicate supplements", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    putAgentBinding({ workspaceId: "managed-fixture", agentId: "execution-fixture", requestedByAgentId: "reviewer-fixture", relationship: "independent", paseoWorkspaceId: "managed-fixture", cwd: fixture.root, provider: "codex/model-a", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    writeState("context:coordinator-test", { agentId: "reviewer-fixture", cwd: fixture.root });
+    const input = sessionOperation.input.parse({ projectConfig: fixture.config, workspaceId: "managed-fixture", token: "coordinator-test", action: "message", requestId: "supplement-1", text: "Preserve keyboard navigation" });
+    await handleSessionOperation(input, fixture.context);
+    await handleSessionOperation(input, fixture.context);
+    assert.equal(fixture.sent.length, 1);
+    await assert.rejects(handleSessionOperation({ ...input, text: "different" }, fixture.context), /conflict/);
+    await assert.rejects(handleSessionOperation({ ...input, token: "other" }, fixture.context), /not_coordinator/);
+    assert.equal(fixture.sent.length, 1);
+  });
+});
+
+test("coordinator waits while busy, receives once, binds acceptance to turn and revokes on stop", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    await handleReviewSettingsUpdate({ projectConfig: fixture.config, scope: "project", patch: { reviewerTarget: "coordinator" }, resetFields: [] });
+    putAgentBinding({ workspaceId: "managed-fixture", agentId: "execution-fixture", requestedByAgentId: "reviewer-fixture", relationship: "independent", paseoWorkspaceId: "managed-fixture", cwd: fixture.root, provider: "codex/model-a", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    writeState("context:coordinator-test", { agentId: "reviewer-fixture", cwd: fixture.root });
+    let session = await startReview({ workspaceId: "managed-fixture", projectConfig: fixture.config, executionAgentId: "execution-fixture" }, fixture.context);
+    assert.equal(session.coordinator?.phase, "waiting");
+    await tickCoordinatorReviews(fixture.context);
+    assert.equal(fixture.reviewerSent.length, 0);
+    fixture.setReviewerBusy(false);
+    await tickCoordinatorReviews(fixture.context);
+    await tickCoordinatorReviews(fixture.context);
+    assert.equal(fixture.reviewerSent.length, 1);
+    assert.equal(fixture.reviewerCreate.length, 0);
+    session = readReviewSession("managed-fixture")!;
+    assert.equal(session.coordinator?.phase, "sent");
+    const input = { projectConfig: fixture.config, workspaceId: session.workspaceId, sessionId: session.id, assignmentId: session.coordinator!.messageId, round: session.round, token: "coordinator-test", action: "read" as const };
+    await assert.rejects(handleCoordinatorReview(input, fixture.context), /turn_required/);
+    fixture.setReviewerBusy(true);
+    await handleCoordinatorReview(input, fixture.context);
+    assert.equal(readReviewSession(session.workspaceId)?.reviewerTurnId, "review-turn");
+    await assert.rejects(handleCoordinatorReview({ ...input, round: session.round + 1 }, fixture.context), /not_authorized/);
+    await handleReviewSessionControl({ projectConfig: fixture.config, workspaceId: session.workspaceId, action: "stop" }, fixture.context);
+    await assert.rejects(handleCoordinatorReview(input, fixture.context), /revoked/);
+    const switched = await handleReviewSessionControl({ projectConfig: fixture.config, workspaceId: session.workspaceId, action: "independent" }, fixture.context);
+    assert.equal(switched.ok, true);
+    assert.equal(switched.session?.roundTarget, "independent");
+    assert.equal(switched.session?.preferences.reviewerTarget, "coordinator");
+  });
+});
 
 test("the frozen review packet and referenced image reach the Reviewer", async () => {
   const fixture = harness();
@@ -446,7 +504,7 @@ test("model discovery and settings update keep shared rules separate from local 
     assert.equal(settings.effective.maxRounds, 2);
     assert.equal(settings.effective.reviewerModel, "model-a");
     const config = JSON.parse(readFileSync(fixture.config, "utf8")) as Record<string, unknown>;
-    assert.deepEqual(config.review, { mode: "automatic", autoFix: false, maxRounds: 2 });
+    assert.deepEqual(config.review, { mode: "automatic", autoFix: false, maxRounds: 2, reviewerTarget: "independent" });
     assert.equal((config.review as Record<string, unknown>).reviewerModel, undefined);
     const models = await handleReviewModels({ projectConfig: fixture.config, workspaceId: "managed-fixture" }, fixture.context);
     assert.equal(models.models[0].id, "model-a");

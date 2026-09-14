@@ -264,6 +264,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [reviewerRole, setReviewerRole] = useState("");
   const [reviewInstructions, setReviewInstructions] = useState("");
   const [reviewerSession, setReviewerSession] = useState<"reuse" | "new_per_round">("reuse");
+  const [reviewerTarget, setReviewerTarget] = useState<"coordinator" | "independent">("coordinator");
   const [executionModel, setExecutionModel] = useState("");
   const [reviewerModel, setReviewerModel] = useState("");
   const reviewDirtyFields = useRef(new Set<string>());
@@ -711,6 +712,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       setReviewerRole(builtInRole ? localizedCopy.reviewDefaultRole : reviewPreferences.reviewerRole);
       setReviewInstructions(builtInInstructions ? localizedCopy.reviewDefaultInstructions : reviewPreferences.instructions);
       setReviewerSession(reviewPreferences.reviewerSession);
+      setReviewerTarget(reviewPreferences.reviewerTarget);
       setExecutionModel(reviewPreferences.executionModel || "");
       setReviewerModel(reviewPreferences.reviewerModel || "");
     }
@@ -737,6 +739,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       if (dirty.has("reviewerRole")) shared.reviewerRole = reviewerRole.trim() || localizedCopy.reviewDefaultRole;
       if (dirty.has("instructions")) shared.instructions = reviewInstructions;
       if (dirty.has("reviewerSession")) shared.reviewerSession = reviewerSession;
+      if (dirty.has("reviewerTarget")) shared.reviewerTarget = reviewerTarget;
       const models: ReviewModelOverride = {};
       const modelReset: string[] = [];
       if (dirty.has("executionModel")) executionModel.trim() ? models.executionModel = executionModel.trim() : modelReset.push("executionModel");
@@ -761,7 +764,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     } catch (error) {
       toast.error(localizedReviewError(error instanceof Error ? { code: error.message } : null, localizedCopy, localizedCopy.reviewSettingsSaveFailed));
     }
-  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, autoFix, executionModel, localizedCopy, maxRounds, projectConfig, repairTimeoutMinutes, reviewInstructions, reviewerModel, reviewerRole, reviewerSession, reviewerTimeoutMinutes, reviewMode, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, sessionDefaultRelationship, sessionPermissionMode, sessionProviderRelationships, toast]);
+  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, autoFix, executionModel, localizedCopy, maxRounds, projectConfig, repairTimeoutMinutes, reviewInstructions, reviewerModel, reviewerRole, reviewerSession, reviewerTarget, reviewerTimeoutMinutes, reviewMode, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, sessionDefaultRelationship, sessionPermissionMode, sessionProviderRelationships, toast]);
   const closeReviewSettings = useCallback(() => {
     syncReviewEditor();
     setReviewSettingsOpen(false);
@@ -782,7 +785,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [localizedCopy, projectConfig, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, toast]);
   const resetAllProjectReviewOverrides = useCallback(async () => {
     try {
-      await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["mode", "autoFix", "maxRounds", "reviewerRole", "instructions", "reviewerSession", "reviewerTimeoutMs", "repairTimeoutMs"] });
+      await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["mode", "autoFix", "maxRounds", "reviewerRole", "instructions", "reviewerSession", "reviewerTarget", "reviewerTimeoutMs", "repairTimeoutMs"] });
       await reviewSettingsUpdateRpc({ projectConfig, scope: "project-model", patch: {}, resetFields: ["executionModel", "reviewerModel"] });
       await agentSessionSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["defaultRelationship", "permissionMode", "providerRelationships"] });
       reviewDirtyFields.current.clear();
@@ -842,7 +845,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       return agentReviewQuery.refetch();
     }).catch(() => toast.error(localizedCopy.reviewErrorGeneric));
   }, [agentReviewQuery, boundAgent?.id, locale, localizedCopy, projectConfig, reviewStartRpc, selectedWorkspaceId, toast]);
-  const controlAgentReview = useCallback((action: "stop" | "resume" | "review" | "repair") => {
+  const controlAgentReview = useCallback((action: "stop" | "resume" | "review" | "repair" | "independent") => {
     if (!selectedWorkspaceId || !agentReview) return;
     void reviewControlRpc({ projectConfig, workspaceId: selectedWorkspaceId, sessionId: agentReview.id, action }).then((result) => {
       if (!result.ok) toast.error(localizedReviewError(result.error, localizedCopy));
@@ -1435,7 +1438,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               theme={theme}
               styles={styles}
             />
-          ) : reviewTab === "agent" ? <AgentReviewView session={agentReview} history={agentReviewHistoryQuery.data?.sessions || []} loading={agentReviewQuery.isFetching} onStart={startAgentReview} onReview={() => controlAgentReview("review")} onRepair={() => controlAgentReview("repair")} onStop={() => controlAgentReview("stop")} onResume={() => controlAgentReview("resume")} onSelectHistory={setReviewSessionId} onOpenAgent={props.navigation ? (id) => props.navigation?.openAgent({ agentId: id }) : undefined} theme={theme} styles={styles} /> : (
+          ) : reviewTab === "agent" ? <AgentReviewView session={agentReview} history={agentReviewHistoryQuery.data?.sessions || []} loading={agentReviewQuery.isFetching} onStart={startAgentReview} onReview={() => controlAgentReview("review")} onRepair={() => controlAgentReview("repair")} onStop={() => controlAgentReview("stop")} onResume={() => controlAgentReview("resume")} onIndependent={() => controlAgentReview("independent")} onSelectHistory={setReviewSessionId} onOpenAgent={props.navigation ? (id) => props.navigation?.openAgent({ agentId: id }) : undefined} theme={theme} styles={styles} /> : (
             <ReviewView
               key={reviewIds.join("|")}
               workspaces={allWorkspaces.filter((workspace) => !isMainWorkspace(workspace))}
@@ -1556,6 +1559,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           <TextInput accessibilityLabel={localizedCopy.reviewSettingsRepairTimeout} keyboardType="number-pad" onChangeText={(value) => { markReviewField("repairTimeoutMs"); setRepairTimeoutMinutes(value); }} placeholder={localizedCopy.reviewSettingsRepairTimeoutPlaceholder} placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { flex: 1 }]} value={repairTimeoutMinutes} />
         </View>
         <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsReviewerSession} · {sourceLabel("reviewerSession")}</Text>
+        <View style={styles.reviewTagRow}>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerTarget === "coordinator" }} onPress={() => { markReviewField("reviewerTarget"); setReviewerTarget("coordinator"); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewCoordinator}</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerTarget === "independent" }} onPress={() => { markReviewField("reviewerTarget"); setReviewerTarget("independent"); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewIndependentSwitch}</Text></Pressable>
+        </View>
         <View style={styles.briefActions}>
           <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerSession === "reuse" }} onPress={() => { markReviewField("reviewerSession"); setReviewerSession("reuse"); }} style={[styles.secondaryButton, reviewerSession === "reuse" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsReuse}</Text></Pressable>
           <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerSession === "new_per_round" }} onPress={() => { markReviewField("reviewerSession"); setReviewerSession("new_per_round"); }} style={[styles.secondaryButton, reviewerSession === "new_per_round" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsNewPerRound}</Text></Pressable>

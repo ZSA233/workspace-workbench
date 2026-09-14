@@ -261,6 +261,7 @@ const transientIssueCodes = new Set([
   "observer_socket_error",
   "git_diff_failed",
   "git_log_failed",
+  "observer_closing",
 ]);
 
 const issueLabelKeys: Record<string, keyof WorkbenchCopy> = {

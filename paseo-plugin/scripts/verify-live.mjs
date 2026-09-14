@@ -166,10 +166,22 @@ try {
         return r.ok && r.result.implementation === "node" ? r : null;
       }),
     );
+  for (const response of health) {
+    const timing = response.result.timing;
+    assert.equal(timing.observationTimeoutSeconds, timing.gitTimeoutSeconds + 5);
+    assert.equal(timing.bridgeTimeoutMs, timing.observationTimeoutMs + 2_000);
+    assert.equal(
+      timing.clientRefreshTimeoutMs,
+      timing.bridgeTimeoutMs + 1_000,
+    );
+    assert.equal(typeof response.result.instanceId, "string");
+    assert.equal(response.result.instanceId, response.result.process.instanceId);
+  }
   assert.notEqual(health[0].result.process.pid, health[1].result.process.pid);
   report.checks.push(
     "actual plugin loaded; separate Node backend PIDs for two projects",
   );
+  report.checks.push("actual worker health exposes the shared observation timing and instance identity");
   const created = await rpc(configs[0], "workspace.create", {
     name: "sample",
     repositories: ["one"],

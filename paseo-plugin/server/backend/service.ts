@@ -54,6 +54,7 @@ export class Service {
         workspaceCleanup: caps.cleanup,
         agentProvider: caps.agent ? "paseo" : null,
       },
+      timing: this.config.timing,
       uptimeSeconds: (Date.now() - this.startedAt) / 1000,
       cache: this.cache.status(),
     };
@@ -160,6 +161,7 @@ export class Service {
       const runtime = next.toolchain ? new Runtime(next) : null;
       this.config = next;
       this.workspaces.config = next;
+      this.cache.config = next;
       this.runtime = runtime;
       this.observation.runtime = runtime;
       return {

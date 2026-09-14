@@ -11,6 +11,10 @@ import {
   WorkbenchError,
   type Json,
 } from "./storage.ts";
+import {
+  resolveObservationTiming,
+  type ObservationTiming,
+} from "../../shared/observation-timing.ts";
 
 export type Repository = {
   id: string;
@@ -129,6 +133,15 @@ export function loadConfig(file: string) {
       throw new WorkbenchError("config_invalid", `invalid limit ${key}`);
     return Math.max(min, Math.min(max, n));
   };
+  let timing: ObservationTiming;
+  try {
+    timing = resolveObservationTiming(limits);
+  } catch (error) {
+    throw new WorkbenchError(
+      "config_invalid",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
   return {
     configPath,
     sourceRoot,
@@ -150,13 +163,15 @@ export function loadConfig(file: string) {
     toolchain: raw.toolchain ? object(raw.toolchain) : null,
     cacheEnabled: cache.enabled !== false,
     cacheRoot: path(cache.root, join(stateRoot, "cache")),
-    gitTimeout: number("gitTimeoutSeconds", 3, 0.5, 30) * 1000,
+    timing,
+    gitTimeout: timing.gitTimeoutMs,
+    observationTimeout: timing.observationTimeoutMs,
     operationTimeout:
       number("workspaceOperationTimeoutSeconds", 120, 5, 600) * 1000,
     maxDiffBytes: number("maxDiffBytes", 262144, 16384, 4194304),
     cacheEntries: number("cacheMaxEntries", 500, 20, 10000),
     cacheBytes: number("cacheMaxBytes", 33554432, 1048576, 536870912),
-    cacheTtl: number("cacheTtlSeconds", 3, 0.5, 60) * 1000,
+    cacheTtl: timing.cacheTtlMs,
     discovery: {
       mode: discovery.mode || "hybrid",
       roots: (discovery.roots || [sourceRoot]).map((value: string) =>

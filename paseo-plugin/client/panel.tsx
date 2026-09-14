@@ -27,6 +27,10 @@ import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpd
 import { observerQuery } from "../shared/observer";
 import { projectsQuery, type ProjectInfo } from "../shared/projects";
 import { projectBackendStart, projectStorageQuery } from "../shared/setup";
+import {
+  DEFAULT_OBSERVATION_TIMING,
+  observationTimingFromWire,
+} from "../shared/observation-timing";
 import { workspaceLifecycle, type WorkspaceLifecycleResponse } from "../shared/workspace-lifecycle";
 import { isMainWorkspace,isRecoverableObserverFailure,makeStyles,mergeDetailResponse,queryErrorMessage,queryFailureForDisplay,resultOf,TabButton,workspaceIdFromProps } from "./components/ui";
 import { openFileReview } from "./file-review-store";
@@ -47,7 +51,7 @@ type WorkspaceFilter,
 type WorkspaceSummary,
 type WorkspaceTask
 } from "./model";
-import { useLastSuccessfulResponse, type ObserverSnapshot } from "./observation";
+import { boundedRefresh, useBoundedCacheRefresh, useLastSuccessfulResponse, type ObserverSnapshot } from "./observation";
 import { useRefreshOnForeground } from "./foreground-refresh";
 import { useObserverPreferences } from "./preferences";
 import { readSurfaceWorkspace, type WorkbenchSurfaceProps } from "./surface-context";
@@ -59,32 +63,6 @@ type ObserverPanelContentProps = PanelProps & {
   paseoWorkspace: { directory: string; name: string } | null;
 };
 type ChangeTreeMode = "tree" | "files";
-
-const REFRESH_INTERVALS = {
-  list: 30_000,
-  detail: 30_000,
-  repository: 45_000,
-  review: 60_000,
-} as const;
-
-const STALE_WINDOWS = {
-  list: 90_000,
-  detail: 90_000,
-  repository: 120_000,
-  review: 150_000,
-} as const;
-
-const REFRESH_REQUEST_TIMEOUT = 12_000;
-
-function boundedRefresh<T>(request: Promise<T>): Promise<T | undefined> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(undefined), REFRESH_REQUEST_TIMEOUT);
-    request.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      () => { clearTimeout(timer); resolve(undefined); },
-    );
-  });
-}
 
 type ObservationArea = {
   label: string;
@@ -104,7 +82,7 @@ function observationStatusLabel(status: ObserverSnapshot["status"], strings = co
 function observationAreaDetail(area: ObservationArea, strings = copy): string {
   const status = area.snapshot.status === "expired"
     ? "expired"
-    : area.fetching
+    : area.fetching || area.snapshot.refreshing
       ? "refreshing"
       : area.snapshot.status;
   const timestamp = area.snapshot.lastObservedAt ? ` · ${formatObservedTime(area.snapshot.lastObservedAt, strings)}` : "";
@@ -324,9 +302,18 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryFn: () => startBackend({ projectConfig }),
     enabled: Boolean(projectConfig),
     retry: false,
-    staleTime: 30_000,
+    staleTime: DEFAULT_OBSERVATION_TIMING.refreshIntervalsMs.list,
+    refetchInterval: DEFAULT_OBSERVATION_TIMING.refreshIntervalsMs.list,
     refetchOnWindowFocus: false,
   });
+  const observationTiming = useMemo(
+    () => observationTimingFromWire(backendQuery.data?.timing),
+    [backendQuery.data?.timing],
+  );
+  const seenBackendInstanceId = useRef<string | null>(null);
+  useEffect(() => {
+    seenBackendInstanceId.current = null;
+  }, [projectConfig]);
   const rawBindingRpc = useRpc(workspaceBindingQuery);
   const bindingRpc = (input: Parameters<typeof rawBindingRpc>[0]) => rawBindingRpc({ ...input, projectConfig });
   const rawDelegateRpc = useRpc(workspaceDelegate);
@@ -394,13 +381,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "workspace-list"],
     queryFn: () => rpc({ method: "workspace.list", params: { includeRemoved: true } }),
     enabled: Boolean(projectConfig && backendQuery.data?.state === "ready"),
-    refetchInterval: REFRESH_INTERVALS.list,
+    refetchInterval: observationTiming.refreshIntervalsMs.list,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
-    staleTime: 1_500,
+    staleTime: observationTiming.clientQueryStaleTimeMs,
   });
-  const listState = useLastSuccessfulResponse("workspace-list", listQuery.data, { error: listQuery.error, staleAfterMs: STALE_WINDOWS.list });
+  const listState = useLastSuccessfulResponse("workspace-list", listQuery.data, { error: listQuery.error, staleAfterMs: observationTiming.staleWindowsMs.list });
   const listResult = resultOf<ListResult>(listState.response);
   const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
   const listReady = Boolean(listResult);
@@ -486,10 +473,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "identify", workspaceDirectory],
     queryFn: () => rpc({ method: "workspace.identify", params: { directory: workspaceDirectory } }),
     enabled: Boolean(workspaceDirectory && preferences.hydrated && !selectionResolved && listReady),
-    refetchInterval: REFRESH_INTERVALS.list,
+    refetchInterval: observationTiming.refreshIntervalsMs.list,
     refetchIntervalInBackground: false,
     retry: false,
-    staleTime: 1_500,
+    staleTime: observationTiming.clientQueryStaleTimeMs,
     refetchOnWindowFocus: false,
   });
   const identified = resultOf<{ matched: boolean; workspaceId: string | null }>(identifyQuery.data);
@@ -547,16 +534,16 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "workspace-detail", selectedWorkspaceId],
     queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, mode: "summary", refreshToolchain: false } }),
     enabled: Boolean(selectedWorkspaceId && selectedWorkspace && listReady),
-    refetchInterval: REFRESH_INTERVALS.detail,
+    refetchInterval: observationTiming.refreshIntervalsMs.detail,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
-    staleTime: 1_500,
+    staleTime: observationTiming.clientQueryStaleTimeMs,
   });
   const detailState = useLastSuccessfulResponse(`workspace-detail:${selectedWorkspaceId}`, detailQuery.data, {
     error: detailQuery.error,
     mergePartial: mergeDetailResponse,
-    staleAfterMs: STALE_WINDOWS.detail,
+    staleAfterMs: observationTiming.staleWindowsMs.detail,
   });
   const detail = resultOf<DetailResult>(detailState.response);
   const detailFailure = queryFailureForDisplay(detailState, detailQuery.data, detailQuery.error, localizedCopy);
@@ -588,13 +575,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable),
-    refetchInterval: REFRESH_INTERVALS.repository,
+    refetchInterval: observationTiming.refreshIntervalsMs.repository,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
-    staleTime: 1_500,
+    staleTime: observationTiming.clientQueryStaleTimeMs,
   });
-  const graphState = useLastSuccessfulResponse(`repository-graph:${selectedWorkspaceId}:${selectedRepoPath}`, graphQuery.data, { error: graphQuery.error, staleAfterMs: STALE_WINDOWS.repository });
+  const graphState = useLastSuccessfulResponse(`repository-graph:${selectedWorkspaceId}:${selectedRepoPath}`, graphQuery.data, { error: graphQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository });
   const graph = resultOf<GraphResult>(graphState.response);
   const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error, localizedCopy);
   const changesScope: ChangeScope = selectedCommit ? "commit" : changeScope;
@@ -610,16 +597,16 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable),
-    refetchInterval: REFRESH_INTERVALS.repository,
+    refetchInterval: observationTiming.refreshIntervalsMs.repository,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
-    staleTime: 1_500,
+    staleTime: observationTiming.clientQueryStaleTimeMs,
   });
   const changesState = useLastSuccessfulResponse(
     `repository-changes:${selectedWorkspaceId}:${selectedRepoPath}:${changesScope}:${selectedCommit}`,
     changesQuery.data,
-    { error: changesQuery.error, staleAfterMs: STALE_WINDOWS.repository },
+    { error: changesQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository },
   );
   const changes = resultOf<ChangesResult>(changesState.response);
   const changesFailure = queryFailureForDisplay(changesState, changesQuery.data, changesQuery.error, localizedCopy);
@@ -658,13 +645,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: tab === "review" && reviewIds.length > 0 && listReady,
-    refetchInterval: REFRESH_INTERVALS.review,
+    refetchInterval: observationTiming.refreshIntervalsMs.review,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
-    staleTime: 1_500,
+    staleTime: observationTiming.clientQueryStaleTimeMs,
   });
-  const reviewState = useLastSuccessfulResponse(`review:${reviewIds.join("|")}:${JSON.stringify(targetOverrides)}`, reviewQuery.data, { error: reviewQuery.error, staleAfterMs: STALE_WINDOWS.review });
+  const reviewState = useLastSuccessfulResponse(`review:${reviewIds.join("|")}:${JSON.stringify(targetOverrides)}`, reviewQuery.data, { error: reviewQuery.error, staleAfterMs: observationTiming.staleWindowsMs.review });
   const review = resultOf<ReviewResult>(reviewState.response);
   const reviewFailure = queryFailureForDisplay(reviewState, reviewQuery.data, reviewQuery.error, localizedCopy);
   const reviewSessionRpc = useRpc(reviewSessionQuery);
@@ -879,7 +866,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       changesState.expired ||
       (tab === "review" && reviewState.expired),
   );
-  const observationRefreshing = manualRefreshing || observationAreas.some((area) => area.fetching);
+  const observationRefreshing = manualRefreshing || observationAreas.some((area) => area.fetching || area.snapshot.refreshing);
   const observationDegraded = observationAreas.some((area) => area.snapshot.status === "degraded");
   const lastSuccessfulAt = observationAreas.reduce<string | null>((latest, area) => {
     const candidate = area.snapshot.lastObservedAt;
@@ -915,14 +902,14 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     if (refreshFlight.current) return refreshFlight.current;
     setManualRefreshing(true);
     const requests: Array<Promise<unknown>> = [
-      boundedRefresh(backendQuery.refetch()),
-      ...(backendQuery.data?.state === "ready" ? [boundedRefresh(listQuery.refetch())] : []),
-      ...(workspaceDirectory && !selectionResolved ? [boundedRefresh(identifyQuery.refetch())] : []),
-      ...(selectedWorkspaceId ? [boundedRefresh(detailQuery.refetch())] : []),
-      ...(selectedWorkspaceId && selectedRepoPath && !selectedWorkspaceUnavailable ? [boundedRefresh(graphQuery.refetch()), boundedRefresh(changesQuery.refetch())] : []),
-      ...(tab === "review" && reviewIds.length ? [boundedRefresh(reviewQuery.refetch())] : []),
+      boundedRefresh(backendQuery.refetch(), observationTiming.clientRefreshTimeoutMs),
+      ...(backendQuery.data?.state === "ready" ? [boundedRefresh(listQuery.refetch(), observationTiming.clientRefreshTimeoutMs)] : []),
+      ...(workspaceDirectory && !selectionResolved ? [boundedRefresh(identifyQuery.refetch(), observationTiming.clientRefreshTimeoutMs)] : []),
+      ...(selectedWorkspaceId ? [boundedRefresh(detailQuery.refetch(), observationTiming.clientRefreshTimeoutMs)] : []),
+      ...(selectedWorkspaceId && selectedRepoPath && !selectedWorkspaceUnavailable ? [boundedRefresh(graphQuery.refetch(), observationTiming.clientRefreshTimeoutMs), boundedRefresh(changesQuery.refetch(), observationTiming.clientRefreshTimeoutMs)] : []),
+      ...(tab === "review" && reviewIds.length ? [boundedRefresh(reviewQuery.refetch(), observationTiming.clientRefreshTimeoutMs)] : []),
       ...(selectedWorkspaceId && selectedWorkspace && !selectedWorkspaceIsMain && listResult?.capabilities?.agent
-        ? [boundedRefresh(bindingQuery.refetch())]
+        ? [boundedRefresh(bindingQuery.refetch(), observationTiming.clientRefreshTimeoutMs)]
         : []),
     ];
     const flight = Promise.allSettled(requests).then(() => undefined).finally(() => {
@@ -931,7 +918,25 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     });
     refreshFlight.current = flight;
     return flight;
-  }, [backendQuery.data?.state, backendQuery.refetch, bindingQuery.refetch, changesQuery.refetch, detailQuery.refetch, graphQuery.refetch, identifyQuery.refetch, listQuery.refetch, listResult?.capabilities?.agent, reviewIds.length, reviewQuery.refetch, selectedRepoPath, selectedWorkspace, selectedWorkspaceId, selectedWorkspaceIsMain, selectedWorkspaceUnavailable, selectionResolved, tab, workspaceDirectory]);
+  }, [backendQuery.data?.state, backendQuery.refetch, bindingQuery.refetch, changesQuery.refetch, detailQuery.refetch, graphQuery.refetch, identifyQuery.refetch, listQuery.refetch, listResult?.capabilities?.agent, observationTiming.clientRefreshTimeoutMs, reviewIds.length, reviewQuery.refetch, selectedRepoPath, selectedWorkspace, selectedWorkspaceId, selectedWorkspaceIsMain, selectedWorkspaceUnavailable, selectionResolved, tab, workspaceDirectory]);
+
+  useBoundedCacheRefresh("workspace-list", listQuery.data, listQuery.refetch, observationTiming.followUpDelaysMs);
+  useBoundedCacheRefresh(`workspace-detail:${selectedWorkspaceId}`, detailQuery.data, detailQuery.refetch, observationTiming.followUpDelaysMs);
+  useBoundedCacheRefresh(`repository-graph:${selectedWorkspaceId}:${selectedRepoPath}`, graphQuery.data, graphQuery.refetch, observationTiming.followUpDelaysMs);
+  useBoundedCacheRefresh(`repository-changes:${selectedWorkspaceId}:${selectedRepoPath}:${changesScope}:${selectedCommit}`, changesQuery.data, changesQuery.refetch, observationTiming.followUpDelaysMs);
+  useBoundedCacheRefresh(`review:${reviewIds.join("|")}:${JSON.stringify(targetOverrides)}`, reviewQuery.data, reviewQuery.refetch, observationTiming.followUpDelaysMs);
+
+  useEffect(() => {
+    const instanceId = backendQuery.data?.instanceId;
+    if (!instanceId || backendQuery.data?.state !== "ready") return;
+    if (seenBackendInstanceId.current === null) {
+      seenBackendInstanceId.current = instanceId;
+      return;
+    }
+    if (seenBackendInstanceId.current === instanceId) return;
+    seenBackendInstanceId.current = instanceId;
+    void refreshAll();
+  }, [backendQuery.data?.instanceId, backendQuery.data?.state, refreshAll]);
 
   useRefreshOnForeground(Boolean(projectConfig), refreshAll);
 

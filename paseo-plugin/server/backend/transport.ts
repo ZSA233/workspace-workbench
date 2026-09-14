@@ -162,6 +162,7 @@ export async function serveSocket(
               ok: true,
               result: {
                 ...service.health(),
+                instanceId,
                 process: {
                   pid: process.pid,
                   configPath: canonical(service.config.configPath),

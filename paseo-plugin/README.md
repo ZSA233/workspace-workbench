@@ -25,6 +25,14 @@ paseo plugin reload workspace-workbench-paseo --json
 会自动扫描并列出可用仓库；确认后生成 `.workspace-workbench/project.json`，并自动登记
 项目、准备配置和启动后端。用户不需要编辑 JSON、维护项目注册表或手动创建 worktree。
 
+## 观察时序
+
+项目配置中的 `limits.gitTimeoutSeconds` 是单条 Git 命令预算；观察总预算会自动使用它加
+5 秒余量。也可以设置 `limits.observationTimeoutSeconds`，但不能低于这个派生下限，否则
+配置会明确报告 `config_invalid`。缓存 TTL (`cacheTtlSeconds`) 只决定何时启动后台刷新，
+不会清空界面已经展示的最后一次成功快照。观察总预算、Unix socket bridge 和面板刷新等待
+会从同一份策略依次派生传输余量，因此调整 Git 超时后不会留下不一致的下游超时。
+
 ## 添加仓库
 
 这里分为两个动作：

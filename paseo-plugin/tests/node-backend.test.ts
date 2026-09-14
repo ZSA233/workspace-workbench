@@ -19,6 +19,7 @@ import { Service } from "../server/backend/service.ts";
 import { Git } from "../server/backend/git.ts";
 import { ObservationCache } from "../server/backend/cache.ts";
 import { type Json, WorkbenchError } from "../server/backend/storage.ts";
+import { resolveObservationTiming } from "../shared/observation-timing.ts";
 
 export function fixture(extra: Json = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "wb-node-")));
@@ -59,6 +60,60 @@ export function git(path: string, args: string[]) {
   assert.equal(r.status, 0, r.stderr);
   return r.stdout.trim();
 }
+test("observation timing derives one consistent downstream budget", () => {
+  const timing = resolveObservationTiming({ gitTimeoutSeconds: 30 });
+  assert.equal(timing.gitTimeoutSeconds, 30);
+  assert.equal(timing.observationTimeoutSeconds, 35);
+  assert.equal(timing.observationTimeoutMs, 35_000);
+  assert.equal(timing.bridgeTimeoutMs, 37_000);
+  assert.equal(timing.clientRefreshTimeoutMs, 38_000);
+  assert.equal(timing.clientQueryStaleTimeMs, 1_500);
+  assert.equal(timing.staleWindowsMs.detail, timing.refreshIntervalsMs.detail * 3);
+  assert.deepEqual(timing.followUpDelaysMs, [250, 1_000, 3_000]);
+  assert.throws(
+    () => resolveObservationTiming({ gitTimeoutSeconds: 30, observationTimeoutSeconds: 34.9 }),
+    /at least 35 seconds/,
+  );
+  const changed = resolveObservationTiming({ gitTimeoutSeconds: 10 });
+  assert.equal(changed.observationTimeoutSeconds, 15);
+  assert.equal(changed.bridgeTimeoutMs, 17_000);
+  assert.equal(changed.clientRefreshTimeoutMs, 18_000);
+});
+
+test("project config rejects an observation budget below the derived minimum", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "wb-config-"))),
+    configPath = join(root, "project.json");
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      project: { id: "invalid", displayName: "Invalid" },
+      sourceRoot: root,
+      repositories: [],
+      limits: { gitTimeoutSeconds: 30, observationTimeoutSeconds: 34 },
+    }),
+  );
+  try {
+    assert.throws(
+      () => loadConfig(configPath),
+      (error: any) => error?.code === "config_invalid" && /at least 35 seconds/.test(error.message),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Git rejects an observation that has already passed its deadline", async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(
+      new Git(join(f.root, "one"), 1_000, Date.now() - 1).run(["status"]),
+      (error: any) => error?.code === "observation_timeout",
+    );
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
 test("Node backend preserves public rejection codes and idempotent records", async () => {
   const f = fixture();
   const service = new Service(f.config);
@@ -268,6 +323,47 @@ test("cache preserves stale data across transient refresh failures", async () =>
         throw new Error("unexpected second recovery");
       })).value,
       "recovered",
+    );
+  } finally {
+    await cache.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("slow fingerprints do not block cached data and changed fingerprints refresh once", async () => {
+  const f = fixture({ limits: { cacheTtlSeconds: 0.5 } });
+  const cache = new ObservationCache(f.config);
+  let refreshes = 0;
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  try {
+    await cache.read("slow-fingerprint", "old", async () => ({
+      value: "last-good",
+      observation: { state: "ready", observedAt: "2026-01-01T00:00:00Z" },
+    }));
+    const started = Date.now();
+    const cached = await cache.read(
+      "slow-fingerprint",
+      async () => {
+        await wait(200);
+        return "new";
+      },
+      async () => {
+        refreshes++;
+        return {
+          value: "new-value",
+          observation: { state: "ready", observedAt: "2026-01-02T00:00:00Z" },
+        };
+      },
+    );
+    assert.ok(Date.now() - started < 100);
+    assert.equal(cached.value, "last-good");
+    await wait(260);
+    assert.equal(refreshes, 1);
+    assert.equal(
+      (await cache.read("slow-fingerprint", async () => "new", async () => {
+        throw new Error("unexpected second refresh");
+      })).value,
+      "new-value",
     );
   } finally {
     await cache.close();
@@ -572,6 +668,36 @@ test("repository IDs matching JavaScript prototype names retain journals and run
     assert.equal(saved.repositories[1].id, "__proto__");
     assert.equal(Object.keys(saved.repositoryAdditions).length, 0);
   } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("workspace detail returns completed repositories when one Git observation times out", async () => {
+  const f = fixture(),
+    service = new Service(f.config),
+    original = Git.prototype.run;
+  try {
+    await service.handle("workspace.create", {
+      name: "partial-detail",
+      repositories: ["one", "two", "three"],
+    });
+    Git.prototype.run = async function (args, check = true) {
+      if (args[0] === "status" && this.path.endsWith("/one"))
+        throw new WorkbenchError("observation_timeout", "injected observation timeout");
+      return original.call(this, args, check);
+    };
+    const detail = await service.handle("workspace.detail", {
+      workspaceId: "partial-detail",
+    });
+    assert.equal(detail.observation.state, "partial");
+    assert.ok(detail.repositories.find((repo: Json) => String(repo.repoPath).endsWith("two"))?.head);
+    assert.equal(
+      detail.repositories.find((repo: Json) => String(repo.repoPath).endsWith("one"))?.issues[0]?.code,
+      "observation_timeout",
+    );
+  } finally {
+    Git.prototype.run = original;
     await service.close();
     rmSync(f.root, { recursive: true, force: true });
   }

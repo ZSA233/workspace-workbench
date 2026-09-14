@@ -7,6 +7,11 @@ import { join, resolve } from "node:path";
 import process from "node:process";
 import { currentProject, withProject } from "./projects.ts";
 import { startBackend } from "./backend-manager.ts";
+import { loadConfig } from "./backend/config.ts";
+import {
+  DEFAULT_OBSERVATION_TIMING,
+  OBSERVATION_TIMING_DEFAULTS,
+} from "../shared/observation-timing.ts";
 
 import {
   observerMethods,
@@ -28,8 +33,19 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
-const requestTimeoutMs = 10_000;
-const responseCacheTtlMs = 1_000;
+
+function configuredBridgeTimeoutMs(): number {
+  const project = currentProject();
+  if (project) {
+    try {
+      return loadConfig(project.configPath).timing.bridgeTimeoutMs;
+    } catch {
+      // The backend reports config_invalid through its normal startup path.
+      // Keep the bridge bounded while that error is surfaced to the panel.
+    }
+  }
+  return DEFAULT_OBSERVATION_TIMING.bridgeTimeoutMs;
+}
 
 class BridgeError extends Error {
   readonly code: string;
@@ -72,7 +88,7 @@ class ObserverBridge {
   private readonly inFlight = new Map<string, Promise<ObserverResponse>>();
   private readonly cache = new Map<string, { expiresAt: number; response: ObserverResponse }>();
 
-  private request(request: SocketRequest): Promise<ObserverResponse> {
+  private request(request: SocketRequest, timeoutMs: number): Promise<ObserverResponse> {
     return new Promise((resolveResponse, reject) => {
       let settled = false;
       let buffer = "";
@@ -85,7 +101,7 @@ class ObserverBridge {
       };
       const timer = setTimeout(() => {
         finish(() => reject(new BridgeError("observer_timeout", "observer request timed out")));
-      }, requestTimeoutMs);
+      }, timeoutMs);
       const fail = (error: Error) => {
         clearTimeout(timer);
         finish(() => reject(error));
@@ -133,13 +149,13 @@ class ObserverBridge {
     const active = this.inFlight.get(key);
     if (active) return active;
     const request: SocketRequest = { id: String(++this.sequence), method: input.method, params: input.params || {} };
-    const pending = this.request(request)
+    const pending = this.request(request, configuredBridgeTimeoutMs())
       .then((response) => {
         if (response.ok && ["observer.reload", "workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete"].includes(input.method)) {
           for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
         }
         if (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method)) {
-          if (cacheable(response)) this.cache.set(key, { response, expiresAt: Date.now() + responseCacheTtlMs });
+          if (cacheable(response)) this.cache.set(key, { response, expiresAt: Date.now() + OBSERVATION_TIMING_DEFAULTS.bridgeResponseCacheTtlMs });
         }
         return response;
       })

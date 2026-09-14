@@ -38,6 +38,13 @@ paseo plugin reload workspace-workbench-paseo --json
 默认配置和运行数据位于项目的 `.workspace-workbench/` 目录，其中包括项目配置、隔离
 worktree、记录和缓存。运行数据默认由 Git 本地忽略。已有项目会继续使用原来的存储路径。
 
+### 观察刷新时序
+
+`limits.gitTimeoutSeconds` 控制单条 Git 命令。未配置
+`limits.observationTimeoutSeconds` 时，观察总预算自动派生为 Git 超时加 5 秒；显式值低于
+该下限会被拒绝。缓存 TTL 只触发后台刷新，不会清空最后成功内容。bridge 和前端等待会在
+观察总预算上分别增加 2 秒和 1 秒余量，相关刷新周期与过期窗口由同一策略统一计算。
+
 ## Workspace 和仓库
 
 - **新建 Workspace**：从自动发现的仓库中选择范围，系统创建隔离分支和 worktree。

@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { observationTimingSchema } from "./observation-timing.ts";
 
 const setupRepository = z.object({
   id: z.string(),
@@ -51,6 +52,8 @@ export const projectSetupSave = defineRpc({
       state: z.enum(["ready", "starting", "missing", "failed", "unsupported"]),
       message: z.string().optional(),
       socketPath: z.string().optional(),
+      timing: observationTimingSchema.optional(),
+      instanceId: z.string().optional(),
     }),
   }),
 });
@@ -83,6 +86,8 @@ export const projectBackendStart = defineRpc({
     state: z.enum(["ready", "starting", "missing", "failed", "unsupported"]),
     message: z.string().optional(),
     socketPath: z.string().optional(),
+    timing: observationTimingSchema.optional(),
+    instanceId: z.string().optional(),
   }),
 });
 
@@ -93,6 +98,8 @@ export const projectBackendStatus = defineRpc({
     state: z.enum(["ready", "starting", "missing", "failed", "unsupported"]),
     message: z.string().optional(),
     socketPath: z.string().optional(),
+    timing: observationTimingSchema.optional(),
+    instanceId: z.string().optional(),
   }),
 });
 

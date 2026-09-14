@@ -36,6 +36,7 @@
   },
   "limits": {
     "gitTimeoutSeconds": 3,
+    "cacheTtlSeconds": 3,
     "workspaceOperationTimeoutSeconds": 120
   },
   "cache": {

@@ -4,6 +4,8 @@ import { join, resolve } from "node:path";
 import { resolveProject, type ProjectRoute } from "./projects.ts";
 import type { ProjectBackendStatus } from "../shared/setup.ts";
 import { BackendSupervisor, backendRequest } from "./backend-supervisor.ts";
+import type { Json } from "./backend/storage.ts";
+import { loadConfig } from "./backend/config.ts";
 
 const PLUGIN_ID = "workspace-workbench-paseo";
 
@@ -39,8 +41,24 @@ function pluginRoot(): string | null {
 
 let supervisor: BackendSupervisor | null = null;
 let disposed = false;
-function statusFor(route: ProjectRoute, state: ProjectBackendStatus["state"], message?: string): ProjectBackendStatus {
-  return { state, ...(message ? { message } : {}), socketPath: route.socketPath };
+function statusFor(
+  route: ProjectRoute,
+  state: ProjectBackendStatus["state"],
+  message?: string,
+  health?: Json | null,
+): ProjectBackendStatus {
+  let timing = health?.timing;
+  if (!timing) {
+    try { timing = loadConfig(route.configPath).timing; } catch {}
+  }
+  const instanceId = health?.process?.instanceId || health?.instanceId;
+  return {
+    state,
+    ...(message ? { message } : {}),
+    socketPath: route.socketPath,
+    ...(timing ? { timing } : {}),
+    ...(typeof instanceId === "string" ? { instanceId } : {}),
+  };
 }
 function version(): string { const root = pluginRoot(); return root ? JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version : "0.1.3"; }
 function manager(): BackendSupervisor {
@@ -58,13 +76,16 @@ export async function backendStatus(projectConfig: string): Promise<ProjectBacke
   try {
     const route = resolveProject({ projectConfig });
     const response = await backendRequest(route.socketPath, "observer.health");
-    if (response?.ok && response.result?.implementation === "node" && response.result?.version === version() && response.result?.process?.configPath === route.configPath && !response.result?.process?.closing) return statusFor(route, "ready");
-    manager(); return statusFor(route, "starting", response ? "Backend will be refreshed by the plugin on the next request" : undefined);
+    if (response?.ok && response.result?.implementation === "node" && response.result?.version === version() && response.result?.process?.configPath === route.configPath && !response.result?.process?.closing) return statusFor(route, "ready", undefined, response.result);
+    manager(); return statusFor(route, "starting", response ? "Backend will be refreshed by the plugin on the next request" : undefined, response?.result);
   } catch (error) { return { state: "failed", message: error instanceof Error ? error.message : String(error) }; }
 }
 export async function startBackend(projectConfig: string): Promise<ProjectBackendStatus> {
   try {
-    const route = resolveProject({ projectConfig }); await manager().ensure(route, version()); return statusFor(route, "ready");
+    const route = resolveProject({ projectConfig });
+    await manager().ensure(route, version());
+    const response = await backendRequest(route.socketPath, "observer.health").catch(() => null);
+    return statusFor(route, "ready", undefined, response?.ok ? response.result : null);
   } catch (error) { return { state: "failed", message: error instanceof Error ? error.message : String(error) }; }
 }
 export async function closeBackends(): Promise<void> { disposed = true; await supervisor?.close(); supervisor = null; }

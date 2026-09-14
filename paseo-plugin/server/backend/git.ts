@@ -12,50 +12,126 @@ export type GitFile = {
   binary: boolean;
 };
 let running = 0;
-const waiting: Array<() => void> = [];
-async function gitSlot<T>(operation: () => Promise<T>): Promise<T> {
-  if (running >= 4) await new Promise<void>((resolve) => waiting.push(resolve));
-  else running++;
+type GitWaiter = {
+  resolve: () => void;
+  reject: (error: WorkbenchError) => void;
+  timer?: ReturnType<typeof setTimeout>;
+  settled: boolean;
+};
+const waiting: GitWaiter[] = [];
+function observationTimeout(): WorkbenchError {
+  return new WorkbenchError(
+    "observation_timeout",
+    "observation deadline exceeded while waiting for a Git slot",
+  );
+}
+function removeWaiter(waiter: GitWaiter): void {
+  const index = waiting.indexOf(waiter);
+  if (index >= 0) waiting.splice(index, 1);
+}
+async function acquireGitSlot(deadline?: number): Promise<void> {
+  if (deadline !== undefined && Date.now() >= deadline)
+    throw observationTimeout();
+  if (running < 4) {
+    running++;
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const waiter: GitWaiter = {
+      resolve,
+      reject,
+      settled: false,
+    };
+    const remaining = deadline === undefined ? undefined : deadline - Date.now();
+    if (remaining !== undefined && remaining <= 0) {
+      waiter.settled = true;
+      reject(observationTimeout());
+      return;
+    }
+    waiting.push(waiter);
+    if (remaining !== undefined)
+      waiter.timer = setTimeout(() => {
+        if (waiter.settled) return;
+        removeWaiter(waiter);
+        waiter.settled = true;
+        waiter.reject(observationTimeout());
+      }, remaining);
+  });
+}
+function releaseGitSlot(): void {
+  while (waiting.length) {
+    const waiter = waiting.shift()!;
+    if (waiter.settled) continue;
+    waiter.settled = true;
+    if (waiter.timer) clearTimeout(waiter.timer);
+    waiter.resolve();
+    return;
+  }
+  running--;
+}
+async function gitSlot<T>(operation: () => Promise<T>, deadline?: number): Promise<T> {
+  let acquired = false;
+  await acquireGitSlot(deadline);
+  acquired = true;
   try {
+    if (deadline !== undefined && Date.now() >= deadline)
+      throw observationTimeout();
     return await operation();
   } finally {
-    const next = waiting.shift();
-    if (next) next();
-    else running--;
+    if (acquired) releaseGitSlot();
   }
 }
 export class Git {
   path: string;
   timeout: number;
-  constructor(path: string, timeout = 3000) {
+  deadline?: number;
+  constructor(path: string, timeout = 3000, deadline?: number) {
     this.path = canonical(path);
     this.timeout = timeout;
+    this.deadline = deadline;
   }
   async run(args: string[], check = true) {
     let result;
     try {
       result = await gitSlot(() =>
-        command(
-          "git",
-          ["-c", "core.fsmonitor=false", "-C", this.path, ...args],
-          {
-            cwd: this.path,
-            timeout: this.timeout,
-            env: {
-              ...process.env,
-              GIT_OPTIONAL_LOCKS: "0",
-              GIT_TERMINAL_PROMPT: "0",
-              GIT_EXTERNAL_DIFF: "",
+        {
+          const remaining = this.deadline === undefined
+            ? this.timeout
+            : this.deadline - Date.now();
+          if (remaining <= 0) throw observationTimeout();
+          return command(
+            "git",
+            ["-c", "core.fsmonitor=false", "-C", this.path, ...args],
+            {
+              cwd: this.path,
+              timeout: Math.max(1, Math.min(this.timeout, remaining)),
+              env: {
+                ...process.env,
+                GIT_OPTIONAL_LOCKS: "0",
+                GIT_TERMINAL_PROMPT: "0",
+                GIT_EXTERNAL_DIFF: "",
+              },
             },
-          },
-        ),
+          );
+        },
+        this.deadline,
       );
+      if (this.deadline !== undefined && Date.now() >= this.deadline)
+        throw observationTimeout();
     } catch (error) {
-      if (error instanceof WorkbenchError && error.code === "process_timeout")
-        throw new WorkbenchError("git_timeout", error.message, {
+      if (error instanceof WorkbenchError && error.code === "observation_timeout")
+        throw new WorkbenchError("observation_timeout", error.message, {
           repository: this.path,
           args,
         });
+      if (error instanceof WorkbenchError && error.code === "process_timeout")
+        throw new WorkbenchError(
+          this.deadline !== undefined && Date.now() >= this.deadline
+            ? "observation_timeout"
+            : "git_timeout",
+          error.message,
+          { repository: this.path, args },
+        );
       throw error;
     }
     if (check && result.code !== 0)

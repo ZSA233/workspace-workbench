@@ -2,7 +2,14 @@ import { join } from "node:path";
 import { type Config } from "./config.ts";
 import { atomicJson, issue, optionalJson, type Json } from "./storage.ts";
 
-type Entry = { value: Json; fingerprint: string; time: number; bytes: number };
+type Entry = {
+  value: Json;
+  fingerprint: string;
+  time: number;
+  bytes: number;
+  fingerprintProbed?: boolean;
+};
+type Fingerprint = string | (() => Promise<string> | string);
 const evictOnRefreshFailure = new Set([
   "file_not_changed",
   "path_invalid",
@@ -14,6 +21,8 @@ const evictOnRefreshFailure = new Set([
 export class ObservationCache {
   private entries = new Map<string, Entry>();
   private flights = new Map<string, Promise<Json>>();
+  private probes = new Set<Entry>();
+  private background = new Set<Promise<unknown>>();
   private failures = new Map<string, string>();
   private generation = 0;
   config: Config;
@@ -74,7 +83,7 @@ export class ObservationCache {
       observation,
     };
   }
-  private produce(key: string, fingerprint: string, work: () => Promise<Json>) {
+  private produce(key: string, fingerprint: Fingerprint, work: () => Promise<Json>) {
     const active = this.flights.get(key);
     if (active) return active;
     const generation = this.generation;
@@ -96,6 +105,10 @@ export class ObservationCache {
                     "git_timeout",
                     "observation_timeout",
                     "observer_busy",
+                    "observer_timeout",
+                    "observer_unavailable",
+                    "observer_connection_refused",
+                    "observer_socket_error",
                   ].includes(e.code),
                 );
                 const old = previous.value[field]?.find(
@@ -116,7 +129,10 @@ export class ObservationCache {
         }
         const entry = {
           value,
-          fingerprint,
+          // A function fingerprint is deliberately evaluated after the
+          // observation is produced.  A slow fingerprint must never delay an
+          // existing cached snapshot (or the first useful response).
+          fingerprint: typeof fingerprint === "string" ? fingerprint : "pending",
           time: Date.now(),
           bytes: Buffer.byteLength(JSON.stringify(value)),
         };
@@ -127,6 +143,24 @@ export class ObservationCache {
           if (value.observation?.state && value.observation.state !== "ready")
             this.failures.set(key, value.observation.state);
           else this.failures.delete(key);
+        }
+        if (typeof fingerprint !== "string") {
+          const pending = Promise.resolve()
+            .then(() => fingerprint())
+            .then((nextFingerprint) => {
+              const current = this.entries.get(key);
+              if (generation === this.generation && current === entry) {
+                current.fingerprint = nextFingerprint;
+                current.fingerprintProbed = true;
+              }
+            })
+            .catch(() => {
+              const current = this.entries.get(key);
+              if (generation === this.generation && current === entry)
+                current.fingerprint = "unavailable";
+            });
+          this.background.add(pending);
+          void pending.finally(() => this.background.delete(pending));
         }
         return this.metadata(entry);
       })
@@ -147,15 +181,40 @@ export class ObservationCache {
     this.flights.set(key, flight);
     return flight;
   }
-  async read(key: string, fingerprint: string, work: () => Promise<Json>) {
+  private startFingerprintProbe(
+    key: string,
+    entry: Entry,
+    fingerprint: () => Promise<string> | string,
+    work: () => Promise<Json>,
+  ): void {
+    if (this.probes.has(entry) || entry.fingerprintProbed || entry.fingerprint === "pending") return;
+    this.probes.add(entry);
+    entry.fingerprintProbed = true;
+    const probe = Promise.resolve()
+      .then(() => fingerprint())
+      .then(async (nextFingerprint) => {
+        const current = this.entries.get(key);
+        if (
+          current === entry &&
+          nextFingerprint !== "unavailable" &&
+          nextFingerprint !== entry.fingerprint
+        )
+          await this.produce(key, nextFingerprint, work).catch(() => {});
+      })
+      .catch(() => {})
+      .finally(() => this.probes.delete(entry));
+    this.background.add(probe);
+    void probe.finally(() => this.background.delete(probe));
+  }
+  async read(key: string, fingerprint: Fingerprint, work: () => Promise<Json>) {
     const entry = this.entries.get(key);
-    if (
-      entry &&
-      entry.fingerprint === fingerprint &&
-      Date.now() - entry.time <= this.config.cacheTtl
-    ) {
+    const fingerprintMatches =
+      typeof fingerprint !== "string" || entry?.fingerprint === fingerprint;
+    if (entry && fingerprintMatches && Date.now() - entry.time <= this.config.cacheTtl) {
       this.entries.delete(key);
       this.entries.set(key, entry);
+      if (typeof fingerprint !== "string")
+        this.startFingerprintProbe(key, entry, fingerprint, work);
       return this.metadata(entry);
     }
     if (entry) {
@@ -187,7 +246,8 @@ export class ObservationCache {
     };
   }
   async close() {
-    await Promise.allSettled(this.flights.values());
+    while (this.flights.size || this.background.size)
+      await Promise.allSettled([...this.flights.values(), ...this.background]);
     atomicJson(this.path, { version: 1, entries: [...this.entries] });
   }
 }

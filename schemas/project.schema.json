@@ -105,7 +105,24 @@
       },
       "additionalProperties": false
     },
-    "limits": { "type": "object" },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "gitTimeoutSeconds": { "type": "number", "minimum": 0.5, "maximum": 30 },
+        "observationTimeoutSeconds": {
+          "type": "number",
+          "minimum": 5,
+          "maximum": 600,
+          "description": "Total read-only observation budget. When omitted, gitTimeoutSeconds plus five seconds is used; values below that derived minimum are invalid."
+        },
+        "cacheTtlSeconds": { "type": "number", "minimum": 0.5, "maximum": 60 },
+        "workspaceOperationTimeoutSeconds": { "type": "number", "minimum": 5, "maximum": 600 },
+        "maxDiffBytes": { "type": "number", "minimum": 16384, "maximum": 4194304 },
+        "cacheMaxEntries": { "type": "number", "minimum": 20, "maximum": 10000 },
+        "cacheMaxBytes": { "type": "number", "minimum": 1048576, "maximum": 536870912 }
+      },
+      "additionalProperties": true
+    },
     "cache": {
       "type": "object",
       "properties": {

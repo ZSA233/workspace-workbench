@@ -10,6 +10,11 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { copy, formatCopyFrom, type WorkbenchCopy } from "../shared/copy";
 import { observerQuery, type ObserverResponse } from "../shared/observer";
+import { projectBackendStatus } from "../shared/setup";
+import {
+  DEFAULT_OBSERVATION_TIMING,
+  observationTimingFromWire,
+} from "../shared/observation-timing";
 import {
   buildDiffDisplayRows,
   buildDiffOverviewMarkers,
@@ -34,7 +39,7 @@ import {
   useActiveFileReviewKey,
   useFileReviews,
 } from "./file-review-store";
-import { useLastSuccessfulResponse } from "./observation";
+import { boundedRefresh, useBoundedCacheRefresh, useLastSuccessfulResponse } from "./observation";
 import { IconButton } from "./components/icon-button";
 import { useReviewModePreference } from "./review-preferences";
 import type { ReviewMode } from "./review-mode";
@@ -91,6 +96,23 @@ export function FileReviewPanel(props: FilePanelProps) {
   const { mode, setMode } = useReviewModePreference(hostWorkspaceId, narrow);
   const activeSelection = selections.find((item) => selectionKey(item) === activeKey) || selections.at(-1);
   const rpc = useRpc(observerQuery);
+  const backendStatusRpc = useRpc(projectBackendStatus);
+  const backendStatusQuery = useQuery({
+    queryKey: ["workspace-workbench", "file-review-backend", activeSelection?.projectConfig],
+    queryFn: () => backendStatusRpc({ projectConfig: activeSelection?.projectConfig || "" }),
+    enabled: Boolean(activeSelection?.projectConfig),
+    refetchInterval: DEFAULT_OBSERVATION_TIMING.refreshIntervalsMs.list,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const observationTiming = useMemo(
+    () => observationTimingFromWire(backendStatusQuery.data?.timing),
+    [backendStatusQuery.data?.timing],
+  );
+  const seenBackendInstanceId = useRef<string | null>(null);
+  useEffect(() => {
+    seenBackendInstanceId.current = null;
+  }, [activeSelection?.projectConfig]);
 
   useEffect(() => {
     if (!activeSelection) {
@@ -127,16 +149,33 @@ export function FileReviewPanel(props: FilePanelProps) {
         },
     }),
     enabled: Boolean(activeSelection),
-    refetchInterval: 45_000,
+    refetchInterval: observationTiming.refreshIntervalsMs.repository,
     refetchOnWindowFocus: false,
     retry: false,
-    staleTime: 1_500,
+    staleTime: observationTiming.clientQueryStaleTimeMs,
   });
   const diffState = useLastSuccessfulResponse(
     `file-review:${hostWorkspaceId}:${activeSelection ? selectionKey(activeSelection) : ""}`,
     diffQuery.data,
-    { error: diffQuery.error },
+    { error: diffQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository },
   );
+  useBoundedCacheRefresh(
+    `file-review:${hostWorkspaceId}:${activeSelection ? selectionKey(activeSelection) : ""}`,
+    diffQuery.data,
+    diffQuery.refetch,
+    observationTiming.followUpDelaysMs,
+  );
+  useEffect(() => {
+    const instanceId = backendStatusQuery.data?.instanceId;
+    if (!instanceId) return;
+    if (seenBackendInstanceId.current === null) {
+      seenBackendInstanceId.current = instanceId;
+      return;
+    }
+    if (seenBackendInstanceId.current === instanceId) return;
+    seenBackendInstanceId.current = instanceId;
+    void boundedRefresh(diffQuery.refetch(), observationTiming.clientRefreshTimeoutMs);
+  }, [backendStatusQuery.data?.instanceId, diffQuery.refetch, observationTiming.clientRefreshTimeoutMs]);
   const durableFailure = diffQuery.data && !diffQuery.data.ok && ["file_not_changed", "path_invalid", "worktree_missing", "commit_missing", "base_missing"].includes(diffQuery.data.error?.code || "");
   const diff = durableFailure ? null : resultOf<DiffResult>(diffState.response);
   const error = responseErrorLabel(diffQuery.data, diffQuery.error, Boolean(diff), copy);

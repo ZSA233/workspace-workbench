@@ -16,7 +16,9 @@ The source is under `server/` because Paseo only bundles plugin imports from
   prepared runtime records, project Go/NPM/pip caches and explicit local execution.
 - `identity.ts`: Git and file digests used in frozen handoffs/review snapshots.
 - `observation.ts`, `review.ts`, `cache.ts`: roster, graph/diff, review sets, bounded
-  single-flight stale-while-revalidate observations with disk persistence.
+  single-flight stale-while-revalidate observations with disk persistence. The shared
+  `shared/observation-timing.ts` policy derives Git, observation, bridge and client
+  budgets while keeping mutation/reviewer/lifecycle budgets independent.
 - `service.ts`, `transport.ts`, `main.ts`: protocol dispatch, bounded JSONL transport,
   socket ownership, draining and process entry.
 - `server/backend-supervisor.ts`: plugin-generation ownership, project isolation,

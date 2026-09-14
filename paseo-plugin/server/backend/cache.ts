@@ -3,6 +3,13 @@ import { type Config } from "./config.ts";
 import { atomicJson, issue, optionalJson, type Json } from "./storage.ts";
 
 type Entry = { value: Json; fingerprint: string; time: number; bytes: number };
+const evictOnRefreshFailure = new Set([
+  "file_not_changed",
+  "path_invalid",
+  "worktree_missing",
+  "commit_missing",
+  "base_missing",
+]);
 /** Bounded derived observations; legacy SQLite is retained, never migrated destructively. */
 export class ObservationCache {
   private entries = new Map<string, Entry>();
@@ -39,23 +46,32 @@ export class ObservationCache {
     }
   }
   private metadata(entry: Entry, refreshing = false): Json {
+    const sourceObservation = entry.value.observation || {};
+    const observation = { ...sourceObservation };
+    const observationState = observation.state || "ready";
+    const ageMs = Math.max(0, Date.now() - entry.time);
+    const observedAt = observation.observedAt;
+    const cacheState = refreshing
+      ? "refreshing"
+      : observationState !== "ready"
+        ? "degraded"
+        : "fresh";
+    observation.cacheState = cacheState;
+    observation.cacheAgeMs = ageMs;
+    observation.refreshing = refreshing;
+    if (!observation.lastObservedAt && observedAt)
+      observation.lastObservedAt = observedAt;
+    if (!observation.lastSuccessfulAt && observationState === "ready")
+      observation.lastSuccessfulAt = observedAt;
     return {
       ...entry.value,
       cache: {
         state: refreshing ? "refreshing" : "fresh",
         refreshing,
         updatedAt: new Date(entry.time).toISOString(),
-        ageMs: Date.now() - entry.time,
+        ageMs,
       },
-      observation: {
-        ...entry.value.observation,
-        ...(refreshing ? { state: "refreshing" } : {}),
-        lastSuccessfulAt:
-          entry.value.observation?.lastSuccessfulAt ||
-          (entry.value.observation?.state === "ready"
-            ? entry.value.observation?.observedAt
-            : undefined),
-      },
+      observation,
     };
   }
   private produce(key: string, fingerprint: string, work: () => Promise<Json>) {
@@ -115,8 +131,12 @@ export class ObservationCache {
         return this.metadata(entry);
       })
       .catch((error) => {
-        this.entries.delete(key);
-        this.failures.set(key, issue(error).code);
+        const code = issue(error).code;
+        // A background refresh is stale-while-revalidate: transient failures
+        // must leave the last good entry available for the next request. Only
+        // errors that make this cache key permanently invalid evict it.
+        if (evictOnRefreshFailure.has(code)) this.entries.delete(key);
+        this.failures.set(key, code);
         if (this.failures.size > 256)
           this.failures.delete(this.failures.keys().next().value!);
         throw error;

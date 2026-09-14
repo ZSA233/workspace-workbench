@@ -67,6 +67,24 @@ export function classifyObservationResponse(response: ObserverResponse | undefin
   return state === "ready" ? "ready" : state === "partial" ? "degraded" : "unavailable";
 }
 
+/**
+ * Cache revalidation is a transport/cache lifecycle marker, not an
+ * observation failure. Keep this status calculation based on the semantic
+ * observation state so a stale ready response cannot become degraded merely
+ * because the backend is refreshing it in the background.
+ */
+export function observationStatusFor(
+  response: ObserverResponse | undefined,
+  failed: boolean,
+  expired: boolean,
+): ObservationStatus {
+  if (!response) return failed ? "unavailable" : "loading";
+  if (expired) return "expired";
+  return failed || responseObservationState(response) !== "ready"
+    ? "degraded"
+    : "fresh";
+}
+
 function observedAt(response: ObserverResponse): string {
   const result = response.result;
   if (result && typeof result === "object") {
@@ -168,13 +186,7 @@ export function useLastSuccessfulResponse(
     : 0;
   const staleAfterMs = Math.max(1_000, options.staleAfterMs || STALE_AFTER_MS);
   const expired = Boolean(displayResponse && (entry.failureCount >= STALE_FAILURE_LIMIT || failureAge >= staleAfterMs));
-  const status: ObservationStatus = !displayResponse
-    ? failed ? "unavailable" : "loading"
-    : expired
-      ? "expired"
-      : failed || responseObservationState(displayResponse) !== "ready"
-        ? "degraded"
-        : "fresh";
+  const status = observationStatusFor(displayResponse, failed, expired);
 
   return {
     response: displayResponse,

@@ -46,6 +46,7 @@ type Harness = {
   setModels(models: Array<Record<string, unknown>>): void;
   setExecutionBusy(busy: boolean, turnId?: string): void;
   setReviewerBusy(busy: boolean): void;
+  setReviewerWaitResults(results: Array<{ status: "idle" | "timeout" | "permission" | "failed"; error?: string; lastMessage?: string }>): void;
   cleanup(): void;
 };
 
@@ -73,6 +74,7 @@ function harness(): Harness {
   const sent: string[] = [];
   const reviewerSent: string[] = [];
   const reviewerCreate: Array<Record<string, unknown>> = [];
+  let reviewerWaitResults: Array<{ status: "idle" | "timeout" | "permission" | "failed"; error?: string; lastMessage?: string }> = [];
   let runtime: Record<string, unknown> = {
     workspaceId: "managed-fixture",
     managed: true,
@@ -109,7 +111,7 @@ function harness(): Harness {
   const reviewerHandle = {
     id: reviewerAgent.id,
     refresh: async () => ({ agent: reviewerAgent, project: null }),
-    waitForFinish: async () => await new Promise<never>(() => {}),
+    waitForFinish: async () => reviewerWaitResults.shift() || await new Promise<never>(() => {}),
     send: async (message: string) => { reviewerSent.push(message); },
   };
   const context = {
@@ -138,6 +140,7 @@ function harness(): Harness {
     setModels(next) { models = next; },
     setExecutionBusy(busy, turnId = "busy") { executionAgent.activeTurn = busy ? { turnId } : null; },
     setReviewerBusy(busy) { reviewerAgent.activeTurn = busy ? { turnId: "review-turn" } : null; reviewerAgent.status = busy ? "running" : "idle"; },
+    setReviewerWaitResults(results) { reviewerWaitResults = [...results]; },
     cleanup() { rmSync(root, { recursive: true, force: true }); },
   };
 }
@@ -233,6 +236,112 @@ test("coordinator waits while busy, receives once, binds acceptance to turn and 
     assert.equal(switched.ok, true);
     assert.equal(switched.session?.roundTarget, "independent");
     assert.equal(switched.session?.preferences.reviewerTarget, "coordinator");
+  });
+});
+
+test("coordinator soft timeout keeps an active turn reviewing and accepts its late result", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    await handleReviewSettingsUpdate({ projectConfig: fixture.config, scope: "project", patch: { reviewerTarget: "coordinator" }, resetFields: [] });
+    putAgentBinding({ workspaceId: "managed-fixture", agentId: "execution-fixture", requestedByAgentId: "reviewer-fixture", relationship: "independent", paseoWorkspaceId: "managed-fixture", cwd: fixture.root, provider: "codex/model-a", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    writeState("context:coordinator-timeout-test", { agentId: "reviewer-fixture", cwd: fixture.root });
+    let session = await startReview({ workspaceId: "managed-fixture", projectConfig: fixture.config, executionAgentId: "execution-fixture" }, fixture.context);
+    fixture.setReviewerBusy(false);
+    await tickCoordinatorReviews(fixture.context);
+    await tickCoordinatorReviews(fixture.context);
+    session = readReviewSession("managed-fixture")!;
+    const input = { projectConfig: fixture.config, workspaceId: session.workspaceId, sessionId: session.id, assignmentId: session.coordinator!.messageId, round: session.round, token: "coordinator-timeout-test", action: "read" as const };
+    fixture.setReviewerBusy(true);
+    await handleCoordinatorReview(input, fixture.context);
+    const accepted = readReviewSession(session.workspaceId)!;
+    const acceptedAt = new Date(Date.now() - accepted.preferences.reviewerTimeoutMs - 1_000).toISOString();
+    writeReviewState(`agent-review:session:${accepted.workspaceId}:${accepted.id}`, { ...accepted, coordinator: { ...accepted.coordinator!, acceptedAt, timeoutAt: null, hardTimeoutAt: null } });
+    await tickCoordinatorReviews(fixture.context);
+    const softTimedOut = readReviewSession(session.workspaceId)!;
+    assert.equal(softTimedOut.status, "reviewing");
+    assert.equal(softTimedOut.coordinator?.phase, "accepted");
+    assert.ok(softTimedOut.coordinator?.timeoutAt);
+    assert.ok(softTimedOut.coordinator?.hardTimeoutAt);
+
+    const result = await recordReviewerResult({
+      workspaceId: softTimedOut.workspaceId,
+      sessionId: softTimedOut.id,
+      reviewerAgentId: softTimedOut.reviewerAgentId!,
+      token: reviewAuthToken(softTimedOut.id)!,
+      result: { verdict: "approved", summary: "Approved after the soft timeout", findings: [], checks: [], unreviewed: [], snapshotId: softTimedOut.snapshotId, diffId: softTimedOut.diffId },
+    }, fixture.context);
+    assert.equal(result.accepted, true);
+    assert.equal(result.session?.status, "reviewing");
+    writeReviewState("agent-review:turn:reviewer-fixture:review-turn", { outcome: "completed", endedAt: new Date().toISOString() });
+    await tickCoordinatorReviews(fixture.context);
+    assert.equal(readReviewSession(session.workspaceId)?.status, "approved");
+  });
+});
+
+test("coordinator hard timeout enters stopping, cancels the exact turn, and fails only after it ends", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    await handleReviewSettingsUpdate({ projectConfig: fixture.config, scope: "project", patch: { reviewerTarget: "coordinator" }, resetFields: [] });
+    putAgentBinding({ workspaceId: "managed-fixture", agentId: "execution-fixture", requestedByAgentId: "reviewer-fixture", relationship: "independent", paseoWorkspaceId: "managed-fixture", cwd: fixture.root, provider: "codex/model-a", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    writeState("context:coordinator-hard-timeout-test", { agentId: "reviewer-fixture", cwd: fixture.root });
+    let session = await startReview({ workspaceId: "managed-fixture", projectConfig: fixture.config, executionAgentId: "execution-fixture" }, fixture.context);
+    fixture.setReviewerBusy(false);
+    await tickCoordinatorReviews(fixture.context);
+    await tickCoordinatorReviews(fixture.context);
+    session = readReviewSession("managed-fixture")!;
+    const input = { projectConfig: fixture.config, workspaceId: session.workspaceId, sessionId: session.id, assignmentId: session.coordinator!.messageId, round: session.round, token: "coordinator-hard-timeout-test", action: "read" as const };
+    fixture.setReviewerBusy(true);
+    await handleCoordinatorReview(input, fixture.context);
+    const accepted = readReviewSession(session.workspaceId)!;
+    const old = new Date(Date.now() - accepted.preferences.reviewerTimeoutMs * 2 - 1_000).toISOString();
+    writeReviewState(`agent-review:session:${accepted.workspaceId}:${accepted.id}`, { ...accepted, coordinator: { ...accepted.coordinator!, acceptedAt: old, timeoutAt: old, hardTimeoutAt: old } });
+    const cancelled: string[] = [];
+    const timeoutContext = { ...fixture.context, paseo: { ...fixture.context.paseo, cancelAgent: async (agentId: string) => { cancelled.push(agentId); fixture.setReviewerBusy(false); } } } as AgentContext;
+    await tickCoordinatorReviews(timeoutContext);
+    const stopping = readReviewSession(session.workspaceId)!;
+    assert.equal(stopping.status, "stopping");
+    assert.equal(stopping.coordinator?.phase, "stopping");
+    assert.deepEqual(cancelled, ["reviewer-fixture"]);
+
+    const handlers = new Map<string, (...args: any[]) => Promise<void>>();
+    const server = { on(name: string, handler: (...args: any[]) => Promise<void>) { handlers.set(name, handler); return () => {}; } };
+    const cleanup = registerReviewLifecycle(server as unknown as Parameters<typeof registerReviewLifecycle>[0]);
+    try {
+      await handlers.get("agent.turn_ended")!({ agent: { id: "reviewer-fixture" }, turnId: "review-turn", outcome: { kind: "cancelled" } }, timeoutContext);
+    } finally {
+      cleanup();
+    }
+    const failed = readReviewSession(session.workspaceId)!;
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.lastError?.code, "reviewer_timeout");
+  });
+});
+
+test("independent Reviewer timeout uses the same stopping lifecycle", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    fixture.setReviewerBusy(true);
+    fixture.setReviewerWaitResults([{ status: "timeout" }, { status: "timeout" }]);
+    const cancelled: string[] = [];
+    const timeoutContext = { ...fixture.context, paseo: { ...fixture.context.paseo, cancelAgent: async (agentId: string) => { cancelled.push(agentId); fixture.setReviewerBusy(false); } } } as AgentContext;
+    const session = await startReview({ projectConfig: fixture.config, workspaceId: "managed-fixture", executionAgentId: "execution-fixture" }, timeoutContext);
+    for (let index = 0; index < 5; index += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+    const stopping = readReviewSession(session.workspaceId)!;
+    assert.equal(stopping.status, "stopping");
+    assert.equal(stopping.lastError?.code, "reviewer_timeout");
+    assert.deepEqual(cancelled, ["reviewer-fixture"]);
+
+    const handlers = new Map<string, (...args: any[]) => Promise<void>>();
+    const server = { on(name: string, handler: (...args: any[]) => Promise<void>) { handlers.set(name, handler); return () => {}; } };
+    const cleanup = registerReviewLifecycle(server as unknown as Parameters<typeof registerReviewLifecycle>[0]);
+    try {
+      await handlers.get("agent.turn_ended")!({ agent: { id: "reviewer-fixture" }, turnId: "review-turn", outcome: { kind: "cancelled" } }, timeoutContext);
+    } finally {
+      cleanup();
+    }
+    const failed = readReviewSession(session.workspaceId)!;
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.lastError?.code, "reviewer_timeout");
   });
 });
 

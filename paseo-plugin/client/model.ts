@@ -1,3 +1,5 @@
+import type { ReviewEvent } from "../shared/agent-review.ts";
+
 export type WorkspaceFilter = "all" | "attention" | "dirty" | "unpushed" | "history";
 export type ChangeScope = "branch" | "working" | "commit";
 export type ObserverSectionId = "repositories" | "graph" | "changes";
@@ -9,6 +11,29 @@ export type SectionLayoutPreference = {
 };
 
 export type ObserverSectionLayout = Record<ObserverSectionId, SectionLayoutPreference>;
+
+/**
+ * Queue delivery is persisted as several lifecycle events so recovery can
+ * distinguish uncertain delivery from confirmed delivery. The timeline is a
+ * user-facing summary, so consecutive queue phases in the same round share
+ * one visible entry while the raw events remain available through the Events
+ * RPC.
+ */
+export function collapseReviewTimelineEvents(events: ReviewEvent[]): ReviewEvent[] {
+  const visible: ReviewEvent[] = [];
+  for (const event of events) {
+    const previous = visible.at(-1);
+    const previousRound = previous?.details?.round;
+    const eventRound = event.details?.round;
+    const sameRound = typeof previousRound !== "number" || typeof eventRound !== "number" || previousRound === eventRound;
+    if (event.kind === "review_queued" && previous?.kind === "review_queued" && sameRound) {
+      visible[visible.length - 1] = event;
+    } else {
+      visible.push(event);
+    }
+  }
+  return visible;
+}
 
 const sectionIds: ObserverSectionId[] = ["repositories", "graph", "changes"];
 const sectionAutoMaxHeights: Record<ObserverSectionId, number> = {

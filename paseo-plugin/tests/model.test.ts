@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildDiffDisplayRows,
   buildDiffOverviewMarkers,
+  collapseReviewTimelineEvents,
   buildTreeRows,
   defaultTreeMode,
   diffDisplayRowMetrics,
@@ -27,6 +28,24 @@ function workspace(id: string, fields: Partial<Workspace> = {}): Workspace {
 function file(path: string, status = "M"): FileChange {
   return { path, status, statusLabel: "Modified", additions: 1, deletions: 1 };
 }
+
+function reviewEvent(sequence: number, kind: "review_queued" | "review_started", round: number): import("../shared/agent-review.ts").ReviewEvent {
+  return {
+    id: `event-${sequence}`,
+    sequence,
+    createdAt: new Date(2026, 0, 1, 0, 0, sequence).toISOString(),
+    kind,
+    summary: `${kind}-${sequence}`,
+    details: { round },
+  };
+}
+
+test("review timeline collapses consecutive queue phases without changing raw event order", () => {
+  const events = [reviewEvent(1, "review_queued", 1), reviewEvent(2, "review_queued", 1), reviewEvent(3, "review_queued", 1), reviewEvent(4, "review_started", 1), reviewEvent(5, "review_queued", 2)];
+  const visible = collapseReviewTimelineEvents(events);
+  assert.deepEqual(visible.map((event) => event.id), ["event-3", "event-4", "event-5"]);
+  assert.deepEqual(events.map((event) => event.id), ["event-1", "event-2", "event-3", "event-4", "event-5"]);
+});
 
 test("workspace sorting and filters preserve the main workspace and activity order", () => {
   const sorted = sortWorkspaces([

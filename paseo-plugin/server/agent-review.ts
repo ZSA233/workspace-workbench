@@ -1065,32 +1065,56 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
   return active;
 }
 
+async function reviewerTurnIsActive(handle: PaseoAgentHandle, session: ReviewSession): Promise<boolean | null> {
+  if (!session.reviewerTurnId || session.reviewerAgentId !== handle.id) return false;
+  try {
+    const refreshed = await handle.refresh();
+    if (!refreshed?.agent || refreshed.agent.id !== handle.id) return null;
+    return refreshed.agent.activeTurn?.turnId === session.reviewerTurnId;
+  } catch {
+    return null;
+  }
+}
+
 function monitorReviewer(handle: PaseoAgentHandle, session: ReviewSession, context: AgentContext): void {
   const monitorKey = `${session.id}:${session.round}:${handle.id}`;
   if (reviewerMonitors.has(monitorKey)) return;
   reviewerMonitors.add(monitorKey);
   void handle.waitForFinish(session.preferences.reviewerTimeoutMs).then(async (result) => {
-    const latest = readSession(session.workspaceId, session.id);
+    let latest = readSession(session.workspaceId, session.id);
     if (!latest || latest.status !== "reviewing" || latest.reviewerAgentId !== handle.id) return;
-    if (result.status !== "idle") {
-      const code = result.status === "timeout"
+    let observed = result;
+    if (result.status === "timeout") {
+      const active = await reviewerTurnIsActive(handle, latest);
+      if (active === null) return;
+      if (active) {
+        observed = await handle.waitForFinish(session.preferences.reviewerTimeoutMs);
+        latest = readSession(session.workspaceId, session.id);
+        if (!latest || latest.status !== "reviewing" || latest.reviewerAgentId !== handle.id) return;
+        if (observed.status === "timeout") {
+          const stillActive = await reviewerTurnIsActive(handle, latest);
+          if (stillActive === null) return;
+          if (stillActive) {
+            await stopTimedOutReviewer(latest, context);
+            return;
+          }
+        }
+      }
+    }
+    if (observed.status !== "idle") {
+      const code = observed.status === "timeout"
         ? "reviewer_timeout"
-        : result.status === "permission"
+        : observed.status === "permission"
           ? "reviewer_permission_required"
           : "reviewer_turn_failed";
-      let cancellation: { code: string; message: string } | null = null;
-      if (result.status === "timeout") {
-        try { await cancelAgentIfSupported(context, handle.id); }
-        catch (error) { cancellation = errorInfo(error, "Timed-out Reviewer could not be cancelled"); }
-      }
-      const details = { status: result.status, error: result.error || null, ...(cancellation ? { cancellation } : {}) };
-      persistSession({ ...latest, status: result.status === "permission" ? "blocked" : "failed", lastError: { code, message: result.error || code } }, { kind: result.status === "permission" ? "blocked" : "failed", summary: result.status === "permission" ? "Reviewer is waiting for permission" : "Reviewer did not finish", details });
+      const details = { status: observed.status, error: observed.error || null };
+      persistSession({ ...latest, status: observed.status === "permission" ? "blocked" : "failed", lastError: { code, message: observed.error || code } }, { kind: observed.status === "permission" ? "blocked" : "failed", summary: observed.status === "permission" ? "Reviewer is waiting for permission" : "Reviewer did not finish", details });
       return;
     }
     // The dedicated MCP result is authoritative. A JSON-looking final chat
     // message is not a review result and must not bypass the Reviewer tool
     // boundary or its snapshot validation.
-    const parsed = reviewResultSchema.safeParse(parseStructuredResult(result.lastMessage || ""));
+    const parsed = reviewResultSchema.safeParse(parseStructuredResult(observed.lastMessage || ""));
     const candidate = latest.pendingReviewerResult;
     if (candidate) {
       const recorded = await recordReviewerResult({ sessionId: latest.id, workspaceId: latest.workspaceId, reviewerAgentId: handle.id, token: readReviewState<ReviewAuth>(authKey(latest.id))?.token || "", result: candidate, finalize: true }, context).catch((error) => ({ ok: false, accepted: false, session: null, error: errorInfo(error) }));
@@ -1153,7 +1177,7 @@ async function startReviewer(session: ReviewSession, context: AgentContext): Pro
     const binding = getAgentBinding(session.workspaceId);
     return persistSession({ ...session, status: "queued", reviewerAgentId: null, reviewerTurnId: null,
       coordinator: { agentId: binding?.parentAgentId || binding?.requestedByAgentId || null, phase: "waiting", queuedAt: now(),
-        messageId: randomUUID(), acceptedAt: null } }, { kind: "review_queued", summary: "等待主控空闲", details: {} });
+        messageId: randomUUID(), acceptedAt: null, timeoutAt: null, hardTimeoutAt: null } }, { kind: "review_queued", summary: "等待主控空闲", details: {} });
   }
   return ensureReviewer(session, runtime, context);
 }
@@ -1412,7 +1436,15 @@ async function recordReviewerResultInternal(input: { workspaceId: string; sessio
   if (!session) throw new Error("review_session_not_found");
   const auth = readReviewState<ReviewAuth>(authKey(session.id));
   if (!reviewerContextMatches(session, auth, { token: input.token, workspaceId: input.workspaceId, reviewerAgentId: input.reviewerAgentId })) throw new Error("reviewer_context_invalid");
-  if (session.status !== "reviewing") return { ok: true, session, accepted: false, error: { code: "review_not_active", message: "This Reviewer result arrived after the review stopped or completed" } };
+  const canFinalizeStoppingCoordinator = input.finalize
+    && session.status === "stopping"
+    && session.roundTarget === "coordinator"
+    && session.coordinator?.phase === "stopping";
+  const canFinalizeTimedOutReviewer = input.finalize
+    && session.status === "stopping"
+    && session.lastError?.code === "reviewer_timeout"
+    && (session.roundTarget === "independent" || canFinalizeStoppingCoordinator);
+  if (session.status !== "reviewing" && !canFinalizeTimedOutReviewer) return { ok: true, session, accepted: false, error: { code: "review_not_active", message: "This Reviewer result arrived after the review stopped or completed" } };
   if (session.materials) validateReportMaterials(session.workspaceId, session.materials.version);
   const parsed = reviewResultSchema.safeParse(input.result);
   if (!parsed.success) return { ok: false, session, accepted: false, error: { code: "reviewer_invalid_result", message: parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ") } };
@@ -1459,7 +1491,8 @@ async function recordReviewerResultInternal(input: { workspaceId: string; sessio
     return { ok: true, session: candidate, accepted: true };
   }
   let nextStatus: ReviewSession["status"] = result.verdict === "approved" ? "approved" : result.verdict === "blocked" ? "blocked" : session.round >= session.maxRounds ? "limit_reached" : "changes_requested";
-  let next = persistSession({ ...session, status: nextStatus, pendingReviewerResult: null, latestResult: result, pendingOperation: null, lastError: null }, { kind: "review_result", summary: result.summary, details: { verdict: result.verdict, findings: result.findings, checks: result.checks, criterionChecks: result.criterionChecks, unreviewed: result.unreviewed, snapshotId: result.snapshotId, diffId: result.diffId, formal: true } });
+  let next = persistSession({ ...session, status: nextStatus, pendingReviewerResult: null, latestResult: result, pendingOperation: null, stopAgentIds: [], lastError: null,
+    coordinator: session.coordinator?.phase === "stopping" ? { ...session.coordinator, phase: "revoked" } : session.coordinator }, { kind: "review_result", summary: result.summary, details: { verdict: result.verdict, findings: result.findings, checks: result.checks, criterionChecks: result.criterionChecks, unreviewed: result.unreviewed, snapshotId: result.snapshotId, diffId: result.diffId, formal: true } });
   if (["approved", "blocked", "limit_reached"].includes(nextStatus)) {
     next = persistSession(next, {
       kind: "finished",
@@ -1691,7 +1724,7 @@ export async function handleCoordinatorReview(input: typeof coordinatorReview.in
         const token = randomUUID();
         writeReviewState(authKey(session.id), { token, workspaceId: session.workspaceId, reviewerAgentId: identity.agentId });
         session = persistSession({ ...session, status: "reviewing", reviewerAgentId: identity.agentId, reviewerTurnId: turnId,
-          coordinator: { ...session.coordinator, phase: "accepted", acceptedAt: now() } }, { kind: "review_started", summary: "Coordinator accepted review", details: { turnId } });
+          coordinator: { ...session.coordinator, phase: "accepted", acceptedAt: now(), timeoutAt: null, hardTimeoutAt: null } }, { kind: "review_started", summary: "Coordinator accepted review", details: { turnId } });
       }
       return { ok: true, snapshot: session.snapshot, handoff: session.handoff, materials: session.materials, supplements: session.materials ? [] : readState(`session-supplements:${session.workspaceId}:${session.executionAgentId}`) || [],
         instructions: `${session.materials ? "First use workbench_handoff_read with the returned materials bundle to read HANDOFF.md, SOURCES.md and required originals. " : ""}Review only. Do not edit files. Submit workbench_review_result for this round, then end this turn; the worker handles required repairs.` };
@@ -1701,6 +1734,58 @@ export async function handleCoordinatorReview(input: typeof coordinatorReview.in
     if (!auth) throw new Error("coordinator_review_revoked");
     return recordReviewerResultInternal({ workspaceId: session.workspaceId, sessionId: session.id, reviewerAgentId: identity.agentId, token: auth.token, result: input.result }, context);
   });
+}
+
+type CoordinatorTurnInspection = "active" | "ended" | "changed" | "unknown";
+
+async function inspectCoordinatorTurn(session: ReviewSession, context: AgentContext): Promise<CoordinatorTurnInspection> {
+  const agentId = session.reviewerAgentId;
+  const turnId = session.reviewerTurnId;
+  if (!agentId || !turnId || session.coordinator?.agentId !== agentId) return "changed";
+  try {
+    const refreshed = await context.paseo.agents.ref(agentId).refresh();
+    const agent = refreshed?.agent;
+    if (!agent || agent.id !== agentId) return "unknown";
+    if (agent.activeTurn?.turnId === turnId) return "active";
+    return agent.activeTurn ? "changed" : "ended";
+  } catch {
+    return "unknown";
+  }
+}
+
+function coordinatorTimeoutWindow(session: ReviewSession): { timeoutAt: string; hardTimeoutAt: string } | null {
+  const acceptedAt = session.coordinator?.acceptedAt ? Date.parse(session.coordinator.acceptedAt) : NaN;
+  if (!Number.isFinite(acceptedAt)) return null;
+  const configuredTimeoutAt = session.coordinator?.timeoutAt ? Date.parse(session.coordinator.timeoutAt) : NaN;
+  const softTimeout = Number.isFinite(configuredTimeoutAt) ? configuredTimeoutAt : acceptedAt + session.preferences.reviewerTimeoutMs;
+  const configuredHardTimeoutAt = session.coordinator?.hardTimeoutAt ? Date.parse(session.coordinator.hardTimeoutAt) : NaN;
+  const hardTimeout = Number.isFinite(configuredHardTimeoutAt) ? configuredHardTimeoutAt : softTimeout + session.preferences.reviewerTimeoutMs;
+  return { timeoutAt: new Date(softTimeout).toISOString(), hardTimeoutAt: new Date(hardTimeout).toISOString() };
+}
+
+function failReviewSession(session: ReviewSession, code: string, message: string, details: Record<string, unknown> = {}): ReviewSession {
+  removeReviewState(authKey(session.id));
+  return persistSession({ ...session, status: "failed", pendingReviewerResult: null, stopAgentIds: [], pendingOperation: null,
+    coordinator: session.coordinator ? { ...session.coordinator, phase: "revoked" } : null, lastError: { code, message } },
+    { kind: "failed", summary: message, details });
+}
+
+async function stopTimedOutReviewer(session: ReviewSession, context: AgentContext): Promise<void> {
+  const agentId = session.reviewerAgentId;
+  const pending = session.coordinator;
+  if (!agentId || session.reviewerTurnId === null || (session.roundTarget === "coordinator" && (!pending || pending.agentId !== agentId))) return;
+  const stopping = persistSession({ ...session, status: "stopping", stopAgentIds: [agentId],
+    pendingOperation: { kind: "cancel", requestId: randomUUID(), createdAt: now() },
+    coordinator: pending ? { ...pending, phase: "stopping" } : null,
+    lastError: { code: "reviewer_timeout", message: "Reviewer exceeded its time limit; stopping the review" } });
+  try {
+    await cancelAgentIfSupported(context, agentId);
+  } catch (error) {
+    const latest = readSession(stopping.workspaceId, stopping.id);
+    if (latest?.status === "stopping" && (latest.roundTarget !== "coordinator" || latest.coordinator?.phase === "stopping")) {
+      persistSession({ ...latest, lastError: errorInfo(error, "Timed-out Reviewer could not be cancelled") });
+    }
+  }
 }
 
 export async function tickCoordinatorReviews(context: AgentContext): Promise<void> {
@@ -1726,10 +1811,25 @@ export async function tickCoordinatorReviews(context: AgentContext): Promise<voi
             await recordReviewerResultInternal({ workspaceId: session.workspaceId, sessionId: session.id, reviewerAgentId: session.reviewerAgentId, token: auth.token, result: session.pendingReviewerResult, finalize: true }, context);
             return;
           }
-          if (pending.acceptedAt && Date.now() - Date.parse(pending.acceptedAt) > session.preferences.reviewerTimeoutMs) {
-            removeReviewState(authKey(session.id));
-            persistSession({ ...session, status: "failed", pendingReviewerResult: null, coordinator: { ...pending, phase: "revoked" }, lastError: { code: "reviewer_timeout", message: "Coordinator review timed out" } }, { kind: "failed", summary: "Coordinator review timed out", details: {} });
+          if (ended) {
+            failReviewSession(session, ended.outcome === "completed" ? "coordinator_review_incomplete" : "reviewer_turn_failed",
+              ended.outcome === "completed" ? "Review turn ended without a completed structured result" : `Coordinator review ended with ${ended.outcome}`,
+              { outcome: ended.outcome, turnId: session.reviewerTurnId });
+            return;
           }
+          const timeoutWindow = coordinatorTimeoutWindow(session);
+          if (!timeoutWindow || Date.now() < Date.parse(timeoutWindow.timeoutAt)) return;
+          const inspection = await inspectCoordinatorTurn(session, context);
+          if (inspection === "unknown" || inspection === "ended") return;
+          if (inspection === "changed") {
+            failReviewSession(session, "reviewer_turn_changed", "Coordinator review turn changed before the review completed", { expectedTurnId: session.reviewerTurnId });
+            return;
+          }
+          if (!pending.timeoutAt || !pending.hardTimeoutAt) {
+            persistSession({ ...session, coordinator: { ...pending, timeoutAt: timeoutWindow.timeoutAt, hardTimeoutAt: timeoutWindow.hardTimeoutAt } });
+            return;
+          }
+          if (Date.now() >= Date.parse(timeoutWindow.hardTimeoutAt)) await stopTimedOutReviewer(session, context);
           return;
         }
         if (pending.phase === "uncertain" && pending.agentId) {
@@ -1776,14 +1876,27 @@ export function registerReviewLifecycle(server: PluginServerContext): () => void
         await withProject({ projectConfig: project.configPath }, async () => {
           await handleReviewTurnEnded(event, context);
           for (const session of storedReviewSessions()) {
-            if (session.roundTarget !== "coordinator" || session.status !== "reviewing" || session.reviewerAgentId !== event.agent.id || session.reviewerTurnId !== event.turnId) continue;
+            if (session.roundTarget !== "coordinator" || !["reviewing", "stopping"].includes(session.status) || session.reviewerAgentId !== event.agent.id || session.reviewerTurnId !== event.turnId) continue;
             await withReviewTransitionLock(session.workspaceId, async () => {
               const latest = readSession(session.workspaceId, session.id);
-              if (!latest || latest.status !== "reviewing") return;
+              if (!latest || !["reviewing", "stopping"].includes(latest.status)) return;
               const auth = readReviewState<ReviewAuth>(authKey(latest.id));
               if (event.outcome.kind === "completed" && latest.pendingReviewerResult && auth) {
                 await recordReviewerResultInternal({ workspaceId: latest.workspaceId, sessionId: latest.id, reviewerAgentId: event.agent.id, token: auth.token, result: latest.pendingReviewerResult, finalize: true }, context);
+              } else if (latest.status === "stopping" && latest.coordinator?.phase === "stopping") {
+                failReviewSession(latest, "reviewer_timeout", "Coordinator review timed out before it produced a completed result", { outcome: event.outcome.kind, turnId: event.turnId });
               } else persistSession({ ...latest, status: "failed", lastError: { code: "coordinator_review_incomplete", message: "Review turn ended without a completed structured result" } }, { kind: "failed", summary: "Coordinator review incomplete", details: {} });
+            });
+          }
+          for (const session of storedReviewSessions()) {
+            if (session.roundTarget !== "independent" || session.status !== "stopping" || session.lastError?.code !== "reviewer_timeout" || session.reviewerAgentId !== event.agent.id || session.reviewerTurnId !== event.turnId) continue;
+            await withReviewTransitionLock(session.workspaceId, async () => {
+              const latest = readSession(session.workspaceId, session.id);
+              if (!latest || latest.status !== "stopping" || latest.lastError?.code !== "reviewer_timeout") return;
+              const auth = readReviewState<ReviewAuth>(authKey(latest.id));
+              if (event.outcome.kind === "completed" && latest.pendingReviewerResult && auth) {
+                await recordReviewerResultInternal({ workspaceId: latest.workspaceId, sessionId: latest.id, reviewerAgentId: event.agent.id, token: auth.token, result: latest.pendingReviewerResult, finalize: true }, context);
+              } else failReviewSession(latest, "reviewer_timeout", "Reviewer timed out before it produced a completed result", { outcome: event.outcome.kind, turnId: event.turnId });
             });
           }
           // A daemon/plugin restart can lose the in-memory monitor. The

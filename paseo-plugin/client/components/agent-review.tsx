@@ -4,6 +4,7 @@ import type { PluginAgentPanelProps, PluginWorkspacePanelProps } from "@getpaseo
 import type { ReviewEvent, ReviewSession } from "../../shared/agent-review";
 import { localizedReviewError, type WorkbenchCopy } from "../../shared/copy";
 import { useWorkbenchCopy } from "../i18n";
+import { collapseReviewTimelineEvents } from "../model";
 import { observerAccent } from "../theme";
 import { MiniTag, StatusPill, makeStyles } from "./ui";
 
@@ -60,7 +61,8 @@ function resultStatus(event: ReviewEvent): ReviewStatus | null {
     if (value === "limit_reached") return "limit_reached";
   }
   if (event.kind === "ready_for_review") return "ready_for_review";
-  if (["review_queued", "reviewer_created", "review_started", "review_candidate"].includes(event.kind)) return "reviewing";
+  if (event.kind === "review_queued") return "queued";
+  if (["reviewer_created", "review_started", "review_candidate"].includes(event.kind)) return "reviewing";
   if (["repair_requested", "repair_sent"].includes(event.kind)) return "fixing";
   if (event.kind === "failed") return "failed";
   if (["blocked", "expired"].includes(event.kind)) return "blocked";
@@ -86,6 +88,7 @@ function roleLabel(role: TimelineRole, copy: WorkbenchCopy): string {
 function eventBody(event: ReviewEvent, copy: WorkbenchCopy): string {
   if (event.kind === "review_result" && event.summary.trim()) return event.summary;
   if (event.kind === "ready_for_review" && event.summary.trim() && event.summary !== "Execution handoff recorded") return event.summary;
+  if (event.kind === "review_queued" && event.summary.trim()) return event.summary;
   return copy[eventCopyKeys[event.kind]];
 }
 
@@ -329,6 +332,7 @@ export function AgentReviewView({
 }) {
   const copy = useWorkbenchCopy();
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
+  const timelineEvents = React.useMemo(() => collapseReviewTimelineEvents(session?.events || []), [session?.events]);
   if (loading && !session) return <Text style={styles.emptyText}>{copy.reviewLoading}</Text>;
   if (!session) {
     return <View style={styles.reviewPanel}>
@@ -347,6 +351,7 @@ export function AgentReviewView({
   const canStartNew = ["approved", "limit_reached"].includes(session.status);
   const result = session.latestResult;
   const conversationAgentId = session.reviewerAgentId || session.executionAgentId;
+  const coordinatorTimedOut = session.status === "reviewing" && session.coordinator?.phase === "accepted" && Boolean(session.coordinator.timeoutAt);
   return <View style={styles.reviewPanel}>
     <View style={styles.reviewOverviewHeader}>
       <View style={styles.reviewOverviewTitle}>
@@ -372,15 +377,16 @@ export function AgentReviewView({
       </View>
     </View> : null}
     {session.status === "waiting_execution" && session.events.some((event) => event.kind === "resumed" && event.details?.phase === "waiting_execution") ? <Text style={styles.reviewEntryMeta}>{copy.reviewResumeWaitingReport}</Text> : null}
-    {session.lastError ? <View style={styles.reviewErrorBanner}><Text style={styles.warningText}>{localizedReviewError(session.lastError, copy)}</Text><Text style={styles.reviewEntryMeta}>{copy.reviewErrorCodeLabel}: {session.lastError.code}</Text></View> : null}
+    {coordinatorTimedOut ? <View style={styles.reviewWarningBanner}><Text style={styles.warningText}>{copy.reviewCoordinatorTimeout}</Text></View> : null}
+    {session.lastError ? <View style={session.status === "stopping" ? styles.reviewWarningBanner : styles.reviewErrorBanner}><Text style={styles.warningText}>{localizedReviewError(session.lastError, copy)}</Text><Text style={styles.reviewEntryMeta}>{copy.reviewErrorCodeLabel}: {session.lastError.code}</Text></View> : null}
     <View style={styles.reviewTimeline}>
-      {session.events.map((event) => {
+      {timelineEvents.map((event) => {
         const open = Boolean(expanded[event.id]);
         return <ReviewMessage key={event.id} event={event} session={session} copy={copy} theme={theme} styles={styles} expanded={open} onToggle={() => setExpanded((current) => ({ ...current, [event.id]: !open }))} />;
       })}
     </View>
     <View style={styles.reviewActionBar}>
-      {session.roundTarget === "coordinator" ? <Text style={styles.reviewEntryMeta}>{session.coordinator?.phase === "waiting" ? copy.reviewCoordinatorWaiting : session.coordinator?.phase === "uncertain" ? copy.reviewCoordinatorUncertain : session.coordinator?.phase === "sent" ? copy.reviewCoordinatorSent : copy.reviewCoordinator}{session.coordinator ? ` · ${session.coordinator.queuedAt}` : ""}</Text> : null}
+      {session.roundTarget === "coordinator" ? <Text style={styles.reviewEntryMeta}>{session.coordinator?.phase === "waiting" ? copy.reviewCoordinatorWaiting : session.coordinator?.phase === "uncertain" ? copy.reviewCoordinatorUncertain : session.coordinator?.phase === "sent" ? copy.reviewCoordinatorSent : session.coordinator?.phase === "stopping" ? copy.reviewCoordinatorStopping : copy.reviewCoordinator}{session.coordinator ? ` · ${session.coordinator.queuedAt}` : ""}</Text> : null}
       {onIndependent && session.roundTarget === "coordinator" && (session.coordinator?.phase === "waiting" || session.status === "stopped" || session.status === "ready_for_review") ? <Pressable accessibilityRole="button" onPress={onIndependent} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.reviewIndependentSwitch}</Text></Pressable> : null}
       {session.coordinator?.agentId && onOpenAgent ? <Pressable accessibilityRole="button" onPress={() => onOpenAgent(session.coordinator!.agentId!)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.reviewCoordinatorOpen}</Text></Pressable> : null}
       {canReview ? <Pressable accessibilityRole="button" onPress={onReview} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{copy.reviewStart}</Text></Pressable> : null}

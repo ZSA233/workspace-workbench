@@ -191,8 +191,10 @@ export const reviewSessionSchema = z.object({
   materials: bundleRefSchema.optional(),
   version: z.literal(2),
   coordinator: z.object({
-    agentId: z.string().nullable(), phase: z.enum(["waiting", "uncertain", "sent", "accepted", "revoked"]),
+    agentId: z.string().nullable(), phase: z.enum(["waiting", "uncertain", "sent", "accepted", "stopping", "revoked"]),
     queuedAt: z.string(), messageId: z.string(), acceptedAt: z.string().nullable().default(null),
+    timeoutAt: z.string().datetime().nullable().default(null),
+    hardTimeoutAt: z.string().datetime().nullable().default(null),
   }).nullable().default(null),
   roundTarget: z.enum(["coordinator", "independent"]).default("independent"),
   id: z.string().trim().min(1),

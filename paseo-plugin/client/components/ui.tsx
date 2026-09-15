@@ -653,6 +653,7 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     reviewResultBanner: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.border, borderRadius: 6, borderWidth: 1, gap: 5, padding: 8 },
     reviewResultTitle: { color: theme.colors.foreground, flex: 1, fontSize: 11, fontWeight: "700" },
     reviewErrorBanner: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.statusDanger, borderRadius: 6, borderWidth: 1, gap: 3, padding: 8 },
+    reviewWarningBanner: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.statusWarning, borderRadius: 6, borderWidth: 1, gap: 3, padding: 8 },
     reviewTagRow: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 5 },
     reviewMessage: { alignItems: "flex-start", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", gap: 8, paddingBottom: 9, paddingTop: 4 },
     reviewMessageSystem: { opacity: 0.85 },

@@ -74,6 +74,9 @@ export function ProjectSetup({ directory, theme, onSaved }: {
           <ActionButton label={copy.setupRetry} onPress={() => { void scanQuery.refetch(); }} theme={theme} />
         </SetupCard>
       ) : null}
+      {data?.scan?.incomplete ? <SetupCard theme={theme} borderColor={theme.colors.statusWarning}>
+        <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>{copy.repositoryScanIncomplete}</Text>
+      </SetupCard> : null}
 
       {!scanQuery.isPending && data && !data.repositories.length ? (
         <SetupCard theme={theme} borderColor={theme.colors.statusWarning}>

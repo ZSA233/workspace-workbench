@@ -238,17 +238,19 @@ export class Observation {
     if (!["error", "missing", "invalid"].includes(result.status)) this.scheduler.observed(git.path);
     return { ...result, observedAt: now(), durationMs: Date.now() - started };
   }
-  list(params: Json) {
+  async list(params: Json) {
     const c = this.workspaces.config,
       workspaces = this.workspaces
         .list()
         .filter((w) => params.includeRemoved || w.state !== "removed");
+    const discovered = await discover(c);
     return {
       schemaVersion: protocol,
       project: { id: c.projectId, displayName: c.displayName },
       workspaces: workspaces.map((w) => this.summary(w, [], true)),
       capabilities: this.workspaces.capabilities(),
-      discoveredCandidates: discover(c),
+      discoveredCandidates: discovered.repositories,
+      discovery: { incomplete: discovered.incomplete, ...(discovered.reason ? { reason: discovered.reason } : {}), scannedDirectories: discovered.scannedDirectories },
       observation: {
         state: "ready",
         observedAt: now(),

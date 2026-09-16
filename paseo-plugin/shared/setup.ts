@@ -31,6 +31,7 @@ export const projectSetupScan = defineRpc({
     repositories: z.array(setupRepository),
     defaultRepositoryPaths: z.array(z.string()),
     configExists: z.boolean(),
+    scan: z.object({ incomplete: z.boolean(), reason: z.enum(["directory_limit", "entry_limit", "time_limit"]).optional(), scannedDirectories: z.number().int().nonnegative() }).optional(),
   }),
 });
 

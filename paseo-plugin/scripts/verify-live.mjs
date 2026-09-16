@@ -34,7 +34,7 @@ const git = (path, args) =>
 for (const project of ["a", "b"]) {
   const path = join(root, project);
   mkdirSync(path);
-  for (const name of ["one", "two", "three", "extra"]) {
+  for (const name of ["one", "two", "three", "extra", "go-secrets"]) {
     const repo = join(path, name);
     mkdirSync(repo);
     git(repo, ["init", "-q"]);

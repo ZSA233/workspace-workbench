@@ -70,12 +70,13 @@ export class Workspaces {
       return value.schemaVersion === 1 && Array.isArray(value.repositories) ? value : null;
     } catch { return null; }
   }
-  mainCandidates(): Json {
+  async mainCandidates(): Promise<Json> {
     const configured = this.config.repositories.map((repo) => ({
       id: repo.id, name: repo.name, path: repositoryPath(this.config, repo),
       configured: true, exists: existsSync(repositoryPath(this.config, repo)),
     }));
-    const found = discover(this.config, true).map((repo) => ({
+    const scan = await discover(this.config, true);
+    const found = scan.repositories.map((repo) => ({
       id: String(repo.id), name: String(repo.display_name || repo.id), path: canonical(String(repo.path)),
       configured: false, exists: existsSync(String(repo.path)),
     }));
@@ -94,13 +95,14 @@ export class Workspaces {
       schemaVersion: 1,
       revision: Number(selection?.revision || 0),
       sourceRoot: this.config.sourceRoot,
+      scan: { incomplete: scan.incomplete, ...(scan.reason ? { reason: scan.reason } : {}), scannedDirectories: scan.scannedDirectories },
       repositories: [...byPath.values()].sort((a, b) => String(a.path).localeCompare(String(b.path))).map(repo => ({
         ...repo, selected: selected.has(canonical(String(repo.path))), missing: !repo.exists,
       })),
     };
   }
-  saveMainSelection(params: Json): Json {
-    const current = this.mainCandidates();
+  async saveMainSelection(params: Json): Promise<Json> {
+    const current = await this.mainCandidates();
     if (Number(params.revision) !== current.revision)
       throw new WorkbenchError("selection_conflict", "Main workspace repository selection changed; reload and retry", current);
     if (!Array.isArray(params.repositories))
@@ -114,13 +116,14 @@ export class Workspaces {
       selected.push({ id: repo.id, name: repo.name, path: repo.path });
     }
     atomicJson(this.mainSelectionPath(), { schemaVersion: 1, revision: current.revision + 1, repositories: selected, updatedAt: now() });
-    return this.mainCandidates();
+    const selectedPaths = new Set(selected.map(repo => canonical(String(repo.path))));
+    return { ...current, revision: current.revision + 1,
+      repositories: current.repositories.map((repo: Json) => ({ ...repo, selected: selectedPaths.has(canonical(String(repo.path))) })) };
   }
   private mainRepositories(): Json[] {
-    const candidates = this.mainCandidates().repositories as Json[];
-    return candidates.filter(repo => repo.selected).map(repo => this.sourceRecord({
-      id: String(repo.id), name: String(repo.name), path: String(repo.path), enabled: true, role: null, defaultBase: null,
-    }));
+    const saved = this.mainSelection();
+    if (!saved) return this.config.repositories.filter(repo => repo.enabled).map(repo => this.sourceRecord(repo));
+    return saved.repositories.map((repo: Json) => this.sourceRecord({ id: String(repo.id), name: String(repo.name), path: String(repo.path), enabled: true, role: null, defaultBase: null }));
   }
   sourceRecord(repo: Repository): Json {
     const path = repositoryPath(this.config, repo);

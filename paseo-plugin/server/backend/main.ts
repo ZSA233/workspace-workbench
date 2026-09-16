@@ -45,13 +45,13 @@ try {
     process.stdout.write(JSON.stringify(service.health()) + "\n");
     await service.close();
   } else if (args[0] === "discover") {
-    process.stdout.write(JSON.stringify(discover(config)) + "\n");
+    process.stdout.write(JSON.stringify((await discover(config)).repositories) + "\n");
     await service.close();
   } else if (args[0] === "accept") {
     const ref = args[args.indexOf("--repository") + 1];
     if (!args.includes("--repository") || !ref)
       throw new Error("accept requires --repository");
-    const candidates = discover(config).filter(
+    const candidates = (await discover(config)).repositories.filter(
       (repo) =>
         repo.id === ref ||
         repo.path === canonical(ref || ".") ||

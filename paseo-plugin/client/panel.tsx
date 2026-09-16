@@ -69,6 +69,7 @@ type ChangeTreeMode = "tree" | "files";
 type MainRepositorySelection = {
   revision: number;
   sourceRoot: string;
+  scan?: { incomplete: boolean; reason?: "directory_limit" | "entry_limit" | "time_limit"; scannedDirectories: number };
   repositories: Array<{ id: string; name: string; path: string; configured: boolean; exists: boolean; missing: boolean; selected: boolean }>;
 };
 
@@ -1311,6 +1312,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
           <Text style={styles.layoutMenuHint}>{localizedCopy.mainRepositoryHint}</Text>
           <TextInput value={mainRepositoryFilter} onChangeText={setMainRepositoryFilter} placeholder={localizedCopy.mainRepositorySearch} style={styles.targetInput} />
+          {mainRepositories?.scan?.incomplete ? <Text style={styles.warningText}>{localizedCopy.repositoryScanIncomplete}</Text> : null}
+          {mainRepositoriesQuery.isError || mainRepositoriesQuery.data?.ok === false ? <Text style={styles.warningText}>{mainRepositoriesQuery.data?.error?.message || localizedCopy.setupScanFailed}</Text> : null}
           {mainRepositoriesQuery.isFetching && !mainRepositories ? <Text style={styles.emptyText}>{localizedCopy.mainRepositoryScanning}</Text> : null}
           {mainRepositories?.repositories.filter(repo => !mainRepositoryFilter.trim() || `${repo.name} ${repo.path}`.toLowerCase().includes(mainRepositoryFilter.trim().toLowerCase())).map(repo => {
             const selected = mainRepositoryDraft.includes(repo.path);

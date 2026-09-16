@@ -1,16 +1,16 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import type { ProjectRuntimeSettings, ProjectRuntimeSettingsUpdateInput, ProjectSetupScan, SetupRepository } from "../shared/setup.ts";
 import { backendStatus, startBackend } from "./backend-manager.ts";
+import { scanGitRoots } from "./backend/discovery-scan.ts";
 import { handleObserver } from "./observer.ts";
 import { resolveProject, type ProjectRoute } from "./projects.ts";
 
 const execFileAsync = promisify(execFile);
-const DEFAULT_EXCLUDES = new Set([".git", ".workspace-workbench", "node_modules", "vendor", ".venv", "__pycache__", "dist", "build"]);
 const EXCLUDE_BLOCK_START = "# workspace-workbench:begin";
 const EXCLUDE_BLOCK_END = "# workspace-workbench:end";
 const SHARED_CONFIG_MARKER = "# workspace-workbench:shared-config";
@@ -178,34 +178,6 @@ async function resolveGitRoot(directory: string): Promise<string | null> {
   }
 }
 
-function hasGitMarker(directory: string): boolean {
-  return existsSync(join(directory, ".git"));
-}
-
-function nestedGitRoots(root: string): string[] {
-  const found: string[] = [];
-  const queue: Array<{ directory: string; depth: number }> = [{ directory: root, depth: 0 }];
-  while (queue.length) {
-    const current = queue.shift()!;
-    if (current.directory !== root && hasGitMarker(current.directory)) {
-      found.push(current.directory);
-      continue;
-    }
-    if (current.depth >= 3) continue;
-    let entries;
-    try {
-      entries = readdirSync(current.directory, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith(".") || DEFAULT_EXCLUDES.has(entry.name)) continue;
-      queue.push({ directory: join(current.directory, entry.name), depth: current.depth + 1 });
-    }
-  }
-  return found.sort((left, right) => left.localeCompare(right));
-}
-
 async function inspectRepository(projectRoot: string, repositoryRoot: string, kind: SetupRepository["kind"], id: string): Promise<SetupRepository> {
   const repoPath = unixRelative(projectRoot, repositoryRoot);
   const branch = await runGit(repositoryRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
@@ -250,15 +222,29 @@ export async function scanProject(directory: string): Promise<ProjectSetupScan> 
   const displayName = basename(projectRoot) || "Workspace";
   const used = new Set<string>();
   const repositoryRoots = new Map<string, { root: string; kind: SetupRepository["kind"] }>();
+  const configPath = join(projectRoot, ".workspace-workbench", "project.json");
+  const existing = existsSync(configPath) ? readConfigValue(configPath) : {};
+  const discovery = isRecord(existing.discovery) ? existing.discovery : {};
+  const layout = configLayout(configPath, existing, projectRoot);
+  const scan = await scanGitRoots({ roots: [projectRoot], sourceRoot: projectRoot,
+    maxDepth: typeof discovery.maxDepth === "number" ? Math.max(0, Math.min(12, discovery.maxDepth)) : 3,
+    excludeNames: Array.isArray(discovery.exclude) ? discovery.exclude.filter((value): value is string => typeof value === "string") : [],
+    excludePaths: [layout.stateRoot, layout.recordsRoot, layout.treesRoot, layout.workspaceRoot],
+    followSymlinks: discovery.followSymlinks === true });
   if (gitAvailable) {
     if (gitRoot) repositoryRoots.set(gitRoot, { root: gitRoot, kind: "root" });
-    for (const nested of nestedGitRoots(projectRoot)) {
+    for (const nested of scan.roots) {
       if (nested !== gitRoot && inside(projectRoot, nested)) repositoryRoots.set(nested, { root: nested, kind: "nested" });
     }
   }
-  const repositories = await Promise.all([...repositoryRoots.values()].map(async ({ root, kind }) => {
-    const item = await inspectRepository(projectRoot, root, kind, repositoryId(projectRoot, root, used));
-    return { ...item, selectedByDefault: kind === "root" || !gitRoot };
+  const roots = [...repositoryRoots.values()], repositories: SetupRepository[] = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, roots.length) }, async () => {
+    while (next < roots.length) {
+      const { root, kind } = roots[next++];
+      const item = await inspectRepository(projectRoot, root, kind, repositoryId(projectRoot, root, used));
+      repositories.push({ ...item, selectedByDefault: kind === "root" || !gitRoot });
+    }
   }));
   repositories.sort((left, right) => left.repoPath.localeCompare(right.repoPath));
   return {
@@ -270,7 +256,8 @@ export async function scanProject(directory: string): Promise<ProjectSetupScan> 
     gitRoot,
     repositories,
     defaultRepositoryPaths: repositories.filter((item) => item.selectedByDefault && item.valid).map((item) => item.repoPath),
-    configExists: existsSync(join(projectRoot, ".workspace-workbench", "project.json")),
+    configExists: existsSync(configPath),
+    scan: { incomplete: scan.incomplete, ...(scan.reason ? { reason: scan.reason } : {}), scannedDirectories: scan.scannedDirectories },
   };
 }
 
@@ -414,7 +401,7 @@ export async function saveProjectSetup(input: { directory: string; repositories:
       mode: "hybrid",
       roots: ["."],
       maxDepth: 3,
-      exclude: [...DEFAULT_EXCLUDES],
+      exclude: Array.isArray(previousDiscovery.exclude) ? previousDiscovery.exclude : [],
       followSymlinks: false,
     },
     repositories: selected.map((repository) => ({

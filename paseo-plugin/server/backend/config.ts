@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { dirname, join, basename, resolve, relative } from "node:path";
-import { readdirSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { scanGitRoots } from "./discovery-scan.ts";
 import {
   canonical,
   hash,
@@ -178,15 +179,7 @@ export function loadConfig(file: string) {
         path(value, sourceRoot, sourceRoot),
       ),
       maxDepth: Math.min(12, Math.max(0, Number(discovery.maxDepth ?? 3))),
-      exclude: discovery.exclude || [
-        ".git",
-        "node_modules",
-        ".workspace-workbench",
-        "vendor",
-        ".venv",
-        "dist",
-        "build",
-      ],
+      exclude: Array.isArray(discovery.exclude) ? discovery.exclude : [],
       followSymlinks: discovery.followSymlinks === true,
     },
   };
@@ -204,63 +197,29 @@ export function repositoryPath(config: Config, repo: Repository): string {
     );
   return candidate;
 }
-export function discover(config: Config, includeManual = false): Json[] {
-  if (config.discovery.mode === "manual" && !includeManual) return [];
+export async function discover(config: Config, includeManual = false) {
+  if (config.discovery.mode === "manual" && !includeManual)
+    return { repositories: [] as Json[], incomplete: false, scannedDirectories: 0 };
   const results: Json[] = [],
     used = new Set(config.repositories.map((repo) => repo.id)),
-    seen = new Set<string>(),
     explicit = new Set(
       config.repositories.map((repo) => repositoryPath(config, repo)),
     );
-  function visit(directory: string, root: string, depth: number) {
-    const real = canonical(directory);
-    if (
-      seen.has(real) ||
-      !inside(real, root, true) ||
-      !inside(real, config.sourceRoot, true) ||
-      inside(real, config.workspaceRoot, true) ||
-      inside(real, config.stateRoot, true)
-    )
-      return;
-    seen.add(real);
-    const containsConfiguredChild = [...explicit].some(path => path !== real && inside(path, real));
-    if (existsSync(join(real, ".git")) && !containsConfiguredChild) {
-      if (!explicit.has(real)) {
-        const part = relative(root, real) || ".",
-          candidate =
-            part
-              .replaceAll("/", "-")
-              .replace(/[^a-zA-Z0-9._-]+/g, "-")
-              .replace(/^[-.]+|[-.]+$/g, "") || "repository";
-        const id = used.has(candidate)
-          ? `${candidate}-${createHash("sha1").update(part).digest("hex").slice(0, 8)}`
-          : candidate;
-        used.add(id);
-        results.push({
-          id,
-          path: real,
-          display_name: basename(real),
-          enabled: false,
-          role: null,
-          default_base: null,
-          metadata: {},
-        });
-      }
-      return;
-    }
-    if (depth >= config.discovery.maxDepth) return;
-    try {
-      for (const item of readdirSync(real, { withFileTypes: true }))
-        if (
-          !item.name.startsWith(".") &&
-          !config.discovery.exclude.includes(item.name) &&
-          !["go-secrets", ".secrets", "secrets"].includes(item.name.toLowerCase()) &&
-          (item.isDirectory() ||
-            (config.discovery.followSymlinks && item.isSymbolicLink()))
-        )
-          visit(join(real, item.name), root, depth + 1);
-    } catch {}
+  const scan = await scanGitRoots({
+    roots: config.discovery.roots, sourceRoot: config.sourceRoot,
+    maxDepth: config.discovery.maxDepth, excludeNames: config.discovery.exclude,
+    excludePaths: [config.stateRoot, config.recordsRoot, config.treesRoot, config.workspaceRoot],
+    descendIntoRepositories: [...explicit],
+    followSymlinks: config.discovery.followSymlinks,
+  });
+  for (const real of scan.roots) {
+    if (explicit.has(real) || [...explicit].some(path => path !== real && inside(path, real))) continue;
+    const part = relative(config.sourceRoot, real) || ".",
+      candidate = part.replaceAll("/", "-").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "") || "repository";
+    const id = used.has(candidate) ? `${candidate}-${createHash("sha1").update(part).digest("hex").slice(0, 8)}` : candidate;
+    used.add(id);
+    results.push({ id, path: real, display_name: basename(real), enabled: false, role: null, default_base: null, metadata: {} });
   }
-  for (const root of config.discovery.roots) visit(root, root, 0);
-  return results.sort((a, b) => a.path.localeCompare(b.path));
+  return { repositories: results.sort((a, b) => a.path.localeCompare(b.path)), incomplete: scan.incomplete,
+    ...(scan.reason ? { reason: scan.reason } : {}), scannedDirectories: scan.scannedDirectories };
 }

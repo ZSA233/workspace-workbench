@@ -29,12 +29,18 @@ test("setup scan prioritizes a parent Git checkout and exposes nested checkouts"
     const nested = join(root, "packages", "child");
     mkdirSync(nested, { recursive: true });
     git(nested, "init", "-q");
+    for (const name of ["go-secrets", "node_modules", ".hidden", "vendor", "dist"]) {
+      const path = join(root, name); mkdirSync(path); git(path, "init", "-q");
+    }
     const result = await scanProject(root);
     assert.equal(result.projectRoot, realpathSync(root));
     assert.equal(result.gitRoot, realpathSync(root));
     assert.deepEqual(result.defaultRepositoryPaths, ["."]);
     assert.ok(result.repositories.some((repository) => repository.repoPath === "." && repository.kind === "root" && repository.selectedByDefault));
     assert.ok(result.repositories.some((repository) => repository.repoPath === "packages/child" && repository.kind === "nested" && !repository.selectedByDefault));
+    for (const name of ["go-secrets", "node_modules", ".hidden", "vendor", "dist"])
+      assert.ok(result.repositories.some((repository) => repository.repoPath === name), `${name} should appear in setup`);
+    assert.equal(result.scan?.incomplete, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -58,6 +64,7 @@ test("setup save writes a local config, local ignore block, and automatic regist
     assert.equal(config.repositories[0].path, ".");
     assert.equal(config.workspaceRoot, ".");
     assert.equal(config.treesRoot, "worktrees");
+    assert.deepEqual(config.discovery.exclude, []);
     const exclude = readFileSync(join(root, ".git", "info", "exclude"), "utf8");
     assert.match(exclude, /workspace-workbench:begin/);
     assert.match(exclude, /project\.json/);

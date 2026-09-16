@@ -49,6 +49,12 @@ paseo plugin reload workspace-workbench-paseo --json
    中尚未加入当前 Workspace 的仓库。用户确认仓库和 base ref，系统自动创建隔离分支、
    更新 manifest、准备运行时并记录逐库结果。
 
+主工作区的“选择仓库”只调整观察和手动审核范围，不修改上述 Workspace 创建目录。
+发现过程不按 `secrets`、`node_modules`、隐藏目录等名称自动排除仓库；只有项目明确配置的
+`discovery.exclude` 会按名称排除。Git 元数据、实际状态和 worktree 生成目录按路径避开。
+扫描达到时间或目录预算时，界面显示“扫描未完成”和已找到的候选；调整项目的扫描根目录、
+深度或显式排除项后可重新扫描。
+
 加入已有 Workspace 不是手动维护底层文件；明确确认只用于保护执行和审核范围。活动执行或
 审核期间不会自动扩大范围。失败后可以用相同选择重试，已完成的 worktree 不会重复创建。
 base ref 默认使用源码当前 `HEAD`，需要时可以展开设置。

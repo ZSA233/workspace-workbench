@@ -123,8 +123,11 @@ test("submit creates an internal operation identity and hands original paths to 
     const request = workflowSubmitRequest.parse({ workspaceId: "sample", task: "Implement the approved requirement", originalPaths: [source] });
     const result = await withProject({ projectConfig: config }, () => orchestrate("submit", request, "parent", { paseo, query }));
     assert.equal((result as { ok?: boolean }).ok, true);
+    assert.equal((result as { action?: string }).action, "accepted");
     const requestId = (result as { requestId?: string }).requestId;
     assert.ok(requestId);
+    const deadline = Date.now() + 2_000;
+    while (!sent && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     assert.match(sent, /Implement the approved requirement/);
     assert.match(sent, /requirements\.md/);
     const saved = withProject({ projectConfig: config }, () => readState<{ stage?: string }>(`workflow:parent:${requestId}`));

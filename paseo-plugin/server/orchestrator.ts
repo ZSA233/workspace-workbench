@@ -20,7 +20,7 @@ type Progress = {
   workspaceId?: string;
   stage: string;
   previewedAt?: string;
-  result?: Awaited<ReturnType<typeof handleAgentDelegate>>;
+  result?: Awaited<ReturnType<typeof handleAgentDelegate>> | { ok: false; action: "failed"; error: { code: string; message: string } };
 };
 const resumableWorkflowStages = new Set(["previewed", "validated", "created", "prepare-failed", "delegating", "handoff-blocked"]);
 const flights = new Map<string, Promise<unknown>>();
@@ -139,15 +139,17 @@ function normalizeWorkflowRequest(request: WorkflowRequest, value: unknown): Nor
   }
 }
 
-export async function orchestrate(action: "preview" | "execute" | "status" | "submit", request: WorkflowRequest | WorkflowStatusRequest | WorkflowSubmitRequest, parentAgentId: string, context: AgentContext) {
+export async function orchestrate(action: "preview" | "execute" | "status" | "submit" | "submit-execute", request: WorkflowRequest | WorkflowStatusRequest | WorkflowSubmitRequest, parentAgentId: string, context: AgentContext) {
   const query = context.query || queryObserver;
   const parent = (await context.paseo.agents.ref(parentAgentId).refresh())?.agent;
   if (!parent) throw new Error("parent_agent_unavailable");
-  if ((action === "execute" || action === "submit") && parent.labels?.["workspace-workbench.role"] === "workspace-worker") throw new Error("execution_child_must_not_delegate");
+  if ((action === "execute" || action === "submit" || action === "submit-execute") && parent.labels?.["workspace-workbench.role"] === "workspace-worker") throw new Error("execution_child_must_not_delegate");
   const project = currentProject();
   if (!project) throw new Error("project_context_required");
   if (resolveProject({ directory: parent.cwd }).configPath !== project.configPath) throw new Error("parent_project_mismatch");
   let submitted = false;
+  const authorizedSubmission = action === "submit-execute";
+  if (authorizedSubmission) action = "execute";
   if (action === "submit") {
     const simple = workflowSubmitRequest.parse(request);
     const requestId = simple.requestId || randomUUID();
@@ -170,6 +172,19 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
   }
   const key = `workflow:${parentAgentId}:${request.requestId}`;
   let previous = readState<Progress>(key);
+  if (submitted) {
+    if (previous) return { ok: true, action: previous.stage === "handed-off" ? "handed-off" : "accepted", requestId: request.requestId, progress: previous, nextAction: "end_turn" };
+    const accepted: Progress = { identity: digest({ submission: request, parentAgentId }), identityVersion: 2, workspaceId: request.workspaceId, stage: "accepted" };
+    writeState(key, accepted);
+    const canonical = request as WorkflowRequest;
+    queueMicrotask(() => {
+      void orchestrate("submit-execute", canonical, parentAgentId, context).catch(error => {
+        const current = readState<Progress>(key) || accepted;
+        writeState(key, { ...current, stage: "failed", result: { ok: false, action: "failed", error: { code: "submission_failed", message: error instanceof Error ? error.message : String(error) } } });
+      });
+    });
+    return { ok: true, action: "accepted", requestId: request.requestId, progress: accepted, nextAction: "end_turn", instructions: "The durable submission was accepted. Use workbench_workspace_status with this requestId if later reconciliation is needed; do not resubmit." };
+  }
   if (action === "status") {
     if (!previous) return { ok: false, progress: null, execution: null, error: { code: "workflow_not_found", message: "No Workspace handoff exists for this request" } };
     if (request.workspaceId && previous.workspaceId && request.workspaceId !== previous.workspaceId) {
@@ -192,8 +207,8 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
   if (!normalized.ok) return normalized;
   const fullRequest = normalized.request;
   const identity = digest({ request: fullRequest, parentAgentId });
-  if (submitted && !previous) {
-    previous = { identity, identityVersion: 2, workspaceId: fullRequest.workspaceId, stage: "previewed", previewedAt: new Date().toISOString() };
+  if (authorizedSubmission && previous?.stage === "accepted") {
+    previous = { ...previous, identity, identityVersion: 2, stage: "previewed", previewedAt: new Date().toISOString() };
     writeState(key, previous);
   }
   let compatiblePrevious = previous;

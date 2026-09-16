@@ -249,7 +249,7 @@ export async function handle(message, lifecycle = {}) {
               if (!controlAction) return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.start", context);
               return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.control", { ...context, action: controlAction });
             })()
-          : client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.orchestrate", { action, request: message.params.arguments, projectConfig, token })
+          : client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.orchestrate", { action, request: action === "submit" && !message.params.arguments?.requestId ? { ...message.params.arguments, requestId: randomUUID() } : message.params.arguments, projectConfig, token })
   ), { ...lifecycle, forceClose: () => { for (const socket of sockets) socket.terminate(); sockets.clear(); } });
   if (materialAction && result?.image) {
     const { image, ...metadata } = result;

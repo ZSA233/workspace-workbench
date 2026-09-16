@@ -187,12 +187,14 @@ test("main workspace starts an independent read-only review without an execution
     fixture.setRuntime({
       workspaceId: "main", managed: false, treePath: fixture.root,
       repositories: [{ id: "fixture", repoPath: ".", worktreePath: fixture.root, branch: "main", baseRef: null, baseSha: null, head, indexDigest: "index-main", worktreeDigest: "worktree-main", statusDigest: "status-main", dirtyPaths: ["new-file.txt"] }],
+      issues: [{ repositoryId: "missing", code: "worktree_missing", message: "worktree is unavailable" }],
     });
     const session = await startReview({ workspaceId: "main", projectConfig: fixture.config, instructions: "Review the recently completed task." }, fixture.context);
     assert.equal(session.executionAgentId, null);
     assert.equal(session.roundTarget, "independent");
     assert.equal(session.preferences.mode, "manual");
     assert.equal(session.preferences.autoFix, false);
+    assert.ok(session.snapshot?.unreviewed.includes("missing: worktree_missing"));
     assert.equal(fixture.reviewerCreate.length, 1);
     const options = fixture.reviewerCreate[0] as { config?: { modeId?: string }; prompt?: string };
     assert.equal(options.config?.modeId, "auto");

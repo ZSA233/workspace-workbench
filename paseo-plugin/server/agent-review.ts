@@ -100,6 +100,7 @@ type Runtime = {
   managed: boolean;
   treePath: string | null;
   repositories: RuntimeRepository[];
+  issues?: string[];
 };
 type StoredGlobalSettings = {
   version: 1;
@@ -446,7 +447,11 @@ function currentRuntimeFromResponse(value: unknown): Runtime {
   }
   const workspaceId = String(candidate.workspaceId || "");
   if (!workspaceId) throw new Error("workspace_runtime_identity_incomplete");
-  return { workspaceId, managed: candidate.managed, treePath: canonicalPath(String(candidate.treePath)), repositories };
+  const issues = Array.isArray(candidate.issues) ? candidate.issues.map(item => {
+    const value = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    return `${String(value.repositoryId || "repository")}: ${String(value.code || value.message || "unavailable")}`;
+  }) : [];
+  return { workspaceId, managed: candidate.managed, treePath: canonicalPath(String(candidate.treePath)), repositories, ...(issues.length ? { issues } : {}) };
 }
 
 function canonicalPath(value: string): string {
@@ -676,7 +681,7 @@ async function captureSnapshot(workspaceId: string, before: Runtime, context: Ag
   if (getAgentBinding(workspaceId)?.handoffBundle) references = [];
   const files = new Map<string, { repositoryId: string; path: string; oldPath?: string; status: string; binary: boolean; truncated: boolean; diff?: string; content?: string }>();
   const capturedArtifacts = await captureReferencedArtifacts(before, references);
-  const unreviewed: string[] = [...capturedArtifacts.unreviewed];
+  const unreviewed: string[] = [...(before.issues || []), ...capturedArtifacts.unreviewed];
   for (const repo of before.repositories) {
     const names = new Map<string, { status: string; oldPath?: string }>();
     const committed = repo.baseSha && repo.head ? await gitOutput(repo.worktreePath, ["diff", "--name-status", "-z", "--find-renames", repo.baseSha, repo.head]) : "";

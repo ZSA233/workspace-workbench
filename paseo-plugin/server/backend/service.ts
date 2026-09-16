@@ -7,7 +7,7 @@ import { Runtime } from "./runtime.ts";
 import { Observation, protocol } from "./observation.ts";
 import { runtimeIdentity } from "./identity.ts";
 import { compare } from "./review.ts";
-import { stable, WorkbenchError, type Json } from "./storage.ts";
+import { issue, stable, WorkbenchError, type Json } from "./storage.ts";
 export const managementMethods = new Set([
   "observer.reload",
   "workspace.create",
@@ -139,9 +139,16 @@ export class Service {
         const w = this.workspaces.get(String(params.workspaceId || ""));
         if (w.state !== "active")
           throw new WorkbenchError("workspace_state_invalid", "workspace is not active");
-        const repositories = [];
-        for (const repo of w.repositories)
-          repositories.push(await runtimeIdentity(repo, this.config, w.managed === true));
+        const repositories = [], issues = [];
+        for (const repo of w.repositories) {
+          try { repositories.push(await runtimeIdentity(repo, this.config, w.managed === true)); }
+          catch (error) {
+            if (w.managed === true) throw error;
+            issues.push({ repositoryId: repo.id, path: repo.worktreePath || repo.sourcePath, ...issue(error) });
+          }
+        }
+        if (!repositories.length)
+          throw new WorkbenchError("review_repositories_unavailable", "No selected main workspace repositories are available", { issues });
         return {
           schemaVersion: protocol,
           workspaceId: w.id,
@@ -151,6 +158,7 @@ export class Service {
           repositories,
           capabilities: this.workspaces.capabilities(),
           reviewOnly: w.managed !== true,
+          issues,
         };
       }
       case "repository.graph":

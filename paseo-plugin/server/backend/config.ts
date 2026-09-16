@@ -204,8 +204,8 @@ export function repositoryPath(config: Config, repo: Repository): string {
     );
   return candidate;
 }
-export function discover(config: Config): Json[] {
-  if (config.discovery.mode === "manual") return [];
+export function discover(config: Config, includeManual = false): Json[] {
+  if (config.discovery.mode === "manual" && !includeManual) return [];
   const results: Json[] = [],
     used = new Set(config.repositories.map((repo) => repo.id)),
     seen = new Set<string>(),
@@ -217,11 +217,14 @@ export function discover(config: Config): Json[] {
     if (
       seen.has(real) ||
       !inside(real, root, true) ||
-      !inside(real, config.sourceRoot, true)
+      !inside(real, config.sourceRoot, true) ||
+      inside(real, config.workspaceRoot, true) ||
+      inside(real, config.stateRoot, true)
     )
       return;
     seen.add(real);
-    if (existsSync(join(real, ".git"))) {
+    const containsConfiguredChild = [...explicit].some(path => path !== real && inside(path, real));
+    if (existsSync(join(real, ".git")) && !containsConfiguredChild) {
       if (!explicit.has(real)) {
         const part = relative(root, real) || ".",
           candidate =
@@ -251,6 +254,7 @@ export function discover(config: Config): Json[] {
         if (
           !item.name.startsWith(".") &&
           !config.discovery.exclude.includes(item.name) &&
+          !["go-secrets", ".secrets", "secrets"].includes(item.name.toLowerCase()) &&
           (item.isDirectory() ||
             (config.discovery.followSymlinks && item.isSymbolicLink()))
         )

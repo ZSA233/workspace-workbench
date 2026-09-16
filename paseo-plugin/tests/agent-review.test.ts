@@ -180,6 +180,30 @@ test("a timed-out session wait does not continue polling after a slow refresh", 
   });
 });
 
+test("main workspace starts an independent read-only review without an execution Agent", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    const head = execFileSync("git", ["-C", fixture.root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    fixture.setRuntime({
+      workspaceId: "main", managed: false, treePath: fixture.root,
+      repositories: [{ id: "fixture", repoPath: ".", worktreePath: fixture.root, branch: "main", baseRef: null, baseSha: null, head, indexDigest: "index-main", worktreeDigest: "worktree-main", statusDigest: "status-main", dirtyPaths: ["new-file.txt"] }],
+    });
+    const session = await startReview({ workspaceId: "main", projectConfig: fixture.config, instructions: "Review the recently completed task." }, fixture.context);
+    assert.equal(session.executionAgentId, null);
+    assert.equal(session.roundTarget, "independent");
+    assert.equal(session.preferences.mode, "manual");
+    assert.equal(session.preferences.autoFix, false);
+    assert.equal(fixture.reviewerCreate.length, 1);
+    const options = fixture.reviewerCreate[0] as { config?: { modeId?: string }; prompt?: string };
+    assert.equal(options.config?.modeId, "auto");
+    assert.match(String(options.prompt), /manual read-only review of the main workspace/i);
+    assert.match(String(options.prompt), /recently completed task/i);
+    const repair = await handleReviewSessionControl({ projectConfig: fixture.config, workspaceId: "main", sessionId: session.id, action: "repair" }, fixture.context);
+    assert.equal(repair.ok, false);
+    assert.equal(repair.error?.code, "review_not_waiting_for_repair");
+  });
+});
+
 test("session messages authorize the original coordinator and deduplicate supplements", async () => {
   const fixture = harness();
   await withFixture(fixture, async () => {

@@ -286,7 +286,7 @@ export const reviewModels = defineRpc({
 });
 export const reviewSessionStart = defineRpc({
   name: "workspace.workbench.agent-review.start",
-  input: projectContext.extend({ executionAgentId: z.string().trim().min(1).optional(), locale: reviewLocaleSchema.optional(), requestId: z.string().trim().min(1).optional() }),
+  input: projectContext.extend({ executionAgentId: z.string().trim().min(1).optional(), locale: reviewLocaleSchema.optional(), instructions: z.string().max(8000).optional(), requestId: z.string().trim().min(1).optional() }),
   output: z.object({ ok: z.boolean(), session: reviewSessionSchema.nullable(), error: rpcError.optional() }),
 });
 export const reviewPreview = defineRpc({

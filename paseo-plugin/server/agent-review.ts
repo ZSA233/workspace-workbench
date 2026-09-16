@@ -427,7 +427,7 @@ export function recordExecutionHandoff(input: { workspaceId: string; projectConf
 function currentRuntimeFromResponse(value: unknown): Runtime {
   if (!value || typeof value !== "object") throw new Error("workspace_runtime_invalid");
   const candidate = value as Record<string, unknown>;
-  if (candidate.managed !== true || typeof candidate.treePath !== "string" || !Array.isArray(candidate.repositories)) throw new Error("workspace_not_managed");
+  if (typeof candidate.managed !== "boolean" || typeof candidate.treePath !== "string" || !Array.isArray(candidate.repositories)) throw new Error("workspace_runtime_invalid");
   const repositories: RuntimeRepository[] = [];
   for (const raw of candidate.repositories) {
     if (!raw || typeof raw !== "object") throw new Error("workspace_runtime_invalid");
@@ -446,7 +446,7 @@ function currentRuntimeFromResponse(value: unknown): Runtime {
   }
   const workspaceId = String(candidate.workspaceId || "");
   if (!workspaceId) throw new Error("workspace_runtime_identity_incomplete");
-  return { workspaceId, managed: true, treePath: canonicalPath(String(candidate.treePath)), repositories };
+  return { workspaceId, managed: candidate.managed, treePath: canonicalPath(String(candidate.treePath)), repositories };
 }
 
 function canonicalPath(value: string): string {
@@ -490,7 +490,7 @@ function reviewerContextMatches(session: ReviewSession, auth: ReviewAuth | null,
 }
 
 async function currentRuntime(workspaceId: string, context: AgentContext): Promise<Runtime> {
-  const response = await (context.query || queryObserver)({ method: "workspace.runtime", params: { workspaceId } });
+  const response = await (context.query || queryObserver)({ method: "workspace.reviewRuntime", params: { workspaceId } });
   if (!response.ok) throw new Error(response.error?.code || "workspace_runtime_unavailable");
   const runtime = currentRuntimeFromResponse(response.result);
   if (runtime.workspaceId !== workspaceId) throw new Error("workspace_runtime_identity_changed");
@@ -819,6 +819,7 @@ function reviewerPrompt(session: ReviewSession): string {
   const packet = session.handoff?.reviewPacket || null;
   const acceptanceCriteria = acceptanceCriteriaFor(session);
   return [
+    ...(!session.executionAgentId ? ["This is a manual read-only review of the main workspace. Use the selected repository paths and current Git metadata to decide the appropriate review scope from the configured review instructions. The working tree may be clean because relevant work was committed. State the exact repositories, commits, files, and evidence actually reviewed. If the instructions do not identify a meaningful scope, report that limitation instead of inventing a fixed commit range or claiming approval."] : []),
     ...(session.materials ? [`Required: use workbench_handoff_read with bundle=${JSON.stringify(session.materials)} to read HANDOFF.md, SOURCES.md and original required sources; this is the version used by execution.`] : []),
     formatCopyFrom(localized, "reviewPromptIntro", [session.id, session.round]),
     localized.reviewPromptRead,
@@ -1260,7 +1261,7 @@ export async function stopReview(session: ReviewSession, context: AgentContext):
   return persistSession({ ...stopping, status: "stopped", stopAgentIds: [], pendingOperation: null, lastError: null }, { kind: "stopped", summary: "Review stopped", details: {} });
 }
 
-async function startReviewInternal(input: { workspaceId: string; projectConfig: string; executionAgentId?: string; locale?: ReviewLocale }, context: AgentContext): Promise<ReviewSession> {
+async function startReviewInternal(input: { workspaceId: string; projectConfig: string; executionAgentId?: string; locale?: ReviewLocale; instructions?: string }, context: AgentContext): Promise<ReviewSession> {
   const existing = readSession(input.workspaceId);
   if (getAgentBinding(input.workspaceId)?.pendingHandoffBundle || existing?.materials && existing.status === "waiting_execution") throw new Error("execution_not_ready");
   const interruptedReviewerOperation = existing?.status === "queued" && (existing.pendingOperation?.kind === "create_reviewer" || existing.pendingOperation?.kind === "send_reviewer");
@@ -1281,6 +1282,21 @@ async function startReviewInternal(input: { workspaceId: string; projectConfig: 
     ...(input.locale ? { locale: input.locale } : {}),
   };
   const runtime = await currentRuntime(input.workspaceId, context);
+  if (!runtime.managed) {
+    const snapshot = await captureSnapshot(input.workspaceId, runtime, context);
+    const handoff = {
+      goal: "Manual read-only review of the main workspace",
+      decisions: [], inScope: runtime.repositories.map(repo => repo.worktreePath), outOfScope: [], steps: [], acceptance: [], constraints: ["Read-only review; do not modify files, commit, push, deploy, or repair."], ambiguities: [],
+      reviewPacket: { requirementUnderstanding: "Review the selected main-workspace repositories using the configured project review instructions.", plan: [], acceptanceCriteria: [], references: [], instructions: input.instructions?.trim() || "" },
+      startMode: "adaptive" as const,
+      expected: { branchByRepository: {}, baseByRepository: {} },
+    };
+    const mainPreferences = { ...preferences, mode: "manual" as const, autoFix: false, reviewerTarget: "independent" as const };
+    let session = newSession({ workspaceId: input.workspaceId, projectConfig: input.projectConfig, executionAgentId: null, preferences: mainPreferences, status: "queued", handoff });
+    session = { ...session, roundTarget: "independent", round: 1, snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, snapshot };
+    session = persistSession(session, { kind: "started", summary: "Manual read-only review started from the main workspace", details: { snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, repositories: runtime.repositories.map(repo => ({ id: repo.id, path: repo.worktreePath, head: repo.head })) } });
+    return startReviewer(session, context);
+  }
   const executionAgentId = input.executionAgentId || existing?.executionAgentId || null;
   if (!executionAgentId) throw new Error("execution_agent_required");
   const execution = await context.paseo.agents.ref(executionAgentId).refresh();
@@ -1297,7 +1313,7 @@ async function startReviewInternal(input: { workspaceId: string; projectConfig: 
   return startReviewer(session, context);
 }
 
-export function startReview(input: { workspaceId: string; projectConfig: string; executionAgentId?: string; locale?: ReviewLocale }, context: AgentContext): Promise<ReviewSession> {
+export function startReview(input: { workspaceId: string; projectConfig: string; executionAgentId?: string; locale?: ReviewLocale; instructions?: string }, context: AgentContext): Promise<ReviewSession> {
   const key = `${currentProject()?.configPath || input.projectConfig}:${input.workspaceId}`;
   const active = reviewStartFlights.get(key);
   if (active) return active;
@@ -1489,7 +1505,7 @@ export async function handleReviewPreview(input: { projectConfig: string; worksp
   }
 }
 
-export async function handleReviewSessionStart(input: { projectConfig: string; workspaceId: string; executionAgentId?: string; locale?: ReviewLocale; token?: string }, context: AgentContext): Promise<ReturnType<typeof reviewSessionStart.output.parse>> {
+export async function handleReviewSessionStart(input: { projectConfig: string; workspaceId: string; executionAgentId?: string; locale?: ReviewLocale; instructions?: string; token?: string }, context: AgentContext): Promise<ReturnType<typeof reviewSessionStart.output.parse>> {
   return withWorkspaceScope(input.workspaceId, async () => {
   try { await authorizeReviewCaller(input.token, context); return { ok: true, session: await startReview(input, context) }; }
   catch (error) { return { ok: false, session: readSession(input.workspaceId), error: errorInfo(error, "Review could not start") }; }
@@ -1506,6 +1522,9 @@ export async function handleReviewSessionControl(input: { projectConfig: string;
     }
     if (input.action === "repair" && session.status !== "changes_requested") {
       return { ok: false, session, error: errorInfo(new Error("review_not_waiting_for_repair")) };
+    }
+    if (input.action === "repair" && !session.executionAgentId) {
+      return { ok: false, session, error: { code: "main_workspace_review_read_only", message: "Main workspace reviews are read-only; apply fixes in a separate development turn" } };
     }
     if (input.action === "independent" && !(session.status === "queued" && session.coordinator?.phase === "waiting") && session.status !== "stopped" && session.status !== "ready_for_review") {
       return { ok: false, session, error: { code: "stop_review_before_switch", message: "Stop or resolve the current review before switching reviewer" } };

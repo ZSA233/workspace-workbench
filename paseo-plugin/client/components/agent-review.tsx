@@ -311,6 +311,7 @@ export function AgentReviewView({
   onStop,
   onResume,
   onIndependent,
+  readOnly = false,
   onSelectHistory,
   onOpenAgent,
   theme,
@@ -325,6 +326,7 @@ export function AgentReviewView({
   onStop: () => void;
   onResume: () => void;
   onIndependent?: () => void;
+  readOnly?: boolean;
   onSelectHistory: (sessionId: string) => void;
   onOpenAgent?: (agentId: string) => void;
   theme: PanelProps["theme"];
@@ -391,7 +393,7 @@ export function AgentReviewView({
       {session.coordinator?.agentId && onOpenAgent ? <Pressable accessibilityRole="button" onPress={() => onOpenAgent(session.coordinator!.agentId!)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.reviewCoordinatorOpen}</Text></Pressable> : null}
       {canReview ? <Pressable accessibilityRole="button" onPress={onReview} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{copy.reviewStart}</Text></Pressable> : null}
       {canManualStart ? <Pressable accessibilityRole="button" onPress={onStart} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{copy.reviewStart}</Text></Pressable> : null}
-      {canRepair ? <Pressable accessibilityRole="button" onPress={onRepair} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{copy.reviewRepairAction}</Text></Pressable> : null}
+      {canRepair && !readOnly ? <Pressable accessibilityRole="button" onPress={onRepair} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{copy.reviewRepairAction}</Text></Pressable> : null}
       {active ? <Pressable accessibilityRole="button" onPress={onStop} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.reviewStop}</Text></Pressable> : null}
       {canResume ? <Pressable accessibilityRole="button" onPress={onResume} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.reviewResume}</Text></Pressable> : null}
       {canStartNew ? <Pressable accessibilityRole="button" onPress={onStart} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.reviewStartNew}</Text></Pressable> : null}

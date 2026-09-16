@@ -66,6 +66,11 @@ type ObserverPanelContentProps = PanelProps & {
   paseoWorkspace: { directory: string; name: string } | null;
 };
 type ChangeTreeMode = "tree" | "files";
+type MainRepositorySelection = {
+  revision: number;
+  sourceRoot: string;
+  repositories: Array<{ id: string; name: string; path: string; configured: boolean; exists: boolean; missing: boolean; selected: boolean }>;
+};
 
 type ObservationArea = {
   label: string;
@@ -307,8 +312,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryFn: () => startBackend({ projectConfig }),
     enabled: Boolean(projectConfig),
     retry: false,
-    staleTime: DEFAULT_OBSERVATION_TIMING.refreshIntervalsMs.list,
-    refetchInterval: DEFAULT_OBSERVATION_TIMING.refreshIntervalsMs.list,
+    staleTime: Infinity,
+    refetchInterval: false,
     refetchOnWindowFocus: false,
   });
   const observationTiming = useMemo(
@@ -333,6 +338,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [tab, setTab] = useState<"workspace" | "review">("workspace");
   const [reviewTab, setReviewTab] = useState<"set" | "agent">("set");
   const [reviewSessionId, setReviewSessionId] = useState("");
+  const [mainReviewInstructions, setMainReviewInstructions] = useState("");
   const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>("all");
   const [selectedCommit, setSelectedCommit] = useState("");
   const [selectedFile, setSelectedFile] = useState("");
@@ -358,6 +364,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [createOpen, setCreateOpen] = useState(false);
   const [workerStartMode, setWorkerStartMode] = useState<"adaptive" | "plan-first">("adaptive");
   const [addRepositoriesOpen, setAddRepositoriesOpen] = useState(false);
+  const [mainRepositoriesOpen, setMainRepositoriesOpen] = useState(false);
+  const [mainRepositoryFilter, setMainRepositoryFilter] = useState("");
+  const [mainRepositoryDraft, setMainRepositoryDraft] = useState<string[]>([]);
+  const [savingMainRepositories, setSavingMainRepositories] = useState(false);
   const newlyCreatedWorkspace = useRef<string | null>(null);
   const [delegating, setDelegating] = useState(false);
   const [lifecycleWorkspaceId, setLifecycleWorkspaceId] = useState("");
@@ -389,7 +399,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "workspace-list"],
     queryFn: () => rpc({ method: "workspace.list", params: { includeRemoved: true } }),
-    enabled: Boolean(projectConfig && backendQuery.data?.state === "ready"),
+    enabled: Boolean(projectConfig),
     refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
@@ -417,6 +427,17 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     () => observedWorkspaces.filter((workspace) => workspace.state !== "removed"),
     [observedWorkspaces],
   );
+  const mainRepositoriesQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "main-repositories"],
+    queryFn: () => rpc({ method: "main.repositories.list", params: {} }),
+    enabled: Boolean(projectConfig && mainRepositoriesOpen),
+    retry: false,
+    staleTime: 0,
+  });
+  const mainRepositories = resultOf<MainRepositorySelection>(mainRepositoriesQuery.data);
+  useEffect(() => {
+    if (mainRepositories) setMainRepositoryDraft(mainRepositories.repositories.filter(repo => repo.selected).map(repo => repo.path));
+  }, [mainRepositories?.revision]);
   const historyWorkspaces = useMemo(
     () => observedWorkspaces.filter((workspace) => workspace.state === "removed"),
     [observedWorkspaces],
@@ -563,6 +584,17 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const displayDetail = listReady && detail?.workspace.id === selectedWorkspaceId
     ? detail
     : null;
+  const saveMainRepositories = useCallback(async () => {
+    if (!mainRepositories || savingMainRepositories) return;
+    setSavingMainRepositories(true);
+    try {
+      const response = await rpc({ method: "main.repositories.save", params: { revision: mainRepositories.revision, repositories: mainRepositoryDraft } });
+      if (!response.ok) throw new Error(response.error?.message || "保存仓库范围失败");
+      await Promise.allSettled([listQuery.refetch(), detailQuery.refetch(), mainRepositoriesQuery.refetch()]);
+      setMainRepositoriesOpen(false);
+    } catch (error) { toast.error(error instanceof Error ? error.message : "保存仓库范围失败"); }
+    finally { setSavingMainRepositories(false); }
+  }, [detailQuery.refetch, listQuery.refetch, mainRepositories, mainRepositoriesQuery.refetch, mainRepositoryDraft, rpc, savingMainRepositories, toast]);
   const selectedRepository = displayDetail?.workspace.id === selectedWorkspaceId
     ? displayDetail.repositories.find((repository) => repository.repoPath === selectedRepoPath)
     : undefined;
@@ -848,12 +880,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         : localizedCopy.agentSessionPermissionFullAccess;
   const startAgentReview = useCallback(() => {
     if (!selectedWorkspaceId) return;
-    void reviewStartRpc({ projectConfig, workspaceId: selectedWorkspaceId, executionAgentId: boundAgent?.id, locale }).then((result) => {
+    void reviewStartRpc({ projectConfig, workspaceId: selectedWorkspaceId, executionAgentId: selectedWorkspaceIsMain ? undefined : boundAgent?.id, locale, ...(selectedWorkspaceIsMain && mainReviewInstructions.trim() ? { instructions: mainReviewInstructions.trim() } : {}) }).then((result) => {
       if (!result.ok) toast.error(localizedReviewError(result.error, localizedCopy));
       else setReviewSessionId("");
       return agentReviewQuery.refetch();
     }).catch(() => toast.error(localizedCopy.reviewErrorGeneric));
-  }, [agentReviewQuery, boundAgent?.id, locale, localizedCopy, projectConfig, reviewStartRpc, selectedWorkspaceId, toast]);
+  }, [agentReviewQuery, boundAgent?.id, locale, localizedCopy, mainReviewInstructions, projectConfig, reviewStartRpc, selectedWorkspaceId, selectedWorkspaceIsMain, toast]);
   const controlAgentReview = useCallback((action: "stop" | "resume" | "review" | "repair" | "independent") => {
     if (!selectedWorkspaceId || !agentReview) return;
     void reviewControlRpc({ projectConfig, workspaceId: selectedWorkspaceId, sessionId: agentReview.id, action }).then((result) => {
@@ -1273,7 +1305,28 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     >
       {observationIssue ? <Text accessibilityRole="alert" style={styles.layoutMenuHint}>{localizedCopy.observationDegraded}: {observationIssue}</Text> : null}
       {selectedWorkspace?.managed && !selectedWorkspaceBlocksTasks && listResult?.capabilities?.create ? <Pressable accessibilityRole="button" onPress={() => setAddRepositoriesOpen(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>添加仓库</Text></Pressable> : null}
+      {selectedWorkspaceIsMain ? <Pressable accessibilityRole="button" onPress={() => { setMainRepositoryFilter(""); setMainRepositoriesOpen(true); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>选择仓库</Text></Pressable> : null}
       {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await listQuery.refetch(); await detailQuery.refetch(); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
+      {mainRepositoriesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingMainRepositories) setMainRepositoriesOpen(false); }} title="主工作区仓库范围">
+        <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
+          <Text style={styles.layoutMenuHint}>仅影响主工作区观察和手动审核，不会创建或删除 worktree。</Text>
+          <TextInput value={mainRepositoryFilter} onChangeText={setMainRepositoryFilter} placeholder="搜索仓库名称或路径" style={styles.targetInput} />
+          {mainRepositoriesQuery.isFetching && !mainRepositories ? <Text style={styles.emptyText}>正在扫描项目仓库…</Text> : null}
+          {mainRepositories?.repositories.filter(repo => !mainRepositoryFilter.trim() || `${repo.name} ${repo.path}`.toLowerCase().includes(mainRepositoryFilter.trim().toLowerCase())).map(repo => {
+            const selected = mainRepositoryDraft.includes(repo.path);
+            return <Pressable key={repo.path} accessibilityRole="checkbox" accessibilityState={{ checked: selected }} onPress={() => setMainRepositoryDraft(current => selected ? current.filter(path => path !== repo.path) : [...current, repo.path])} style={[styles.secondaryButton, selected && styles.scopeButtonActive]}>
+              <Text style={styles.secondaryButtonText}>{selected ? "✓" : "○"} {repo.name}{repo.missing ? " · 目录缺失" : repo.configured ? " · 已配置" : " · 已发现"}</Text>
+              <Text selectable style={styles.layoutMenuHint}>{repo.path}</Text>
+            </Pressable>;
+          })}
+          {!mainRepositoriesQuery.isFetching && !mainRepositories?.repositories.length ? <Text style={styles.emptyText}>当前扫描范围内没有发现 Git 仓库。</Text> : null}
+          <View style={styles.briefActions}>
+            <Pressable accessibilityRole="button" onPress={() => { void mainRepositoriesQuery.refetch(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>重新扫描</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={savingMainRepositories || !mainRepositories} onPress={() => { void saveMainRepositories(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{savingMainRepositories ? "正在保存…" : "保存范围"}</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={savingMainRepositories} onPress={() => setMainRepositoriesOpen(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>取消</Text></Pressable>
+          </View>
+        </Modal.Content>
+      </Modal> : null}
       {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await listQuery.refetch(); newlyCreatedWorkspace.current = id; selectWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
       {handoffPacketOpen ? <Modal open onOpenChange={(open) => { if (!open) setHandoffPacketOpen(false); }} title={localizedCopy.handoffPacket}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
@@ -1377,7 +1430,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabs}>
         <TabButton active={tab === "workspace"} label={localizedCopy.tabWorkspace} onPress={() => setTab("workspace")} theme={theme} styles={styles} />
         <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
-        {selectedWorkspaceId && !selectedWorkspaceIsMain ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
+        {selectedWorkspaceId && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
       </ScrollView>
       <View
         style={styles.bodyShell}
@@ -1388,7 +1441,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       >
         <SectionAllocationContext.Provider value={allocation}>
         <BodyContainer {...(tab === "review" || allocation.outerScroll ? { scrollEnabled: !sectionDragging, contentContainerStyle: styles.bodyContent } : {})} style={[styles.body, tab === "workspace" && !allocation.outerScroll && styles.bodyContent, stableScrollbarStyle]}>
-          {backendQuery.data && backendQuery.data.state !== "ready" ? (
+          {backendQuery.data && backendQuery.data.state !== "ready" && !listReady ? (
             <View style={styles.warningCard}>
               <Text style={styles.warningTitle}>{localizedCopy.setupBackendTitle}</Text>
               <Text style={styles.warningText}>{backendQuery.data.message || (backendQuery.data.state === "starting" ? localizedCopy.setupBackendStarting : localizedCopy.setupBackendFailed)}</Text>
@@ -1447,7 +1500,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               theme={theme}
               styles={styles}
             />
-          ) : reviewTab === "agent" ? <AgentReviewView session={agentReview} history={agentReviewHistoryQuery.data?.sessions || []} loading={agentReviewQuery.isFetching} onStart={startAgentReview} onReview={() => controlAgentReview("review")} onRepair={() => controlAgentReview("repair")} onStop={() => controlAgentReview("stop")} onResume={() => controlAgentReview("resume")} onIndependent={() => controlAgentReview("independent")} onSelectHistory={setReviewSessionId} onOpenAgent={props.navigation ? (id) => props.navigation?.openAgent({ agentId: id }) : undefined} theme={theme} styles={styles} /> : (
+          ) : reviewTab === "agent" ? <View>
+            {selectedWorkspaceIsMain ? <View style={styles.targetRow}>
+              <Text style={styles.layoutMenuHint}>主工作区审核始终手动、独立且只读。审核范围由项目审核提示词和 Reviewer 根据当前 Git 状态判断。</Text>
+              <TextInput value={mainReviewInstructions} onChangeText={setMainReviewInstructions} placeholder="本次补充说明（可选）" multiline style={styles.targetInput} />
+            </View> : null}
+            <AgentReviewView session={agentReview} history={agentReviewHistoryQuery.data?.sessions || []} loading={agentReviewQuery.isFetching} onStart={startAgentReview} onReview={() => controlAgentReview("review")} onRepair={() => controlAgentReview("repair")} onStop={() => controlAgentReview("stop")} onResume={() => controlAgentReview("resume")} onIndependent={() => controlAgentReview("independent")} onSelectHistory={setReviewSessionId} onOpenAgent={props.navigation ? (id) => props.navigation?.openAgent({ agentId: id }) : undefined} readOnly={selectedWorkspaceIsMain} theme={theme} styles={styles} />
+          </View> : (
             <ReviewView
               key={reviewIds.join("|")}
               workspaces={allWorkspaces.filter((workspace) => !isMainWorkspace(workspace))}

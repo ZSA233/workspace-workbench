@@ -10,14 +10,14 @@ import {
   type Json,
 } from "./storage.ts";
 import { type Config } from "./config.ts";
-export async function runtimeIdentity(repo: Json, config: Config) {
+export async function runtimeIdentity(repo: Json, config: Config, verifyRecordedBranch = true) {
   const path = canonical(repo.worktreePath),
     git = new Git(path, config.gitTimeout);
   if (!existsSync(path))
     throw new WorkbenchError("worktree_missing", "worktree is unavailable");
   const branch = await git.branch(),
     head = await git.head();
-  if ((await git.root()) !== path || branch !== repo.branch)
+  if ((await git.root()) !== path || (verifyRecordedBranch && branch !== repo.branch))
     throw new WorkbenchError(
       "worktree_identity_changed",
       "worktree Git identity changed",

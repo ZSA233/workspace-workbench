@@ -17,6 +17,7 @@ export const managementMethods = new Set([
   "workspace.remove",
   "workspace.restore",
   "workspace.delete",
+  "main.repositories.save",
 ]);
 export class Service {
   config: Config;
@@ -69,7 +70,7 @@ export class Service {
   async handle(method: string, params: Json = {}): Promise<Json> {
     if (managementMethods.has(method))
       return this.workspaces.mutations.run(async () => {
-        if (method !== "observer.reload" && !this.config.managementEnabled)
+        if (!["observer.reload", "main.repositories.save"].includes(method) && !this.config.managementEnabled)
           throw new WorkbenchError(
             "capability_unavailable",
             "workspace management disabled",
@@ -94,6 +95,8 @@ export class Service {
         return this.workspaces.identify(
           String(params.directory || this.config.sourceRoot),
         );
+      case "main.repositories.list":
+        return this.workspaces.mainCandidates();
       case "workspace.runtime": {
         const w = this.workspaces.get(String(params.workspaceId || ""));
         if (!w.managed)
@@ -132,6 +135,24 @@ export class Service {
           toolchain,
         };
       }
+      case "workspace.reviewRuntime": {
+        const w = this.workspaces.get(String(params.workspaceId || ""));
+        if (w.state !== "active")
+          throw new WorkbenchError("workspace_state_invalid", "workspace is not active");
+        const repositories = [];
+        for (const repo of w.repositories)
+          repositories.push(await runtimeIdentity(repo, this.config, w.managed === true));
+        return {
+          schemaVersion: protocol,
+          workspaceId: w.id,
+          managed: w.managed === true,
+          treePath: w.treePath,
+          sourceRoot: w.sourceRoot,
+          repositories,
+          capabilities: this.workspaces.capabilities(),
+          reviewOnly: w.managed !== true,
+        };
+      }
       case "repository.graph":
       case "repository.changes":
       case "repository.diff":
@@ -149,6 +170,7 @@ export class Service {
     }
   }
   private async mutate(method: string, params: Json): Promise<Json> {
+    if (method === "main.repositories.save") return this.workspaces.saveMainSelection(params);
     if (method === "observer.reload") {
       const next = loadConfig(this.config.configPath);
       for (const key of [

@@ -589,12 +589,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     setSavingMainRepositories(true);
     try {
       const response = await rpc({ method: "main.repositories.save", params: { revision: mainRepositories.revision, repositories: mainRepositoryDraft } });
-      if (!response.ok) throw new Error(response.error?.message || "保存仓库范围失败");
+      if (!response.ok) throw new Error(response.error?.message || localizedCopy.mainRepositorySaveFailed);
       await Promise.allSettled([listQuery.refetch(), detailQuery.refetch(), mainRepositoriesQuery.refetch()]);
       setMainRepositoriesOpen(false);
-    } catch (error) { toast.error(error instanceof Error ? error.message : "保存仓库范围失败"); }
+    } catch (error) { toast.error(error instanceof Error ? error.message : localizedCopy.mainRepositorySaveFailed); }
     finally { setSavingMainRepositories(false); }
-  }, [detailQuery.refetch, listQuery.refetch, mainRepositories, mainRepositoriesQuery.refetch, mainRepositoryDraft, rpc, savingMainRepositories, toast]);
+  }, [detailQuery.refetch, listQuery.refetch, localizedCopy.mainRepositorySaveFailed, mainRepositories, mainRepositoriesQuery.refetch, mainRepositoryDraft, rpc, savingMainRepositories, toast]);
   const selectedRepository = displayDetail?.workspace.id === selectedWorkspaceId
     ? displayDetail.repositories.find((repository) => repository.repoPath === selectedRepoPath)
     : undefined;
@@ -1305,25 +1305,25 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     >
       {observationIssue ? <Text accessibilityRole="alert" style={styles.layoutMenuHint}>{localizedCopy.observationDegraded}: {observationIssue}</Text> : null}
       {selectedWorkspace?.managed && !selectedWorkspaceBlocksTasks && listResult?.capabilities?.create ? <Pressable accessibilityRole="button" onPress={() => setAddRepositoriesOpen(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>添加仓库</Text></Pressable> : null}
-      {selectedWorkspaceIsMain ? <Pressable accessibilityRole="button" onPress={() => { setMainRepositoryFilter(""); setMainRepositoriesOpen(true); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>选择仓库</Text></Pressable> : null}
+      {selectedWorkspaceIsMain ? <Pressable accessibilityRole="button" onPress={() => { setMainRepositoryFilter(""); setMainRepositoriesOpen(true); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainSelectRepositories}</Text></Pressable> : null}
       {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await listQuery.refetch(); await detailQuery.refetch(); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
-      {mainRepositoriesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingMainRepositories) setMainRepositoriesOpen(false); }} title="主工作区仓库范围">
+      {mainRepositoriesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingMainRepositories) setMainRepositoriesOpen(false); }} title={localizedCopy.mainRepositoryTitle}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
-          <Text style={styles.layoutMenuHint}>仅影响主工作区观察和手动审核，不会创建或删除 worktree。</Text>
-          <TextInput value={mainRepositoryFilter} onChangeText={setMainRepositoryFilter} placeholder="搜索仓库名称或路径" style={styles.targetInput} />
-          {mainRepositoriesQuery.isFetching && !mainRepositories ? <Text style={styles.emptyText}>正在扫描项目仓库…</Text> : null}
+          <Text style={styles.layoutMenuHint}>{localizedCopy.mainRepositoryHint}</Text>
+          <TextInput value={mainRepositoryFilter} onChangeText={setMainRepositoryFilter} placeholder={localizedCopy.mainRepositorySearch} style={styles.targetInput} />
+          {mainRepositoriesQuery.isFetching && !mainRepositories ? <Text style={styles.emptyText}>{localizedCopy.mainRepositoryScanning}</Text> : null}
           {mainRepositories?.repositories.filter(repo => !mainRepositoryFilter.trim() || `${repo.name} ${repo.path}`.toLowerCase().includes(mainRepositoryFilter.trim().toLowerCase())).map(repo => {
             const selected = mainRepositoryDraft.includes(repo.path);
             return <Pressable key={repo.path} accessibilityRole="checkbox" accessibilityState={{ checked: selected }} onPress={() => setMainRepositoryDraft(current => selected ? current.filter(path => path !== repo.path) : [...current, repo.path])} style={[styles.secondaryButton, selected && styles.scopeButtonActive]}>
-              <Text style={styles.secondaryButtonText}>{selected ? "✓" : "○"} {repo.name}{repo.missing ? " · 目录缺失" : repo.configured ? " · 已配置" : " · 已发现"}</Text>
+              <Text style={styles.secondaryButtonText}>{selected ? "✓" : "○"} {repo.name} · {repo.missing ? localizedCopy.mainRepositoryMissing : repo.configured ? localizedCopy.mainRepositoryConfigured : localizedCopy.mainRepositoryDiscovered}</Text>
               <Text selectable style={styles.layoutMenuHint}>{repo.path}</Text>
             </Pressable>;
           })}
-          {!mainRepositoriesQuery.isFetching && !mainRepositories?.repositories.length ? <Text style={styles.emptyText}>当前扫描范围内没有发现 Git 仓库。</Text> : null}
+          {!mainRepositoriesQuery.isFetching && !mainRepositories?.repositories.length ? <Text style={styles.emptyText}>{localizedCopy.mainRepositoryEmpty}</Text> : null}
           <View style={styles.briefActions}>
-            <Pressable accessibilityRole="button" onPress={() => { void mainRepositoriesQuery.refetch(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>重新扫描</Text></Pressable>
-            <Pressable accessibilityRole="button" disabled={savingMainRepositories || !mainRepositories} onPress={() => { void saveMainRepositories(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{savingMainRepositories ? "正在保存…" : "保存范围"}</Text></Pressable>
-            <Pressable accessibilityRole="button" disabled={savingMainRepositories} onPress={() => setMainRepositoriesOpen(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>取消</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={() => { void mainRepositoriesQuery.refetch(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainRepositoryRescan}</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={savingMainRepositories || !mainRepositories} onPress={() => { void saveMainRepositories(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{savingMainRepositories ? localizedCopy.mainRepositorySaving : localizedCopy.mainRepositorySave}</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={savingMainRepositories} onPress={() => setMainRepositoriesOpen(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainRepositoryCancel}</Text></Pressable>
           </View>
         </Modal.Content>
       </Modal> : null}
@@ -1502,8 +1502,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
             />
           ) : reviewTab === "agent" ? <View>
             {selectedWorkspaceIsMain ? <View style={styles.targetRow}>
-              <Text style={styles.layoutMenuHint}>主工作区审核始终手动、独立且只读。审核范围由项目审核提示词和 Reviewer 根据当前 Git 状态判断。</Text>
-              <TextInput value={mainReviewInstructions} onChangeText={setMainReviewInstructions} placeholder="本次补充说明（可选）" multiline style={styles.targetInput} />
+              <Text style={styles.layoutMenuHint}>{localizedCopy.mainReviewHint}</Text>
+              <TextInput value={mainReviewInstructions} onChangeText={setMainReviewInstructions} placeholder={localizedCopy.mainReviewInstructions} multiline style={styles.targetInput} />
             </View> : null}
             <AgentReviewView session={agentReview} history={agentReviewHistoryQuery.data?.sessions || []} loading={agentReviewQuery.isFetching} onStart={startAgentReview} onReview={() => controlAgentReview("review")} onRepair={() => controlAgentReview("repair")} onStop={() => controlAgentReview("stop")} onResume={() => controlAgentReview("resume")} onIndependent={() => controlAgentReview("independent")} onSelectHistory={setReviewSessionId} onOpenAgent={props.navigation ? (id) => props.navigation?.openAgent({ agentId: id }) : undefined} readOnly={selectedWorkspaceIsMain} theme={theme} styles={styles} />
           </View> : (

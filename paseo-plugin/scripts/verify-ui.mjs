@@ -38,6 +38,11 @@ try {
     await page.getByText('Workspace Workbench',{exact:true}).first().click();
     await page.getByText('Repositories',{exact:true}).waitFor({timeout:15_000});
   };
+  const selectRepository = async name => {
+    const row = page.getByText(new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')} ·`)).last();
+    await row.waitFor({timeout:15_000});
+    await row.click();
+  };
   await page.goto(ui.url);
   await page.getByText('Add project',{exact:true}).first().click();
   await page.getByText('Search for directory',{exact:true}).click();
@@ -50,12 +55,24 @@ try {
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor();
   await screenshot('01-clean-workbench.png');
   report.checks.push('real plugin panel loaded from the isolated host, empty state rendered');
+  await page.getByText(/^(选择仓库|Select repositories)$/).click();
+  await page.getByText(/^(主工作区仓库范围|Main workspace repository scope)$/).waitFor();
+  await screenshot('02-main-repository-picker.png');
+  await page.getByText(/extra · (已发现|discovered)/).click();
+  await page.getByText(/^(保存范围|Save scope)$/).click();
+  await page.getByText(/^(主工作区仓库范围|Main workspace repository scope)$/).waitFor({state:'detached'});
+  report.checks.push('main workspace repository picker discovered and selected an unregistered repository without changing the managed catalog');
+  await page.getByText(/Agent.*(Review|审核)/i).last().click();
+  await page.getByText(/主工作区审核始终手动|Main workspace reviews are always manual/).waitFor();
+  await screenshot('03-main-read-only-review.png');
+  report.checks.push('main workspace exposes the independent read-only Agent Review tab');
+  await page.getByText('Workspace',{exact:true}).last().click();
   const file = join(ui.project,'one','ui-proof.txt');
   let started = Date.now();
   writeFileSync(file,'line one\nline two\n');
   await page.getByText('ui-proof.txt',{exact:true}).first().waitFor({timeout:7000});
   report.initialUpdateMs = Date.now()-started;
-  await screenshot('02-automatic-refresh.png');
+  await screenshot('04-automatic-refresh.png');
   await page.getByText('ui-proof.txt',{exact:true}).first().click();
   await page.getByText('line one',{exact:true}).waitFor();
   for (let n=0;n<10;n++) {
@@ -65,7 +82,7 @@ try {
   }
   report.p95Ms=[...report.latenciesMs].sort((a,b)=>a-b)[Math.ceil(report.latenciesMs.length*.95)-1];
   assert.ok(report.p95Ms<=3000,`UI p95 exceeded 3 seconds: ${report.p95Ms}`);
-  await screenshot('03-live-file-diff.png');
+  await screenshot('05-live-file-diff.png');
   report.checks.push('file click opened the real diff; ten disk edits appeared without manual refresh');
   let before;
   for(let n=0;n<30;n++){ before=await health(); if(!before.git.running&&!before.git.queued)break;await sleep(100); }
@@ -76,25 +93,26 @@ try {
   // Full plugin reload reconstructs the client bundle. File-tab selections are
   // currently memory-only, so explicitly reopen through the real navigation.
   await panel();
+  await selectRepository('one');
   await page.getByText('ui-proof.txt',{exact:true}).first().click();
   appendFileSync(file,'after plugin reload\n');
   await page.getByText('after plugin reload',{exact:true}).waitFor({timeout:15_000});
-  await screenshot('04-after-plugin-reload.png');
+  await screenshot('06-after-plugin-reload.png');
   report.checks.push('plugin reload completed; reopening the file restored the current diff');
   const prior=await health();
   assert.equal(prior.process.configPath,join(ui.project,'project.json'));
   process.kill(prior.process.pid,'SIGKILL');
   await page.getByText('after plugin reload',{exact:true}).waitFor();
-  await screenshot('05-retained-snapshot.png');
+  await screenshot('07-retained-snapshot.png');
   started=Date.now();appendFileSync(file,'after backend recovery\n');
   await page.getByText('after backend recovery',{exact:true}).waitFor({timeout:25_000});
   const recovered=await health();assert.notEqual(recovered.process.pid,prior.process.pid);
   report.recovery={elapsedMs:Date.now()-started,beforePid:prior.process.pid,afterPid:recovered.process.pid,buildId:recovered.buildId};
-  await screenshot('06-backend-recovered.png');
+  await screenshot('08-backend-recovered.png');
   report.checks.push('owned test backend crashed; existing page retained content and recovered automatically');
   unlinkSync(file);await panel();
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor({timeout:10_000});
-  await screenshot('07-empty-after-cleanup.png');
+  await screenshot('09-empty-after-cleanup.png');
   report.checks.push('file deletion restored the clean/empty state');
   assert.deepEqual(report.pageErrors,[]);
   report.ok=true;

@@ -34,7 +34,7 @@ const git = (path, args) =>
 for (const project of ["a", "b"]) {
   const path = join(root, project);
   mkdirSync(path);
-  for (const name of ["one", "two", "three"]) {
+  for (const name of ["one", "two", "three", "extra"]) {
     const repo = join(path, name);
     mkdirSync(repo);
     git(repo, ["init", "-q"]);
@@ -81,11 +81,11 @@ const listener = createServer();
 await new Promise((r) => listener.listen(0, "127.0.0.1", r));
 const port = listener.address().port;
 await new Promise((r) => listener.close(r));
-if (process.env.WORKBENCH_LIVE_AGENTS === "1") {
-  const value = JSON.parse(readFileSync(configs[0], "utf8"));
+for (const config of configs) {
+  const value = JSON.parse(readFileSync(config, "utf8"));
   value.agent = { provider: "paseo", bridge: { script: join(plugin, "mcp.mjs"), endpoint: `127.0.0.1:${port}` } };
-  value.review = { mode: "automatic", reviewerTarget: "coordinator", autoFix: false };
-  writeFileSync(configs[0], JSON.stringify(value));
+  value.review = { mode: "manual", reviewerTarget: "independent", autoFix: false };
+  writeFileSync(config, JSON.stringify(value));
 }
 const env = {
   ...process.env,

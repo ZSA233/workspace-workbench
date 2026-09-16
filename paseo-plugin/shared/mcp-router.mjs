@@ -24,6 +24,7 @@ const publicTools = [
   { name: "workbench_workspace_preview", description: "Validate the canonical request and freeze handoff materials without Git changes. Check missing required sources before execute; retries reuse the same materials." },
   { name: "workbench_workspace_execute", description: "Create or reuse the canonical previewed Workspace and start its worker. On success report the handoff and END this turn; the worker implements the plan." },
   { name: "workbench_workspace_status", description: "Read the saved status for an uncertain Workspace handoff using its request ID." },
+  { name: "workbench_workspace_submit", description: "Submit an authorized task and original paths, then create or reuse its Workspace and start the worker without a separate preview." },
   { name: "workbench_review_preview", description: "Preview review context without starting a Reviewer." },
   { name: "workbench_review_execute", description: "Start or continue the Workspace Agent Review orchestration." },
   { name: "workbench_review_status", description: "Read the current and historical Agent Review status." },
@@ -109,6 +110,16 @@ const workspaceStatusSchema = {
     workspaceId: { type: "string", minLength: 1 },
   },
 };
+const workspaceSubmitSchema = {
+  type: "object", required: ["task"], additionalProperties: false,
+  properties: {
+    requestId: { type: "string", minLength: 1 }, workspaceId: { type: "string", minLength: 1 },
+    name: { type: "string", minLength: 1 }, repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    baseRefs: { type: "object", additionalProperties: { type: "string" } }, task: { type: "string", minLength: 1 },
+    originalPaths: { type: "array", maxItems: 128, items: { type: "string", minLength: 1 } },
+    startMode: { enum: ["adaptive", "plan-first"] }, relationship: { enum: ["independent", "child"] },
+  },
+};
 const reviewerReadSchema = {
   type: "object", additionalProperties: false, properties: {},
 };
@@ -187,7 +198,7 @@ const reviewerActions = new Map([
 export async function handle(message, lifecycle = {}) {
   if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version }, ...(tools === publicTools ? { instructions: coordinatorGuidance } : {}) };
   if (message.method === "ping") return {};
-  if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: extraSchema(tool.name) || (tool.name === "workbench_artifact_register" ? artifactRegisterSchema : tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name === "workbench_workspace_status" ? workspaceStatusSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema), annotations: { readOnlyHint: !["workbench_workspace_preview", "workbench_session_message", "workbench_session_stop", "workbench_review_read", "workbench_review_result", "workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: tool.name === "workbench_session_stop" } })) };
+  if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: extraSchema(tool.name) || (tool.name === "workbench_artifact_register" ? artifactRegisterSchema : tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name === "workbench_workspace_status" ? workspaceStatusSchema : tool.name === "workbench_workspace_submit" ? workspaceSubmitSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema), annotations: { readOnlyHint: !["workbench_workspace_preview", "workbench_workspace_submit", "workbench_session_message", "workbench_session_stop", "workbench_review_read", "workbench_review_result", "workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: tool.name === "workbench_session_stop" } })) };
   if (message.method !== "tools/call") throw new Error("method_not_found");
   const tool = tools.find((value) => message.params?.name === value.name);
   const action = tool?.name === "workbench_artifact_register" ? "artifact_register" : tool?.name === "workbench_execution_report" ? "execution_report" : tool ? reviewerActions.get(tool.name) || tool.name.replace("workbench_workspace_", "") : null;

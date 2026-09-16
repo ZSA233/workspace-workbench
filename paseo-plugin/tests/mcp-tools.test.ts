@@ -24,6 +24,7 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
     "workbench_workspace_preview",
     "workbench_workspace_execute",
     "workbench_workspace_status",
+    "workbench_workspace_submit",
     "workbench_review_preview",
     "workbench_review_execute",
     "workbench_review_status",
@@ -42,6 +43,7 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
     if (tool.name === "workbench_artifact_register") assert.deepEqual(tool.inputSchema.required, ["artifact"]);
     if (["workbench_workspace_preview", "workbench_workspace_execute"].includes(tool.name)) assert.deepEqual(tool.inputSchema.required, ["requestId", "handoff"]);
     if (tool.name === "workbench_workspace_status") assert.deepEqual(tool.inputSchema.required, ["requestId"]);
+    if (tool.name === "workbench_workspace_submit") assert.deepEqual(tool.inputSchema.required, ["task"]);
     if (["workbench_review_preview", "workbench_review_status", "workbench_review_stop", "workbench_review_resume"].includes(tool.name)) assert.deepEqual(tool.inputSchema.required, ["workspaceId"]);
     if (tool.name === "workbench_review_execute") assert.deepEqual(tool.inputSchema.required, ["workspaceId", "action"]);
   }

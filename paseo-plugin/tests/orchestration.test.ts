@@ -8,7 +8,7 @@ import { childExecutionConfig } from "../server/execution-policy.ts";
 import { orchestrate } from "../server/orchestrator.ts";
 import { withProject } from "../server/projects.ts";
 import { readState } from "../server/orchestration-state.ts";
-import { workflowRequest, workflowStatusRequest } from "../shared/orchestration.ts";
+import { workflowRequest, workflowStatusRequest, workflowSubmitRequest } from "../shared/orchestration.ts";
 
 const parent = (cwd: string, plan = false) => ({ id: "parent", cwd, provider: "codex", model: "fixture", currentModeId: "auto", availableModes: [{ id: "auto" }, { id: "full-access" }], pendingPermissions: [], features: [{ id: "plan_mode", type: "toggle", value: plan }] }) as unknown as PaseoAgent;
 test("provider modes fail closed and inherit the current permission by default", () => {
@@ -98,6 +98,37 @@ test("repository aliases fail closed when a name is ambiguous", async () => {
     const result = await withProject({ projectConfig: config }, () => orchestrate("preview", request, "parent", { paseo, query }));
     assert.equal((result as { ok?: boolean }).ok, false);
     assert.equal((result as { error?: { code?: string } }).error?.code, "repository_ambiguous");
+  } finally {
+    if (prior === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = prior;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("submit creates an internal operation identity and hands original paths to the worker without preview replay", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "workbench-submit-")));
+  const config = join(root, "project.json"), source = join(root, "requirements.md");
+  writeFileSync(source, "Original requirement\n");
+  writeFileSync(config, JSON.stringify({ schemaVersion: 1, sourceRoot: root, workspaceRoot: root, stateRoot: root, recordsRoot: join(root, "records"), treesRoot: join(root, "trees"), repositories: [], agent: { provider: "paseo" } }));
+  const prior = process.env.WORKSPACE_WORKBENCH_CONFIG; process.env.WORKSPACE_WORKBENCH_CONFIG = config;
+  let sent = "";
+  const worker = { ...parent(root), id: "submit-worker", cwd: root, workspaceId: "paseo-submit", status: "idle", activeTurn: null } as unknown as PaseoAgent;
+  const paseo = { agents: { ref: (id: string) => ({ refresh: async () => ({ agent: id === "parent" ? parent(root) : worker }), send: async (message: string) => { sent = message; } }), list: async () => ({ entries: [], pageInfo: { hasMore: false } }) }, workspaces: { open: async () => ({ id: "paseo-submit", agents: { create: async () => ({ id: "submit-worker", current: () => worker, refresh: async () => ({ agent: worker }), send: async (message: string) => { sent = message; } }) } }) } } as unknown as PaseoApi;
+  const query = async (input: { method: string }) => {
+    if (input.method === "workspace.list") return { ok: true, result: { capabilities: { create: true, agent: true, prepare: false } } };
+    if (input.method === "workspace.detail") return { ok: true, result: { workspace: { sourceRoot: root }, repositories: [{ id: "repo", repoPath: ".", sourcePath: root, worktreePath: root }] } };
+    if (input.method === "workspace.runtime") return { ok: true, result: { workspaceId: "sample", managed: true, treePath: root, repositories: [], capabilities: { agent: true } } };
+    return { ok: true, result: {} };
+  };
+  try {
+    const request = workflowSubmitRequest.parse({ workspaceId: "sample", task: "Implement the approved requirement", originalPaths: [source] });
+    const result = await withProject({ projectConfig: config }, () => orchestrate("submit", request, "parent", { paseo, query }));
+    assert.equal((result as { ok?: boolean }).ok, true);
+    const requestId = (result as { requestId?: string }).requestId;
+    assert.ok(requestId);
+    assert.match(sent, /Implement the approved requirement/);
+    assert.match(sent, /requirements\.md/);
+    const saved = withProject({ projectConfig: config }, () => readState<{ stage?: string }>(`workflow:parent:${requestId}`));
+    assert.equal(saved?.stage, "handed-off");
   } finally {
     if (prior === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = prior;
     rmSync(root, { recursive: true, force: true });

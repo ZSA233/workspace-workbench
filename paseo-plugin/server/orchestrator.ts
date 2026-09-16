@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { coordinatorGuidance, handoffOutcome } from "../shared/handoff-guidance.mjs";
 import { createPreviewBundle, readBundle, assertBundleReady, writeBundleEnvironment } from "./handoff-bundles.ts";
 import type { BundleRef } from "../shared/handoff-materials.ts";
@@ -10,7 +11,7 @@ import { queryObserver } from "./observer.ts";
 import { currentProject, resolveProject } from "./projects.ts";
 import { digest, readState, writeState } from "./orchestration-state.ts";
 import { getWorkbenchCopy } from "../shared/copy.ts";
-import { workflowRequest, type WorkflowRequest, type WorkflowStatusRequest } from "../shared/orchestration.ts";
+import { workflowRequest, workflowSubmitRequest, type WorkflowRequest, type WorkflowStatusRequest, type WorkflowSubmitRequest } from "../shared/orchestration.ts";
 
 type Progress = {
   bundle?: BundleRef;
@@ -138,16 +139,37 @@ function normalizeWorkflowRequest(request: WorkflowRequest, value: unknown): Nor
   }
 }
 
-export async function orchestrate(action: "preview" | "execute" | "status", request: WorkflowRequest | WorkflowStatusRequest, parentAgentId: string, context: AgentContext) {
+export async function orchestrate(action: "preview" | "execute" | "status" | "submit", request: WorkflowRequest | WorkflowStatusRequest | WorkflowSubmitRequest, parentAgentId: string, context: AgentContext) {
   const query = context.query || queryObserver;
   const parent = (await context.paseo.agents.ref(parentAgentId).refresh())?.agent;
   if (!parent) throw new Error("parent_agent_unavailable");
-  if (action === "execute" && parent.labels?.["workspace-workbench.role"] === "workspace-worker") throw new Error("execution_child_must_not_delegate");
+  if ((action === "execute" || action === "submit") && parent.labels?.["workspace-workbench.role"] === "workspace-worker") throw new Error("execution_child_must_not_delegate");
   const project = currentProject();
   if (!project) throw new Error("project_context_required");
   if (resolveProject({ directory: parent.cwd }).configPath !== project.configPath) throw new Error("parent_project_mismatch");
+  let submitted = false;
+  if (action === "submit") {
+    const simple = workflowSubmitRequest.parse(request);
+    const requestId = simple.requestId || randomUUID();
+    request = workflowRequest.parse({
+      requestId, workspaceId: simple.workspaceId, name: simple.name, repositories: simple.repositories,
+      baseRefs: simple.baseRefs,
+      handoff: {
+        goal: simple.task,
+        startMode: simple.startMode,
+        relationship: simple.relationship,
+        reviewPacket: {
+          requirementUnderstanding: "Use the task statement and original documents directly; inspect repository facts before implementation.",
+          references: simple.originalPaths.map((path, index) => ({ id: `source-${index + 1}`, kind: "document", title: path.split(/[\\/]/).at(-1) || path, path, required: false })),
+          instructions: simple.originalPaths.length ? `Read these original paths directly when accessible:\n${simple.originalPaths.join("\n")}` : "",
+        },
+      },
+    });
+    action = "execute";
+    submitted = true;
+  }
   const key = `workflow:${parentAgentId}:${request.requestId}`;
-  const previous = readState<Progress>(key);
+  let previous = readState<Progress>(key);
   if (action === "status") {
     if (!previous) return { ok: false, progress: null, execution: null, error: { code: "workflow_not_found", message: "No Workspace handoff exists for this request" } };
     if (request.workspaceId && previous.workspaceId && request.workspaceId !== previous.workspaceId) {
@@ -156,7 +178,7 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
     return { ok: true, progress: previous, execution: previous.workspaceId ? await handleWorkspaceBinding({ workspaceId: previous.workspaceId }, context) : null };
   }
   const rawRequest = workflowRequest.parse(request);
-  if (action === "execute" && !previous) {
+  if (action === "execute" && !previous && !submitted) {
     return { ok: false, action: "blocked", sideEffects: [], requiresExecution: false, error: { code: "preview_required", message: getWorkbenchCopy(rawRequest.handoff.reviewLocale).workspacePreviewRequired } };
   }
   const listing = await query({ method: "workspace.list", params: { includeRemoved: true } });
@@ -170,6 +192,10 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
   if (!normalized.ok) return normalized;
   const fullRequest = normalized.request;
   const identity = digest({ request: fullRequest, parentAgentId });
+  if (submitted && !previous) {
+    previous = { identity, identityVersion: 2, workspaceId: fullRequest.workspaceId, stage: "previewed", previewedAt: new Date().toISOString() };
+    writeState(key, previous);
+  }
   let compatiblePrevious = previous;
   if (compatiblePrevious && compatiblePrevious.identity !== identity) {
     const legacyRetry = compatiblePrevious.identityVersion === undefined
@@ -251,7 +277,7 @@ export async function orchestrate(action: "preview" | "execute" | "status", requ
     if (progress.bundle) writeBundleEnvironment(progress.bundle, runtime.result);
     const result = await handleAgentDelegate({ workspaceId: progress.workspaceId!, parentAgentId, handoff: fullRequest.handoff, bundle: progress.bundle }, context);
     writeState(key, { ...progress, stage: result.ok ? "handed-off" : "handoff-blocked", result });
-    return handoffOutcome(result);
+    return { ...handoffOutcome(result), requestId: fullRequest.requestId };
   })().finally(() => flights.delete(flightKey));
   flights.set(flightKey, run);
   return run;

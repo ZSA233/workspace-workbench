@@ -14,10 +14,22 @@ export const workflowStatusRequest = z.object({
   requestId: z.string().min(1),
   workspaceId: z.string().min(1).optional(),
 });
+export const workflowSubmitRequest = z.object({
+  requestId: z.string().min(1).optional(),
+  workspaceId: z.string().min(1).optional(),
+  name: z.string().trim().min(1).optional(),
+  repositories: z.array(z.string().min(1)).min(1).optional(),
+  baseRefs: z.record(z.string(), z.string()).default({}),
+  task: z.string().trim().min(1),
+  originalPaths: z.array(z.string().trim().min(1)).max(128).default([]),
+  startMode: z.enum(["adaptive", "plan-first"]).default("adaptive"),
+  relationship: z.enum(["independent", "child"]).optional(),
+});
 export const orchestrationRpc = defineRpc({
   name: "workspace.workbench.orchestrate",
-  input: z.object({ projectConfig: z.string(), token: z.string().min(1), action: z.enum(["preview", "execute", "status"]), request: z.union([workflowRequest, workflowStatusRequest]) }),
+  input: z.object({ projectConfig: z.string(), token: z.string().min(1), action: z.enum(["preview", "execute", "status", "submit"]), request: z.union([workflowRequest, workflowStatusRequest, workflowSubmitRequest]) }),
   output: z.unknown(),
 });
 export type WorkflowRequest = z.infer<typeof workflowRequest>;
 export type WorkflowStatusRequest = z.infer<typeof workflowStatusRequest>;
+export type WorkflowSubmitRequest = z.infer<typeof workflowSubmitRequest>;

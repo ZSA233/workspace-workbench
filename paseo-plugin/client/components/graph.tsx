@@ -186,7 +186,7 @@ export function CommitGraph({
   }, []);
   const laneCount = Math.max(1, ...rows.map((row) => row.laneCount));
   const railWidth = laneCount * GRAPH_LANE_WIDTH + 8;
-  const workingFileCount = Math.max(repository.workingChanges.files, repository.dirtyPaths?.length || 0);
+  const workingFileCount = Math.max((repository.workingChanges?.files ?? repository.dirtyPaths?.length ?? 0), repository.dirtyPaths?.length || 0);
   const showWorktree = Boolean(repository.dirty || workingFileCount > 0);
   const graphHeight = (rows.length + (showWorktree ? 1 : 0)) * GRAPH_ROW_HEIGHT;
   const branchScopeAvailable = repository.branchScopeAvailable !== false;
@@ -218,7 +218,7 @@ export function CommitGraph({
           {!selectedCommit ? (
             <View style={styles.changeScopeRow}>
               {showWorktree ? <ScopeButton label={formatCopyFrom(copy, "text_22c7a14625", [workingFileCount])} active={changeScope === "working"} onPress={() => onScope("working")} styles={styles} /> : null}
-              {branchScopeAvailable ? <ScopeButton label={formatCopyFrom(copy, "text_46b798f402", [repository.changes.files])} active={changeScope === "branch"} onPress={() => onScope("branch")} styles={styles} /> : null}
+              {branchScopeAvailable ? <ScopeButton label={formatCopyFrom(copy, "text_46b798f402", [(repository.changes?.files ?? "—")])} active={changeScope === "branch"} onPress={() => onScope("branch")} styles={styles} /> : null}
             </View>
           ) : <IconButton label={copy.text_62b4069970} icon="ArrowLeft" color={theme.colors.foregroundMuted} onPress={() => onCommit("")} />}
           <IconButton label={copy.text_4f55ee1e68} icon="Info" active={detailsOpen} color={theme.colors.foregroundMuted} onPress={onToggleDetails} />
@@ -345,9 +345,9 @@ export function WorkingTreeRow({
       <View style={styles.graphRowCopy}>
           <Text numberOfLines={1} style={styles.graphSubject}>
           <Text style={styles.graphWorktreeLabel}>{copy.text_ef7c82a2b7}</Text>
-          <Text style={styles.graphSha}>{formatCopyFrom(copy, "text_29e918bbdd", [formatCopyFrom(copy, "fileCountLabel", [Math.max(repository.workingChanges.files, repository.dirtyPaths?.length || 0)])])}</Text>
+          <Text style={styles.graphSha}>{formatCopyFrom(copy, "text_29e918bbdd", [formatCopyFrom(copy, "fileCountLabel", [Math.max((repository.workingChanges?.files ?? repository.dirtyPaths?.length ?? 0), repository.dirtyPaths?.length || 0)])])}</Text>
           <Text>{" · "}</Text>
-          <ChangeCounts additions={repository.workingChanges.additions} deletions={repository.workingChanges.deletions} styles={styles} />
+          {repository.workingChanges ? <ChangeCounts additions={repository.workingChanges.additions} deletions={repository.workingChanges.deletions} styles={styles} /> : <Text style={styles.graphSha}>{copy.observationNotLoaded}</Text>}
         </Text>
       </View>
     </Pressable>

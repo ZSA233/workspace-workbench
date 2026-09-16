@@ -352,7 +352,7 @@ export function RepositoryRow({
   const stale = Boolean(repository.observationStale || hasTransientIssue);
   const status = stale ? "stale" : repository.status || (repository.dirty ? "dirty" : "clean");
   const statusTone = statusColor(status, theme);
-  const workingFiles = Math.max(repository.workingChanges.files, repository.dirtyPaths?.length || 0);
+  const workingFiles = Math.max((repository.workingChanges?.files ?? repository.dirtyPaths?.length ?? 0), repository.dirtyPaths?.length || 0);
   const metaStatus = stale
     ? copy.text_f9f75e6112
     : repository.dirty && workingFiles
@@ -366,9 +366,10 @@ export function RepositoryRow({
         <Text numberOfLines={1} style={styles.repositoryMeta}>{metaStatus} {copy.text_97def2ca9e}{repository.headShort || "—"}</Text>
       </View>
       <View style={styles.repositoryMetrics}>
-        {repository.changes.files ? <ChangeCounts additions={repository.changes.additions} deletions={repository.changes.deletions} styles={styles} /> : null}
-        {workingFiles ? <ChangeCounts additions={repository.workingChanges.additions} deletions={repository.workingChanges.deletions} fileCount={workingFiles} prefix="dirty" styles={styles} /> : null}
-        {!repository.changes.files && !workingFiles ? <Text style={styles.repositoryDelta}>{stale ? copy.text_f9f75e6112 : copy.text_8fae4f2a02}</Text> : null}
+        {repository.changes?.files ? <ChangeCounts additions={repository.changes?.additions ?? 0} deletions={repository.changes?.deletions ?? 0} styles={styles} /> : null}
+        {workingFiles && repository.workingChanges ? <ChangeCounts additions={repository.workingChanges?.additions ?? 0} deletions={repository.workingChanges?.deletions ?? 0} fileCount={workingFiles} prefix="dirty" styles={styles} /> : null}
+        {!repository.changes && !repository.workingChanges ? <Text style={styles.repositoryDelta}>{copy.observationNotLoaded}</Text> : null}
+        {repository.changes && !repository.changes.files && !workingFiles ? <Text style={styles.repositoryDelta}>{stale ? copy.text_f9f75e6112 : copy.text_8fae4f2a02}</Text> : null}
       </View>
     </Pressable>
   );

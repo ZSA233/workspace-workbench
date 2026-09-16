@@ -33,8 +33,11 @@ paseo plugin reload workspace-workbench-paseo --json
 
 项目配置中的 `limits.gitTimeoutSeconds` 是单条 Git 命令预算；观察总预算会自动使用它加
 5 秒余量。也可以设置 `limits.observationTimeoutSeconds`，但不能低于这个派生下限，否则
-配置会明确报告 `config_invalid`。缓存 TTL (`cacheTtlSeconds`) 只决定何时启动后台刷新，
-不会清空界面已经展示的最后一次成功快照。观察总预算、Unix socket bridge 和面板刷新等待
+配置会明确报告 `config_invalid`。摘要、历史图和 diff 使用事件版本缓存，不再因
+`cacheTtlSeconds` 到期而完整扫描。活动页面每秒批量查询内存版本号，文件变化合并
+300ms（最长 1 秒）后刷新；正常监听下每 5 分钟核对，监听降级时每 30 秒核对。
+页面需求租约为 30 秒，租约到期后停止后台 Git 并释放监听；返回页面会核验旧快照。
+摘要不计算 numstat，增删行数由 Changes 按需加载。观察总预算、Unix socket bridge 和面板刷新等待
 会从同一份策略依次派生传输余量，因此调整 Git 超时后不会留下不一致的下游超时。
 
 ## 添加仓库
@@ -61,3 +64,29 @@ Agent 交接、Review、权限和计划/执行模式见[根目录 README](../REA
 
 固定版本或离线安装可使用 GitHub Release 压缩包。压缩包包含 Node 后端源码，不包含项目
 配置、Workspace 记录、缓存、socket、Agent 绑定或 secret。
+
+## 连接超时排查
+
+MCP 每次工具调用建立独立连接，总预算 55 秒，包含排队；连接最多 8 秒，预留
+1 秒清理，RPC 使用剩余预算。最多 4 个活动调用、16 个排队调用；ping 和取消通知
+独立处理。取消和 stdin 关闭会回收本次连接，清理异常记入诊断而不覆盖执行结果。
+连接阶段失败不会发送业务请求；RPC 超时则不代表
+服务端操作已撤销，必须沿用原 requestId 查询状态，不能创建新身份盲目重试。
+连接清理失败不能覆盖已经收到的成功结果或原始错误。
+
+`running` 只表示插件进程存在。排查时分别检查 Paseo RPC、后端
+`observer.health` 的 `activeRequests`/`closing` 和 Paseo daemon 日志。
+`session_caller_not_coordinator` 是会话授权错误；材料类型或路径错误也是校验失败，
+都不应通过反复重载修复。多个 MCP 进程可能分别属于不同活动会话，不能批量终止。
+
+多仓 Workspace 容器本身不是 Git 仓库。若容器位于另一个 Git 仓库之下，Paseo 的
+Git watcher/reconciliation 可能向上发现外层仓库并重复扫描；用
+`git -C <workspace-container> rev-parse --show-toplevel` 确认扫描对象，再检查
+宿主日志中的 `git status --porcelain` 超时。这与 Workbench 后端健康检查是不同链路。
+不要为消除扫描而删除外层 `.git` 或给容器初始化新的 Git 仓库。
+
+本地目录插件的 MCP 源码修改由新启动的 MCP 进程加载。插件 reload 只重载 Paseo
+插件及其后端，不会替换已有 Agent 持有的 MCP 进程；已有会话须由宿主重新连接 MCP
+或在新会话验证，不能声称 reload 已让全部旧会话生效。
+
+详细设计、兼容边界和验证命令见 [观察与传输链路](../docs/observation-and-transport.md)。

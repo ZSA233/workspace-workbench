@@ -1,3 +1,8 @@
+import { findExistingReviewer, reviewerTurnIsActive, inspectCoordinatorTurn, availableCodexModels } from "./review-host.ts";
+import { withReviewTransitionLock } from "./review-state-transitions.ts";
+import { sessionKey, indexKey, sessionIndex, readSession, persistSession, storedReviewSessions, activeReviewSessions, forgetReviewWorkspace, onReviewChanged } from "./agent-review-store.ts";
+export { readReviewSession } from "./agent-review-store.ts";
+import { ReviewRecoveryClock } from "./review-recovery-clock.ts";
 import { withWorkspaceScope } from "./workspace-scope.ts";
 import { sessionLimits, coordinatorReview } from "../shared/session-tools.ts";
 import { assertBundleReady } from "./handoff-bundles.ts";
@@ -51,15 +56,12 @@ import {
 } from "../shared/agent-review.ts";
 
 const execFileAsync = promisify(execFile);
-const sessionKey = (workspaceId: string, id: string) => `agent-review:session:${workspaceId}:${id}`;
-const indexKey = (workspaceId: string) => `agent-review:index:${workspaceId}`;
 const reportKey = (agentId: string) => `agent-review:execution-report:${agentId}`;
 const turnKey = (agentId: string, turnId: string) => `agent-review:turn:${agentId}:${turnId}`;
 const authKey = (sessionId: string) => `agent-review:auth:${sessionId}`;
 const now = () => new Date().toISOString();
 const reviewerMonitors = new Set<string>();
 const reviewStartFlights = new Map<string, Promise<ReviewSession>>();
-const reviewTransitionQueues = new Map<string, Promise<void>>();
 let coordinatorContext: AgentContext | null = null;
 let coordinatorTickRunning = false;
 let coordinatorGeneration = 0;
@@ -99,7 +101,6 @@ type Runtime = {
   treePath: string | null;
   repositories: RuntimeRepository[];
 };
-type StoredReviewIndex = { sessionIds: string[]; activeSessionId: string | null };
 type StoredGlobalSettings = {
   version: 1;
   defaults: Partial<ReviewPreferences>;
@@ -127,49 +128,6 @@ type ExecutionReportRecord = {
 };
 type ReviewAuth = { token: string; workspaceId: string; reviewerAgentId: string };
 
-async function acquireReviewDiskLock(path: string): Promise<() => void> {
-  const deadline = Date.now() + 15_000;
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  while (true) {
-    try {
-      mkdirSync(path, { mode: 0o700 });
-      const heartbeat = setInterval(() => {
-        try { utimesSync(path, new Date(), new Date()); } catch { /* release will report no state change */ }
-      }, 30_000);
-      heartbeat.unref();
-      return () => { clearInterval(heartbeat); rmSync(path, { recursive: true, force: true }); };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        if (Date.now() - statSync(path).mtimeMs > 10 * 60_000) rmSync(path, { recursive: true, force: true });
-      }
-      catch { /* another owner may be replacing the lock */ }
-      if (Date.now() >= deadline) throw new Error("review_orchestrator_busy");
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 75));
-    }
-  }
-}
-
-async function withReviewTransitionLock<T>(workspaceId: string, operation: () => Promise<T>): Promise<T> {
-  const project = currentProject();
-  if (!project) throw new Error("project_context_required");
-  const key = `${project.configPath}:${workspaceId}`;
-  const previous = reviewTransitionQueues.get(key) || Promise.resolve();
-  let releaseQueue!: () => void;
-  const queued = new Promise<void>((resolveQueue) => { releaseQueue = resolveQueue; });
-  const chain = previous.then(() => queued);
-  reviewTransitionQueues.set(key, chain);
-  await previous;
-  let releaseDisk: (() => void) | null = null;
-  try {
-    releaseDisk = await acquireReviewDiskLock(join(project.stateRoot, "reviews", `.transition-${digest(workspaceId)}`));
-    return await operation();
-  } finally {
-    releaseDisk?.();
-    releaseQueue();
-    if (reviewTransitionQueues.get(key) === chain) reviewTransitionQueues.delete(key);
-  }
-}
 
 function handoffSnapshot(handoff: Handoff): NonNullable<ReviewSession["handoff"]> {
   const packet = handoff.reviewPacket || reviewPacketSchema.parse({});
@@ -320,26 +278,6 @@ function updateReviewSettings(scope: "project" | "global" | "project-model", pat
   atomicJson(reviewSettingsPath(), file);
 }
 
-function sessionIndex(workspaceId: string): StoredReviewIndex {
-  const value = readReviewState<StoredReviewIndex>(indexKey(workspaceId));
-  return value && Array.isArray(value.sessionIds) ? value : { sessionIds: [], activeSessionId: null };
-}
-
-function readSession(workspaceId: string, id?: string): ReviewSession | null {
-  const index = sessionIndex(workspaceId);
-  const sessionId = id || index.activeSessionId || index.sessionIds.at(-1);
-  if (!sessionId) return null;
-  const raw = readReviewState<unknown>(sessionKey(workspaceId, sessionId));
-  const legacy = raw as { preferences?: { reviewerTarget?: string } } | null;
-  const parsed = reviewSessionSchema.safeParse(legacy?.preferences && !legacy.preferences.reviewerTarget
-    ? { ...legacy, preferences: { ...legacy.preferences, reviewerTarget: "independent" } } : raw);
-  return parsed.success ? parsed.data : null;
-}
-
-export function readReviewSession(workspaceId: string, id?: string): ReviewSession | null {
-  return readSession(workspaceId, id);
-}
-
 export async function prepareSessionSupplement(workspaceId: string): Promise<void> {
   await withReviewTransitionLock(workspaceId, async () => {
     const session = readSession(workspaceId);
@@ -410,45 +348,13 @@ export function clearReviewWorkspaceState(workspaceId: string): { sessionsRemove
     if (removeReviewState(authKey(id))) authRecordsRemoved += 1;
   }
   const indexRemoved = removeReviewState(indexKey(workspaceId));
+  forgetReviewWorkspace(workspaceId);
   return { sessionsRemoved, indexRemoved, authRecordsRemoved, runtimeRecordsRemoved };
 }
 
 /** Used by the local integration harness; the token is never returned by a UI RPC. */
 export function reviewAuthToken(sessionId: string): string | null {
   return readReviewState<ReviewAuth>(authKey(sessionId))?.token || null;
-}
-
-function persistSession(session: ReviewSession, event?: { kind: ReviewEvent["kind"]; summary: string; messageKey?: string; messageArgs?: Record<string, string | number | boolean>; details?: Record<string, unknown> }): ReviewSession {
-  const stored = readReviewState<unknown>(sessionKey(session.workspaceId, session.id));
-  const parsedStored = reviewSessionSchema.safeParse(stored);
-  if (parsedStored.success && parsedStored.data.revision !== session.revision) throw new Error("review_state_conflict");
-  const nextEvent: ReviewEvent | null = event ? {
-    id: randomUUID(),
-    sequence: session.events.length,
-    createdAt: now(),
-    kind: event.kind,
-    messageKey: event.messageKey || `review.event.${event.kind}`,
-    ...(event.messageArgs ? { messageArgs: event.messageArgs } : {}),
-    summary: event.summary,
-    details: {
-      ...(event.details || {}),
-      round: session.round,
-    },
-  } : null;
-  const next = reviewSessionSchema.parse({
-    ...session,
-    revision: session.revision + 1,
-    events: nextEvent ? [...session.events, nextEvent] : session.events,
-    updatedAt: now(),
-  });
-  const previous = stored && typeof stored === "object" ? stored as Record<string, unknown> : {};
-  writeReviewState(sessionKey(next.workspaceId, next.id), { ...previous, ...next,
-    preferences: { ...(previous.preferences && typeof previous.preferences === "object" ? previous.preferences : {}), ...next.preferences } });
-  const index = sessionIndex(next.workspaceId);
-  const sessionIds = index.sessionIds.includes(next.id) ? index.sessionIds : [...index.sessionIds, next.id];
-  const active = ["approved", "blocked", "failed", "stopped", "limit_reached"].includes(next.status) ? index.activeSessionId === next.id ? null : index.activeSessionId : next.id;
-  writeReviewState(indexKey(next.workspaceId), { sessionIds, activeSessionId: active });
-  return next;
 }
 
 function newSession(input: { workspaceId: string; projectConfig: string; executionAgentId: string | null; preferences: ReviewPreferences; status?: ReviewSession["status"]; handoff?: ReviewSession["handoff"] }): ReviewSession {
@@ -830,11 +736,6 @@ function reviewerModelId(value: string): string {
   return value.startsWith("codex/") ? value.slice("codex/".length) : value;
 }
 
-async function availableCodexModels(context: AgentContext, cwd: string): Promise<Array<{ id: string; label: string; selectable: boolean; isDefault: boolean }>> {
-  const response = await context.paseo.providers.listModels("codex", { cwd, requestId: randomUUID() });
-  return (response.models || []).map((model) => ({ id: model.id, label: model.label || model.id, selectable: model.isSelectable !== false, isDefault: model.isDefault === true }));
-}
-
 async function resolveReviewerModel(session: ReviewSession, runtime: Runtime, context: AgentContext): Promise<{ model: string; models: Array<{ id: string; label: string; selectable: boolean; isDefault: boolean }> }> {
   const models = await availableCodexModels(context, runtime.treePath!);
   const explicit = session.preferences.reviewerModel;
@@ -935,15 +836,6 @@ function reviewerPrompt(session: ReviewSession): string {
     `${localized.reviewSettingsRole}: ${role}.`,
     `${localized.reviewSettingsInstructions}: ${instructions}`,
   ].join(" ");
-}
-
-async function findExistingReviewer(session: ReviewSession, context: AgentContext): Promise<PaseoAgent | null> {
-  const project = currentProject();
-  if (!project) throw new Error("project_context_required");
-  const result = await context.paseo.agents.list({ filter: { labels: { "workspace-workbench.role": "reviewer", "workspace-workbench.review-session": session.id, "workspace-workbench.review-round": String(session.round), "workspace-workbench.project": digest(project.configPath) } }, page: { limit: 50 } });
-  const entries = result.entries.map((entry) => entry.agent);
-  if (entries.length > 1) throw new Error("reviewer_candidates_ambiguous");
-  return entries[0] || null;
 }
 
 async function ensureReviewer(session: ReviewSession, runtime: Runtime, context: AgentContext): Promise<ReviewSession> {
@@ -1063,17 +955,6 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
   const active = persistSession(next, { kind: "review_started", summary: `Review round ${next.round} started`, details: { reviewerAgentId: handle.id, model: model.model, snapshotId: next.snapshotId, diffId: next.diffId } });
   monitorReviewer(handle, active, context);
   return active;
-}
-
-async function reviewerTurnIsActive(handle: PaseoAgentHandle, session: ReviewSession): Promise<boolean | null> {
-  if (!session.reviewerTurnId || session.reviewerAgentId !== handle.id) return false;
-  try {
-    const refreshed = await handle.refresh();
-    if (!refreshed?.agent || refreshed.agent.id !== handle.id) return null;
-    return refreshed.agent.activeTurn?.turnId === session.reviewerTurnId;
-  } catch {
-    return null;
-  }
 }
 
 function monitorReviewer(handle: PaseoAgentHandle, session: ReviewSession, context: AgentContext): void {
@@ -1680,23 +1561,8 @@ export async function handleReviewerResultRpc(input: ReviewerResultRpcInput, con
   catch (error) { return { ok: false, session: readSession(input.workspaceId, input.sessionId), accepted: false, error: errorInfo(error, "Reviewer result rejected") }; }
 }
 
-function storedReviewSessions(): ReviewSession[] {
-  const project = currentProject();
-  if (!project) return [];
-  try {
-    return readdirSync(join(project.stateRoot, "reviews"), { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-      .flatMap((entry) => {
-        try {
-          const parsed = reviewSessionSchema.safeParse(JSON.parse(readFileSync(join(project.stateRoot, "reviews", entry.name), "utf8")));
-          return parsed.success ? [parsed.data] : [];
-        } catch { return []; }
-      });
-  } catch { return []; }
-}
-
 async function recoverReviewerForAgent(agentId: string, context: AgentContext): Promise<void> {
-  for (const session of storedReviewSessions()) {
+  for (const session of activeReviewSessions()) {
     if (session.status === "reviewing" && session.reviewerAgentId === agentId) await recoverReviewerMonitor(session, context);
   }
 }
@@ -1736,22 +1602,6 @@ export async function handleCoordinatorReview(input: typeof coordinatorReview.in
   });
 }
 
-type CoordinatorTurnInspection = "active" | "ended" | "changed" | "unknown";
-
-async function inspectCoordinatorTurn(session: ReviewSession, context: AgentContext): Promise<CoordinatorTurnInspection> {
-  const agentId = session.reviewerAgentId;
-  const turnId = session.reviewerTurnId;
-  if (!agentId || !turnId || session.coordinator?.agentId !== agentId) return "changed";
-  try {
-    const refreshed = await context.paseo.agents.ref(agentId).refresh();
-    const agent = refreshed?.agent;
-    if (!agent || agent.id !== agentId) return "unknown";
-    if (agent.activeTurn?.turnId === turnId) return "active";
-    return agent.activeTurn ? "changed" : "ended";
-  } catch {
-    return "unknown";
-  }
-}
 
 function coordinatorTimeoutWindow(session: ReviewSession): { timeoutAt: string; hardTimeoutAt: string } | null {
   const acceptedAt = session.coordinator?.acceptedAt ? Date.parse(session.coordinator.acceptedAt) : NaN;
@@ -1795,7 +1645,7 @@ export async function tickCoordinatorReviews(context: AgentContext): Promise<voi
   try {
     const candidates: Array<{ config: string; session: ReviewSession }> = [];
     for (const project of registeredProjects()) await withProject({ projectConfig: project.configPath }, () => {
-      for (const session of storedReviewSessions()) if (session.roundTarget === "coordinator" && ["queued", "reviewing"].includes(session.status)) candidates.push({ config: project.configPath, session });
+      for (const session of activeReviewSessions()) if (session.roundTarget === "coordinator" && ["queued", "reviewing"].includes(session.status)) candidates.push({ config: project.configPath, session });
     });
     candidates.sort((a, b) => (a.session.coordinator?.queuedAt || "").localeCompare(b.session.coordinator?.queuedAt || ""));
     const occupied = new Set(candidates.filter(c => c.session.coordinator?.phase !== "waiting").map(c => c.session.coordinator?.agentId));
@@ -1875,7 +1725,7 @@ export function registerReviewLifecycle(server: PluginServerContext): () => void
       try {
         await withProject({ projectConfig: project.configPath }, async () => {
           await handleReviewTurnEnded(event, context);
-          for (const session of storedReviewSessions()) {
+          for (const session of activeReviewSessions()) {
             if (session.roundTarget !== "coordinator" || !["reviewing", "stopping"].includes(session.status) || session.reviewerAgentId !== event.agent.id || session.reviewerTurnId !== event.turnId) continue;
             await withReviewTransitionLock(session.workspaceId, async () => {
               const latest = readSession(session.workspaceId, session.id);
@@ -1888,7 +1738,7 @@ export function registerReviewLifecycle(server: PluginServerContext): () => void
               } else persistSession({ ...latest, status: "failed", lastError: { code: "coordinator_review_incomplete", message: "Review turn ended without a completed structured result" } }, { kind: "failed", summary: "Coordinator review incomplete", details: {} });
             });
           }
-          for (const session of storedReviewSessions()) {
+          for (const session of activeReviewSessions()) {
             if (session.roundTarget !== "independent" || session.status !== "stopping" || session.lastError?.code !== "reviewer_timeout" || session.reviewerAgentId !== event.agent.id || session.reviewerTurnId !== event.turnId) continue;
             await withReviewTransitionLock(session.workspaceId, async () => {
               const latest = readSession(session.workspaceId, session.id);
@@ -1916,7 +1766,13 @@ export function registerReviewLifecycle(server: PluginServerContext): () => void
       catch (error) { console.warn("workspace_workbench_review_recovery_failed", errorInfo(error)); }
     }
   });
-  const timer = setInterval(() => { if (coordinatorContext) void tickCoordinatorReviews(coordinatorContext).catch(() => {}); }, sessionLimits.reviewPollMs);
-  timer.unref();
-  return () => { coordinatorGeneration++; clearInterval(timer); coordinatorContext = null; cleanup(); cleanupStarted(); };
+  const clock = new ReviewRecoveryClock(async () => { if (coordinatorContext) await tickCoordinatorReviews(coordinatorContext); });
+  const updateClock = (session: ReviewSession) => {
+    const window = coordinatorTimeoutWindow(session);
+    const deadline = window ? Date.parse(Date.now() < Date.parse(window.timeoutAt) ? window.timeoutAt : window.hardTimeoutAt) : undefined;
+    clock.update(`${session.projectConfig}:${session.id}`, ["queued", "reviewing", "stopping"].includes(session.status), deadline);
+  };
+  const unsubscribe = onReviewChanged(updateClock);
+  for (const project of registeredProjects()) void withProject({ projectConfig: project.configPath }, () => { for (const session of activeReviewSessions()) updateClock(session); });
+  return () => { coordinatorGeneration++; clock.close(); unsubscribe(); coordinatorContext = null; cleanup(); cleanupStarted(); };
 }

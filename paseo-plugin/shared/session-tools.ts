@@ -2,7 +2,7 @@ import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { reviewArtifactReferenceSchema } from "./review-packet.ts";
 
-export const sessionLimits = { waitMs: 30_000, pollMs: 1_000, historyItems: 20, maxHistoryItems: 100, historyBytes: 32_768, reviewPollMs: 15_000 } as const;
+export const sessionLimits = { waitMs: 30_000, pollMs: 1_000, historyItems: 20, maxHistoryItems: 100, historyBytes: 32_768, reviewPollMs: 60_000 } as const;
 export const sessionOperation = defineRpc({
   name: "workspace.workbench.session",
   input: z.object({

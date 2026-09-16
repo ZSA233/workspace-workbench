@@ -108,7 +108,7 @@ const daemon = spawn(
     "--no-relay",
     "--no-mcp",
     "--no-inject-mcp",
-    "--no-web-ui",
+    process.env.WORKBENCH_LIVE_UI === "1" ? "--web-ui" : "--no-web-ui",
   ],
   { env, stdio: ["ignore", "pipe", "pipe"] },
 );
@@ -267,6 +267,7 @@ try {
   // Keep this above the configured TTL even when the daemon is busy starting
   // both project workers and servicing the compatibility probes.
   await delay(3500);
+  await rpc(configs[0], "workspace.detail", { workspaceId: "sample", force: true });
   const staleGraph = await rpc(configs[0], "repository.graph", branchGraphQuery);
   const staleChanges = await rpc(configs[0], "repository.changes", branchChangesQuery);
   for (const response of [staleGraph, staleChanges]) {
@@ -367,6 +368,10 @@ try {
   report.checks.push(
     "actual plugin request recovered a crashed project backend",
   );
+  if (process.env.WORKBENCH_LIVE_UI === "1") {
+    console.log(JSON.stringify({ kind: "ui-ready", url: `http://127.0.0.1:${port}`, project: resolve(configs[0], ".."), continueFile: join(root, "continue") }));
+    await wait(() => existsSync(join(root, "continue")), 600_000);
+  }
   execFileSync(
     cli,
     [

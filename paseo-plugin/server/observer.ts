@@ -1,3 +1,5 @@
+import { sessionRevision } from "./session-observation.ts";
+import { reviewRevision } from "./agent-review-store.ts";
 import { withWorkspaceScope } from "./workspace-scope.ts";
 import type { AgentContext } from "./agent-provider.ts";
 import { createConnection, type Socket } from "node:net";
@@ -33,6 +35,7 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
+const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(): number {
   const project = currentProject();
@@ -83,8 +86,9 @@ function cacheable(response: ObserverResponse): boolean {
   return !observation?.state || observation.state === "ready";
 }
 
-class ObserverBridge {
+export class ObserverBridge {
   private sequence = 0;
+  private readonly cancellations = new Set<() => void>();
   private readonly inFlight = new Map<string, Promise<ObserverResponse>>();
   private readonly cache = new Map<string, { expiresAt: number; response: ObserverResponse }>();
 
@@ -96,9 +100,12 @@ class ObserverBridge {
       const finish = (callback: () => void) => {
         if (settled) return;
         settled = true;
+        this.cancellations.delete(cancel);
         callback();
         socket?.destroy();
       };
+      const cancel = () => fail(new BridgeError("observer_unavailable", "observer bridge closed"));
+      this.cancellations.add(cancel);
       const timer = setTimeout(() => {
         finish(() => reject(new BridgeError("observer_timeout", "observer request timed out")));
       }, timeoutMs);
@@ -111,13 +118,17 @@ class ObserverBridge {
       socket.on("connect", () => socket?.write(`${JSON.stringify(request)}\n`));
       socket.on("data", (chunk: string | Buffer) => {
         buffer += String(chunk);
+        if (Buffer.byteLength(buffer) > 32 * 1024 * 1024) { fail(new BridgeError("observer_output_limit", "observer response exceeded limit")); return; }
         const newline = buffer.indexOf("\n");
         if (newline < 0) return;
         clearTimeout(timer);
         try {
-          finish(() => resolveResponse(JSON.parse(buffer.slice(0, newline)) as ObserverResponse));
+          const response = JSON.parse(buffer.slice(0, newline)) as ObserverResponse;
+          if (!response || typeof response !== "object" || typeof response.ok !== "boolean" || (response.id !== undefined && response.id !== request.id))
+            throw new Error("invalid observer response envelope");
+          finish(() => resolveResponse(response));
         } catch {
-          finish(() => reject(new BridgeError("observer_invalid_response", "observer returned invalid JSON")));
+          fail(new BridgeError("observer_invalid_response", "observer returned invalid JSON"));
         }
       });
       socket.on("error", (error) => {
@@ -143,7 +154,7 @@ class ObserverBridge {
     }
     const key = `${configuredSocketPath()}:${input.method}:${JSON.stringify(input.params || {})}`;
     const projectPrefix = `${configuredSocketPath()}:`;
-    const cached = this.cache.get(key);
+    const cached = input.method === "observer.versions" ? undefined : this.cache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.response;
     this.cache.delete(key);
     const active = this.inFlight.get(key);
@@ -154,10 +165,15 @@ class ObserverBridge {
         if (response.ok && ["observer.reload", "workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete"].includes(input.method)) {
           for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
         }
-        if (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method)) {
+        if (input.method !== "observer.versions" && (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method))) {
           if (cacheable(response)) this.cache.set(key, { response, expiresAt: Date.now() + OBSERVATION_TIMING_DEFAULTS.bridgeResponseCacheTtlMs });
         }
         return response;
+      })
+      .catch(error => {
+        if (!replayableMethods.has(input.method) && error instanceof BridgeError)
+          return { ok: false, error: { code: "request_uncertain_retry_same_identity", message: "Response unavailable; reconcile the saved operation before retrying" } };
+        throw error;
       })
       .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, pending);
@@ -165,6 +181,7 @@ class ObserverBridge {
   }
 
   close(): void {
+    for (const cancel of this.cancellations) cancel();
     this.inFlight.clear();
     this.cache.clear();
   }
@@ -192,10 +209,15 @@ export async function handleObserver(input: QueryInput, context?: AgentContext):
         });
       }
       try {
-        return await bridge.call(input);
+        const response = await bridge.call(input);
+        if (input.method === "observer.versions" && response.ok && response.result && typeof response.result === "object")
+          return { ...response, result: { ...response.result, reviewRevision: reviewRevision(), sessionRevision: sessionRevision() } };
+        return response;
       } catch (error) {
         const code = error instanceof BridgeError ? error.code : "";
         const project = currentProject();
+        if (!replayableMethods.has(input.method) && error instanceof BridgeError)
+          return { ok: false, error: { code: "request_uncertain_retry_same_identity", message: "Response unavailable; reconcile the saved operation before retrying" } };
         if (!project || !["observer_connection_refused", "observer_unavailable"].includes(code)) throw error;
         const backend = await startBackend(project.configPath);
         if (backend.state !== "ready") throw error;

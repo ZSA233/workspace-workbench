@@ -422,6 +422,9 @@ test("repository graph and changes keep ready state during stale branch refresh"
     assert.equal(changes.observation.state, "ready");
     await new Promise((r) => setTimeout(r, 550));
 
+    // TTL is not invalidation. Explicitly invalidate the same cached snapshots.
+    assert.equal((await service.handle("repository.graph", graphParams)).cache.refreshing, false);
+    service.observation.scheduler.force(workspace.id);
     const staleGraph = await service.handle("repository.graph", graphParams);
     const staleChanges = await service.handle("repository.changes", changesParams);
     assert.equal(staleGraph.observation.state, "ready");

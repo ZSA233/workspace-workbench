@@ -251,11 +251,13 @@ export function useLastSuccessfulResponse(
   const cacheAgeMs = Number.isFinite(cacheTimestamp)
     ? Math.max(0, Date.now() - cacheTimestamp)
     : entry.cacheAgeMs;
+  const validation = (displayResponse?.result as { observation?: { validatedAt?: string } } | undefined)?.observation?.validatedAt;
+  const recentlyValidated = !!validation && Date.now() - Date.parse(validation) < 30_000;
   const expired = Boolean(
     displayResponse &&
       (entry.failureCount >= STALE_FAILURE_LIMIT ||
-        failureAge >= staleAfterMs ||
-        (cacheAgeMs !== null && cacheAgeMs >= staleAfterMs)),
+        (!recentlyValidated && (failureAge >= staleAfterMs ||
+        (cacheAgeMs !== null && cacheAgeMs >= staleAfterMs)))),
   );
   const stale = Boolean(displayResponse && (failed || expired));
   const status = observationStatusFor(displayResponse, failed, expired);

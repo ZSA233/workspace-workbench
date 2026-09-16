@@ -1,3 +1,5 @@
+import { useObservationRefresh } from "./use-observation-refresh";
+import { useObservationVersions } from "./use-observation-versions";
 import {
 useRpc,
 usePaseo,
@@ -388,7 +390,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "workspace-list"],
     queryFn: () => rpc({ method: "workspace.list", params: { includeRemoved: true } }),
     enabled: Boolean(projectConfig && backendQuery.data?.state === "ready"),
-    refetchInterval: observationTiming.refreshIntervalsMs.list,
+    refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -398,6 +400,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listResult = resultOf<ListResult>(listState.response);
   const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
   const listReady = Boolean(listResult);
+  const observationIssue = useObservationVersions(projectConfig, [selectedWorkspaceId], listReady);
   useEffect(() => {
     if (backendQuery.data?.state !== "ready" || listReady) return;
     void listQuery.refetch();
@@ -439,7 +442,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "agent-context", parentAgentId],
     queryFn: () => agentContextRpc({ projectConfig, agentId: parentAgentId! }),
     enabled: Boolean(parentAgentId && listReady),
-    refetchInterval: 10_000,
+    refetchInterval: 60_000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -458,7 +461,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "execution-binding", selectedWorkspaceId],
     queryFn: () => bindingRpc({ workspaceId: selectedWorkspaceId }),
     enabled: Boolean(selectedWorkspaceId && listReady && !selectedWorkspaceIsMain && listResult?.capabilities?.agent),
-    refetchInterval: 10_000,
+    refetchInterval: 60_000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -480,7 +483,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "identify", workspaceDirectory],
     queryFn: () => rpc({ method: "workspace.identify", params: { directory: workspaceDirectory } }),
     enabled: Boolean(workspaceDirectory && preferences.hydrated && !selectionResolved && listReady),
-    refetchInterval: observationTiming.refreshIntervalsMs.list,
+    refetchInterval: false,
     refetchIntervalInBackground: false,
     retry: false,
     staleTime: observationTiming.clientQueryStaleTimeMs,
@@ -541,7 +544,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "workspace-detail", selectedWorkspaceId],
     queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, mode: "summary", refreshToolchain: false } }),
     enabled: Boolean(selectedWorkspaceId && selectedWorkspace && listReady),
-    refetchInterval: observationTiming.refreshIntervalsMs.detail,
+    refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -582,7 +585,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable),
-    refetchInterval: observationTiming.refreshIntervalsMs.repository,
+    refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -604,7 +607,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable),
-    refetchInterval: observationTiming.refreshIntervalsMs.repository,
+    refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -632,7 +635,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     setChangeScope(
       selectedRepository.branchScopeAvailable === false
         ? "working"
-        : selectedRepository.dirty || selectedRepository.workingChanges.files
+        : selectedRepository.dirty || (selectedRepository.workingChanges?.files ?? selectedRepository.dirtyPaths?.length ?? 0)
           ? "working"
           : "branch",
     );
@@ -652,7 +655,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       },
     }),
     enabled: tab === "review" && reviewIds.length > 0 && listReady,
-    refetchInterval: observationTiming.refreshIntervalsMs.review,
+    refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -674,12 +677,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const agentReviewQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "agent-review", selectedWorkspaceId, reviewSessionId],
     queryFn: () => reviewSessionRpc({ projectConfig, workspaceId: selectedWorkspaceId, ...(reviewSessionId ? { sessionId: reviewSessionId } : {}) }),
-    enabled: Boolean(selectedWorkspaceId && listReady), refetchInterval: 2_000, refetchOnWindowFocus: false, retry: false,
+    enabled: Boolean(selectedWorkspaceId && listReady), refetchInterval: false, refetchOnWindowFocus: false, retry: false,
   });
   const agentReviewHistoryQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "agent-review-history", selectedWorkspaceId],
     queryFn: () => reviewSessionListRpc({ projectConfig, workspaceId: selectedWorkspaceId }),
-    enabled: Boolean(selectedWorkspaceId && listReady), refetchInterval: 15_000, refetchOnWindowFocus: false, retry: false,
+    enabled: Boolean(selectedWorkspaceId && listReady), refetchInterval: false, refetchOnWindowFocus: false, retry: false,
   });
   const reviewSettingsQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "agent-review-settings"],
@@ -883,7 +886,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     if (!latest || (Date.parse(candidate) > Date.parse(latest))) return candidate;
     return latest;
   }, null);
-  const refreshFlight = useRef<Promise<void> | null>(null);
 
   const prepareSelectedToolchain = useCallback(async () => {
     if (!selectedWorkspaceId || selectedWorkspaceIsMain || !displayDetail || preparingToolchain) return;
@@ -907,27 +909,17 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     if (failure) toast.error(failure);
   }, [detailQuery.refetch, displayDetail, listQuery.refetch, localizedCopy.text_273309c58d, preparingToolchain, rpc, selectedWorkspaceId, selectedWorkspaceIsMain, toast]);
 
-  const refreshAll = useCallback((): Promise<void> => {
-    if (refreshFlight.current) return refreshFlight.current;
-    setManualRefreshing(true);
-    const requests: Array<Promise<unknown>> = [
-      boundedRefresh(backendQuery.refetch(), observationTiming.clientRefreshTimeoutMs),
-      ...(backendQuery.data?.state === "ready" ? [boundedRefresh(listQuery.refetch(), observationTiming.clientRefreshTimeoutMs)] : []),
-      ...(workspaceDirectory && !selectionResolved ? [boundedRefresh(identifyQuery.refetch(), observationTiming.clientRefreshTimeoutMs)] : []),
-      ...(selectedWorkspaceId ? [boundedRefresh(detailQuery.refetch(), observationTiming.clientRefreshTimeoutMs)] : []),
-      ...(selectedWorkspaceId && selectedRepoPath && !selectedWorkspaceUnavailable ? [boundedRefresh(graphQuery.refetch(), observationTiming.clientRefreshTimeoutMs), boundedRefresh(changesQuery.refetch(), observationTiming.clientRefreshTimeoutMs)] : []),
-      ...(tab === "review" && reviewIds.length ? [boundedRefresh(reviewQuery.refetch(), observationTiming.clientRefreshTimeoutMs)] : []),
+  const refreshAll = useObservationRefresh(() => [
+      backendQuery.refetch(),
+      ...(backendQuery.data?.state === "ready" ? [listQuery.refetch()] : []),
+      ...(workspaceDirectory && !selectionResolved ? [identifyQuery.refetch()] : []),
+      ...(selectedWorkspaceId ? [detailQuery.refetch()] : []),
+      ...(selectedWorkspaceId && selectedRepoPath && !selectedWorkspaceUnavailable ? [graphQuery.refetch(), changesQuery.refetch()] : []),
+      ...(tab === "review" && reviewIds.length ? [reviewQuery.refetch()] : []),
       ...(selectedWorkspaceId && selectedWorkspace && !selectedWorkspaceIsMain && listResult?.capabilities?.agent
-        ? [boundedRefresh(bindingQuery.refetch(), observationTiming.clientRefreshTimeoutMs)]
+        ? [bindingQuery.refetch()]
         : []),
-    ];
-    const flight = Promise.allSettled(requests).then(() => undefined).finally(() => {
-      refreshFlight.current = null;
-      setManualRefreshing(false);
-    });
-    refreshFlight.current = flight;
-    return flight;
-  }, [backendQuery.data?.state, backendQuery.refetch, bindingQuery.refetch, changesQuery.refetch, detailQuery.refetch, graphQuery.refetch, identifyQuery.refetch, listQuery.refetch, listResult?.capabilities?.agent, observationTiming.clientRefreshTimeoutMs, reviewIds.length, reviewQuery.refetch, selectedRepoPath, selectedWorkspace, selectedWorkspaceId, selectedWorkspaceIsMain, selectedWorkspaceUnavailable, selectionResolved, tab, workspaceDirectory]);
+    ], observationTiming.clientRefreshTimeoutMs, setManualRefreshing);
 
   useBoundedCacheRefresh("workspace-list", listQuery.data, listQuery.refetch, observationTiming.followUpDelaysMs);
   useBoundedCacheRefresh(`workspace-detail:${selectedWorkspaceId}`, detailQuery.data, detailQuery.refetch, observationTiming.followUpDelaysMs);
@@ -1279,6 +1271,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         if (Math.abs(width - panelWidth) > 1) setPanelWidth(width);
       }}
     >
+      {observationIssue ? <Text accessibilityRole="alert" style={styles.layoutMenuHint}>{localizedCopy.observationDegraded}: {observationIssue}</Text> : null}
       {selectedWorkspace?.managed && !selectedWorkspaceBlocksTasks && listResult?.capabilities?.create ? <Pressable accessibilityRole="button" onPress={() => setAddRepositoriesOpen(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>添加仓库</Text></Pressable> : null}
       {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await listQuery.refetch(); await detailQuery.refetch(); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
       {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await listQuery.refetch(); newlyCreatedWorkspace.current = id; selectWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
@@ -1477,7 +1470,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <Text style={styles.layoutMenuHint}>{observationLabel}</Text>
         <Text style={styles.layoutMenuHint}>{localizedCopy.text_a6625c543c}{formatObservedTime(lastSuccessfulAt, localizedCopy)}</Text>
         {observationAreas.filter((area) => area.fetching || (area.snapshot.status !== "fresh" && area.snapshot.status !== "loading")).map((area) => <Text key={area.label} style={area.snapshot.status === "expired" ? styles.warningText : styles.layoutMenuHint}>{observationAreaDetail(area, localizedCopy)}</Text>)}
-        <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.refreshNow} disabled={manualRefreshing} onPress={() => { void refreshAll(); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.refreshNow}</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.refreshNow} disabled={manualRefreshing} onPress={() => { void (selectedWorkspaceId ? rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, force: true } }).catch(() => undefined).then(() => refreshAll()) : refreshAll()); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.refreshNow}</Text></Pressable>
       </AnchoredMenu>
       <ProjectStorageMenu
         open={storageMenuOpen}

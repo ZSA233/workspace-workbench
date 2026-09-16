@@ -1,3 +1,4 @@
+import { sessionChanged } from "./session-observation.ts";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve, join } from "node:path";
@@ -96,6 +97,7 @@ export function registerAgentIntegration(server: PluginServerContext): () => voi
     for (const project of registeredProjects()) await withProject({ projectConfig: project.configPath }, async () => {
       const saved = allAgentBindings().find((binding) => binding.agentId === agentId);
       if (!saved) return;
+      sessionChanged();
       if (saved.relationship !== "child" || !saved.parentAgentId) {
         putAgentBinding({ ...saved, status, updatedAt: new Date().toISOString(), pendingNotifications: [] });
         return;

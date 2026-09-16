@@ -1,3 +1,5 @@
+import { gitDiagnostics } from "./git.ts";
+import { buildId } from "../../shared/build-id.mjs";
 import { loadConfig, type Config } from "./config.ts";
 import { Workspaces } from "./workspaces.ts";
 import { ObservationCache } from "./cache.ts";
@@ -24,6 +26,7 @@ export class Service {
   observation: Observation;
   startedAt = Date.now();
   version: string;
+  build = buildId(["../server/backend/service.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts"]);
   constructor(config: Config, version = "0.1.3") {
     this.config = config;
     this.version = version;
@@ -35,6 +38,7 @@ export class Service {
       this.runtime,
       this.cache,
     );
+    this.cache.onProduced = () => this.observation.scheduler.published();
   }
   health() {
     const caps = this.workspaces.capabilities();
@@ -43,6 +47,8 @@ export class Service {
       service: "workspace-workbench",
       implementation: "node",
       version: this.version,
+      buildId: this.build,
+      git: gitDiagnostics(),
       project: {
         id: this.config.projectId,
         displayName: this.config.displayName,
@@ -57,6 +63,7 @@ export class Service {
       timing: this.config.timing,
       uptimeSeconds: (Date.now() - this.startedAt) / 1000,
       cache: this.cache.status(),
+      observationScheduler: this.observation.scheduler.health(),
     };
   }
   async handle(method: string, params: Json = {}): Promise<Json> {
@@ -71,9 +78,12 @@ export class Service {
           return await this.mutate(method, params);
         } finally {
           this.cache.clear();
+          this.observation.scheduler.force();
         }
       });
     switch (method) {
+      case "observer.versions":
+        return this.observation.scheduler.versions(Array.isArray(params.workspaceIds) ? params.workspaceIds.slice(0, 100).filter((id: unknown) => typeof id === "string") : []);
       case "observer.health":
         return this.health();
       case "workspace.list":
@@ -204,6 +214,7 @@ export class Service {
   }
   async close() {
     await this.workspaces.mutations.drain();
+    await this.observation.scheduler.close();
     await this.cache.close();
   }
 }

@@ -25,6 +25,7 @@ export class ObservationCache {
   private background = new Set<Promise<unknown>>();
   private failures = new Map<string, string>();
   private generation = 0;
+  onProduced?: () => void;
   config: Config;
   path: string;
   constructor(config: Config) {
@@ -140,6 +141,7 @@ export class ObservationCache {
           this.entries.delete(key);
           this.entries.set(key, entry);
           this.trim();
+          this.onProduced?.();
           if (value.observation?.state && value.observation.state !== "ready")
             this.failures.set(key, value.observation.state);
           else this.failures.delete(key);
@@ -206,18 +208,18 @@ export class ObservationCache {
     this.background.add(probe);
     void probe.finally(() => this.background.delete(probe));
   }
-  async read(key: string, fingerprint: Fingerprint, work: () => Promise<Json>) {
+  async read(key: string, fingerprint: Fingerprint, work: () => Promise<Json>, versioned = false, waitFresh = false) {
     const entry = this.entries.get(key);
     const fingerprintMatches =
       typeof fingerprint !== "string" || entry?.fingerprint === fingerprint;
-    if (entry && fingerprintMatches && Date.now() - entry.time <= this.config.cacheTtl) {
+    if (entry && fingerprintMatches && (versioned || Date.now() - entry.time <= this.config.cacheTtl)) {
       this.entries.delete(key);
       this.entries.set(key, entry);
       if (typeof fingerprint !== "string")
         this.startFingerprintProbe(key, entry, fingerprint, work);
       return this.metadata(entry);
     }
-    if (entry) {
+    if (entry && !waitFresh) {
       void this.produce(key, fingerprint, work).catch(() => {});
       return this.metadata(entry, true);
     }

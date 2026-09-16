@@ -1,3 +1,4 @@
+import { ObservationScheduler } from "./observation-scheduler.ts";
 import { existsSync, lstatSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
 import { Git, type GitFile } from "./git.ts";
@@ -39,14 +40,17 @@ export class Observation {
   workspaces: Workspaces;
   runtime: Runtime | null;
   cache: ObservationCache;
+  scheduler: ObservationScheduler;
   constructor(
     workspaces: Workspaces,
     runtime: Runtime | null,
     cache: ObservationCache,
+    scheduler = new ObservationScheduler(),
   ) {
     this.workspaces = workspaces;
     this.runtime = runtime;
     this.cache = cache;
+    this.scheduler = scheduler;
   }
   git(repo: Json, deadline?: number) {
     return new Git(
@@ -129,6 +133,11 @@ export class Observation {
     };
   }
   async repository(repo: Json, deadline?: number): Promise<Json> {
+    const path = repo.worktreePath || repo.sourcePath;
+    return this.cache.read(`summary:${path}`, this.scheduler.token(path),
+      () => this.repositorySnapshot(repo, deadline), true, true);
+  }
+  private async repositorySnapshot(repo: Json, deadline?: number): Promise<Json> {
     const started = Date.now(),
       git = this.git(repo, deadline);
     const result: Json = {
@@ -153,8 +162,8 @@ export class Observation {
       issues: [],
       changeIssues: [],
       changesLoaded: false,
-      workingChanges: count([]),
-      changes: count([]),
+      workingChanges: null,
+      changes: null,
     };
     if (!result.worktreeExists) {
       result.status = "missing";
@@ -170,7 +179,7 @@ export class Observation {
     try {
       await this.withinDeadline(
         (async () => {
-          if (!(await git.valid())) {
+          if (!(await git.valid()) || await git.root() !== git.path) {
             result.status = "invalid";
             result.issues = [
               { code: "repository_invalid", message: "path is not a Git checkout" },
@@ -214,18 +223,11 @@ export class Observation {
               pushed: ahead === 0,
             });
           }
-          if (status.length) {
-            const files = await git.files("working");
-            result.workingChanges = count(files);
-            result.dirtyPaths = files.map((file) => file.path);
-          }
-          if (baseSha && head && baseSha !== head)
-            try {
-              result.changes = count(await git.files("branch", baseSha));
-            } catch (error) {
-              result.changeIssues = [issue(error)];
-            }
-          result.changesLoaded = true;
+          result.dirtyPaths = status.map(([, path]) => path);
+          // Expensive numstat and branch diffs belong to Changes, not summary.
+          result.workingChanges = null;
+          result.changes = null;
+          result.changesLoaded = false;
         })(),
         deadline,
       );
@@ -233,6 +235,7 @@ export class Observation {
       result.status = "error";
       result.issues.push(issue(error));
     }
+    if (!["error", "missing", "invalid"].includes(result.status)) this.scheduler.observed(git.path);
     return { ...result, observedAt: now(), durationMs: Date.now() - started };
   }
   list(params: Json) {
@@ -254,47 +257,21 @@ export class Observation {
       },
     };
   }
-  async fingerprint(repo: Json, deadline?: number) {
-    const git = this.git(repo, deadline);
-    if (!existsSync(git.path)) return "missing";
-    try {
-      const dir = await git.text(["rev-parse", "--absolute-git-dir"]);
-      return hash(
-        stable([
-          await git.head(),
-          await git.branch(),
-          ...["HEAD", "index", "logs/HEAD"].map((name) => {
-            try {
-              const st = lstatSync(join(dir, name));
-              return `${st.mtimeMs}:${st.size}`;
-            } catch {
-              return "missing";
-            }
-          }),
-        ]),
-      );
-    } catch {
-      return "unavailable";
-    }
+  async fingerprint(repo: Json) {
+    return this.scheduler.token(repo.worktreePath || repo.sourcePath);
   }
   async workspaceFingerprint(workspace: Json) {
-    const deadline = Date.now() + this.workspaces.config.observationTimeout;
-    return hash(
-      stable(workspace) +
-        (
-          await Promise.all(
-            workspace.repositories.map((repo: Json) =>
-              this.fingerprint(repo, deadline),
-            ),
-          )
-        ).join(":"),
-    );
+    return stable(workspace) + workspace.repositories.map((repo: Json) => this.scheduler.token(repo.worktreePath || repo.sourcePath)).join(":");
   }
   async detail(params: Json) {
     const workspace = this.workspaces.get(String(params.workspaceId || ""));
+    await Promise.all(workspace.repositories.map((repo: Json) => this.scheduler.register(workspace.id,
+      repo.worktreePath || repo.sourcePath, () => this.repository(repo, Date.now() + this.workspaces.config.observationTimeout))));
+    if (params.force) this.scheduler.force(workspace.id);
+    const validationToken = this.scheduler.workspaceToken(workspace.id);
     return this.cache.read(
       `detail:${workspace.id}:${stable(params)}`,
-      () => this.workspaceFingerprint(workspace),
+      await this.workspaceFingerprint(workspace),
       async () => {
         const start = Date.now(),
           deadline = start + this.workspaces.config.observationTimeout,
@@ -340,11 +317,12 @@ export class Observation {
           repositories,
           observation: {
             state: transient ? "partial" : "ready",
+            validationKey: `workspace:${workspace.id}`, validationToken,
             observedAt: now(),
             durationMs: Date.now() - start,
           },
         };
-      },
+      }, true,
     );
   }
   async repositoryQuery(method: string, params: Json) {
@@ -362,7 +340,12 @@ export class Observation {
         workspace,
         params.repoPath || params.repositoryId || "",
       );
+    await this.scheduler.register(workspace.id, repo.worktreePath || repo.sourcePath,
+      () => this.repository(repo, Date.now() + this.workspaces.config.observationTimeout));
+    if (params.force) this.scheduler.force(workspace.id);
     const git = this.git(repo);
+    const validationScope = method === "repository.graph" || params.scope === "branch" || params.scope === "commit" ? "refs" : "working";
+    const validationToken = this.scheduler.token(git.path, validationScope);
     let marker = "";
     if (params.path)
       try {
@@ -371,7 +354,7 @@ export class Observation {
       } catch {}
     return this.cache.read(
       `${method}:${workspace.id}:${stable(params)}`,
-      () => this.fingerprint(repo).then((fingerprint) => fingerprint + stable(repo) + marker),
+      this.scheduler.token(git.path, method === "repository.graph" || params.scope === "branch" || params.scope === "commit" ? "refs" : "working") + stable(repo) + marker,
       async () => {
         const deadline = Date.now() + this.workspaces.config.observationTimeout;
         return this.withinDeadline(
@@ -386,7 +369,7 @@ export class Observation {
               workspaceId: workspace.id,
               repoPath: repo.repoPath,
               head,
-              observation: { state: "ready", observedAt: now() },
+              observation: { state: "ready", observedAt: now(), validationKey: `${git.path}#${validationScope}`, validationToken },
             };
             if (method === "repository.graph") {
               const historyMode =
@@ -445,7 +428,7 @@ export class Observation {
           })(),
           deadline,
         );
-      },
+      }, true,
     );
   }
 }

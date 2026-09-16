@@ -3,6 +3,7 @@ export type WorkbenchLocale = "zh-CN" | "en-US";
 /** Central default UI copy; stable keys survive component moves. */
 const zhCopy = {
   observationStatus: "观察状态",
+  observationNotLoaded: "未加载",
   observationStale: "观察数据可能已过期",
   observationUnavailable: "观察暂不可用",
   refreshNow: "立即刷新",
@@ -554,6 +555,7 @@ export type WorkbenchCopy = {
 const enCopy: WorkbenchCopy = {
   ...zhCopy,
   observationStatus: "Observation status",
+  observationNotLoaded: "Not loaded",
   observationStale: "Observation may be stale",
   observationUnavailable: "Observation unavailable",
   refreshNow: "Refresh now",

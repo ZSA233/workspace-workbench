@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
 import { canonical, inside, WorkbenchError, type Json } from "./storage.ts";
@@ -12,7 +13,12 @@ export type GitFile = {
   binary: boolean;
 };
 let running = 0;
+const priority = new AsyncLocalStorage<number>();
+let commands = 0, timedOut = 0;
+export const gitDiagnostics = () => ({ running, queued: waiting.length, commands, timedOut });
+export const withBackgroundGit = <T>(operation: () => Promise<T>): Promise<T> => priority.run(1, operation);
 type GitWaiter = {
+  priority: number;
   resolve: () => void;
   reject: (error: WorkbenchError) => void;
   timer?: ReturnType<typeof setTimeout>;
@@ -38,6 +44,7 @@ async function acquireGitSlot(deadline?: number): Promise<void> {
   }
   await new Promise<void>((resolve, reject) => {
     const waiter: GitWaiter = {
+      priority: priority.getStore() || 0,
       resolve,
       reject,
       settled: false,
@@ -49,6 +56,7 @@ async function acquireGitSlot(deadline?: number): Promise<void> {
       return;
     }
     waiting.push(waiter);
+    waiting.sort((a, b) => a.priority - b.priority);
     if (remaining !== undefined)
       waiter.timer = setTimeout(() => {
         if (waiter.settled) return;
@@ -99,6 +107,7 @@ export class Git {
             ? this.timeout
             : this.deadline - Date.now();
           if (remaining <= 0) throw observationTimeout();
+          commands++;
           return command(
             "git",
             ["-c", "core.fsmonitor=false", "-C", this.path, ...args],
@@ -124,7 +133,8 @@ export class Git {
           repository: this.path,
           args,
         });
-      if (error instanceof WorkbenchError && error.code === "process_timeout")
+      if (error instanceof WorkbenchError && error.code === "process_timeout") {
+        timedOut++;
         throw new WorkbenchError(
           this.deadline !== undefined && Date.now() >= this.deadline
             ? "observation_timeout"
@@ -132,6 +142,7 @@ export class Git {
           error.message,
           { repository: this.path, args },
         );
+      }
       throw error;
     }
     if (check && result.code !== 0)

@@ -247,8 +247,8 @@ export type RepositorySummary = {
   pushed: boolean | null;
   upstream?: string;
   branchScopeAvailable?: boolean;
-  changes: ChangeSummary;
-  workingChanges: ChangeSummary;
+  changes: ChangeSummary | null;
+  workingChanges: ChangeSummary | null;
   issues: Issue[];
   changeIssues: Issue[];
   changesLoaded?: boolean;

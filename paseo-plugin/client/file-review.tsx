@@ -1,3 +1,4 @@
+import { useObservationVersions } from "./use-observation-versions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -96,6 +97,7 @@ export function FileReviewPanel(props: FilePanelProps) {
   const { mode, setMode } = useReviewModePreference(hostWorkspaceId, narrow);
   const activeSelection = selections.find((item) => selectionKey(item) === activeKey) || selections.at(-1);
   const rpc = useRpc(observerQuery);
+  const observationIssue = useObservationVersions(activeSelection?.projectConfig, activeSelection ? [activeSelection.workspaceId] : []);
   const backendStatusRpc = useRpc(projectBackendStatus);
   const backendStatusQuery = useQuery({
     queryKey: ["workspace-workbench", "file-review-backend", activeSelection?.projectConfig],
@@ -149,7 +151,7 @@ export function FileReviewPanel(props: FilePanelProps) {
         },
     }),
     enabled: Boolean(activeSelection),
-    refetchInterval: observationTiming.refreshIntervalsMs.repository,
+    refetchInterval: false,
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: observationTiming.clientQueryStaleTimeMs,
@@ -186,6 +188,7 @@ export function FileReviewPanel(props: FilePanelProps) {
 
   return (
     <View style={styles.screen} accessibilityLabel={copy.changesTitle} onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
+      {observationIssue ? <Text>{copy.observationDegraded}: {observationIssue}</Text> : null}
       <View style={styles.header}>
         <View style={styles.headerCopy}>
           <Text numberOfLines={1} style={styles.title}>{copy.text_01970ba582}</Text>

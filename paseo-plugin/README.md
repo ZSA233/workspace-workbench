@@ -90,3 +90,7 @@ Git watcher/reconciliation 可能向上发现外层仓库并重复扫描；用
 或在新会话验证，不能声称 reload 已让全部旧会话生效。
 
 详细设计、兼容边界和验证命令见 [观察与传输链路](../docs/observation-and-transport.md)。
+
+无头浏览器验收可运行 `npm --prefix paseo-plugin run test:plugin-ui`；首次使用先执行
+`npm --prefix paseo-plugin exec -- playwright install chromium`。测试会启动隔离的
+真实 Paseo 页面，验证自动刷新与崩溃恢复，并在 `.local/verification/ui/` 保存截图。

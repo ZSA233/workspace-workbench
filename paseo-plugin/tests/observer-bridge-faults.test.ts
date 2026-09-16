@@ -29,3 +29,15 @@ test('bridge shutdown aborts outstanding reads and releases sockets',async()=>{
   try {const request=f.bridge.call({method:'workspace.list',params:{}});await new Promise(r=>setTimeout(r,10));f.bridge.close();await assert.rejects(request,/bridge closed/);await new Promise(r=>setTimeout(r,10));assert.equal(f.sockets.size,0);}
   finally{await f.close();}
 });
+
+test('a version change cannot be hidden by the bridge response TTL',async()=>{
+  let generation=0;
+  const f=await fixture(socket=>socket.write(JSON.stringify({ok:true,result:{generation:++generation}})+'\n'));
+  try {
+    const first=await f.bridge.call({method:'repository.diff',params:{workspaceId:'w',path:'file'}});
+    const second=await f.bridge.call({method:'repository.diff',params:{workspaceId:'w',path:'file'}});
+    assert.equal((first.result as {generation:number}).generation,1);
+    assert.equal((second.result as {generation:number}).generation,2);
+    assert.equal(f.calls(),2);
+  } finally {await f.close();}
+});

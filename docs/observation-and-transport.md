@@ -93,6 +93,27 @@ the normal plugin. Optional `WORKBENCH_LIVE_UI=1` serves the bundled web UI and 
 an isolated URL and continuation-file path; create that file after visual inspection
 so automated unload/cleanup continues. The wait is bounded to ten minutes.
 
+For repeatable visual acceptance without an attached desktop browser:
+
+```sh
+npm --prefix paseo-plugin exec -- playwright install chromium
+npm --prefix paseo-plugin run test:plugin-ui
+```
+
+This starts an isolated real Paseo daemon, opens its bundled UI in headless
+Chromium, navigates the actual plugin, and verifies ten consecutive file edits,
+idle Git cost, plugin reload, backend crash recovery, and deletion/empty state.
+It saves screenshots and timings under `.local/verification/ui/`. No page mocks,
+Agent prompts, production projects or normal plugin reloads are involved.
+Full plugin reload recreates client module memory, so this test reopens the
+selected file; a backend-only crash must preserve the existing page and recover
+without reselection.
+
+The bridge must not apply its one-second response TTL to versioned queries.
+Otherwise a rapid edit can invalidate a query, receive a cached old response,
+and consume the only version change without ever requesting the new snapshot.
+The headless rapid-edit test and bridge regression test cover this race.
+
 Tests include real native filesystem events, exact-root rejection, linked worktree
 refs, ignored-but-tracked files, event storms, expired leases, watcher recovery,
 malformed bridge responses, uncertain writes, MCP queue/EOF cancellation and one

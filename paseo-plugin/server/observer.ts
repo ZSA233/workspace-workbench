@@ -35,6 +35,7 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
+const versionedMethods = new Set<string>(["observer.versions", "workspace.detail", "repository.graph", "repository.changes", "repository.diff"]);
 const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(): number {
@@ -154,7 +155,7 @@ export class ObserverBridge {
     }
     const key = `${configuredSocketPath()}:${input.method}:${JSON.stringify(input.params || {})}`;
     const projectPrefix = `${configuredSocketPath()}:`;
-    const cached = input.method === "observer.versions" ? undefined : this.cache.get(key);
+    const cached = versionedMethods.has(input.method) ? undefined : this.cache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.response;
     this.cache.delete(key);
     const active = this.inFlight.get(key);
@@ -165,7 +166,7 @@ export class ObserverBridge {
         if (response.ok && ["observer.reload", "workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete"].includes(input.method)) {
           for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
         }
-        if (input.method !== "observer.versions" && (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method))) {
+        if (!versionedMethods.has(input.method) && (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method))) {
           if (cacheable(response)) this.cache.set(key, { response, expiresAt: Date.now() + OBSERVATION_TIMING_DEFAULTS.bridgeResponseCacheTtlMs });
         }
         return response;

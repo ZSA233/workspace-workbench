@@ -49,11 +49,13 @@ export const projectSetupSave = defineRpc({
       displayName: z.string(),
     }),
     backend: z.object({
-      state: z.enum(["ready", "starting", "missing", "failed", "unsupported"]),
+      state: z.enum(["ready", "starting", "recovering", "unavailable", "missing", "failed", "unsupported"]),
       message: z.string().optional(),
       socketPath: z.string().optional(),
       timing: observationTimingSchema.optional(),
       instanceId: z.string().optional(),
+      lastSuccessfulAt: z.string().optional(),
+      failureSince: z.string().optional(),
     }),
   }),
 });
@@ -83,11 +85,13 @@ export const projectBackendStart = defineRpc({
   name: "workspace.workbench.backend.start",
   input: z.object({ projectConfig: z.string().trim().min(1) }),
   output: z.object({
-    state: z.enum(["ready", "starting", "missing", "failed", "unsupported"]),
+    state: z.enum(["ready", "starting", "recovering", "unavailable", "missing", "failed", "unsupported"]),
     message: z.string().optional(),
     socketPath: z.string().optional(),
     timing: observationTimingSchema.optional(),
     instanceId: z.string().optional(),
+    lastSuccessfulAt: z.string().optional(),
+    failureSince: z.string().optional(),
   }),
 });
 
@@ -95,11 +99,13 @@ export const projectBackendStatus = defineRpc({
   name: "workspace.workbench.backend.status",
   input: z.object({ projectConfig: z.string().trim().min(1) }),
   output: z.object({
-    state: z.enum(["ready", "starting", "missing", "failed", "unsupported"]),
+    state: z.enum(["ready", "starting", "recovering", "unavailable", "missing", "failed", "unsupported"]),
     message: z.string().optional(),
     socketPath: z.string().optional(),
     timing: observationTimingSchema.optional(),
     instanceId: z.string().optional(),
+    lastSuccessfulAt: z.string().optional(),
+    failureSince: z.string().optional(),
   }),
 });
 

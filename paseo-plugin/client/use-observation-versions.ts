@@ -14,7 +14,7 @@ export function useObservationVersions(projectConfig: string | undefined, worksp
   useEffect(() => {
     if (!enabled || !projectConfig) return;
     let disposed = false, running = false, timer: ReturnType<typeof setTimeout> | undefined;
-    let previous = '', previousReview = '', previousSession = '', failures = 0, validatedAt = 0;
+    let previous = '', previousReview = '', previousSession = '', failures = 0, validatedAt = 0, failureSince = 0;
     const document = (globalThis as unknown as { document?: DocumentVisibility }).document;
     const visible = () => Platform.OS === 'web' ? document?.visibilityState !== 'hidden' : !AppState.currentState || AppState.currentState === 'active';
     const schedule = () => { clearTimeout(timer); if (!disposed && visible()) timer = setTimeout(() => void poll(), Math.min(30_000, 1_000 * 2 ** Math.min(failures, 5))); };
@@ -24,10 +24,16 @@ export function useObservationVersions(projectConfig: string | undefined, worksp
       try {
         const response = await rpcRef.current({ projectConfig, method: 'observer.versions', params: { workspaceIds: JSON.parse(idsKey) } });
         if (disposed) return;
-        if (!response.ok) { failures++; setIssue(response.error?.code || "observer_unavailable"); return; }
-        failures = 0;
+        if (!response.ok) {
+          failures++; failureSince ||= Date.now();
+          if (Date.now() - failureSince >= 10_000) setIssue(response.error?.code || "observer_unavailable");
+          return;
+        }
+        failures = 0; failureSince = 0;
         const value = response.result as { instanceId: string; revision: number; reviewRevision?: string; sessionRevision?: string; tokens?: Record<string, string>; repositories?: Array<{ issue?: string }> };
-        setIssue(value.repositories?.find(r => r.issue)?.issue || null);
+        // Repository issues are rendered on their own rows. A broken or
+        // missing checkout must not turn the whole backend into a red banner.
+        setIssue(null);
         if (Date.now() - validatedAt > 10_000) {
           validatedAt = Date.now();
           client.setQueriesData({ predicate: q => q.queryKey[0] === 'workspace-workbench' && q.queryKey.includes(projectConfig) }, (old: any) => {
@@ -48,7 +54,10 @@ export function useObservationVersions(projectConfig: string | undefined, worksp
           const review = key.includes('agent-review') || key.includes('agent-review-history');
           return review ? reviewChanged : changed && key.some(part => ['workspace-list', 'workspace-detail', 'repository-graph', 'repository-changes', 'file-review', 'review'].includes(String(part)));
         }, refetchType: 'active' }).catch(() => {});
-      } catch { failures++; if (!disposed) setIssue("observer_unavailable"); }
+      } catch {
+        failures++; failureSince ||= Date.now();
+        if (!disposed && Date.now() - failureSince >= 10_000) setIssue("observer_unavailable");
+      }
       finally { running = false; schedule(); }
     };
     const visibility = () => { clearTimeout(timer); if (visible()) { previous = ''; void poll(); } };

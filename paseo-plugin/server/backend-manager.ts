@@ -41,6 +41,17 @@ function pluginRoot(): string | null {
 
 let supervisor: BackendSupervisor | null = null;
 let disposed = false;
+type ConnectionRecord = { lastSuccessfulAt?: string; failureSince?: string; message?: string };
+const connections = new Map<string, ConnectionRecord>();
+function connection(route: ProjectRoute) { let value = connections.get(route.configPath); if (!value) { value = {}; connections.set(route.configPath, value); } return value; }
+export function recordBackendSuccess(projectConfig?: string): void {
+  try { const route = resolveProject({ projectConfig }); connections.set(route.configPath, { lastSuccessfulAt: new Date().toISOString() }); } catch {}
+}
+export function recordBackendFailure(projectConfig: string, message: string): ConnectionRecord {
+  const route = resolveProject({ projectConfig }), current = connection(route);
+  const next = { ...current, failureSince: current.failureSince || new Date().toISOString(), message };
+  connections.set(route.configPath, next); return next;
+}
 function statusFor(
   route: ProjectRoute,
   state: ProjectBackendStatus["state"],
@@ -52,12 +63,15 @@ function statusFor(
     try { timing = loadConfig(route.configPath).timing; } catch {}
   }
   const instanceId = health?.process?.instanceId || health?.instanceId;
+  const connectionState = connection(route);
   return {
     state,
     ...(message ? { message } : {}),
     socketPath: route.socketPath,
     ...(timing ? { timing } : {}),
     ...(typeof instanceId === "string" ? { instanceId } : {}),
+    ...(connectionState.lastSuccessfulAt ? { lastSuccessfulAt: connectionState.lastSuccessfulAt } : {}),
+    ...(connectionState.failureSince ? { failureSince: connectionState.failureSince } : {}),
   };
 }
 function version(): string { const root = pluginRoot(); return root ? JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version : "0.1.3"; }
@@ -76,16 +90,25 @@ export async function backendStatus(projectConfig: string): Promise<ProjectBacke
   try {
     const route = resolveProject({ projectConfig });
     const response = await backendRequest(route.socketPath, "observer.health");
-    if (response?.ok && response.result?.implementation === "node" && response.result?.version === version() && response.result?.process?.configPath === route.configPath && !response.result?.process?.closing) return statusFor(route, "ready", undefined, response.result);
+    if (response?.ok && response.result?.implementation === "node" && response.result?.version === version() && response.result?.process?.configPath === route.configPath && !response.result?.process?.closing) { recordBackendSuccess(route.configPath); return statusFor(route, "ready", undefined, response.result); }
     manager(); return statusFor(route, "starting", response ? "Backend will be refreshed by the plugin on the next request" : undefined, response?.result);
-  } catch (error) { return { state: "failed", message: error instanceof Error ? error.message : String(error) }; }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try { const route = resolveProject({ projectConfig }), state = recordBackendFailure(projectConfig, message); return statusFor(route, Date.now() - Date.parse(state.failureSince!) < 10_000 ? "recovering" : "unavailable", message); }
+    catch { return { state: "failed", message }; }
+  }
 }
 export async function startBackend(projectConfig: string): Promise<ProjectBackendStatus> {
   try {
     const route = resolveProject({ projectConfig });
     await manager().ensure(route, version());
     const response = await backendRequest(route.socketPath, "observer.health").catch(() => null);
+    recordBackendSuccess(route.configPath);
     return statusFor(route, "ready", undefined, response?.ok ? response.result : null);
-  } catch (error) { return { state: "failed", message: error instanceof Error ? error.message : String(error) }; }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try { const route = resolveProject({ projectConfig }), state = recordBackendFailure(projectConfig, message); return statusFor(route, message.includes("retained") && Date.now() - Date.parse(state.failureSince!) < 10_000 ? "recovering" : "failed", message); }
+    catch { return { state: "failed", message }; }
+  }
 }
-export async function closeBackends(): Promise<void> { disposed = true; await supervisor?.close(); supervisor = null; }
+export async function closeBackends(): Promise<void> { disposed = true; await supervisor?.close(); supervisor = null; connections.clear(); }

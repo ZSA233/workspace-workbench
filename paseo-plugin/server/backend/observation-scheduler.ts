@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { resolve, join, relative } from 'node:path';
 import * as watcher from '@parcel/watcher';
 import { Git, withBackgroundGit } from './git.ts';
@@ -82,8 +82,12 @@ export class ObservationScheduler {
     if (this.closed) return Promise.resolve();
     const promise = (async () => {
       try {
+        if (!existsSync(repo.path))
+          throw new WorkbenchError('repository_missing', 'Repository directory does not exist');
+        try { accessSync(repo.path, constants.R_OK | constants.X_OK); }
+        catch { throw new WorkbenchError('repository_access_denied', 'Repository directory is not accessible'); }
         const git = new Git(repo.path, 3_000, Date.now() + 10_000);
-        if (!existsSync(repo.path) || await git.root() !== repo.path)
+        if (await git.root() !== repo.path)
           throw new WorkbenchError('repository_root_mismatch', 'Observation requires an exact Git worktree root');
         const gitDir = canonical(await git.text(['rev-parse', '--absolute-git-dir']));
         const commonDir = resolve(repo.path, await git.text(['rev-parse', '--git-common-dir']));
@@ -97,7 +101,9 @@ export class ObservationScheduler {
         repo.issue = null; repo.failures = 0; repo.retryAt = 0; repo.working++; repo.refs++; this.revision++;
       } catch (error) {
         repo.issue = error instanceof WorkbenchError ? error.code : 'watcher_unavailable';
-        repo.retryAt = Date.now() + Math.min(300_000, 5_000 * 2 ** Math.min(6, repo.failures++));
+        repo.retryAt = repo.issue === 'repository_missing' || repo.issue === 'repository_root_mismatch' || repo.issue === 'repository_access_denied'
+          ? Date.now() + this.options.degradedMs
+          : Date.now() + Math.min(300_000, 5_000 * 2 ** Math.min(6, repo.failures++));
         this.revision++;
       }
     })();

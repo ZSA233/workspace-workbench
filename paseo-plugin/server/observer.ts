@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { currentProject, withProject } from "./projects.ts";
-import { startBackend } from "./backend-manager.ts";
+import { recordBackendFailure, recordBackendSuccess, startBackend } from "./backend-manager.ts";
 import { loadConfig } from "./backend/config.ts";
 import {
   DEFAULT_OBSERVATION_TIMING,
@@ -193,11 +193,6 @@ const bridge = new ObserverBridge();
 export async function handleObserver(input: QueryInput, context?: AgentContext): Promise<ObserverResponse> {
   try {
     const callWithRecovery = async (): Promise<ObserverResponse> => {
-      const project = currentProject();
-      if (project) {
-        const backend = await startBackend(project.configPath);
-        if (backend.state !== "ready") return { ok: false, error: { code: "backend_unavailable", message: backend.message || "Backend is unavailable" } };
-      }
       if (input.method === "workspace.addRepositories") {
         return withWorkspaceScope(String(input.params.workspaceId || ""), async () => {
           if (context) {
@@ -206,23 +201,28 @@ export async function handleObserver(input: QueryInput, context?: AgentContext):
             if (active.error) return { ok: false, error: active.error };
             if (active.tasks.length) return { ok: false, error: { code: "workspace_task_active", message: "请先结束当前执行或审核，再添加仓库。" } };
           }
-          return bridge.call(input);
+          return callObserverWithRecovery(input);
         });
       }
+      return callObserverWithRecovery(input);
+    };
+    const callObserverWithRecovery = async (request: QueryInput): Promise<ObserverResponse> => {
       try {
-        const response = await bridge.call(input);
-        if (input.method === "observer.versions" && response.ok && response.result && typeof response.result === "object")
+        const response = await bridge.call(request);
+        if (response.ok) recordBackendSuccess(currentProject()?.configPath);
+        if (request.method === "observer.versions" && response.ok && response.result && typeof response.result === "object")
           return { ...response, result: { ...response.result, reviewRevision: reviewRevision(), sessionRevision: sessionRevision() } };
         return response;
       } catch (error) {
         const code = error instanceof BridgeError ? error.code : "";
         const project = currentProject();
-        if (!replayableMethods.has(input.method) && error instanceof BridgeError)
+        if (project) recordBackendFailure(project.configPath, error instanceof Error ? error.message : String(error));
+        if (!replayableMethods.has(request.method) && error instanceof BridgeError)
           return { ok: false, error: { code: "request_uncertain_retry_same_identity", message: "Response unavailable; reconcile the saved operation before retrying" } };
         if (!project || !["observer_connection_refused", "observer_unavailable"].includes(code)) throw error;
         const backend = await startBackend(project.configPath);
         if (backend.state !== "ready") throw error;
-        return bridge.call(input);
+        return bridge.call(request);
       }
     };
     return await (currentProject() ? callWithRecovery() : withProject(input, callWithRecovery));

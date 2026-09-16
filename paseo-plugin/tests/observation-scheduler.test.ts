@@ -37,6 +37,15 @@ test('exact root validation rejects containers inside an outer repository',async
   try {const nested=join(f.repo,'container');mkdirSync(nested);await scheduler.register('nested',nested);assert.deepEqual(scheduler.health().issues,['repository_root_mismatch']);}
   finally {await scheduler.close();rmSync(f.root,{recursive:true,force:true});}
 });
+test('missing repository is classified separately and does not hide healthy repositories',async()=>{
+  const f=fixture(), scheduler=new ObservationScheduler({degradedMs:60});
+  try {
+    await Promise.all([scheduler.register('w',f.repo),scheduler.register('w',join(f.root,'missing'))]);
+    const versions=scheduler.versions(['w']);
+    assert.equal(versions.repositories.find(item=>item.path===f.repo)?.issue,null);
+    assert.equal(versions.repositories.find(item=>item.path===join(f.root,'missing'))?.issue,'repository_missing');
+  } finally {await scheduler.close();rmSync(f.root,{recursive:true,force:true});}
+});
 test('late watcher subscription is reclaimed after timeout and never revived',async()=>{
   const f=fixture();let released=0;
   const scheduler=new ObservationScheduler({subscribeMs:10, subscribe:async()=>{await delay(60);return {unsubscribe:async()=>{released++;}};}});

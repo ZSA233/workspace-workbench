@@ -25,7 +25,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test": "node --experimental-strip-types --test --test-concurrency=4 tests/*.test.ts",
     "test:plugin-live": "node scripts/verify-live.mjs",
     "test:plugin-ui": "node --experimental-strip-types scripts/verify-ui.mjs"
   },

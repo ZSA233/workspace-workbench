@@ -412,6 +412,8 @@ export type GraphResult = {
 };
 
 export type ChangesResult = {
+  workspaceId: string;
+  repoPath: string;
   files: FileChange[];
   summary: ChangeSummary;
   issues: Issue[];

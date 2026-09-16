@@ -1,4 +1,5 @@
 import { useObservationVersions } from "./use-observation-versions";
+import { useForegroundActivity } from "./foreground-activity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -86,6 +87,7 @@ function scopeLabel(scope: FileReviewSelection["scope"], strings: WorkbenchCopy 
 }
 
 export function FileReviewPanel(props: FilePanelProps) {
+  const foreground = useForegroundActivity();
   const copy = useWorkbenchCopy();
   const hostWorkspaceId = props.workspaceId;
   const selections = useFileReviews(hostWorkspaceId);
@@ -97,13 +99,13 @@ export function FileReviewPanel(props: FilePanelProps) {
   const { mode, setMode } = useReviewModePreference(hostWorkspaceId, narrow);
   const activeSelection = selections.find((item) => selectionKey(item) === activeKey) || selections.at(-1);
   const rpc = useRpc(observerQuery);
-  const observationIssue = useObservationVersions(activeSelection?.projectConfig, activeSelection ? [activeSelection.workspaceId] : []);
+  const observationIssue = useObservationVersions(activeSelection?.projectConfig, activeSelection ? [activeSelection.workspaceId] : [], foreground);
   const backendStatusRpc = useRpc(projectBackendStatus);
   const backendStatusQuery = useQuery({
     queryKey: ["workspace-workbench", "file-review-backend", activeSelection?.projectConfig],
     queryFn: () => backendStatusRpc({ projectConfig: activeSelection?.projectConfig || "" }),
     enabled: Boolean(activeSelection?.projectConfig),
-    refetchInterval: DEFAULT_OBSERVATION_TIMING.refreshIntervalsMs.list,
+    refetchInterval: foreground ? DEFAULT_OBSERVATION_TIMING.refreshIntervalsMs.list : false,
     refetchOnWindowFocus: false,
     retry: false,
   });
@@ -166,6 +168,7 @@ export function FileReviewPanel(props: FilePanelProps) {
     diffQuery.data,
     diffQuery.refetch,
     observationTiming.followUpDelaysMs,
+    foreground,
   );
   useEffect(() => {
     const instanceId = backendStatusQuery.data?.instanceId;

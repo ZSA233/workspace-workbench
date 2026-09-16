@@ -289,6 +289,7 @@ export function useBoundedCacheRefresh(
   response: ObserverResponse | undefined,
   refetch: () => Promise<unknown>,
   delaysMs: readonly number[] = DEFAULT_OBSERVATION_TIMING.followUpDelaysMs,
+  enabled = true,
 ): void {
   const attempted = useRef(new Set<string>());
   const refetchRef = useRef(refetch);
@@ -297,7 +298,7 @@ export function useBoundedCacheRefresh(
   const refreshing = metadata.refreshing;
   const cacheUpdatedAt = metadata.cacheUpdatedAt;
   useEffect(() => {
-    if (!refreshing) return;
+    if (!enabled || !refreshing) return;
     const token = `${key}:${cacheUpdatedAt || "unknown"}`;
     if (attempted.current.has(token)) return;
     attempted.current.add(token);
@@ -305,12 +306,13 @@ export function useBoundedCacheRefresh(
       attempted.current.delete(attempted.current.values().next().value!);
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let resolveWait: (() => void) | undefined;
     void (async () => {
       for (const delay of delaysMs) {
         await new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, Math.max(0, delay));
+          resolveWait = resolve;
+          timer = setTimeout(() => { timer = undefined; resolveWait = undefined; resolve(); }, Math.max(0, delay));
         });
-        timer = undefined;
         if (cancelled) return;
         const result = await refetchRef.current().catch(() => undefined);
         if (cancelled) return;
@@ -323,6 +325,8 @@ export function useBoundedCacheRefresh(
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      resolveWait?.();
+      attempted.current.delete(token);
     };
-  }, [cacheUpdatedAt, delaysMs, key, refreshing]);
+  }, [cacheUpdatedAt, delaysMs, enabled, key, refreshing]);
 }

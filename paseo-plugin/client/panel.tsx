@@ -56,6 +56,7 @@ type WorkspaceTask
 } from "./model";
 import { boundedRefresh, useBoundedCacheRefresh, useLastSuccessfulResponse, type ObserverSnapshot } from "./observation";
 import { useRefreshOnForeground } from "./foreground-refresh";
+import { useForegroundActivity } from "./foreground-activity";
 import { useObserverPreferences } from "./preferences";
 import { readSurfaceWorkspace, type WorkbenchSurfaceProps } from "./surface-context";
 import { localeFromHostProps, useWorkbenchCopy, WorkbenchLocaleProvider, useWorkbenchLocale } from "./i18n";
@@ -252,6 +253,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
 
 function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string; onProjectReady?: () => void; onSwitchProject?: () => void }) {
   const { projectConfig } = props;
+  const foreground = useForegroundActivity();
   const { hostWorkspaceId, paseoWorkspace } = props;
   const { theme, layout } = props;
   const localizedCopy = useWorkbenchCopy();
@@ -411,7 +413,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listResult = resultOf<ListResult>(listState.response);
   const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
   const listReady = Boolean(listResult);
-  const observationIssue = useObservationVersions(projectConfig, [selectedWorkspaceId], listReady);
+  const observationIssue = useObservationVersions(projectConfig, [selectedWorkspaceId], listReady && foreground);
   useEffect(() => {
     if (backendQuery.data?.state !== "ready" || listReady) return;
     void listQuery.refetch();
@@ -464,7 +466,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "agent-context", parentAgentId],
     queryFn: () => agentContextRpc({ projectConfig, agentId: parentAgentId! }),
     enabled: Boolean(parentAgentId && listReady),
-    refetchInterval: 60_000,
+    refetchInterval: foreground ? 60_000 : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -483,7 +485,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     queryKey: ["workspace-workbench", projectConfig, "execution-binding", selectedWorkspaceId],
     queryFn: () => bindingRpc({ workspaceId: selectedWorkspaceId }),
     enabled: Boolean(selectedWorkspaceId && listReady && !selectedWorkspaceIsMain && listResult?.capabilities?.agent),
-    refetchInterval: 60_000,
+    refetchInterval: foreground ? 60_000 : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: false,
@@ -954,11 +956,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         : []),
     ], observationTiming.clientRefreshTimeoutMs, setManualRefreshing);
 
-  useBoundedCacheRefresh("workspace-list", listQuery.data, listQuery.refetch, observationTiming.followUpDelaysMs);
-  useBoundedCacheRefresh(`workspace-detail:${selectedWorkspaceId}`, detailQuery.data, detailQuery.refetch, observationTiming.followUpDelaysMs);
-  useBoundedCacheRefresh(`repository-graph:${selectedWorkspaceId}:${selectedRepoPath}`, graphQuery.data, graphQuery.refetch, observationTiming.followUpDelaysMs);
-  useBoundedCacheRefresh(`repository-changes:${selectedWorkspaceId}:${selectedRepoPath}:${changesScope}:${selectedCommit}`, changesQuery.data, changesQuery.refetch, observationTiming.followUpDelaysMs);
-  useBoundedCacheRefresh(`review:${reviewIds.join("|")}:${JSON.stringify(targetOverrides)}`, reviewQuery.data, reviewQuery.refetch, observationTiming.followUpDelaysMs);
+  useBoundedCacheRefresh("workspace-list", listQuery.data, listQuery.refetch, observationTiming.followUpDelaysMs, foreground);
+  useBoundedCacheRefresh(`workspace-detail:${selectedWorkspaceId}`, detailQuery.data, detailQuery.refetch, observationTiming.followUpDelaysMs, foreground);
+  useBoundedCacheRefresh(`repository-graph:${selectedWorkspaceId}:${selectedRepoPath}`, graphQuery.data, graphQuery.refetch, observationTiming.followUpDelaysMs, foreground);
+  useBoundedCacheRefresh(`repository-changes:${selectedWorkspaceId}:${selectedRepoPath}:${changesScope}:${selectedCommit}`, changesQuery.data, changesQuery.refetch, observationTiming.followUpDelaysMs, foreground);
+  useBoundedCacheRefresh(`review:${reviewIds.join("|")}:${JSON.stringify(targetOverrides)}`, reviewQuery.data, reviewQuery.refetch, observationTiming.followUpDelaysMs, foreground);
 
   useEffect(() => {
     const instanceId = backendQuery.data?.instanceId;
@@ -972,7 +974,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     void refreshAll();
   }, [backendQuery.data?.instanceId, backendQuery.data?.state, refreshAll]);
 
-  useRefreshOnForeground(Boolean(projectConfig), refreshAll);
+  // The version poll resumes observation queries; only bootstrap needs a direct retry.
+  useRefreshOnForeground(Boolean(projectConfig && !listReady), () => {
+    void backendQuery.refetch();
+    void listQuery.refetch();
+  });
 
   const observationLabel = observerError
     ? localizedCopy.observationUnavailable
@@ -1473,6 +1479,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               changesRefreshing={manualRefreshing}
               changesError={changesFailure}
               changesStale={changesState.expired}
+              changesCurrent={!changesQuery.isFetching && !changesState.stale && !changesState.expired && !changesState.refreshing && !changesFailure}
               treeMode={changeTreeMode || defaultTreeMode(changes?.files || [])}
               onTreeMode={setChangeTreeMode}
               selectedCommit={selectedCommit}

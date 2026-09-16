@@ -48,14 +48,18 @@ try {
   await page.getByText(basename(ui.project),{exact:true}).last().click();
   await page.getByText('Repositories',{exact:true}).waitFor();
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor();
+  assert.equal(await page.getByText('Not loaded',{exact:true}).count(),0);
   await screenshot('01-clean-workbench.png');
-  report.checks.push('real plugin panel loaded from the isolated host, empty state rendered');
+  report.checks.push('real plugin panel loaded from the isolated host; clean repository rows had no misleading Not loaded label');
   const file = join(ui.project,'one','ui-proof.txt');
   let started = Date.now();
   writeFileSync(file,'line one\nline two\n');
   await page.getByText('ui-proof.txt',{exact:true}).first().waitFor({timeout:7000});
+  await page.getByText('+2',{exact:true}).first().waitFor({timeout:7000});
+  assert.equal(await page.getByText('Not loaded',{exact:true}).count(),0);
   report.initialUpdateMs = Date.now()-started;
   await screenshot('02-automatic-refresh.png');
+  report.checks.push('only the selected repository displayed calculated colored change counts');
   await page.getByText('ui-proof.txt',{exact:true}).first().click();
   await page.getByText('line one',{exact:true}).waitFor();
   for (let n=0;n<10;n++) {
@@ -65,8 +69,14 @@ try {
   }
   report.p95Ms=[...report.latenciesMs].sort((a,b)=>a-b)[Math.ceil(report.latenciesMs.length*.95)-1];
   assert.ok(report.p95Ms<=3000,`UI p95 exceeded 3 seconds: ${report.p95Ms}`);
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  appendFileSync(file,'while unfocused\n');
+  await sleep(2500);
+  assert.equal(await page.getByText('while unfocused',{exact:true}).count(),0);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.getByText('while unfocused',{exact:true}).waitFor({timeout:7000});
   await screenshot('03-live-file-diff.png');
-  report.checks.push('file click opened the real diff; ten disk edits appeared without manual refresh');
+  report.checks.push('file click opened the real diff; ten disk edits appeared without manual refresh; blur paused updates and focus resumed them');
   let before;
   for(let n=0;n<30;n++){ before=await health(); if(!before.git.running&&!before.git.queued)break;await sleep(100); }
   await sleep(16_000);

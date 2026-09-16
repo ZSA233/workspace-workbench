@@ -10,6 +10,7 @@ isTransientIssueCode,
 sectionRemainingHeight,
 type ChangeScope,
 type ChangesResult,
+type ChangeSummary,
 type DetailResult,
 type FileChange,
 type GraphResult,
@@ -18,6 +19,7 @@ type ObserverSectionLayout,
 type RepositorySummary,
 type WorkspaceSummary
 } from "../model";
+import { selectedChangeSummary } from "../repository-metrics";
 import { ChangeCounts,InlineRefresh,SectionDisclosureButton,SectionViewport,fileCountLabel,issueDetail,issueLabel,makeStyles,repositoryBranchLabel,statusColor,visibleIssues } from "./ui";
 import { useWorkbenchCopy } from "../i18n";
 
@@ -56,6 +58,7 @@ export const WorkspaceView = memo(function WorkspaceView({
   changesRefreshing,
   changesError,
   changesStale,
+  changesCurrent,
   treeMode,
   onTreeMode,
   selectedCommit,
@@ -100,6 +103,7 @@ export const WorkspaceView = memo(function WorkspaceView({
   changesRefreshing: boolean;
   changesError: string | null;
   changesStale: boolean;
+  changesCurrent: boolean;
   treeMode: ChangeTreeMode;
   onTreeMode: (mode: ChangeTreeMode) => void;
   selectedCommit: string;
@@ -152,6 +156,18 @@ export const WorkspaceView = memo(function WorkspaceView({
   }
   const repositories = detail.repositories;
   const toolchain = detail.workspace.toolchain;
+  const changeSummary = selectedChangeSummary(
+    selectedRepository,
+    changes,
+    detail.workspace.id,
+    selectedCommit ? "commit" : changeScope,
+    changesCurrent,
+  );
+  const graphRepository = selectedRepository && changeSummary
+    ? changeScope === "working"
+      ? { ...selectedRepository, workingChanges: changeSummary }
+      : { ...selectedRepository, changes: changeSummary }
+    : selectedRepository;
   if (detail.workspace.state === "create_failed") {
     return (
       <View onLayout={(event) => onContentLayout(event.nativeEvent.layout.height)}>
@@ -208,6 +224,7 @@ export const WorkspaceView = memo(function WorkspaceView({
                   key={repository.repoPath}
                   repository={repository}
                   selected={selectedRepository?.repoPath === repository.repoPath}
+                  changeSummary={selectedRepository?.repoPath === repository.repoPath ? changeSummary : null}
                   onPress={() => onRepo(repository.repoPath)}
                   theme={theme}
                   styles={styles}
@@ -246,7 +263,7 @@ export const WorkspaceView = memo(function WorkspaceView({
             loadingMore={graphLoadingMore}
             changeScope={changeScope}
             onScope={onScope}
-            repository={selectedRepository}
+            repository={graphRepository || selectedRepository}
             detailsOpen={repositoryDetailsOpen}
             onToggleDetails={onToggleRepositoryDetails}
             sectionLayout={sectionLayout.graph}
@@ -337,12 +354,14 @@ export function ToolchainNotice({
 export function RepositoryRow({
   repository,
   selected,
+  changeSummary,
   onPress,
   theme,
   styles,
 }: {
   repository: RepositorySummary;
   selected: boolean;
+  changeSummary: ChangeSummary | null;
   onPress: () => void;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
@@ -366,10 +385,11 @@ export function RepositoryRow({
         <Text numberOfLines={1} style={styles.repositoryMeta}>{metaStatus} {copy.text_97def2ca9e}{repository.headShort || "—"}</Text>
       </View>
       <View style={styles.repositoryMetrics}>
-        {repository.changes?.files ? <ChangeCounts additions={repository.changes?.additions ?? 0} deletions={repository.changes?.deletions ?? 0} styles={styles} /> : null}
-        {workingFiles && repository.workingChanges ? <ChangeCounts additions={repository.workingChanges?.additions ?? 0} deletions={repository.workingChanges?.deletions ?? 0} fileCount={workingFiles} prefix="dirty" styles={styles} /> : null}
-        {!repository.changes && !repository.workingChanges ? <Text style={styles.repositoryDelta}>{copy.observationNotLoaded}</Text> : null}
-        {repository.changes && !repository.changes.files && !workingFiles ? <Text style={styles.repositoryDelta}>{stale ? copy.text_f9f75e6112 : copy.text_8fae4f2a02}</Text> : null}
+        {changeSummary && (changeSummary.additions || changeSummary.deletions)
+          ? <ChangeCounts additions={changeSummary.additions} deletions={changeSummary.deletions} styles={styles} />
+          : changeSummary
+            ? <Text style={styles.repositoryDelta}>{fileCountLabel(changeSummary.files, copy)}</Text>
+            : null}
       </View>
     </Pressable>
   );

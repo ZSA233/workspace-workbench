@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test, { after } from "node:test";
@@ -42,6 +42,32 @@ test("setup scan prioritizes a parent Git checkout and exposes nested checkouts"
       assert.ok(result.repositories.some((repository) => repository.repoPath === name), `${name} should appear in setup`);
     assert.equal(result.scan?.incomplete, false);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("setup reuses an already registered project for the same source root", async () => {
+  const root = temporaryGitProject();
+  const registry = join(root, "registry.json");
+  const config = join(root, "compose", "workspace", "workbench.json");
+  const previous = process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY;
+  mkdirSync(join(root, "compose", "workspace"), { recursive: true });
+  writeFileSync(config, JSON.stringify({ schemaVersion: 1, sourceRoot: "../..", project: { id: "existing", displayName: "Existing" }, repositories: [{ id: "child", path: "compose" }] }));
+  writeFileSync(registry, JSON.stringify({ configs: [config] }));
+  process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = registry;
+  try {
+    const scan = await scanProject(root);
+    assert.equal(scan.configPath, realpathSync(config));
+    assert.equal(scan.configExists, true);
+    const before = readFileSync(config, "utf8");
+    const result = await saveProjectSetup({ directory: root, repositories: ["."], shareConfig: false });
+    assert.equal(result.project.configPath, realpathSync(config));
+    assert.equal(readFileSync(config, "utf8"), before);
+    assert.equal(readFileSync(registry, "utf8"), JSON.stringify({ configs: [config] }));
+    assert.equal(existsSync(join(root, ".workspace-workbench", "project.json")), false);
+  } finally {
+    if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY;
+    else process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = previous;
     rmSync(root, { recursive: true, force: true });
   }
 });

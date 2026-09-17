@@ -8,7 +8,7 @@ import type { ProjectRuntimeSettings, ProjectRuntimeSettingsUpdateInput, Project
 import { backendStatus, startBackend } from "./backend-manager.ts";
 import { scanGitRoots } from "./backend/discovery-scan.ts";
 import { handleObserver } from "./observer.ts";
-import { resolveProject, type ProjectRoute } from "./projects.ts";
+import { registeredProjects, resolveProject, type ProjectRoute } from "./projects.ts";
 
 const execFileAsync = promisify(execFile);
 const EXCLUDE_BLOCK_START = "# workspace-workbench:begin";
@@ -219,10 +219,14 @@ export async function scanProject(directory: string): Promise<ProjectSetupScan> 
   const gitAvailable = (await runGit(null, ["--version"], 2_000)) !== null;
   const gitRoot = gitAvailable ? await resolveGitRoot(current) : null;
   const projectRoot = gitRoot || current;
+  const registered = registeredProjects().find((project) => {
+    try { return realpathSync(project.sourceRoot) === projectRoot; }
+    catch { return resolve(project.sourceRoot) === projectRoot; }
+  });
   const displayName = basename(projectRoot) || "Workspace";
   const used = new Set<string>();
   const repositoryRoots = new Map<string, { root: string; kind: SetupRepository["kind"] }>();
-  const configPath = join(projectRoot, ".workspace-workbench", "project.json");
+  const configPath = registered?.configPath || join(projectRoot, ".workspace-workbench", "project.json");
   const existing = existsSync(configPath) ? readConfigValue(configPath) : {};
   const discovery = isRecord(existing.discovery) ? existing.discovery : {};
   const layout = configLayout(configPath, existing, projectRoot);
@@ -250,8 +254,8 @@ export async function scanProject(directory: string): Promise<ProjectSetupScan> 
   return {
     projectRoot,
     displayName,
-    configPath: join(projectRoot, ".workspace-workbench", "project.json"),
-    configRelativePath: ".workspace-workbench/project.json",
+    configPath,
+    configRelativePath: unixRelative(projectRoot, configPath),
     gitAvailable,
     gitRoot,
     repositories,
@@ -367,6 +371,14 @@ function registerProject(configPath: string): void {
 
 export async function saveProjectSetup(input: { directory: string; repositories: string[]; shareConfig: boolean }) {
   const scan = await scanProject(input.directory);
+  const localConfig = join(scan.projectRoot, ".workspace-workbench", "project.json");
+  if (scan.configExists && scan.configPath !== localConfig) {
+    const route = resolveProject({ projectConfig: scan.configPath });
+    return {
+      project: { configPath: route.configPath, sourceRoot: route.sourceRoot, workspaceRoot: route.workspaceRoot, displayName: route.displayName },
+      backend: await startBackend(route.configPath),
+    };
+  }
   const available = new Map(scan.repositories.map((repository) => [repository.repoPath, repository]));
   const selectedPaths = [...new Set(input.repositories)];
   const selected = selectedPaths.map((path) => available.get(path));

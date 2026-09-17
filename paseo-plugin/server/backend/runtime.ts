@@ -168,6 +168,9 @@ export class Runtime {
   file(workspace: Json) {
     return join(this.root, hash(workspace.id) + ".json");
   }
+  cacheRoot(workspace: Json) {
+    return join(this.config.cacheRoot, "workspaces", workspace.id === "main" ? "main" : hash(workspace.id).slice(0, 16));
+  }
   load(workspace: Json): Json {
     try {
       return optionalJson(this.file(workspace));
@@ -175,8 +178,16 @@ export class Runtime {
       return {};
     }
   }
-  cache(tools: string[], create = false) {
+  cache(workspace: Json, tools: string[], create = false) {
     const vars: Record<string, string> = {};
+    if (this.manager === "mise" && this.mode !== "system") {
+      const path = join(this.root, "mise");
+      if (create) {
+        try { mkdirSync(path, { recursive: true, mode: 0o700 }); accessSync(path, constants.W_OK); }
+        catch { throw new WorkbenchError("runtime_cache_unavailable", `mise data directory is not writable: ${path}`); }
+      }
+      vars.MISE_DATA_DIR = path;
+    }
     if (!this.config.cacheEnabled) return vars;
     const paths = Object.assign(
       {},
@@ -186,14 +197,19 @@ export class Runtime {
       ...tools.map((tool) => adapters[tool]?.cache || {}),
     );
     for (const [name, part] of Object.entries(paths)) {
-      const path = join(this.config.cacheRoot, String(part));
+      const path = join(this.cacheRoot(workspace), String(part));
       try {
         if (create) mkdirSync(path, { recursive: true, mode: 0o700 });
-        accessSync(path, constants.W_OK);
+        if (create) accessSync(path, constants.W_OK);
         vars[name] = path;
-      } catch {}
+      } catch { throw new WorkbenchError("runtime_cache_unavailable", `runtime cache directory is not writable: ${path}`); }
     }
     return vars;
+  }
+  environment(workspace: Json, tools: string[], create = false) {
+    const env = { ...process.env };
+    for (const name of ["MISE_DATA_DIR", "MISE_CACHE_DIR"]) if (!env[name]?.trim()) delete env[name];
+    return { ...env, ...this.cache(workspace, tools, create) };
   }
   entryExecutable(entry: Json, tool: string) {
     return (
@@ -283,8 +299,8 @@ export class Runtime {
       managerAvailable: !!managerPath,
       managerPath,
       cache: {
-        scope: "project",
-        root: this.config.cacheRoot,
+        scope: "workspace",
+        root: this.cacheRoot(workspace),
         enabled: this.config.cacheEnabled,
       },
       requirements,
@@ -294,7 +310,7 @@ export class Runtime {
       environment: {
         pathEntries: status === "ready" ? [...bins] : [],
         variables: {
-          ...this.cache([...tools]),
+          ...this.cache(workspace, [...tools]),
           ...(status === "ready" ? { GOTOOLCHAIN: "local" } : {}),
         },
       },
@@ -334,16 +350,13 @@ export class Runtime {
       ),
     ];
   }
-  async version(tool: string, path: string) {
+  async version(workspace: Json, tool: string, path: string) {
+    const env = { ...this.environment(workspace, [tool], true), GOTOOLCHAIN: "local" };
     try {
       const r = await command(path, adapters[tool].args, {
         cwd: this.root,
         timeout: 10000,
-        env: {
-          ...process.env,
-          ...this.cache([tool], true),
-          GOTOOLCHAIN: "local",
-        },
+        env,
       });
       return r.code === 0
         ? `${r.stdout}\n${r.stderr}`.match(adapters[tool].pattern)?.[1] || ""
@@ -365,7 +378,7 @@ export class Runtime {
         ? this.requirements[repositoryId]
         : {},
       previous = Object.hasOwn(saved, repositoryId) ? saved[repositoryId] : {};
-    this.cache(Object.keys(requested), true);
+    this.cache(workspace, Object.keys(requested), true);
     if (previous.status === "ready" && this.ready(previous, requested))
       return { workspaceId: workspace.id, repositoryId, ...previous };
     const entry: Json = {
@@ -390,7 +403,7 @@ export class Runtime {
               (this.mode === "system" && this.managed(path))
             )
               continue;
-            const resolved = await this.version(tool, path);
+            const resolved = await this.version(workspace, tool, path);
             if (!matches(resolved)) continue;
             entry.resolved[tool] = resolved;
             entry.paths[tool] = dirname(path);
@@ -412,7 +425,7 @@ export class Runtime {
             `No compatible runtime for ${tool}@${version}; install mise or configure runtimePaths`,
             { missingRuntimes: [{ tool, version }], manager: "mise" },
           );
-        const env = { ...process.env, ...this.cache([tool], true) },
+        const env = this.environment(workspace, [tool], true),
           spec = `${tool}@${version}`;
         const install = await command(manager, ["install", spec, "--yes"], {
           cwd: this.root,
@@ -433,7 +446,7 @@ export class Runtime {
             "toolchain_not_ready",
             "runtime executable missing",
           );
-        const resolved = await this.version(tool, path);
+        const resolved = await this.version(workspace, tool, path);
         if (!matches(resolved))
           throw new WorkbenchError(
             "toolchain_not_ready",

@@ -28,6 +28,7 @@ paseo plugin reload workspace-workbench-paseo --json
 首次使用时在 Paseo 的“设置 → 插件”中启用插件。打开没有项目配置的 Git 目录后，插件
 会自动扫描并列出可用仓库；确认后生成 `.workspace-workbench/project.json`，并自动登记
 项目、准备配置和启动后端。用户不需要编辑 JSON、维护项目注册表或手动创建 worktree。
+如果同一源码根目录已有登记的项目配置，向导会打开该项目，不再生成第二份配置或覆盖其仓库清单。
 
 ## 观察时序
 
@@ -91,6 +92,11 @@ detached HEAD 的子仓逐个选择是否从当前提交创建分支。选择保
 
 项目仓库可以声明 Go、Python 或 Node 运行时。这里的 Python 是业务项目的可选运行时，
 Workbench 后端自身不再启动或下载 Python。
+
+运行时安装数据由项目共享，保存在 `stateRoot/toolchains/mise`；`mise`、Go、pip 和 npm
+缓存位于项目 `cache.root/workspaces/<Workspace ID>` 下，主工作区使用 `main`。
+准备工具链、本地执行和 Agent 交接都会使用这些路径，不会把缓存写到源码仓库。
+已有缓存不自动迁移或删除；目录不可写时会报告错误。
 
 Agent 交接、Review、权限和计划/执行模式见[根目录 README](../README.md)及
 [Agent Workspace 流程](../docs/agent-workspace-flow.md)。Reviewer 使用独立只读会话；

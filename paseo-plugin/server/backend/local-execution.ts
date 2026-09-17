@@ -28,7 +28,9 @@ export async function executeLocal(
       "recover additions before local execution",
     );
   await runtimeIdentity(repository, service.config);
-  const vars: NodeJS.ProcessEnv = { ...process.env, GOTOOLCHAIN: "local" };
+  const vars: NodeJS.ProcessEnv = service.runtime
+    ? { ...service.runtime.environment(workspace, [], true), GOTOOLCHAIN: "local" }
+    : { ...process.env, GOTOOLCHAIN: "local" };
   if (service.runtime) {
     const requested = Object.hasOwn(service.runtime.requirements, repository.id)
         ? service.runtime.requirements[repository.id]
@@ -44,6 +46,7 @@ export async function executeLocal(
       );
     for (const [tool, version] of Object.entries(requested)) {
       const actual = await service.runtime.version(
+        workspace,
         tool,
         service.runtime.entryExecutable(saved, tool),
       );
@@ -56,7 +59,7 @@ export async function executeLocal(
           "runtime executable version changed; prepare again",
         );
     }
-    Object.assign(vars, service.runtime.cache(Object.keys(requested), true));
+    Object.assign(vars, service.runtime.cache(workspace, Object.keys(requested), true));
     vars.PATH = [
       ...service.runtime.bins(saved, requested),
       process.env.PATH || "",

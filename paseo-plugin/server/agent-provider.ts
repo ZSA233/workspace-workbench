@@ -65,7 +65,7 @@ function runtimeEnvironment(runtime: RuntimeResult): Record<string, string> {
   const rawPathEntries = Array.isArray(environment?.pathEntries) ? environment.pathEntries : [];
   const pathEntries = rawPathEntries.filter((value): value is string => typeof value === "string" && isAbsolute(value));
   const variables: Record<string, string> = {};
-  const allowedVariables = new Set(["GOCACHE", "GOMODCACHE", "NPM_CONFIG_CACHE", "PIP_CACHE_DIR", "MISE_CACHE_DIR", "GOTOOLCHAIN"]);
+  const allowedVariables = new Set(["GOCACHE", "GOMODCACHE", "NPM_CONFIG_CACHE", "PIP_CACHE_DIR", "MISE_DATA_DIR", "MISE_CACHE_DIR", "GOTOOLCHAIN"]);
   if (environment?.variables && typeof environment.variables === "object" && !Array.isArray(environment.variables)) {
     for (const [key, value] of Object.entries(environment.variables as Record<string, unknown>)) {
       if (allowedVariables.has(key) && typeof value === "string" && (key === "GOTOOLCHAIN" || isAbsolute(value))) variables[key] = value;

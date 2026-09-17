@@ -235,7 +235,7 @@ test("Node runtime preparation supports Node and Python project requirements", a
     const prepared = await service.handle("workspace.prepare", { workspaceId: created.id, repositoryId: "one" });
     assert.equal(prepared.status, "ready");
     const runtime = await service.handle("workspace.runtime", { workspaceId: created.id });
-    assert.equal(runtime.toolchain.environment.variables.NPM_CONFIG_CACHE, join(f.config.cacheRoot, "npm"));
+    assert.equal(runtime.toolchain.environment.variables.NPM_CONFIG_CACHE, join(service.runtime!.cacheRoot(created), "npm"));
     assert.equal(service.runtime?.requirements.two.python, "3.11");
     const raw = JSON.parse(readFileSync(f.configPath, "utf8"));
     raw.toolchain.repositories.two = { python: "3.11" };
@@ -625,7 +625,7 @@ test("local Node CLI execution validates prepared runtimes and init preserves ex
       await executeLocal(service, "local", "one", [
         process.execPath,
         "-e",
-        `process.exit(process.env.NPM_CONFIG_CACHE===${JSON.stringify(join(f.config.cacheRoot, "npm"))}&&process.env.GOTOOLCHAIN==='local'?0:1)`,
+        `process.exit(process.env.NPM_CONFIG_CACHE===${JSON.stringify(join(service.runtime!.cacheRoot(service.workspaces.get("local")), "npm"))}&&process.env.GOTOOLCHAIN==='local'?0:1)`,
       ]),
       0,
     );
@@ -634,6 +634,35 @@ test("local Node CLI execution validates prepared runtimes and init preserves ex
       executeLocal(service, "local", "one", [process.execPath, "--version"]),
       /prepare/,
     );
+  } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("mise data is shared while caches are isolated by workspace", async () => {
+  const f = fixture({ toolchain: { mode: "auto", manager: "mise", repositories: { one: { go: "1.26" } } } });
+  const service = new Service(f.config);
+  try {
+    const first = await service.handle("workspace.create", { name: "first", repositories: ["one"] });
+    const second = await service.handle("workspace.create", { name: "second", repositories: ["one"] });
+    const a = service.runtime!.cache(first, ["go", "python", "node"], true);
+    const b = service.runtime!.cache(second, ["go", "python", "node"], true);
+    assert.equal(a.MISE_DATA_DIR, join(f.config.stateRoot, "toolchains", "mise"));
+    assert.equal(a.MISE_DATA_DIR, b.MISE_DATA_DIR);
+    for (const name of ["MISE_CACHE_DIR", "GOCACHE", "GOMODCACHE", "PIP_CACHE_DIR", "NPM_CONFIG_CACHE"]) {
+      assert.ok(a[name].startsWith(service.runtime!.cacheRoot(first)));
+      assert.ok(b[name].startsWith(service.runtime!.cacheRoot(second)));
+      assert.notEqual(a[name], b[name]);
+    }
+    assert.equal(service.runtime!.summary(first).cache.scope, "workspace");
+    assert.equal(service.runtime!.summary(first).environment.variables.MISE_DATA_DIR, a.MISE_DATA_DIR);
+    assert.equal(service.runtime!.summary(first).environment.variables.MISE_CACHE_DIR, a.MISE_CACHE_DIR);
+    assert.equal(git(join(f.root, "one"), ["status", "--porcelain"]), "");
+    const blocked = join(f.root, "blocked-cache");
+    writeFileSync(blocked, "not a directory");
+    service.runtime!.config.cacheRoot = blocked;
+    assert.throws(() => service.runtime!.cache(first, ["go"], true), (error: any) => error?.code === "runtime_cache_unavailable");
   } finally {
     await service.close();
     rmSync(f.root, { recursive: true, force: true });

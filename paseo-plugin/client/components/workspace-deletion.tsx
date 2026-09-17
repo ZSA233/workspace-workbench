@@ -80,6 +80,10 @@ export function WorkspaceDeletionPanel({
         <View style={styles.deletionModalRow}><Text style={styles.deletionModalBullet}>•</Text><Text style={styles.deletionModalRowText}>{copy.workspaceDeleteBranchPreserved}</Text></View>
         <View style={styles.deletionModalRow}><Text style={styles.deletionModalBullet}>•</Text><Text style={styles.deletionModalRowText}>{repositoryCountLabel(workspace.repositoryCount, copy)}</Text></View>
       </View>
+      {impact?.detachedSafetyRefs?.length ? <View style={styles.deletionModalSection}>
+        <Text style={styles.deletionModalSectionTitle}>{copy.orphanSafetyRefs}</Text>
+        {impact.detachedSafetyRefs.map(item => <Text key={item.ref} selectable style={styles.deletionModalRowText}>{item.repositoryId} · {item.ref} · {item.head.slice(0, 8)}</Text>)}
+      </View> : null}
 
       {dirty ? <View style={styles.deletionModalRow}><Text style={[styles.deletionModalBullet, { color: theme.colors.statusWarning }]}>•</Text><Text style={styles.deletionModalRowText}>{copy.workspaceDeleteDirty}{workspace.dirtyRepositoryCount ? ` · ${workspace.dirtyRepositoryCount}` : ""}</Text></View> : null}
       {unpushed ? <View style={styles.deletionModalRow}><Text style={[styles.deletionModalBullet, { color: theme.colors.statusWarning }]}>•</Text><Text style={styles.deletionModalRowText}>{copy.workspaceDeleteUnpushed}</Text></View> : null}

@@ -236,6 +236,24 @@ export const WorkspaceView = memo(function WorkspaceView({
         ) : null}
       </View>
 
+      {detail.gitlinks ? <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>{copy.linkedPointerTitle}</Text>
+          <Text style={styles.sectionCount}>{detail.gitlinks.length}</Text>
+        </View>
+        {detail.gitlinks.map(link => {
+          const available = repositories.some(repo => repo.repoPath === link.path);
+          const drift = link.committedSha !== link.indexSha || link.indexSha !== link.checkoutSha;
+          return <Pressable key={link.path} accessibilityRole="button" disabled={!available} onPress={() => onRepo(link.path)} style={styles.repositoryRow}>
+            <View style={[styles.repositoryDot, { backgroundColor: link.issue ? theme.colors.statusDanger : drift ? theme.colors.statusWarning : theme.colors.statusSuccess }]} />
+            <View style={styles.repositoryCopy}>
+              <Text style={styles.repositoryLine}>{link.path}{link.issue ? ` · ${copy.linkedMissing}` : ""}</Text>
+              <Text style={styles.repositoryMeta}>{copy.linkedCommitted} {(link.committedSha || "—").slice(0, 8)} · {copy.linkedIndex} {(link.indexSha || "—").slice(0, 8)} · {copy.linkedCheckout} {(link.checkoutSha || "—").slice(0, 8)}</Text>
+            </View>
+          </Pressable>;
+        })}
+      </View> : null}
+
       {selectedRepository ? (
         <View
           onLayout={(event) => {

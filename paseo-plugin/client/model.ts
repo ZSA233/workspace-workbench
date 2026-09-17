@@ -155,6 +155,7 @@ export type WorkspaceDeletionImpact = {
   dirtyRepositories?: number;
   externalReferences?: Array<{ repository?: string; ref?: string }>;
   branchesPreserved?: string[];
+  detachedSafetyRefs?: Array<{ repositoryId: string; ref: string; head: string }>;
   preserves?: string[];
   loses?: string[];
   runtimeState?: {
@@ -181,7 +182,8 @@ export type ObservationMeta = {
 export type WorkspaceSummary = {
   id: string;
   displayName?: string;
-  kind?: "managed" | "live";
+  kind?: "managed" | "live" | "linked-live";
+  layout?: "gitlink";
   managed?: boolean;
   sourceRoot?: string;
   treePath?: string;
@@ -385,6 +387,7 @@ export type GraphMergeSource = {
 export type DetailResult = {
   workspace: WorkspaceSummary;
   repositories: RepositorySummary[];
+  gitlinks?: Array<{ path: string; committedSha: string | null; indexSha: string | null; checkoutSha: string | null; issue?: string }>;
   observedAt?: string;
   observation?: ObservationMeta;
   observationStale?: boolean;
@@ -393,6 +396,7 @@ export type DetailResult = {
 export type ListResult = {
   capabilities?: { create?: boolean; prepare?: boolean; cleanup?: boolean; remove?: boolean; restore?: boolean; permanentDelete?: boolean; agent?: boolean };
   workspaces: WorkspaceSummary[];
+  orphanCandidates?: Array<{ id: string; name: string; treePath: string; repositoryCount: number; recordInvalid?: boolean; resume?: boolean }>;
   observedAt?: string;
   observation?: ObservationMeta;
 };

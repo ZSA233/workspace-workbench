@@ -59,6 +59,34 @@ paseo plugin reload workspace-workbench-paseo --json
 审核期间不会自动扩大范围。失败后可以用相同选择重试，已完成的 worktree 不会重复创建。
 base ref 默认使用源码当前 `HEAD`，需要时可以展开设置。
 
+## Gitlink 工作区
+
+项目中的外层 Git 仓库如果用 gitlink 固定子仓提交，可在“选择 Gitlink 工作区”中勾选。
+它会作为一个只读的聚合 Workspace 出现：外层仓库和每个子仓各有独立的 Git 状态、提交图
+和 diff；“子仓指针”同时展示外层提交、暂存区及子仓当前 HEAD。子仓未提交的文件修改
+只在子仓中显示，不会重复计为外层代码变更。子仓缺失或未初始化时保留对应行并显示问题。
+
+新建时可选择已勾选的外层仓库。插件从外层基准提交读取 gitlink SHA，在嵌套目录中为
+外层和全部子仓创建同名分支；子仓基准默认是外层固定的 SHA，可显式覆盖。创建只使用本地
+已有 Git 对象，不自动 fetch、stage 或 commit。子仓提交后，外层指针差异会显示出来，
+由开发者决定何时暂存和提交外层仓库。Gitlink 模式的记录留在插件状态目录，不往外层
+工作树添加 manifest。干净工作区按子仓到外层顺序清理；任何用户修改或新增提交都阻止
+清理并保留现场。普通平铺 Workspace 的流程保持原样。
+
+## 接管没有记录的工作区
+
+Workbench 会在配置的 `treesRoot` 下列出有 Git worktree、却没有有效 Workspace 记录的
+直接子目录，并在选择器中标为“待认领”。打开候选后才核验各仓库的 Git 身份、当前 HEAD、
+分支和修改；额外文件与旧元数据会提示为清理前需要处理的问题。确认接管前可以为处于
+detached HEAD 的子仓逐个选择是否从当前提交创建分支。选择保持 detached 也可接管，
+但后续提交可能没有分支引用。
+
+认领记录使用兼容的 schema-v1 格式，标记 `origin: adopted` 并单独保存认领时的 HEAD。
+原始创建基线、时间和请求不会被猜测。旧记录若无效，原文件会先备份到项目状态目录。
+认领后可使用普通 Workspace 的观察、Agent 和审核入口。清理会重新检查身份、修改与
+认领时 HEAD；detached 提交在移除 worktree 前保存到明确的 Git 引用，预览会列出引用。
+任何新增提交、修改或未知容器文件仍会阻止清理。
+
 ## 运行时和交接
 
 项目仓库可以声明 Go、Python 或 Node 运行时。这里的 Python 是业务项目的可选运行时，
@@ -85,7 +113,8 @@ MCP 每次工具调用建立独立连接，总预算 55 秒，包含排队；连
 `session_caller_not_coordinator` 是会话授权错误；材料类型或路径错误也是校验失败，
 都不应通过反复重载修复。多个 MCP 进程可能分别属于不同活动会话，不能批量终止。
 
-多仓 Workspace 容器本身不是 Git 仓库。若容器位于另一个 Git 仓库之下，Paseo 的
+普通平铺多仓 Workspace 的容器本身不是 Git 仓库；Gitlink 模式则保留外层 Git worktree，
+并在其中放置各子仓 worktree。若平铺容器位于另一个 Git 仓库之下，Paseo 的
 Git watcher/reconciliation 可能向上发现外层仓库并重复扫描；用
 `git -C <workspace-container> rev-parse --show-toplevel` 确认扫描对象，再检查
 宿主日志中的 `git status --porcelain` 超时。这与 Workbench 后端健康检查是不同链路。

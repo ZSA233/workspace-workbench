@@ -3,13 +3,15 @@ import { FlatList, Icon, Modal, TextInput } from "@getpaseo/plugin/client/react-
 import { useQuery } from "@tanstack/react-query";
 import { PanResponder, Platform, Pressable, Text, useWindowDimensions, View } from "react-native";
 import type { ObserverMethod, ObserverResponse } from "../../shared/observer";
-import type { DetailResult } from "../model";
+import type { DetailResult, WorkspaceSummary } from "../model";
 import { clampCreateWorkspaceHeight, CREATE_WORKSPACE_MAX_HEIGHT, CREATE_WORKSPACE_MIN_HEIGHT, CREATE_WORKSPACE_MIN_LIST_HEIGHT, createWorkspaceNaturalHeight } from "../create-workspace-layout";
 import { makeStyles } from "./ui";
 import { useWorkbenchCopy } from "../i18n";
 
-export function CreateWorkspace({ addTo, projectKey, currentRepo, rpc, onCreated, onClose, styles }: {
+export function CreateWorkspace({ addTo, projectKey, currentRepo, linkedSources = [], preferredSourceId = "", rpc, onCreated, onClose, styles }: {
   addTo?: { id: string; repositoryPaths: string[] };
+  linkedSources?: WorkspaceSummary[];
+  preferredSourceId?: string;
   projectKey: string; currentRepo: string;
   rpc(input: { method: ObserverMethod; params: Record<string, unknown> }): Promise<ObserverResponse>;
   onCreated(id: string): Promise<void>; onClose(): void; styles: ReturnType<typeof makeStyles>;
@@ -19,6 +21,10 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, rpc, onCreated
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string[]>(!addTo && currentRepo ? [currentRepo] : []);
   const [bases, setBases] = useState<Record<string, string>>({});
+  const [linkedSource, setLinkedSource] = useState(preferredSourceId);
+  const [branchName, setBranchName] = useState("");
+  const [rootBaseRef, setRootBaseRef] = useState("");
+  const [previewRef, setPreviewRef] = useState("HEAD");
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -28,17 +34,25 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, rpc, onCreated
   const frame = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
   const pendingHeight = useRef<number | null>(null);
   const window = useWindowDimensions();
-  const catalog = useQuery({ queryKey: ["workbench-create-catalog", projectKey], queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: "main", summary: true } }), retry: false });
+  useEffect(() => {
+    const timer = setTimeout(() => setPreviewRef(rootBaseRef.trim() || "HEAD"), 300);
+    return () => clearTimeout(timer);
+  }, [rootBaseRef]);
+  const catalog = useQuery({ queryKey: ["workbench-create-catalog", projectKey], queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: "main", summary: true } }), enabled: !linkedSource, retry: false });
+  const linkedCatalog = useQuery({ queryKey: ["workbench-linked-create", projectKey, linkedSource, previewRef], queryFn: () => rpc({ method: "linked.workspace.preview", params: { sourceWorkspaceId: linkedSource, rootBaseRef: previewRef } }), enabled: Boolean(linkedSource), retry: false });
+  const linkedPreview = linkedCatalog.data?.ok ? linkedCatalog.data.result as { rootSha: string; links: Array<{ path: string; pinnedSha: string; issue?: string }> } : null;
   const repositories = (catalog.data?.ok ? (catalog.data.result as DetailResult).repositories : []).filter((repo) => !addTo?.repositoryPaths.includes(repo.repoPath));
   const valid = repositories.filter((repo) => repo.status !== "missing" && Boolean(repo.head));
-  const canCreate = (addTo || name.trim()) && selected.length && selected.every((path) => valid.some((repo) => repo.repoPath === path));
+  const canCreate = linkedSource && !addTo
+    ? Boolean(name.trim() && previewRef === (rootBaseRef.trim() || "HEAD") && linkedPreview?.links.length && !linkedPreview.links.some(link => link.issue))
+    : Boolean((addTo || name.trim()) && selected.length && selected.every((path) => valid.some((repo) => repo.repoPath === path)));
   const filteredRepositories = useMemo(
     () => repositories.filter((repo) => `${repo.name} ${repo.repoPath}`.toLowerCase().includes(search.toLowerCase())),
     [repositories, search],
   );
   const maxHeight = Math.max(CREATE_WORKSPACE_MIN_HEIGHT, Math.min(CREATE_WORKSPACE_MAX_HEIGHT, Math.max(CREATE_WORKSPACE_MIN_HEIGHT, window.height - 120)));
   const naturalHeight = createWorkspaceNaturalHeight({
-    repositoryCount: filteredRepositories.length,
+    repositoryCount: linkedSource ? linkedPreview?.links.length || 0 : filteredRepositories.length,
     selectedCount: selected.length,
     basesExpanded: expanded,
     hasStatusMessage: Boolean(error) || catalog.isPending || catalog.isError || Boolean(catalog.data && !catalog.data.ok),
@@ -93,7 +107,13 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, rpc, onCreated
     if (lock.current || !canCreate) return;
     lock.current = true; setBusy(true); setError("");
     try {
-      const response = await rpc({ method: addTo ? "workspace.addRepositories" : "workspace.create", params: { ...(addTo ? { workspaceId: addTo.id } : { name: name.trim() }), repositories: [...selected].sort(), baseRefs: Object.fromEntries(selected.map((path) => [path, bases[path]?.trim() || "HEAD"])) } });
+      const params = linkedSource && !addTo
+        ? { name: name.trim(), sourceWorkspaceId: linkedSource,
+            branchName: branchName.trim() || `feature/${name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-")}`,
+            rootBaseRef: rootBaseRef.trim() || "HEAD",
+            baseRefs: Object.fromEntries((linkedPreview?.links || []).filter(link => bases[link.path]?.trim()).map(link => [link.path, bases[link.path].trim()])) }
+        : { ...(addTo ? { workspaceId: addTo.id } : { name: name.trim() }), repositories: [...selected].sort(), baseRefs: Object.fromEntries(selected.map((path) => [path, bases[path]?.trim() || "HEAD"])) };
+      const response = await rpc({ method: addTo ? "workspace.addRepositories" : "workspace.create", params });
       if (!response.ok) throw new Error(response.error?.message || copy.text_deb3990191);
       const result = response.result as { id: string; preparations?: Array<{ status?: string }> };
       if (result.preparations?.some((item) => item.status === "prepare_failed")) throw new Error("仓库已添加，运行时准备失败。修复运行时后重试；不会重复创建仓库。");
@@ -110,6 +130,22 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, rpc, onCreated
       contentContainerStyle={styles.createModalBody}
     >
       {!addTo ? <TextInput accessibilityLabel={copy.text_76848596cb} placeholder={copy.text_76848596cb} value={name} onChangeText={setName} editable={!busy} style={inputStyle} /> : null}
+      {!addTo && linkedSources.length ? <View style={{ gap: 5 }}>
+        <Text style={styles.repositoryMeta}>{copy.linkedCreateSource}</Text>
+        <Pressable accessibilityRole="button" accessibilityState={{ selected: !linkedSource }} onPress={() => setLinkedSource("")} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{!linkedSource ? "✓ " : "○ "}{copy.linkedCreateFlat}</Text></Pressable>
+        {linkedSources.map(source => <Pressable key={source.id} accessibilityRole="button" accessibilityState={{ selected: linkedSource === source.id }} onPress={() => setLinkedSource(source.id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{linkedSource === source.id ? "✓ " : "○ "}{source.displayName}</Text></Pressable>)}
+      </View> : null}
+      {linkedSource && !addTo ? <View style={{ gap: 6 }}>
+        <TextInput accessibilityLabel={copy.linkedBranchName} placeholder={`${copy.linkedBranchName}: feature/${name.trim() || "workspace"}`} value={branchName} onChangeText={setBranchName} style={inputStyle} />
+        <TextInput accessibilityLabel={copy.linkedOuterBaseRef} placeholder={`${copy.linkedOuterBaseRef}: HEAD`} value={rootBaseRef} onChangeText={setRootBaseRef} style={inputStyle} />
+        <Text style={styles.layoutMenuHint}>{copy.linkedBaseHint}</Text>
+        {linkedCatalog.isFetching ? <Text style={styles.emptyText}>{copy.mainRepositoryScanning}</Text> : null}
+        {linkedCatalog.data && !linkedCatalog.data.ok ? <Text style={styles.warningText}>{linkedCatalog.data.error?.message}</Text> : null}
+        {linkedPreview?.links.map(link => <View key={link.path} style={{ gap: 2 }}>
+          <Text style={styles.repositoryMeta}>{link.path} · {link.pinnedSha.slice(0, 8)}{link.issue ? ` · ${copy.linkedMissing}` : ""}</Text>
+          <TextInput accessibilityLabel={`${link.path} ${copy.createBase}`} placeholder={link.pinnedSha} value={bases[link.path] || ""} onChangeText={value => setBases(current => ({ ...current, [link.path]: value }))} style={inputStyle} />
+        </View>)}
+      </View> : <>
       <TextInput accessibilityLabel={copy.createSearch} placeholder={copy.createSearch} value={search} onChangeText={setSearch} style={inputStyle} />
       <FlatList
         data={filteredRepositories}
@@ -138,6 +174,7 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, rpc, onCreated
       {catalog.isPending ? <Text style={styles.emptyText}>{copy.text_96c3e67563}</Text> : null}
       {catalog.isError || catalog.data && !catalog.data.ok ? <Text style={styles.warningText}>{copy.createCatalogFailed}</Text> : null}
       <Pressable onPress={() => setExpanded((value) => !value)}><Text style={styles.secondaryButtonText}>{copy.createBase}</Text></Pressable>
+      </>}
       {error ? <Text style={styles.warningText}>{error}</Text> : null}
       <Pressable accessibilityRole="button" disabled={!canCreate || busy} onPress={() => { void create(); }} style={[styles.copyButton, (!canCreate || busy) && { opacity: 0.5 }]}><Text style={styles.copyButtonText}>{busy ? copy.text_1680b04bf6 : addTo ? "添加仓库" : copy.text_fcbd093292}</Text></Pressable>
     </Modal.Content>

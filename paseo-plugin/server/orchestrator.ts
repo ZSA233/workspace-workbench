@@ -155,6 +155,7 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
     const requestId = simple.requestId || randomUUID();
     request = workflowRequest.parse({
       requestId, workspaceId: simple.workspaceId, name: simple.name, repositories: simple.repositories,
+      sourceWorkspaceId: simple.sourceWorkspaceId, branchName: simple.branchName, rootBaseRef: simple.rootBaseRef,
       baseRefs: simple.baseRefs,
       handoff: {
         goal: simple.task,
@@ -200,8 +201,9 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
   if (!listing.ok) return listing;
   const capabilities = (listing.result as { capabilities?: { create?: boolean; agent?: boolean; prepare?: boolean } }).capabilities;
   if (!capabilities?.agent || !rawRequest.workspaceId && !capabilities?.create) throw new Error("capability_unavailable");
-  if (!rawRequest.workspaceId && (!rawRequest.name || !rawRequest.repositories?.length)) throw new Error("workspace_selection_required");
-  const catalog = await query({ method: "workspace.detail", params: { workspaceId: rawRequest.workspaceId || "main", summary: true } });
+  if (!rawRequest.workspaceId && (!rawRequest.name || (!rawRequest.repositories?.length && !rawRequest.sourceWorkspaceId))) throw new Error("workspace_selection_required");
+  if (rawRequest.sourceWorkspaceId && rawRequest.repositories?.length) throw new Error("gitlink_repositories_implicit");
+  const catalog = await query({ method: "workspace.detail", params: { workspaceId: rawRequest.workspaceId || rawRequest.sourceWorkspaceId || "main", summary: true } });
   if (!catalog.ok) return catalog;
   const normalized = normalizeWorkflowRequest(rawRequest, catalog.result);
   if (!normalized.ok) return normalized;
@@ -256,7 +258,8 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
     writeState(key, progress);
     if (!progress.workspaceId) {
       await verifyExecution();
-      const response = await query({ method: "workspace.create", params: { name: fullRequest.name, repositories: fullRequest.repositories, baseRefs: fullRequest.baseRefs } });
+      const response = await query({ method: "workspace.create", params: { name: fullRequest.name, repositories: fullRequest.repositories, baseRefs: fullRequest.baseRefs,
+        sourceWorkspaceId: fullRequest.sourceWorkspaceId, branchName: fullRequest.branchName, rootBaseRef: fullRequest.rootBaseRef } });
       if (!response.ok) return response;
       progress = { ...progress, workspaceId: (response.result as { id: string }).id, stage: "created" };
       writeState(key, progress);

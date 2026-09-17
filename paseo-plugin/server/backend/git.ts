@@ -198,13 +198,14 @@ export class Git {
       throw new WorkbenchError("commit_missing", "commit is unavailable");
     return r.stdout.trim();
   }
-  async status(): Promise<Array<[string, string]>> {
+  async status(ignoreSubmoduleContent: boolean | "all" = false): Promise<Array<[string, string]>> {
     const values = (
         await this.run([
           "status",
           "--porcelain=v1",
           "-z",
           "--untracked-files=all",
+          ...(ignoreSubmoduleContent ? [`--ignore-submodules=${ignoreSubmoduleContent === "all" ? "all" : "dirty"}`] : []),
         ])
       ).stdout.split("\0"),
       result: Array<[string, string]> = [];
@@ -317,15 +318,18 @@ export class Git {
     scope: string,
     base?: string | null,
     commit?: string | null,
+    ignoreSubmoduleContent = false,
   ): Promise<GitFile[]> {
     const hasHead = await this.head(),
       range = await this.range(scope, base, commit);
+    const diffArgs = scope === "working" && ignoreSubmoduleContent
+      ? [...range.args, "--ignore-submodules=dirty"] : range.args;
     const empty = scope === "working" && !hasHead;
     const names = empty
       ? []
       : (
           await this.run([
-            ...range.args,
+            ...diffArgs,
             "--no-ext-diff",
             "--name-status",
             "-z",
@@ -354,7 +358,7 @@ export class Git {
     const stats = empty
       ? []
       : (
-          await this.run([...range.args, "--no-ext-diff", "--numstat", "-z"])
+          await this.run([...diffArgs, "--no-ext-diff", "--numstat", "-z"])
         ).stdout.split("\0");
     for (let i = 0; i < stats.length; ) {
       const fields = stats[i++].split("\t");

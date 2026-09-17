@@ -50,6 +50,9 @@ const schema = {
     workspaceId: { type: "string", minLength: 1 },
     name: { type: "string", minLength: 1 },
     repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    sourceWorkspaceId: { type: "string", minLength: 1, description: "Selected read-only Gitlink Workspace to use as a nested workspace source." },
+    branchName: { type: "string", minLength: 1, description: "One branch name for the outer repository and every child repository." },
+    rootBaseRef: { type: "string", minLength: 1, description: "Outer repository ref; child defaults come from its pinned Gitlink commits." },
     baseRefs: { type: "object", additionalProperties: { type: "string" } },
     handoff: {
       type: "object",
@@ -115,6 +118,9 @@ const workspaceSubmitSchema = {
   properties: {
     requestId: { type: "string", minLength: 1 }, workspaceId: { type: "string", minLength: 1 },
     name: { type: "string", minLength: 1 }, repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    sourceWorkspaceId: { type: "string", minLength: 1, description: "Selected Gitlink Workspace source." },
+    branchName: { type: "string", minLength: 1, description: "Shared outer and child branch name." },
+    rootBaseRef: { type: "string", minLength: 1, description: "Outer repository base ref; children default to pinned commits." },
     baseRefs: { type: "object", additionalProperties: { type: "string" } }, task: { type: "string", minLength: 1 },
     originalPaths: { type: "array", maxItems: 128, items: { type: "string", minLength: 1 } },
     startMode: { enum: ["adaptive", "plan-first"] }, relationship: { enum: ["independent", "child"] },

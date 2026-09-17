@@ -44,6 +44,17 @@ for (const project of ["a", "b"]) {
     git(repo, ["add", "."]);
     git(repo, ["commit", "-qm", "initial"]);
   }
+  const linked = join(path, "outer");
+  mkdirSync(linked);
+  git(linked, ["init", "-q"]);
+  git(linked, ["config", "user.name", "Workbench verification"]);
+  git(linked, ["config", "user.email", "verification@example.invalid"]);
+  git(linked, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", join(path, "one"), "halh"]);
+  git(linked, ["commit", "-qam", "initial pointers"]);
+  const orphan = join(path, "workspaces", "trees", "legacy");
+  mkdirSync(orphan, { recursive: true });
+  for (const id of ["one", "two"])
+    git(join(path, id), ["worktree", "add", "-q", "--detach", join(orphan, id), "HEAD"]);
   const config = join(path, "project.json");
   configs.push(config);
   writeFileSync(

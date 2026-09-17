@@ -36,7 +36,7 @@ type SocketRequest = {
 
 const allowedMethods = new Set<string>(observerMethods);
 const versionedMethods = new Set<string>(["observer.versions", "workspace.detail", "repository.graph", "repository.changes", "repository.diff"]);
-const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
+const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(): number {
   const project = currentProject();
@@ -163,10 +163,10 @@ export class ObserverBridge {
     const request: SocketRequest = { id: String(++this.sequence), method: input.method, params: input.params || {} };
     const pending = this.request(request, configuredBridgeTimeoutMs())
       .then((response) => {
-        if (response.ok && ["observer.reload", "workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete"].includes(input.method)) {
+        if (response.ok && ["observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete"].includes(input.method)) {
           for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
         }
-        if (!versionedMethods.has(input.method) && (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method))) {
+        if (!versionedMethods.has(input.method) && (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.orphan.preview", "workspace.orphan.adopt", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method))) {
           if (cacheable(response)) this.cache.set(key, { response, expiresAt: Date.now() + OBSERVATION_TIMING_DEFAULTS.bridgeResponseCacheTtlMs });
         }
         return response;

@@ -104,6 +104,37 @@ test("repository aliases fail closed when a name is ambiguous", async () => {
   }
 });
 
+test("Gitlink workflow preview resolves the selected outer Workspace and preserves one shared branch", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "workbench-gitlink-flow-")));
+  const config = join(root, "project.json");
+  writeFileSync(config, JSON.stringify({ sourceRoot: root, workspaceRoot: root, stateRoot: root, agent: { provider: "paseo" } }));
+  const previous = process.env.WORKSPACE_WORKBENCH_CONFIG;
+  process.env.WORKSPACE_WORKBENCH_CONFIG = config;
+  const paseo = { agents: { ref: () => ({ refresh: async () => ({ agent: parent(root) }) }) } } as unknown as PaseoApi;
+  const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
+  const query = async (input: { method: string; params?: Record<string, unknown> }) => {
+    calls.push(input);
+    if (input.method === "workspace.list") return { ok: true, result: { capabilities: { create: true, agent: true } } };
+    if (input.method === "workspace.detail") return { ok: true, result: { workspace: { sourceRoot: root }, repositories: [
+      { id: "@root", repoPath: ".", sourcePath: join(root, "outer"), worktreePath: join(root, "outer") },
+      { id: "halh", repoPath: "halh", sourcePath: join(root, "outer", "halh"), worktreePath: join(root, "outer", "halh") },
+    ] } };
+    throw new Error(`unexpected method ${input.method}`);
+  };
+  try {
+    const request = workflowRequest.parse({ requestId: "gitlink", name: "nested", sourceWorkspaceId: "linked-fixture",
+      branchName: "feature/nested", rootBaseRef: "main", baseRefs: { halh: "pin-sha" }, handoff: { goal: "Implement fixture" } });
+    const result = await withProject({ projectConfig: config }, () => orchestrate("preview", request, "parent", { paseo, query }));
+    assert.equal((result as { ok?: boolean }).ok, true);
+    assert.equal(calls.find(call => call.method === "workspace.detail")?.params?.workspaceId, "linked-fixture");
+    assert.equal((result as { request: { branchName: string; sourceWorkspaceId: string } }).request.branchName, "feature/nested");
+    assert.equal((result as { request: { sourceWorkspaceId: string } }).request.sourceWorkspaceId, "linked-fixture");
+  } finally {
+    if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("submit creates an internal operation identity and hands original paths to the worker without preview replay", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "workbench-submit-")));
   const config = join(root, "project.json"), source = join(root, "requirements.md");

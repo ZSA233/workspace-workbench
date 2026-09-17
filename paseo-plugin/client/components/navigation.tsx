@@ -135,6 +135,7 @@ export function WorkspaceSelector({
   workspaces,
   historyWorkspaces,
   visibleWorkspaces,
+  orphanCandidates,
   selectedWorkspace,
   selectedWorkspaceId,
   filter,
@@ -145,6 +146,7 @@ export function WorkspaceSelector({
   onOpen,
   onFilter,
   onSelect,
+  onOpenOrphan,
   onRemoveWorkspace,
   onRestoreWorkspace,
   onPermanentDeleteWorkspace,
@@ -158,6 +160,7 @@ export function WorkspaceSelector({
   workspaces: WorkspaceSummary[];
   historyWorkspaces: WorkspaceSummary[];
   visibleWorkspaces: WorkspaceSummary[];
+  orphanCandidates?: Array<{ id: string; name: string; repositoryCount: number; resume?: boolean }>;
   selectedWorkspace?: WorkspaceSummary;
   selectedWorkspaceId: string;
   filter: WorkspaceFilter;
@@ -168,6 +171,7 @@ export function WorkspaceSelector({
   onOpen: () => void;
   onFilter: (filter: WorkspaceFilter) => void;
   onSelect: (id: string) => void;
+  onOpenOrphan?: (id: string) => void;
   onRemoveWorkspace?: (workspace: WorkspaceSummary) => void;
   onRestoreWorkspace?: (workspace: WorkspaceSummary) => void;
   onPermanentDeleteWorkspace?: (workspace: WorkspaceSummary) => void;
@@ -258,6 +262,16 @@ export function WorkspaceSelector({
             windowSize={7}
             ListEmptyComponent={!loading ? <Text style={styles.emptyText}>{localizedCopy.text_daa32fe25c}</Text> : null}
           />
+          {filter === "all" && orphanCandidates?.length ? <View style={{ maxHeight: 170 }}>
+            <Text style={styles.selectorListLabel}>{localizedCopy.orphanHeading} · {orphanCandidates.length}</Text>
+            <FlatList data={orphanCandidates} keyExtractor={(item) => item.id} nestedScrollEnabled
+              renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`${item.resume ? localizedCopy.orphanResume : localizedCopy.orphanCandidate} ${item.name}`} onPress={() => onOpenOrphan?.(item.id)} style={styles.workspaceOption}>
+                <View style={styles.workspaceOptionCopy}>
+                  <Text numberOfLines={1} style={styles.workspaceOptionTitle}>{item.name}</Text>
+                  <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{item.resume ? localizedCopy.orphanResume : localizedCopy.orphanCandidate} · {repositoryCountLabel(item.repositoryCount, localizedCopy)}</Text>
+                </View>
+              </Pressable>} />
+          </View> : null}
         </View>
       ) : null}
     </View>

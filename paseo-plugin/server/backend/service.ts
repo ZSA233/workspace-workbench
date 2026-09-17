@@ -11,6 +11,7 @@ import { issue, stable, WorkbenchError, type Json } from "./storage.ts";
 export const managementMethods = new Set([
   "observer.reload",
   "workspace.create",
+  "workspace.orphan.adopt",
   "workspace.addRepositories",
   "workspace.prepare",
   "workspace.cleanup",
@@ -18,6 +19,7 @@ export const managementMethods = new Set([
   "workspace.restore",
   "workspace.delete",
   "main.repositories.save",
+  "linked.workspaces.save",
 ]);
 export class Service {
   config: Config;
@@ -70,7 +72,7 @@ export class Service {
   async handle(method: string, params: Json = {}): Promise<Json> {
     if (managementMethods.has(method))
       return this.workspaces.mutations.run(async () => {
-        if (!["observer.reload", "main.repositories.save"].includes(method) && !this.config.managementEnabled)
+        if (!["observer.reload", "main.repositories.save", "linked.workspaces.save"].includes(method) && !this.config.managementEnabled)
           throw new WorkbenchError(
             "capability_unavailable",
             "workspace management disabled",
@@ -89,6 +91,8 @@ export class Service {
         return this.health();
       case "workspace.list":
         return this.observation.list(params);
+      case "workspace.orphan.preview":
+        return this.workspaces.orphanPreview(String(params.workspaceId || ""));
       case "workspace.detail":
         return this.observation.detail(params);
       case "workspace.identify":
@@ -97,6 +101,10 @@ export class Service {
         );
       case "main.repositories.list":
         return this.workspaces.mainCandidates();
+      case "linked.workspaces.list":
+        return this.workspaces.linkedCandidates();
+      case "linked.workspace.preview":
+        return this.workspaces.previewGitlink(params);
       case "workspace.runtime": {
         const w = this.workspaces.get(String(params.workspaceId || ""));
         if (!w.managed)
@@ -179,6 +187,7 @@ export class Service {
   }
   private async mutate(method: string, params: Json): Promise<Json> {
     if (method === "main.repositories.save") return this.workspaces.saveMainSelection(params);
+    if (method === "linked.workspaces.save") return this.workspaces.saveLinkedSelection(params);
     if (method === "observer.reload") {
       const next = loadConfig(this.config.configPath);
       for (const key of [
@@ -210,6 +219,7 @@ export class Service {
       };
     }
     if (method === "workspace.create") return this.workspaces.create(params);
+    if (method === "workspace.orphan.adopt") return this.workspaces.adoptOrphan(params);
     if (method === "workspace.addRepositories") {
       const workspace = await this.workspaces.add(params),
         preparations = [];

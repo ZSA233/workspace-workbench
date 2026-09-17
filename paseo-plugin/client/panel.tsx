@@ -73,6 +73,19 @@ type MainRepositorySelection = {
   scan?: { incomplete: boolean; reason?: "directory_limit" | "entry_limit" | "time_limit"; scannedDirectories: number };
   repositories: Array<{ id: string; name: string; path: string; configured: boolean; exists: boolean; missing: boolean; selected: boolean }>;
 };
+type LinkedWorkspaceSelection = {
+  revision: number;
+  scan?: { incomplete: boolean };
+  repositories: Array<{ path: string; name: string; selected: boolean; missing?: boolean; links?: Array<{ path: string }> }>;
+};
+type OrphanPreview = {
+  id: string; treePath: string; eligible: boolean; fingerprint: string;
+  repositories: Array<{ id: string; repoPath: string; worktreePath: string; head: string; branch: string | null; dirty: boolean; dirtyPaths: string[] }>;
+  issues: Array<{ code: string; message: string; path?: string }>;
+  warnings?: Array<{ code: string; message: string; path?: string }>;
+  plannedBranches?: Record<string, string>;
+  resume?: boolean;
+};
 
 type ObservationArea = {
   label: string;
@@ -371,6 +384,14 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [mainRepositoryFilter, setMainRepositoryFilter] = useState("");
   const [mainRepositoryDraft, setMainRepositoryDraft] = useState<string[]>([]);
   const [savingMainRepositories, setSavingMainRepositories] = useState(false);
+  const [linkedWorkspacesOpen, setLinkedWorkspacesOpen] = useState(false);
+  const [linkedWorkspaceFilter, setLinkedWorkspaceFilter] = useState("");
+  const [linkedWorkspaceDraft, setLinkedWorkspaceDraft] = useState<string[]>([]);
+  const [savingLinkedWorkspaces, setSavingLinkedWorkspaces] = useState(false);
+  const [orphanId, setOrphanId] = useState("");
+  const [orphanBranches, setOrphanBranches] = useState<Record<string, string>>({});
+  const [adoptingOrphan, setAdoptingOrphan] = useState(false);
+  const [orphanError, setOrphanError] = useState("");
   const newlyCreatedWorkspace = useRef<string | null>(null);
   const [delegating, setDelegating] = useState(false);
   const [lifecycleWorkspaceId, setLifecycleWorkspaceId] = useState("");
@@ -413,6 +434,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listResult = resultOf<ListResult>(listState.response);
   const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
   const listReady = Boolean(listResult);
+  const orphanPreviewQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "orphan-preview", orphanId],
+    queryFn: () => rpc({ method: "workspace.orphan.preview", params: { workspaceId: orphanId } }),
+    enabled: Boolean(projectConfig && orphanId), retry: false, staleTime: 0, refetchOnWindowFocus: false,
+  });
+  const orphanPreview = resultOf<OrphanPreview>(orphanPreviewQuery.data);
+  useEffect(() => { setOrphanBranches(orphanPreview?.plannedBranches || {}); setOrphanError(""); }, [orphanId, orphanPreview?.fingerprint]);
   const observationIssue = useObservationVersions(projectConfig, [selectedWorkspaceId], listReady && foreground);
   useEffect(() => {
     if (backendQuery.data?.state !== "ready" || listReady) return;
@@ -441,6 +469,15 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   useEffect(() => {
     if (mainRepositories) setMainRepositoryDraft(mainRepositories.repositories.filter(repo => repo.selected).map(repo => repo.path));
   }, [mainRepositories?.revision]);
+  const linkedWorkspacesQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "linked-workspaces"],
+    queryFn: () => rpc({ method: "linked.workspaces.list", params: {} }),
+    enabled: Boolean(projectConfig && linkedWorkspacesOpen), retry: false, staleTime: 0,
+  });
+  const linkedWorkspaces = resultOf<LinkedWorkspaceSelection>(linkedWorkspacesQuery.data);
+  useEffect(() => {
+    if (linkedWorkspaces) setLinkedWorkspaceDraft(linkedWorkspaces.repositories.filter(item => item.selected).map(item => item.path));
+  }, [linkedWorkspaces?.revision]);
   const historyWorkspaces = useMemo(
     () => observedWorkspaces.filter((workspace) => workspace.state === "removed"),
     [observedWorkspaces],
@@ -456,6 +493,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   // and trigger an unwanted fallback.
   const selectedWorkspace = observedWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId);
   const selectedWorkspaceIsMain = isMainWorkspace(selectedWorkspace);
+  useEffect(() => {
+    if (selectedWorkspace?.kind === "linked-live" && tab === "review" && reviewTab === "agent") setTab("workspace");
+  }, [selectedWorkspace?.kind, tab, reviewTab]);
   const selectedWorkspaceUnavailable = selectedWorkspace?.state === "create_failed" || selectedWorkspace?.state === "record_invalid";
   const selectedWorkspaceBlocksTasks = selectedWorkspaceUnavailable || selectedWorkspace?.state === "deletion_pending" || selectedWorkspace?.state === "removed";
   const agentId = "agentId" in props ? props.agentId : undefined;
@@ -598,6 +638,17 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     } catch (error) { toast.error(error instanceof Error ? error.message : localizedCopy.mainRepositorySaveFailed); }
     finally { setSavingMainRepositories(false); }
   }, [detailQuery.refetch, listQuery.refetch, localizedCopy.mainRepositorySaveFailed, mainRepositories, mainRepositoriesQuery.refetch, mainRepositoryDraft, rpc, savingMainRepositories, toast]);
+  const saveLinkedWorkspaces = useCallback(async () => {
+    if (!linkedWorkspaces || savingLinkedWorkspaces) return;
+    setSavingLinkedWorkspaces(true);
+    try {
+      const response = await rpc({ method: "linked.workspaces.save", params: { revision: linkedWorkspaces.revision, repositories: linkedWorkspaceDraft } });
+      if (!response.ok) throw new Error(response.error?.message || localizedCopy.linkedWorkspaceSaveFailed);
+      await Promise.allSettled([listQuery.refetch(), linkedWorkspacesQuery.refetch()]);
+      setLinkedWorkspacesOpen(false);
+    } catch (error) { toast.error(error instanceof Error ? error.message : localizedCopy.linkedWorkspaceSaveFailed); }
+    finally { setSavingLinkedWorkspaces(false); }
+  }, [linkedWorkspaces, savingLinkedWorkspaces, linkedWorkspaceDraft, rpc, localizedCopy.linkedWorkspaceSaveFailed, listQuery.refetch, linkedWorkspacesQuery.refetch, toast]);
   const selectedRepository = displayDetail?.workspace.id === selectedWorkspaceId
     ? displayDetail.repositories.find((repository) => repository.repoPath === selectedRepoPath)
     : undefined;
@@ -1296,6 +1347,22 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const resetLayout = useCallback(() => { animateSectionLayout(); preferences.resetLayout(); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.resetLayout]);
   const BodyContainer = tab === "review" || allocation.outerScroll ? ScrollView : View;
   const draftHandoff = buildSelectedHandoff();
+  const adoptSelectedOrphan = async () => {
+    if (!orphanPreview?.eligible || adoptingOrphan) return;
+    setAdoptingOrphan(true); setOrphanError("");
+    try {
+      const response = await rpc({ method: "workspace.orphan.adopt", params: {
+        workspaceId: orphanPreview.id, fingerprint: orphanPreview.fingerprint, branches: orphanBranches,
+      } });
+      if (!response.ok) throw new Error(response.error?.message || localizedCopy.orphanCannotAdopt);
+      const adoptedId = orphanPreview.id;
+      await listQuery.refetch();
+      newlyCreatedWorkspace.current = adoptedId;
+      selectWorkspace(adoptedId);
+      setOrphanId("");
+    } catch (error) { setOrphanError(error instanceof Error ? error.message : String(error)); }
+    finally { setAdoptingOrphan(false); }
+  };
   const draftPacket = draftHandoff?.reviewPacket || null;
   const handoffAssetOptions = useMemo(
     () => (artifactListQuery.data?.artifacts || []).filter((artifact) => artifact.kind === "image" || artifact.mimeType.startsWith("image/")),
@@ -1311,8 +1378,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       }}
     >
       {observationIssue ? <Text accessibilityRole="alert" style={styles.layoutMenuHint}>{localizedCopy.observationDegraded}: {observationIssue}</Text> : null}
-      {selectedWorkspace?.managed && !selectedWorkspaceBlocksTasks && listResult?.capabilities?.create ? <Pressable accessibilityRole="button" onPress={() => setAddRepositoriesOpen(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>添加仓库</Text></Pressable> : null}
-      {selectedWorkspaceIsMain ? <Pressable accessibilityRole="button" onPress={() => { setMainRepositoryFilter(""); setMainRepositoriesOpen(true); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainSelectRepositories}</Text></Pressable> : null}
+      {selectedWorkspace?.managed && selectedWorkspace.layout !== "gitlink" && !selectedWorkspaceBlocksTasks && listResult?.capabilities?.create ? <Pressable accessibilityRole="button" onPress={() => setAddRepositoriesOpen(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>添加仓库</Text></Pressable> : null}
+      {selectedWorkspaceId === "main" ? <Pressable accessibilityRole="button" onPress={() => { setMainRepositoryFilter(""); setMainRepositoriesOpen(true); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainSelectRepositories}</Text></Pressable> : null}
+      <Pressable accessibilityRole="button" onPress={() => { setLinkedWorkspaceFilter(""); setLinkedWorkspacesOpen(true); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.linkedSelectWorkspaces}</Text></Pressable>
       {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await listQuery.refetch(); await detailQuery.refetch(); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
       {mainRepositoriesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingMainRepositories) setMainRepositoriesOpen(false); }} title={localizedCopy.mainRepositoryTitle}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
@@ -1336,7 +1404,58 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           </View>
         </Modal.Content>
       </Modal> : null}
-      {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await listQuery.refetch(); newlyCreatedWorkspace.current = id; selectWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
+      {linkedWorkspacesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingLinkedWorkspaces) setLinkedWorkspacesOpen(false); }} title={localizedCopy.linkedWorkspaceTitle}>
+        <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
+          <Text style={styles.layoutMenuHint}>{localizedCopy.linkedWorkspaceHint}</Text>
+          <TextInput value={linkedWorkspaceFilter} onChangeText={setLinkedWorkspaceFilter} placeholder={localizedCopy.mainRepositorySearch} style={styles.targetInput} />
+          {linkedWorkspaces?.scan?.incomplete ? <Text style={styles.warningText}>{localizedCopy.repositoryScanIncomplete}</Text> : null}
+          {linkedWorkspacesQuery.data?.ok === false ? <Text style={styles.warningText}>{linkedWorkspacesQuery.data.error?.message}</Text> : null}
+          {linkedWorkspaces?.repositories.filter(item => !linkedWorkspaceFilter.trim() || `${item.name} ${item.path}`.toLowerCase().includes(linkedWorkspaceFilter.trim().toLowerCase())).map(item => {
+            const selected = linkedWorkspaceDraft.includes(item.path);
+            return <Pressable key={item.path} accessibilityRole="checkbox" accessibilityState={{ checked: selected }} onPress={() => setLinkedWorkspaceDraft(current => selected ? current.filter(path => path !== item.path) : [...current, item.path])} style={[styles.secondaryButton, selected && styles.scopeButtonActive]}>
+              <Text style={styles.secondaryButtonText}>{selected ? "✓" : "○"} {item.name} · {item.links?.length || 0} Gitlinks{item.missing ? ` · ${localizedCopy.mainRepositoryMissing}` : ""}</Text>
+              <Text selectable style={styles.layoutMenuHint}>{item.path}</Text>
+            </Pressable>;
+          })}
+          {!linkedWorkspacesQuery.isFetching && !linkedWorkspaces?.repositories.length ? <Text style={styles.emptyText}>{localizedCopy.linkedWorkspaceEmpty}</Text> : null}
+          <View style={styles.briefActions}>
+            <Pressable accessibilityRole="button" onPress={() => { void linkedWorkspacesQuery.refetch(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainRepositoryRescan}</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={savingLinkedWorkspaces || !linkedWorkspaces} onPress={() => { void saveLinkedWorkspaces(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{savingLinkedWorkspaces ? localizedCopy.mainRepositorySaving : localizedCopy.mainRepositorySave}</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={savingLinkedWorkspaces} onPress={() => setLinkedWorkspacesOpen(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainRepositoryCancel}</Text></Pressable>
+          </View>
+        </Modal.Content>
+      </Modal> : null}
+      {orphanId ? <Modal open onOpenChange={(open) => { if (!open && !adoptingOrphan) setOrphanId(""); }} title={localizedCopy.orphanAdoptTitle}>
+        <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 9, padding: 14 }}>
+          <Text style={styles.layoutMenuHint}>{localizedCopy.orphanAdoptHint}</Text>
+          <Text selectable style={styles.reviewDetailText}>{orphanPreview?.treePath || orphanId}</Text>
+          {orphanPreviewQuery.isFetching && !orphanPreview ? <Text style={styles.emptyText}>{localizedCopy.mainRepositoryScanning}</Text> : null}
+          {orphanPreviewQuery.data?.ok === false ? <Text style={styles.warningText}>{orphanPreviewQuery.data.error?.message}</Text> : null}
+          {orphanPreview?.repositories.map(repo => {
+            const createBranch = Object.prototype.hasOwnProperty.call(orphanBranches, repo.id);
+            return <View key={repo.id} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>{repo.repoPath} · {repo.branch || localizedCopy.orphanDetached}{repo.dirty ? ` · ${localizedCopy.workspaceStatusDirty}` : ""}</Text>
+              <Text selectable style={styles.layoutMenuHint}>{localizedCopy.orphanSnapshot}: {repo.head}</Text>
+              {repo.branch === null ? <View style={styles.briefActions}>
+                <Pressable accessibilityRole="button" disabled={orphanPreview?.resume} accessibilityState={{ selected: !createBranch }} onPress={() => setOrphanBranches(current => { const next = { ...current }; delete next[repo.id]; return next; })} style={[styles.secondaryButton, !createBranch && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.orphanKeepDetached}</Text></Pressable>
+                <Pressable accessibilityRole="button" disabled={orphanPreview?.resume} accessibilityState={{ selected: createBranch }} onPress={() => setOrphanBranches(current => ({ ...current, [repo.id]: current[repo.id] || `recovered/${orphanId}/${repo.id}` }))} style={[styles.secondaryButton, createBranch && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.orphanCreateBranch}</Text></Pressable>
+              </View> : null}
+              {createBranch ? <TextInput accessibilityLabel={`${localizedCopy.orphanCreateBranch} ${repo.id}`} editable={!orphanPreview?.resume} value={orphanBranches[repo.id]} onChangeText={value => setOrphanBranches(current => ({ ...current, [repo.id]: value }))} style={styles.targetInput} /> : null}
+            </View>;
+          })}
+          {orphanPreview?.repositories.some(repo => repo.branch === null && !Object.prototype.hasOwnProperty.call(orphanBranches, repo.id)) ? <Text style={styles.layoutMenuHint}>{localizedCopy.orphanBranchHint}</Text> : null}
+          {orphanPreview?.issues.map((item, index) => <Text key={`${item.code}:${index}`} style={styles.warningText}>{item.code}: {item.message}</Text>)}
+          {orphanPreview?.warnings?.map((item, index) => <Text key={`${item.code}:warning:${index}`} style={styles.layoutMenuHint}>{item.code === "workspace_extra_path" ? localizedCopy.orphanExtraPath : item.code === "workspace_metadata_unknown" ? localizedCopy.orphanMetadataWarning : item.code === "record_invalid" ? localizedCopy.orphanInvalidRecordWarning : item.message}{item.path ? `: ${item.path}` : ""}</Text>)}
+          {orphanPreview && !orphanPreview.eligible ? <Text style={styles.warningText}>{localizedCopy.orphanCannotAdopt}</Text> : null}
+          {orphanError ? <Text style={styles.warningText}>{orphanError}</Text> : null}
+          <View style={styles.briefActions}>
+            <Pressable accessibilityRole="button" onPress={() => { void orphanPreviewQuery.refetch(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.orphanRefresh}</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={!orphanPreview?.eligible || adoptingOrphan} onPress={() => { void adoptSelectedOrphan(); }} style={styles.primaryReviewButton}><Text style={styles.primaryReviewButtonText}>{adoptingOrphan ? localizedCopy.orphanAdopting : orphanPreview?.resume ? localizedCopy.orphanResume : localizedCopy.orphanAdopt}</Text></Pressable>
+            <Pressable accessibilityRole="button" disabled={adoptingOrphan} onPress={() => setOrphanId("")} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainRepositoryCancel}</Text></Pressable>
+          </View>
+        </Modal.Content>
+      </Modal> : null}
+      {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} linkedSources={allWorkspaces.filter(workspace => workspace.kind === "linked-live")} preferredSourceId={selectedWorkspace?.kind === "linked-live" ? selectedWorkspace.id : ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await listQuery.refetch(); newlyCreatedWorkspace.current = id; selectWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
       {handoffPacketOpen ? <Modal open onOpenChange={(open) => { if (!open) setHandoffPacketOpen(false); }} title={localizedCopy.handoffPacket}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
           <Text style={styles.layoutMenuHint}>{localizedCopy.handoffPacketHint}</Text>
@@ -1390,6 +1509,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         workspaces={allWorkspaces}
         historyWorkspaces={historyWorkspaces}
         visibleWorkspaces={visibleWorkspaces}
+        orphanCandidates={listResult?.orphanCandidates}
         selectedWorkspace={selectedWorkspace}
         selectedWorkspaceId={selectedWorkspaceId}
         filter={workspaceFilter}
@@ -1400,6 +1520,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         onOpen={() => setSelectorOpen((current) => !current)}
         onFilter={setWorkspaceFilter}
         onSelect={(id) => { selectWorkspace(id); setSelectorOpen(false); }}
+        onOpenOrphan={(id) => { setOrphanId(id); setSelectorOpen(false); }}
         onRemoveWorkspace={listResult?.capabilities?.remove ? (workspace) => { void removeWorkspace(workspace); } : undefined}
         onRestoreWorkspace={listResult?.capabilities?.restore ? (workspace) => { void restoreWorkspace(workspace); } : undefined}
         onPermanentDeleteWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { inspectWorkspaceLifecycle(workspace, "permanent"); } : undefined}
@@ -1439,7 +1560,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabs}>
         <TabButton active={tab === "workspace"} label={localizedCopy.tabWorkspace} onPress={() => setTab("workspace")} theme={theme} styles={styles} />
         <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
-        {selectedWorkspaceId && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
+        {selectedWorkspaceId && selectedWorkspace?.kind !== "linked-live" && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
       </ScrollView>
       <View
         style={styles.bodyShell}

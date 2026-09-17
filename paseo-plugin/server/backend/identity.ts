@@ -12,7 +12,8 @@ import {
 import { type Config } from "./config.ts";
 export async function runtimeIdentity(repo: Json, config: Config, verifyRecordedBranch = true) {
   const path = canonical(repo.worktreePath),
-    git = new Git(path, config.gitTimeout);
+    git = new Git(path, config.gitTimeout),
+    ignoreChildContent = repo.role === "gitlink-root";
   if (!existsSync(path))
     throw new WorkbenchError("worktree_missing", "worktree is unavailable");
   const branch = await git.branch(),
@@ -23,17 +24,17 @@ export async function runtimeIdentity(repo: Json, config: Config, verifyRecorded
       "worktree Git identity changed",
     );
   const status = (
-    await git.run(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+    await git.run(["status", "--porcelain=v1", "-z", "--untracked-files=all", ...(ignoreChildContent ? ["--ignore-submodules=dirty"] : [])])
   ).stdout;
   const staged = (
     await git.run(["diff", "--no-ext-diff", "--cached", "--binary"])
   ).stdout;
   const working = head
-    ? (await git.run(["diff", "--no-ext-diff", "--binary", "HEAD"])).stdout
+    ? (await git.run(["diff", "--no-ext-diff", "--binary", "HEAD", ...(ignoreChildContent ? ["--ignore-submodules=dirty"] : [])])).stdout
     : "";
   const dirtyPaths: string[] = [],
     fileDigests: string[] = [];
-  for (const [, name] of await git.status()) {
+  for (const [, name] of await git.status(ignoreChildContent)) {
     const relative = name.split("\0").at(-1)!;
     dirtyPaths.push(relative);
     if (

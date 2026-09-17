@@ -6,6 +6,7 @@ import { Workspaces } from "./workspaces.ts";
 import { Runtime } from "./runtime.ts";
 import { ObservationCache } from "./cache.ts";
 import { discover } from "./config.ts";
+import { gitlinkDetails } from "./gitlinks.ts";
 import {
   hash,
   issue,
@@ -105,6 +106,7 @@ export class Observation {
       displayName: workspace.displayName || workspace.id,
       kind: workspace.kind || "managed",
       managed: workspace.managed !== false,
+      ...(workspace.layout ? { layout: workspace.layout } : {}),
       description: workspace.description || "",
       state: workspace.state || "active",
       ...(workspace.deletion ? { deletion: workspace.deletion } : {}),
@@ -189,7 +191,7 @@ export class Observation {
           const head = await git.head(),
             branch = await git.branch(),
             [upstream, upstreamSha] = await git.upstream(),
-            status = await git.status();
+            status = await git.status(repo.role === "gitlink-root");
           const baseSha = repo.baseSha || upstreamSha,
             baseRef = repo.baseRef || upstream;
           Object.assign(result, {
@@ -239,15 +241,19 @@ export class Observation {
     return { ...result, observedAt: now(), durationMs: Date.now() - started };
   }
   async list(params: Json) {
-    const c = this.workspaces.config,
+    const orphanCandidates = this.workspaces.orphanCandidates(),
+      orphanIds = new Set(orphanCandidates.map((candidate: Json) => candidate.id)),
+      c = this.workspaces.config,
       workspaces = this.workspaces
         .list()
-        .filter((w) => params.includeRemoved || w.state !== "removed");
+        .filter((w) => (params.includeRemoved || w.state !== "removed") &&
+          !(orphanIds.has(w.id) && ["record_invalid", "adopting", "adopt_failed"].includes(w.state)));
     const discovered = await discover(c);
     return {
       schemaVersion: protocol,
       project: { id: c.projectId, displayName: c.displayName },
       workspaces: workspaces.map((w) => this.summary(w, [], true)),
+      orphanCandidates,
       capabilities: this.workspaces.capabilities(),
       discoveredCandidates: discovered.repositories,
       discovery: { incomplete: discovered.incomplete, ...(discovered.reason ? { reason: discovered.reason } : {}), scannedDirectories: discovered.scannedDirectories },
@@ -266,7 +272,7 @@ export class Observation {
     return stable(workspace) + workspace.repositories.map((repo: Json) => this.scheduler.token(repo.worktreePath || repo.sourcePath)).join(":");
   }
   async detail(params: Json) {
-    const workspace = this.workspaces.get(String(params.workspaceId || ""));
+    const workspace = await this.workspaces.refreshLinked(this.workspaces.get(String(params.workspaceId || "")));
     await Promise.all(workspace.repositories.map((repo: Json) => this.scheduler.register(workspace.id,
       repo.worktreePath || repo.sourcePath, () => this.repository(repo, Date.now() + this.workspaces.config.observationTimeout))));
     if (params.force) this.scheduler.force(workspace.id);
@@ -317,6 +323,7 @@ export class Observation {
           schemaVersion: protocol,
           workspace: this.summary(workspace, repositories),
           repositories,
+          ...(workspace.layout === "gitlink" ? { gitlinks: await gitlinkDetails(workspace.treePath, this.workspaces.config.gitTimeout).catch(error => [{ path: "", issue: issue(error).code }]) } : {}),
           observation: {
             state: transient ? "partial" : "ready",
             validationKey: `workspace:${workspace.id}`, validationToken,
@@ -337,7 +344,7 @@ export class Observation {
           "diff path must remain inside the repository",
         );
     }
-    const workspace = this.workspaces.get(String(params.workspaceId || "")),
+    const workspace = await this.workspaces.refreshLinked(this.workspaces.get(String(params.workspaceId || ""))),
       repo = this.workspaces.repository(
         workspace,
         params.repoPath || params.repositoryId || "",
@@ -381,7 +388,7 @@ export class Observation {
                   1,
                   Math.min(200, Number(params.maxCommits) || 50),
                 ),
-                graph = await git.graph(historyMode, baseSha, maxCommits);
+                graph = await git.graph(historyMode === "branch" && !baseSha ? "full" : historyMode, baseSha, maxCommits);
               return {
                 ...common,
                 branch: await git.branch(),
@@ -391,7 +398,7 @@ export class Observation {
               };
             }
             if (method === "repository.changes") {
-              const files = (await git.files(scope, baseSha, params.commitSha)).map(
+              const files = (await git.files(scope, baseSha, params.commitSha, repo.role === "gitlink-root")).map(
                 fileJson,
               );
               return {

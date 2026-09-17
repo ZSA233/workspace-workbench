@@ -43,7 +43,7 @@ export async function compare(
         const head = await git.head();
         entry.headShort = (head || "").slice(0, 8);
         entry.branch = (await git.branch()) || "";
-        entry.dirty = !!(await git.status()).length;
+        entry.dirty = !!(await git.status(repo.role === "gitlink-root")).length;
         if (!head || !targetRef)
           throw new WorkbenchError(
             "base_missing",

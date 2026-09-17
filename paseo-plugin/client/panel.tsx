@@ -80,7 +80,7 @@ type LinkedWorkspaceSelection = {
 };
 type OrphanPreview = {
   id: string; treePath: string; eligible: boolean; fingerprint: string;
-  repositories: Array<{ id: string; repoPath: string; worktreePath: string; head: string; branch: string | null; dirty: boolean; dirtyPaths: string[] }>;
+  repositories: Array<{ id: string; repoPath: string; sourcePath: string; configured?: boolean; worktreePath: string; head: string; branch: string | null; dirty: boolean; dirtyPaths: string[] }>;
   issues: Array<{ code: string; message: string; path?: string }>;
   warnings?: Array<{ code: string; message: string; path?: string }>;
   plannedBranches?: Record<string, string>;
@@ -1435,6 +1435,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
             const createBranch = Object.prototype.hasOwnProperty.call(orphanBranches, repo.id);
             return <View key={repo.id} style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>{repo.repoPath} · {repo.branch || localizedCopy.orphanDetached}{repo.dirty ? ` · ${localizedCopy.workspaceStatusDirty}` : ""}</Text>
+              {repo.configured === false ? <Text selectable style={styles.layoutMenuHint}>{localizedCopy.orphanInferredSource}: {repo.sourcePath}</Text> : null}
               <Text selectable style={styles.layoutMenuHint}>{localizedCopy.orphanSnapshot}: {repo.head}</Text>
               {repo.branch === null ? <View style={styles.briefActions}>
                 <Pressable accessibilityRole="button" disabled={orphanPreview?.resume} accessibilityState={{ selected: !createBranch }} onPress={() => setOrphanBranches(current => { const next = { ...current }; delete next[repo.id]; return next; })} style={[styles.secondaryButton, !createBranch && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.orphanKeepDetached}</Text></Pressable>
@@ -1445,7 +1446,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           })}
           {orphanPreview?.repositories.some(repo => repo.branch === null && !Object.prototype.hasOwnProperty.call(orphanBranches, repo.id)) ? <Text style={styles.layoutMenuHint}>{localizedCopy.orphanBranchHint}</Text> : null}
           {orphanPreview?.issues.map((item, index) => <Text key={`${item.code}:${index}`} style={styles.warningText}>{item.code}: {item.message}</Text>)}
-          {orphanPreview?.warnings?.map((item, index) => <Text key={`${item.code}:warning:${index}`} style={styles.layoutMenuHint}>{item.code === "workspace_extra_path" ? localizedCopy.orphanExtraPath : item.code === "workspace_metadata_unknown" ? localizedCopy.orphanMetadataWarning : item.code === "record_invalid" ? localizedCopy.orphanInvalidRecordWarning : item.message}{item.path ? `: ${item.path}` : ""}</Text>)}
+          {orphanPreview?.warnings?.map((item, index) => <Text key={`${item.code}:warning:${index}`} style={styles.layoutMenuHint}>{item.code === "workspace_extra_path" ? localizedCopy.orphanExtraPath : item.code === "worktree_identity_unverified" ? localizedCopy.orphanUnmanagedPath : item.code === "workspace_metadata_unknown" ? localizedCopy.orphanMetadataWarning : item.code === "record_invalid" ? localizedCopy.orphanInvalidRecordWarning : item.message}{item.path ? `: ${item.path}` : ""}</Text>)}
           {orphanPreview && !orphanPreview.eligible ? <Text style={styles.warningText}>{localizedCopy.orphanCannotAdopt}</Text> : null}
           {orphanError ? <Text style={styles.warningText}>{orphanError}</Text> : null}
           <View style={styles.briefActions}>

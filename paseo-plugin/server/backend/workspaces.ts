@@ -308,6 +308,7 @@ export class Workspaces {
           mode: "managed",
         })),
         adoption: { requestHash, fingerprint: params.fingerprint, branches: requestedBranches, adoptedAt: now(), originalBaseUnknown: true,
+          unmanagedPaths: preview.unmanagedPaths || [],
           ...(existingRecordBackup ? { existingRecordBackup } : {}) },
       };
       this.save(record, false);
@@ -368,10 +369,13 @@ export class Workspaces {
         const configured = this.config.repositories.find(
           (item) => item.id === repo.id,
         );
+        const configuredSourceMatches = configured && canonical(repo.sourcePath) === repositoryPath(this.config, configured);
+        const adoptedSourceMatches = value.origin === "adopted" && repo.repoPath &&
+          canonical(repo.sourcePath) === canonical(join(this.config.sourceRoot, repo.repoPath)) &&
+          inside(repo.sourcePath, this.config.sourceRoot) &&
+          canonical(repo.worktreePath) === canonical(join(value.treePath, repo.repoPath));
         if (
-          !configured ||
-          canonical(repo.sourcePath) !==
-            repositoryPath(this.config, configured) ||
+          !configuredSourceMatches && !adoptedSourceMatches ||
           !inside(repo.worktreePath, value.treePath)
         )
           return null;

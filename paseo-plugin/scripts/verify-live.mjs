@@ -53,8 +53,10 @@ for (const project of ["a", "b"]) {
   git(linked, ["commit", "-qam", "initial pointers"]);
   const orphan = join(path, "workspaces", "trees", "legacy");
   mkdirSync(orphan, { recursive: true });
-  for (const id of ["one", "two"])
+  for (const id of ["one", "two", "extra"])
     git(join(path, id), ["worktree", "add", "-q", "--detach", join(orphan, id), "HEAD"]);
+  mkdirSync(join(orphan, "build"));
+  writeFileSync(join(orphan, "build", "artifact"), "keep me\n");
   const config = join(path, "project.json");
   configs.push(config);
   writeFileSync(

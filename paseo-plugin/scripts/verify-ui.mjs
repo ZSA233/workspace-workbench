@@ -55,6 +55,7 @@ try {
   await screenshot('01-orphan-candidate.png');
   await page.getByRole('button',{name:'Unclaimed legacy'}).click();
   await page.getByText('Adopt existing workspace',{exact:true}).waitFor();
+  await page.getByText(/Source repository identified through Git worktrees/).waitFor();
   await page.getByText('Create branch',{exact:true}).first().click();
   await screenshot('01-orphan-adoption-preview.png');
   await page.getByText('Confirm adoption',{exact:true}).click();
@@ -62,10 +63,11 @@ try {
   const adopted = await backendRequest(join(ui.project,'s.sock'),'workspace.detail',{workspaceId:'legacy'},5000);
   assert.ok(adopted?.ok);
   assert.equal(adopted.result.workspace.state,'active');
-  assert.equal(adopted.result.repositories.length,2);
+  assert.equal(adopted.result.repositories.length,3);
   assert.equal(adopted.result.repositories.filter(repo=>repo.branch).length,1);
+  assert.ok(adopted.result.repositories.some(repo=>repo.repoPath==='extra'));
   await page.getByText('Repositories',{exact:true}).waitFor({timeout:20000});
-  await page.getByText('one · recovered/legacy/one',{exact:true}).waitFor({timeout:20000});
+  await page.getByText('extra · recovered/legacy/extra',{exact:true}).waitFor({timeout:20000});
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor({timeout:20000});
   await page.getByText(/Reached the start of history/).first().waitFor({timeout:20000});
   await screenshot('01-orphan-adopted.png');

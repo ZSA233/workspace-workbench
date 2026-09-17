@@ -185,3 +185,50 @@ test("concurrent adoption is idempotent and dirty content is retained", async ()
     await assert.rejects(f.service.handle("workspace.cleanup", { workspaceId: "lost", confirm: true }), /user changes/);
   } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
+
+test("an unconfigured source worktree is adopted with configured siblings while build output stays untouched", async () => {
+  const f = fixture();
+  try {
+    const source = join(f.root, "deploy"), target = join(f.tree, "deploy");
+    mkdirSync(source);
+    git(source, "init", "-q"); git(source, "config", "user.name", "Fixture"); git(source, "config", "user.email", "fixture@example.invalid");
+    writeFileSync(join(source, "README"), "deploy\n"); git(source, "add", "README"); git(source, "commit", "-qm", "initial");
+    git(source, "worktree", "add", "-q", "--detach", target, "HEAD");
+    mkdirSync(join(f.tree, "build")); writeFileSync(join(f.tree, "build", "artifact"), "keep me");
+    const preview = await f.service.handle("workspace.orphan.preview", { workspaceId: "lost" });
+    assert.equal(preview.eligible, true);
+    assert.deepEqual(preview.repositories.map((repo: { id: string }) => repo.id), ["alpha", "beta", "deploy"]);
+    assert.equal(preview.repositories.find((repo: { id: string }) => repo.id === "deploy").sourcePath, source);
+    assert.ok(preview.warnings.some((warning: { code: string }) => warning.code === "workspace_extra_path"));
+    const adopted = await f.service.handle("workspace.orphan.adopt", { workspaceId: "lost", fingerprint: preview.fingerprint, branches: {} });
+    assert.equal(adopted.state, "active");
+    assert.equal(f.service.workspaces.get("lost").repositories.length, 3);
+    assert.equal((await f.service.handle("workspace.detail", { workspaceId: "lost" })).repositories.length, 3);
+    assert.equal((await f.service.handle("workspace.reviewRuntime", { workspaceId: "lost" })).repositories.length, 3);
+    await f.service.handle("workspace.remove", { workspaceId: "lost" });
+    await assert.rejects(f.service.handle("workspace.cleanup", { workspaceId: "lost", confirm: true }), /extra files/);
+    assert.equal(readFileSync(join(f.tree, "build", "artifact"), "utf8"), "keep me");
+  } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("an unverified sibling remains untouched while confirmed worktrees can be adopted", async () => {
+  const f = fixture(), outside = realpathSync(mkdtempSync(join(tmpdir(), "wb-outside-")));
+  try {
+    git(outside, "init", "-q"); git(outside, "config", "user.name", "Fixture"); git(outside, "config", "user.email", "fixture@example.invalid");
+    writeFileSync(join(outside, "README"), "outside\n"); git(outside, "add", "README"); git(outside, "commit", "-qm", "initial");
+    git(outside, "worktree", "add", "-q", "--detach", join(f.tree, "rogue"), "HEAD");
+    const preview = await f.service.handle("workspace.orphan.preview", { workspaceId: "lost" });
+    assert.equal(preview.eligible, true);
+    assert.deepEqual(preview.repositories.map((repo: { id: string }) => repo.id), ["alpha", "beta"]);
+    assert.deepEqual(preview.unmanagedPaths, [join(f.tree, "rogue")]);
+    const adopted = await f.service.handle("workspace.orphan.adopt", { workspaceId: "lost", fingerprint: preview.fingerprint, branches: {} });
+    assert.deepEqual(adopted.adoption.unmanagedPaths, [join(f.tree, "rogue")]);
+    await f.service.handle("workspace.remove", { workspaceId: "lost" });
+    await assert.rejects(f.service.handle("workspace.cleanup", { workspaceId: "lost", confirm: true }), /extra files/);
+    assert.equal(existsSync(join(f.tree, "rogue", "README")), true);
+  } finally {
+    await f.service.close();
+    try { git(outside, "worktree", "remove", join(f.tree, "rogue")); } catch {}
+    rmSync(f.root, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true });
+  }
+});

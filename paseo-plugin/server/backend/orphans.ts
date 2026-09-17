@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readdirSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { type Config, repositoryPath } from "./config.ts";
 import { Git } from "./git.ts";
 import { canonical, inside, issue, type Json } from "./storage.ts";
@@ -33,11 +33,31 @@ async function commonDirectory(path: string, timeout: number): Promise<string> {
   return canonical(resolve(path, common));
 }
 
+async function sourceFromWorktrees(config: Config, worktree: Git, common: string, path: string): Promise<Json | null> {
+  const matches: Json[] = [];
+  for (const entry of await worktree.worktrees()) {
+    if (typeof entry.worktree !== "string") continue;
+    const sourcePath = canonical(entry.worktree);
+    if (sourcePath === path || !inside(sourcePath, config.sourceRoot) ||
+      inside(sourcePath, config.treesRoot, true)) continue;
+    try {
+      const source = new Git(sourcePath, config.gitTimeout);
+      const gitDir = canonical(resolve(sourcePath, (await source.text(["rev-parse", "--git-dir"])).trim()));
+      if (await source.root() !== sourcePath || gitDir !== common ||
+        !await source.registered(path)) continue;
+      const repoPath = relative(config.sourceRoot, sourcePath).replaceAll("\\", "/");
+      matches.push({ id: repoPath, name: basename(sourcePath), repoPath, role: null,
+        sourcePath, configured: false });
+    } catch { /* An unverified checkout cannot own this worktree. */ }
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export async function orphanPreview(config: Config, id: string): Promise<Json> {
   const treePath = canonical(join(config.treesRoot, id));
   if (!id || basename(treePath) !== id || !inside(treePath, config.treesRoot) || !existsSync(treePath))
     return { id, treePath, eligible: false, repositories: [], issues: [{ code: "workspace_missing", message: "Workspace tree is unavailable" }] };
-  const issues: Json[] = [], warnings: Json[] = [], repositories: Json[] = [];
+  const issues: Json[] = [], warnings: Json[] = [], repositories: Json[] = [], unmanagedPaths: string[] = [];
   if (existsSync(join(config.recordsRoot, `${id}.json`)))
     warnings.push({ code: "record_invalid", message: "Existing invalid record will be preserved before adoption" });
   const sourceCommons = new Map<string, Json[]>();
@@ -69,15 +89,19 @@ export async function orphanPreview(config: Config, id: string): Promise<Json> {
     try {
       const git = new Git(path, config.gitTimeout);
       if (await git.root() !== path) throw new Error("Not an exact Git worktree root");
-      const matches = sourceCommons.get(await commonDirectory(path, config.gitTimeout)) || [];
-      if (matches.length !== 1 || !await new Git(matches[0].sourcePath, config.gitTimeout).registered(path))
+      const common = await commonDirectory(path, config.gitTimeout);
+      const matches = sourceCommons.get(common) || [];
+      const source = matches.length === 1 ? matches[0] :
+        matches.length === 0 ? await sourceFromWorktrees(config, git, common, path) : null;
+      if (!source || !await new Git(source.sourcePath, config.gitTimeout).registered(path))
         throw new Error("Source repository could not be identified uniquely");
-      const source = matches[0], head = await git.head(), branch = await git.branch();
+      const head = await git.head(), branch = await git.branch();
       if (!head) throw new Error("HEAD is unavailable");
       const dirtyPaths = (await git.status()).map(([, file]) => file);
       repositories.push({ ...source, worktreePath: path, head, branch: branch || null, dirty: dirtyPaths.length > 0, dirtyPaths });
     } catch (error) {
-      issues.push({ path, ...issue(error), code: "worktree_identity_unverified" });
+      warnings.push({ path, ...issue(error), code: "worktree_identity_unverified" });
+      unmanagedPaths.push(path);
     }
   }
   if (!repositories.length) issues.push({ code: "repositories_empty", message: "No registered worktrees found" });
@@ -89,6 +113,9 @@ export async function orphanPreview(config: Config, id: string): Promise<Json> {
         warnings.push({ code: "workspace_metadata_unknown", message: "Workspace metadata must be reviewed before cleanup" });
     } catch { warnings.push({ code: "workspace_metadata_unknown", message: "Workspace metadata is unreadable" }); }
   }
-  const fingerprint = repositories.map(repo => `${repo.id}:${repo.worktreePath}:${repo.head}:${repo.branch || "detached"}:${repo.dirtyPaths.join(",")}`).sort().join("\n");
-  return { id, name: id, treePath, eligible: !issues.length, repositories, issues, warnings, fingerprint };
+  const fingerprint = [
+    ...repositories.map(repo => `${repo.id}:${repo.worktreePath}:${repo.head}:${repo.branch || "detached"}:${repo.dirtyPaths.join(",")}`),
+    ...unmanagedPaths.map(path => `unmanaged:${path}`),
+  ].sort().join("\n");
+  return { id, name: id, treePath, eligible: !issues.length, repositories, issues, warnings, unmanagedPaths, fingerprint };
 }

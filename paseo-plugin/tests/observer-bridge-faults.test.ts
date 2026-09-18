@@ -41,3 +41,35 @@ test('a version change cannot be hidden by the bridge response TTL',async()=>{
     assert.equal(f.calls(),2);
   } finally {await f.close();}
 });
+
+test('short bridge cache evicts old unique responses instead of retaining them indefinitely',async()=>{
+  const f=await fixture(socket=>socket.write(JSON.stringify({ok:true,result:{observation:{state:'ready'},value:'x'.repeat(1024)}})+'\n'));
+  try {
+    for(let i=0;i<200;i++) await f.bridge.call({method:'workspace.list',params:{view:i}});
+    const cache=(f.bridge as unknown as {cache:Map<string,unknown>}).cache;
+    assert.ok(cache.size<=128);
+    await new Promise(r=>setTimeout(r,1100));
+    await f.bridge.call({method:'workspace.list',params:{view:'fresh'}});
+    assert.equal(cache.size,1);
+  } finally {await f.close();}
+});
+
+test('read admission rejects excess distinct queries while versions remain available',async()=>{
+  const f=await fixture(socket=>{socket.write(JSON.stringify({ok:true,result:{revision:1}})+'\n');});
+  try {
+    // Hold distinct reads by delaying the fixture's next responses.
+    const pending:Promise<unknown>[]=[];
+    const original=(f.bridge as unknown as {request:(request:unknown,timeout:number)=>Promise<unknown>}).request.bind(f.bridge);
+    (f.bridge as unknown as {request:(request:unknown,timeout:number)=>Promise<unknown>}).request=async(request,timeout)=>{
+      if((request as {method:string}).method==='workspace.list') return new Promise(()=>{});
+      return original(request,timeout);
+    };
+    for(let i=0;i<16;i++) pending.push(f.bridge.call({method:'workspace.list',params:{i}}));
+    const busy=await f.bridge.call({method:'workspace.list',params:{i:17}});
+    assert.equal(busy.error?.code,'observer_busy');
+    const versions=await f.bridge.call({method:'observer.versions',params:{workspaceIds:['w']}});
+    assert.equal(versions.ok,true);
+    // The fixture owns unresolved fake requests; do not await them.
+    assert.equal(pending.length,16);
+  } finally {await f.close();}
+});

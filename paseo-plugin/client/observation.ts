@@ -184,6 +184,7 @@ export function useLastSuccessfulResponse(
       cacheUpdatedAt: null,
     };
     cache.current.set(key, entry);
+    if (cache.current.size > 32) cache.current.delete(cache.current.keys().next().value!);
   }
 
   if (response !== entry.lastResponse) {

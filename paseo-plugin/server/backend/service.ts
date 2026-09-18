@@ -41,7 +41,7 @@ export class Service {
       this.runtime,
       this.cache,
     );
-    this.cache.onProduced = () => this.observation.scheduler.published();
+    this.cache.onProduced = scope => this.observation.scheduler.published(scope);
   }
   health() {
     const caps = this.workspaces.capabilities();
@@ -82,6 +82,7 @@ export class Service {
         } finally {
           this.cache.clear();
           this.observation.scheduler.force();
+          this.observation.scheduler.rosterChanged();
         }
       });
     switch (method) {

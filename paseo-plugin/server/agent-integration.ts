@@ -23,7 +23,7 @@ function bridgeConfig(configPath: string) {
   return { script: resolve(dirname(configPath), bridge.script), endpoint };
 }
 
-export function registerAgentIntegration(server: PluginServerContext): () => void {
+export function registerAgentIntegration(server: PluginServerContext, currentApi?: () => Promise<import("@getpaseo/client").PaseoApi>): () => void {
   let api: import("@getpaseo/client").PaseoApi | null = null;
   const cleanups = [server.before("agent.create", ({ request }) => {
     if (request.env?.WORKBENCH_WORKER_WORKSPACE || request.env?.WORKBENCH_REVIEW_ONLY) return request;
@@ -122,16 +122,16 @@ export function registerAgentIntegration(server: PluginServerContext): () => voi
   }));
   let retrying = false;
   const retryTimer = setInterval(() => {
-    if (!api || retrying) return;
+    if (!api && !currentApi || retrying) return;
     retrying = true;
-    const paseo = api;
     void (async () => {
+      const paseo = currentApi ? await currentApi() : api!;
       for (const project of registeredProjects()) {
         try { await withProject({ projectConfig: project.configPath }, async () => {
           for (const binding of allAgentBindings()) if (binding.pendingNotifications?.length) await flush(binding, { paseo });
         }); } catch { console.warn("workbench_notification_retry_pending"); }
       }
-    })().finally(() => { retrying = false; });
+    })().catch(() => { console.warn("workbench_notification_retry_pending"); }).finally(() => { retrying = false; });
   }, 20_000);
   retryTimer.unref();
   return () => { clearInterval(retryTimer); cleanups.forEach((cleanup) => cleanup()); };

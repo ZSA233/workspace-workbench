@@ -13,13 +13,15 @@ excluded only when they contain no tracked files; index/ignore changes rebuild
 subscriptions. Native subscription timeout is five seconds; late subscriptions
 are unsubscribed. Idle leases release watchers and stop periodic Git work.
 
-The visible panel batches an `observer.versions` request once per second. This
-reads memory and renews demand; it performs no Git queries. It returns an instance
-ID, a revision, repository state and validation tokens. A matching validation token
-keeps an unchanged snapshot valid without pretending its original observation time
-has advanced. Hidden/unmounted panels stop this loop. Transport failure backs off
-up to 30 seconds and appears as a degraded status. On reconnect, the instance ID
-invalidates old tokens.
+Visible panels in one renderer share one `observer.versions` request per project
+each second. This reads memory and renews demand; it performs no Git queries. The
+response retains its global revision for older clients and also identifies roster,
+Workspace and repository changes. A file edit refreshes only queries for its
+Workspace/repository; a cache publication no longer invalidates every active
+panel. Matching validation tokens keep an unchanged snapshot valid without
+pretending its original observation time advanced. Hidden/unmounted panels stop
+the loop. Transport failure backs off up to 30 seconds. Idle registrations and
+watchers are retired after their leases and retention window expire.
 
 Summary, graph, changes and diff use versioned cache entries. Summary counts dirty
 paths without computing numstat or branch diffs. `changesLoaded: false` and nullable
@@ -50,6 +52,14 @@ metadata includes the MCP build ID, request phases, queue age and failure counts
 Backend health includes a separate build ID, watcher state and Git command counts.
 These are local diagnostics and never contain credentials or full request bodies.
 
+The plugin process also owns one recoverable local Paseo API connection for Agent
+operations. It reconnects without unloading the plugin when the host-provided API
+transport stops responding. Read-only calls may retry once after reconnect;
+uncertain writes are never replayed. Backend status reports this connection's
+state, reconnect count, plugin-process memory and bounded per-method RPC counts.
+The observation cache is a bounded in-memory map persisted as JSON; SQLite is
+used only for the project backend's exclusive process lease.
+
 A failed response after dispatch is not proof that a mutation did not execute.
 Neither MCP nor Observer automatically replays mutations; the caller reconciles
 using the durable request/workspace identity. Observer recovery retries only a
@@ -79,6 +89,7 @@ npm --prefix paseo-plugin run typecheck
 npm --prefix paseo-plugin test
 node paseo-plugin/scripts/verify-observation-performance.mjs
 node paseo-plugin/scripts/verify-live.mjs
+node --expose-gc --experimental-strip-types paseo-plugin/scripts/verify-resource-bounds.mjs
 ```
 
 The performance script extracts the committed baseline into an isolated directory,
@@ -88,7 +99,8 @@ and measures twenty edits with a one-second client cadence. Output is saved unde
 an explicit pre-refactor revision when running after this change is committed.
 
 The live script starts a separate Paseo home/registry and verifies real plugin
-loading, authorization, reload, worker crash recovery and cleanup. It never reloads
+loading, authorization, 100 injected local API disconnects, reload, worker crash
+recovery and cleanup. It never reloads
 the normal plugin. Optional `WORKBENCH_LIVE_UI=1` serves the bundled web UI and prints
 an isolated URL and continuation-file path; create that file after visual inspection
 so automated unload/cleanup continues. The wait is bounded to ten minutes.

@@ -74,6 +74,25 @@ test('inactive repositories stop reconciliation; reopening invalidates snapshots
   finally {await scheduler.close();rmSync(f.root,{recursive:true,force:true});}
 });
 
+test('published snapshots are scoped and idle registrations are released',async()=>{
+  const f=fixture(), scheduler=new ObservationScheduler({leaseMs:40,retentionMs:60});
+  try {
+    await scheduler.register('w',f.repo);
+    const before=scheduler.versions(['w']);
+    scheduler.published({workspaceId:'w',repoPath:f.repo});
+    const after=scheduler.versions(['w']);
+    assert.equal(after.rosterRevision,before.rosterRevision);
+    assert.equal(after.workspaceVersions.w,before.workspaceVersions.w+1);
+    assert.equal(after.repositoryVersions[f.repo],before.repositoryVersions[f.repo]+1);
+    scheduler.rosterChanged();
+    assert.equal(scheduler.versions(['w']).rosterRevision,before.rosterRevision+1);
+    await delay(2300);
+    assert.equal(scheduler.health().workspaceRegistrations,0);
+    assert.equal(scheduler.health().repositories,0);
+    assert.equal(scheduler.health().watchedDirectories,0);
+  } finally {await scheduler.close();rmSync(f.root,{recursive:true,force:true});}
+});
+
 test('tracked files inside previously ignored directories stay observable after force-add',async()=>{
   const f=fixture(), scheduler=new ObservationScheduler();
   try {

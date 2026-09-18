@@ -32,6 +32,17 @@ try {
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1600, height: 1050 } });
   page.on('pageerror', e => report.pageErrors.push(e.message));
+  let measuringRpc = false;
+  const rpcMethods = new Map();
+  page.on('websocket', socket => socket.on('framesent', frame => {
+    if (!measuringRpc || typeof frame.payload !== 'string') return;
+    try {
+      const value = JSON.parse(frame.payload);
+      const message = value.type === 'session' ? value.message : value;
+      if (message?.type !== 'plugin.rpc.invoke.request' || message.pluginId !== 'workspace-workbench-paseo') return;
+      rpcMethods.set(message.method, (rpcMethods.get(message.method) || 0) + 1);
+    } catch {}
+  }));
   const screenshot = async name => { await page.screenshot({ path: join(output,name), fullPage: true }); report.screenshots.push(name); };
   const health = async () => { const response = await backendRequest(join(ui.project,'s.sock'), 'observer.health'); assert.ok(response?.ok); return response.result; };
   const panel = async () => {
@@ -102,8 +113,11 @@ try {
   report.checks.push('file click opened the real diff; ten disk edits appeared without manual refresh; blur paused updates and focus resumed them');
   let before;
   for(let n=0;n<30;n++){ before=await health(); if(!before.git.running&&!before.git.queued)break;await sleep(100); }
+  measuringRpc = true;
   await sleep(16_000);
-  const after=await health();report.idle={seconds:16,gitCommands:after.git.commands-before.git.commands};assert.equal(report.idle.gitCommands,0);
+  measuringRpc = false;
+  const after=await health();report.idle={seconds:16,gitCommands:after.git.commands-before.git.commands,rpcCalls:[...rpcMethods.values()].reduce((a,b)=>a+b,0),rpcMethods:Object.fromEntries(rpcMethods)};assert.equal(report.idle.gitCommands,0);
+  assert.ok(report.idle.rpcCalls<=32,`idle Workbench RPC rate exceeded 2/s: ${report.idle.rpcCalls}/16s`);
   report.checks.push('visible UI generated zero additional Git commands during 16 idle seconds');
   await exec(process.env.PASEO_CLI || 'paseo',['plugin','reload','workspace-workbench-paseo','--host',new URL(ui.url).host,'--json'],{timeout:60_000});
   // Full plugin reload reconstructs the client bundle. File-tab selections are

@@ -137,7 +137,7 @@ export class Observation {
   async repository(repo: Json, deadline?: number): Promise<Json> {
     const path = repo.worktreePath || repo.sourcePath;
     return this.cache.read(`summary:${path}`, this.scheduler.token(path),
-      () => this.repositorySnapshot(repo, deadline), true, true);
+      () => this.repositorySnapshot(repo, deadline), true, true, { repoPath: path });
   }
   private async repositorySnapshot(repo: Json, deadline?: number): Promise<Json> {
     const started = Date.now(),
@@ -331,7 +331,7 @@ export class Observation {
             durationMs: Date.now() - start,
           },
         };
-      }, true,
+      }, true, false, { workspaceId: workspace.id },
     );
   }
   async repositoryQuery(method: string, params: Json) {
@@ -437,7 +437,7 @@ export class Observation {
           })(),
           deadline,
         );
-      }, true,
+      }, true, false, { workspaceId: workspace.id, repoPath: git.path },
     );
   }
 }

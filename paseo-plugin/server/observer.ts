@@ -36,6 +36,9 @@ type SocketRequest = {
 
 const allowedMethods = new Set<string>(observerMethods);
 const versionedMethods = new Set<string>(["observer.versions", "workspace.detail", "repository.graph", "repository.changes", "repository.diff"]);
+const BRIDGE_CACHE_ENTRIES = 128;
+const BRIDGE_CACHE_BYTES = 8 * 1024 * 1024;
+const BRIDGE_IN_FLIGHT = 16;
 const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(): number {
@@ -91,7 +94,17 @@ export class ObserverBridge {
   private sequence = 0;
   private readonly cancellations = new Set<() => void>();
   private readonly inFlight = new Map<string, Promise<ObserverResponse>>();
-  private readonly cache = new Map<string, { expiresAt: number; response: ObserverResponse }>();
+  private readonly cache = new Map<string, { expiresAt: number; response: ObserverResponse; bytes: number }>();
+
+  private trimCache() {
+    for (const [key, value] of this.cache) if (value.expiresAt <= Date.now()) this.cache.delete(key);
+    let bytes = [...this.cache.values()].reduce((sum, value) => sum + value.bytes, 0);
+    while (this.cache.size > BRIDGE_CACHE_ENTRIES || bytes > BRIDGE_CACHE_BYTES) {
+      const key = this.cache.keys().next().value!;
+      bytes -= this.cache.get(key)!.bytes;
+      this.cache.delete(key);
+    }
+  }
 
   private request(request: SocketRequest, timeoutMs: number): Promise<ObserverResponse> {
     return new Promise((resolveResponse, reject) => {
@@ -155,11 +168,14 @@ export class ObserverBridge {
     }
     const key = `${configuredSocketPath()}:${input.method}:${JSON.stringify(input.params || {})}`;
     const projectPrefix = `${configuredSocketPath()}:`;
+    this.trimCache();
     const cached = versionedMethods.has(input.method) ? undefined : this.cache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.response;
     this.cache.delete(key);
     const active = this.inFlight.get(key);
     if (active) return active;
+    if (this.inFlight.size >= BRIDGE_IN_FLIGHT && !["observer.health", "observer.versions"].includes(input.method))
+      return { ok: false, error: { code: "observer_busy", message: "observer request limit reached; retry" } };
     const request: SocketRequest = { id: String(++this.sequence), method: input.method, params: input.params || {} };
     const pending = this.request(request, configuredBridgeTimeoutMs())
       .then((response) => {
@@ -167,7 +183,13 @@ export class ObserverBridge {
           for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
         }
         if (!versionedMethods.has(input.method) && (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.orphan.preview", "workspace.orphan.adopt", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method))) {
-          if (cacheable(response)) this.cache.set(key, { response, expiresAt: Date.now() + OBSERVATION_TIMING_DEFAULTS.bridgeResponseCacheTtlMs });
+          if (cacheable(response)) {
+            const bytes = Buffer.byteLength(JSON.stringify(response));
+            if (bytes <= BRIDGE_CACHE_BYTES) {
+              this.cache.set(key, { response, bytes, expiresAt: Date.now() + OBSERVATION_TIMING_DEFAULTS.bridgeResponseCacheTtlMs });
+              this.trimCache();
+            }
+          }
         }
         return response;
       })

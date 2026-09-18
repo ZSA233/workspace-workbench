@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { type Config } from "./config.ts";
-import { atomicJson, issue, optionalJson, type Json } from "./storage.ts";
+import { atomicJson, issue, optionalJson, WorkbenchError, type Json } from "./storage.ts";
 
 type Entry = {
   value: Json;
@@ -10,6 +10,7 @@ type Entry = {
   fingerprintProbed?: boolean;
 };
 type Fingerprint = string | (() => Promise<string> | string);
+export type CachePublication = { workspaceId?: string; repoPath?: string };
 const evictOnRefreshFailure = new Set([
   "file_not_changed",
   "path_invalid",
@@ -25,7 +26,7 @@ export class ObservationCache {
   private background = new Set<Promise<unknown>>();
   private failures = new Map<string, string>();
   private generation = 0;
-  onProduced?: () => void;
+  onProduced?: (scope?: CachePublication) => void;
   config: Config;
   path: string;
   constructor(config: Config) {
@@ -84,9 +85,10 @@ export class ObservationCache {
       observation,
     };
   }
-  private produce(key: string, fingerprint: Fingerprint, work: () => Promise<Json>) {
+  private produce(key: string, fingerprint: Fingerprint, work: () => Promise<Json>, scope?: CachePublication) {
     const active = this.flights.get(key);
     if (active) return active;
+    if (this.flights.size >= 32) throw new WorkbenchError("observer_busy", "snapshot computation limit reached");
     const generation = this.generation;
     const flight = work()
       .then((value) => {
@@ -141,12 +143,13 @@ export class ObservationCache {
           this.entries.delete(key);
           this.entries.set(key, entry);
           this.trim();
-          this.onProduced?.();
+          this.onProduced?.(scope);
           if (value.observation?.state && value.observation.state !== "ready")
             this.failures.set(key, value.observation.state);
           else this.failures.delete(key);
         }
-        if (typeof fingerprint !== "string") {
+        if (typeof fingerprint !== "string" && this.background.size >= 32) entry.fingerprint = "unavailable";
+        if (typeof fingerprint !== "string" && this.background.size < 32) {
           const pending = Promise.resolve()
             .then(() => fingerprint())
             .then((nextFingerprint) => {
@@ -188,8 +191,9 @@ export class ObservationCache {
     entry: Entry,
     fingerprint: () => Promise<string> | string,
     work: () => Promise<Json>,
+    scope?: CachePublication,
   ): void {
-    if (this.probes.has(entry) || entry.fingerprintProbed || entry.fingerprint === "pending") return;
+    if (this.probes.has(entry) || entry.fingerprintProbed || entry.fingerprint === "pending" || this.background.size >= 32) return;
     this.probes.add(entry);
     entry.fingerprintProbed = true;
     const probe = Promise.resolve()
@@ -201,14 +205,14 @@ export class ObservationCache {
           nextFingerprint !== "unavailable" &&
           nextFingerprint !== entry.fingerprint
         )
-          await this.produce(key, nextFingerprint, work).catch(() => {});
+          await this.produce(key, nextFingerprint, work, scope).catch(() => {});
       })
       .catch(() => {})
       .finally(() => this.probes.delete(entry));
     this.background.add(probe);
     void probe.finally(() => this.background.delete(probe));
   }
-  async read(key: string, fingerprint: Fingerprint, work: () => Promise<Json>, versioned = false, waitFresh = false) {
+  async read(key: string, fingerprint: Fingerprint, work: () => Promise<Json>, versioned = false, waitFresh = false, scope?: CachePublication) {
     const entry = this.entries.get(key);
     const fingerprintMatches =
       typeof fingerprint !== "string" || entry?.fingerprint === fingerprint;
@@ -216,14 +220,19 @@ export class ObservationCache {
       this.entries.delete(key);
       this.entries.set(key, entry);
       if (typeof fingerprint !== "string")
-        this.startFingerprintProbe(key, entry, fingerprint, work);
+        this.startFingerprintProbe(key, entry, fingerprint, work, scope);
       return this.metadata(entry);
     }
     if (entry && !waitFresh) {
-      void this.produce(key, fingerprint, work).catch(() => {});
+      try { void this.produce(key, fingerprint, work, scope).catch(() => {}); }
+      catch (error) {
+        const retained = this.metadata(entry);
+        return { ...retained, observation: { ...retained.observation, cacheState: "degraded", refreshing: false,
+          issues: [{ code: issue(error).code }] } };
+      }
       return this.metadata(entry, true);
     }
-    return this.produce(key, fingerprint, work);
+    return this.produce(key, fingerprint, work, scope);
   }
   clear() {
     this.generation++;

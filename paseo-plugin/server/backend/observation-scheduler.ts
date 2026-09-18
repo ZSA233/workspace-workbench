@@ -15,21 +15,25 @@ type Repo = {
 };
 export type SchedulerOptions = {
   subscribe?: typeof watcher.subscribe; leaseMs?: number; reconcileMs?: number;
-  degradedMs?: number; debounceMs?: number; maxWaitMs?: number; subscribeMs?: number;
+  degradedMs?: number; debounceMs?: number; maxWaitMs?: number; subscribeMs?: number; retentionMs?: number;
 };
 /** Events invalidate derived data, never claim that a Git observation succeeded. */
 export class ObservationScheduler {
   readonly instanceId = randomUUID();
   revision = 0;
+  rosterRevision = 0;
+  private workspaceVersions = new Map<string, number>();
+  private repositoryVersions = new Map<string, number>();
   private repos = new Map<string, Repo>();
   private workspaces = new Map<string, Set<string>>();
+  private workspaceDemand = new Map<string, number>();
   private watches = new Map<string, Watch>();
   private closed = false;
   private timer: ReturnType<typeof setInterval>;
   private options: Required<SchedulerOptions>;
   constructor(options: SchedulerOptions = {}) {
     this.options = { subscribe: watcher.subscribe, leaseMs: 30_000, reconcileMs: 300_000,
-      degradedMs: 30_000, debounceMs: 300, maxWaitMs: 1_000, subscribeMs: 5_000, ...options };
+      degradedMs: 30_000, debounceMs: 300, maxWaitMs: 1_000, subscribeMs: 5_000, retentionMs: 300_000, ...options };
     this.timer = setInterval(() => this.tick(), 1_000); this.timer.unref();
   }
   register(workspace: string, path: string, refresh?: () => Promise<unknown>) {
@@ -42,6 +46,7 @@ export class ObservationScheduler {
     }
     if (refresh) repo.refresh = refresh;
     const paths = this.workspaces.get(workspace) || new Set<string>(); paths.add(path); this.workspaces.set(workspace, paths);
+    this.workspaceDemand.set(workspace, Date.now());
     this.touch(repo);
     return repo.ready || this.prepare(repo);
   }
@@ -51,13 +56,19 @@ export class ObservationScheduler {
   }
   // Called by the lightweight RPC. No filesystem reads or Git processes here.
   versions(workspaceIds: string[]) {
-    for (const id of workspaceIds) for (const path of this.workspaces.get(id) || []) this.touch(this.repos.get(path)!);
+    for (const id of workspaceIds) {
+      if (this.workspaces.has(id)) this.workspaceDemand.set(id, Date.now());
+      for (const path of this.workspaces.get(id) || []) this.touch(this.repos.get(path)!);
+    }
     const tokens: Record<string, string> = {};
     for (const id of workspaceIds) {
       tokens[`workspace:${id}`] = this.workspaceToken(id);
       for (const path of this.workspaces.get(id) || []) for (const scope of ['working', 'refs'] as const) tokens[`${path}#${scope}`] = this.token(path, scope);
     }
-    return { instanceId: this.instanceId, revision: this.revision, tokens,
+    return { instanceId: this.instanceId, revision: this.revision, rosterRevision: this.rosterRevision,
+      workspaceVersions: Object.fromEntries(workspaceIds.map(id => [id, this.workspaceVersions.get(id) || 0])),
+      repositoryVersions: Object.fromEntries([...new Set(workspaceIds.flatMap(id => [...(this.workspaces.get(id) || [])]))].map(path => [path, this.repositoryVersions.get(path) || 0])),
+      tokens,
       repositories: [...new Set(workspaceIds.flatMap(id => [...(this.workspaces.get(id) || [])]))].map(path => {
         const r = this.repos.get(path)!;
         return { path, revision: `${r.working}:${r.refs}`, refreshing: !!r.refreshing,
@@ -70,7 +81,12 @@ export class ObservationScheduler {
   }
   workspaceToken(id: string) { return [...(this.workspaces.get(id) || [])].map(path => this.token(path)).join(':'); }
   observed(path: string) { const r = this.repos.get(path); if (r) r.successfulAt = new Date().toISOString(); }
-  published() { this.revision++; }
+  published(scope?: { workspaceId?: string; repoPath?: string }) {
+    this.revision++;
+    if (scope?.workspaceId) this.workspaceVersions.set(scope.workspaceId, (this.workspaceVersions.get(scope.workspaceId) || 0) + 1);
+    if (scope?.repoPath) this.repositoryVersions.set(scope.repoPath, (this.repositoryVersions.get(scope.repoPath) || 0) + 1);
+  }
+  rosterChanged() { this.rosterRevision++; this.revision++; }
   force(workspace?: string) {
     for (const r of this.repos.values()) if (!workspace || this.workspaces.get(workspace)?.has(r.path)) {
       if (workspace) this.touch(r);
@@ -179,6 +195,12 @@ export class ObservationScheduler {
   }
   private tick() {
     if (this.closed) return;
+    const now = Date.now();
+    for (const [id, demandedAt] of this.workspaceDemand) if (now - demandedAt > this.options.retentionMs) {
+      this.workspaceDemand.delete(id);
+      this.workspaces.delete(id);
+      this.workspaceVersions.delete(id);
+    }
     for (const repo of this.repos.values()) {
       if (repo.lease <= Date.now()) {
         if (repo.watches.size) repo.ready = this.release(repo).finally(() => { repo.ready = undefined; });
@@ -193,9 +215,14 @@ export class ObservationScheduler {
         repo.verified = Date.now(); this.event(repo, true, true, true);
       }
     }
+    const referenced = new Set([...this.workspaces.values()].flatMap(paths => [...paths]));
+    for (const [path, repo] of this.repos) if (!referenced.has(path) && repo.lease <= now && !repo.watches.size && !repo.ready && !repo.refreshing) {
+      this.repos.delete(path);
+      this.repositoryVersions.delete(path);
+    }
   }
   health() { return { instanceId: this.instanceId, revision: this.revision, watchedDirectories: this.watches.size,
-    repositories: this.repos.size, activeRepositories: [...this.repos.values()].filter(r => r.lease > Date.now()).length,
+    repositories: this.repos.size, workspaceRegistrations: this.workspaces.size, activeRepositories: [...this.repos.values()].filter(r => r.lease > Date.now()).length,
     issues: [...new Set([...this.repos.values()].map(r => r.issue).filter(Boolean))] }; }
   async close() {
     this.closed = true; clearInterval(this.timer);

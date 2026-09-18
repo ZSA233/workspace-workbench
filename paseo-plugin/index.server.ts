@@ -1,4 +1,6 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { HostConnection } from "./server/host-connection";
+import { RpcMetrics } from "./server/rpc-metrics";
 import { sessionOperation, coordinatorReview } from "./shared/session-tools";
 import { handleSessionOperation } from "./server/session-tools";
 import { handoffMaterials } from "./shared/handoff-materials";
@@ -55,52 +57,89 @@ import {
 } from "./server/agent-review";
 
 export default function contribute(server: PluginServerContext) {
-  server.registerSettings(observerSettings);
-  server.handle(workspaceHandoffPreview, (input, context) => withProject(input, () => orchestrate("preview", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)));
-  server.handle(handoffMaterials, (input, context) => withProject(input, () => handleHandoffMaterials(input, context)));
-  server.handle(sessionOperation, (input, context) => withProject(input, () => handleSessionOperation(input, context)));
-  server.handle(coordinatorReview, (input, context) => withProject(input, () => handleCoordinatorReview(input, context)));
+  const host = new HostConnection();
+  const metrics = new RpcMetrics();
+  const measured: PluginServerContext = {
+    ...server,
+    handle: (contract, handler) => server.handle(contract, (input, context) => {
+      const submethod = contract.name === "workspace.workbench.query" && typeof (input as { method?: unknown }).method === "string"
+        ? `:${(input as { method: string }).method}` : "";
+      return metrics.track(contract.name + submethod, () => handler(input, context));
+    }),
+  };
+  const readOnlyHostMethods = new Set([
+    "workspace.workbench.agent_context", "workspace.workbench.agent.status",
+    "workspace.workbench.binding", "workspace.workbench.agent-review.models",
+    "workspace.workbench.agent-review.preview", "workspace.workbench.agent-review.session",
+    "workspace.workbench.agent-review.sessions", "workspace.workbench.agent-review.events",
+    "workspace.workbench.handoff-materials", "workspace.workbench.agent-review.reviewer-read",
+  ]);
+  const withHost: PluginServerContext = {
+    ...measured,
+    handle: (contract, handler) => measured.handle(contract, (input, context) => host.run(
+      paseo => handler(input, { ...context, paseo }),
+      readOnlyHostMethods.has(contract.name)
+        || contract.name === "workspace.workbench.orchestrate" && (input as { action?: string }).action === "status"
+        || contract.name === "workspace.workbench.session" && ["status", "history", "wait"].includes(String((input as { action?: string }).action))
+        || contract.name === "workspace.workbench.coordinator-review" && (input as { action?: string }).action === "read"
+        || contract.name === "workspace.workbench.lifecycle" && (input as { action?: string }).action === "inspect",
+    )),
+    on: (name, handler) => measured.on(name, async (event, context) => {
+      // Persist lifecycle facts even if the host connection is temporarily down.
+      const paseo = await host.api().catch(() => context.paseo);
+      return handler(event, { ...context, paseo });
+    }),
+  };
+  measured.registerSettings(observerSettings);
+  withHost.handle(workspaceHandoffPreview, (input, context) => withProject(input, () => orchestrate("preview", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)));
+  withHost.handle(handoffMaterials, (input, context) => withProject(input, () => handleHandoffMaterials(input, context)));
+  withHost.handle(sessionOperation, (input, context) => withProject(input, () => handleSessionOperation(input, context)));
+  withHost.handle(coordinatorReview, (input, context) => withProject(input, () => handleCoordinatorReview(input, context)));
   // Start all registered projects through one generation-owned supervisor.
   // Failure remains project-specific and is retried on the next request.
   void Promise.allSettled(registeredProjects().map(project => startBackend(project.configPath)));
-  server.handle(reviewSessionQuery, (input, context) => withProject(input, () => handleReviewSessionQuery(input, context)));
-  server.handle(reviewSessionList, (input) => withProject(input, () => handleReviewSessionList(input)));
-  server.handle(reviewSessionEvents, (input) => withProject(input, () => handleReviewSessionEvents(input)));
-  server.handle(reviewSettingsGet, (input) => withProject(input, () => handleReviewSettingsGet(input)));
-  server.handle(reviewSettingsUpdate, (input) => withProject(input, () => handleReviewSettingsUpdate(input)));
-  server.handle(agentSessionSettingsGet, (input) => withProject(input, () => handleAgentSessionSettingsGet()));
-  server.handle(agentSessionSettingsUpdate, (input) => withProject(input, () => handleAgentSessionSettingsUpdate(input)));
-  server.handle(agentSessionProviders, (input, context) => withProject(input, () => handleAgentSessionProviders(context)));
-  server.handle(artifactRegister, (input, context) => withProject(input, () => registerArtifact(input, context)));
-  server.handle(artifactList, (input) => withProject(input, () => listArtifacts()));
-  server.handle(reviewModels, (input, context) => withProject(input, () => handleReviewModels(input, context)));
-  server.handle(reviewPreview, (input, context) => withProject(input, () => handleReviewPreview(input, context)));
-  server.handle(reviewSessionStart, (input, context) => withProject(input, () => handleReviewSessionStart(input, context)));
-  server.handle(reviewSessionControl, (input, context) => withProject(input, () => handleReviewSessionControl(input, context)));
-  server.handle(executionReport, (input, context) => withProject(input, () => handleExecutionReportRpc(input, context)));
-  server.handle(reviewerRead, (input, context) => withProject(input, () => handleReviewerReadRpc(input, context)));
-  server.handle(reviewerResult, (input, context) => withProject(input, () => handleReviewerResultRpc(input, context)));
-  const cleanupAgents = registerAgentIntegration(server);
-  const cleanupReviewLifecycle = registerReviewLifecycle(server);
-  server.handle(projectsQuery, async (input) => registeredProjects({ directory: input.directory }));
-  server.handle(projectSetupScan, handleProjectSetupScan);
-  server.handle(projectSetupSave, handleProjectSetupSave);
-  server.handle(projectStorageQuery, handleProjectStorage);
-  server.handle(projectRuntimeSettingsGet, (input) => withProject(input, () => handleProjectRuntimeSettingsGet(input)));
-  server.handle(projectRuntimeSettingsUpdate, (input) => withProject(input, () => handleProjectRuntimeSettingsUpdate(input)));
-  server.handle(projectBackendStart, handleProjectBackendStart);
-  server.handle(projectBackendStatus, handleProjectBackendStatus);
-  server.handle(observerQuery, handleObserver);
-  server.handle(agentStatusQuery, (input, context) => withProject(input, () => handleAgentStatus(input, context)));
-  server.handle(agentDelegate, (input, context) => withProject(input, async () => {
+  withHost.handle(reviewSessionQuery, (input, context) => withProject(input, () => handleReviewSessionQuery(input, context)));
+  measured.handle(reviewSessionList, (input) => withProject(input, () => handleReviewSessionList(input)));
+  measured.handle(reviewSessionEvents, (input) => withProject(input, () => handleReviewSessionEvents(input)));
+  measured.handle(reviewSettingsGet, (input) => withProject(input, () => handleReviewSettingsGet(input)));
+  measured.handle(reviewSettingsUpdate, (input) => withProject(input, () => handleReviewSettingsUpdate(input)));
+  measured.handle(agentSessionSettingsGet, (input) => withProject(input, () => handleAgentSessionSettingsGet()));
+  measured.handle(agentSessionSettingsUpdate, (input) => withProject(input, () => handleAgentSessionSettingsUpdate(input)));
+  withHost.handle(agentSessionProviders, (input, context) => withProject(input, () => handleAgentSessionProviders(context)));
+  withHost.handle(artifactRegister, (input, context) => withProject(input, () => registerArtifact(input, context)));
+  measured.handle(artifactList, (input) => withProject(input, () => listArtifacts()));
+  withHost.handle(reviewModels, (input, context) => withProject(input, () => handleReviewModels(input, context)));
+  withHost.handle(reviewPreview, (input, context) => withProject(input, () => handleReviewPreview(input, context)));
+  withHost.handle(reviewSessionStart, (input, context) => withProject(input, () => handleReviewSessionStart(input, context)));
+  withHost.handle(reviewSessionControl, (input, context) => withProject(input, () => handleReviewSessionControl(input, context)));
+  withHost.handle(executionReport, (input, context) => withProject(input, () => handleExecutionReportRpc(input, context)));
+  withHost.handle(reviewerRead, (input, context) => withProject(input, () => handleReviewerReadRpc(input, context)));
+  withHost.handle(reviewerResult, (input, context) => withProject(input, () => handleReviewerResultRpc(input, context)));
+  const cleanupAgents = registerAgentIntegration(withHost, () => host.api());
+  const cleanupReviewLifecycle = registerReviewLifecycle(withHost);
+  measured.handle(projectsQuery, async (input) => registeredProjects({ directory: input.directory }));
+  measured.handle(projectSetupScan, handleProjectSetupScan);
+  measured.handle(projectSetupSave, handleProjectSetupSave);
+  measured.handle(projectStorageQuery, handleProjectStorage);
+  measured.handle(projectRuntimeSettingsGet, (input) => withProject(input, () => handleProjectRuntimeSettingsGet(input)));
+  measured.handle(projectRuntimeSettingsUpdate, (input) => withProject(input, () => handleProjectRuntimeSettingsUpdate(input)));
+  measured.handle(projectBackendStart, async (input) => ({ ...await handleProjectBackendStart(input), hostTransport: host.status(), rpcMetrics: metrics.snapshot() }));
+  measured.handle(projectBackendStatus, async (input) => ({ ...await handleProjectBackendStatus(input), hostTransport: host.status(), rpcMetrics: metrics.snapshot() }));
+  measured.handle(observerQuery, async (input, context) => {
+    const response = await handleObserver(input, context);
+    if (input.method !== "observer.versions" || !response.ok || !response.result || typeof response.result !== "object") return response;
+    return { ...response, result: { ...response.result, hostTransport: host.status() } };
+  });
+  withHost.handle(agentStatusQuery, (input, context) => withProject(input, () => handleAgentStatus(input, context)));
+  withHost.handle(agentDelegate, (input, context) => withProject(input, async () => {
     try { return agentDelegate.output.parse(await orchestrate("execute", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)); }
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
-  server.handle(workspaceBindingQuery, (input, context) => withProject(input, () => handleWorkspaceBinding(input, context)));
-  server.handle(workspaceDelegate, (input, context) => withProject(input, async () => {
+  withHost.handle(workspaceBindingQuery, (input, context) => withProject(input, () => handleWorkspaceBinding(input, context)));
+  withHost.handle(workspaceDelegate, (input, context) => withProject(input, async () => {
     try { return workspaceDelegate.output.parse(await orchestrate("execute", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)); }
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
-  server.handle(workspaceLifecycle, (input, context) => withProject(input, () => handleWorkspaceLifecycle(input, context)));
-  return () => { cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); return closeBackends(); };
+  withHost.handle(workspaceLifecycle, (input, context) => withProject(input, () => handleWorkspaceLifecycle(input, context)));
+  return async () => { cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); await Promise.all([closeBackends(), host.close()]); };
 }

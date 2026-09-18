@@ -93,6 +93,8 @@ export const projectBackendStart = defineRpc({
     instanceId: z.string().optional(),
     lastSuccessfulAt: z.string().optional(),
     failureSince: z.string().optional(),
+    hostTransport: z.object({ state: z.string(), active: z.number(), reconnects: z.number(), failures: z.number(), lastSuccessfulAt: z.string().nullable(), lastFailure: z.string().nullable() }).optional(),
+    rpcMetrics: z.object({ windowStartedAt: z.string(), active: z.number(), peak: z.number(), methods: z.record(z.string(), z.object({ count: z.number(), failures: z.number(), maxMs: z.number() })), memory: z.object({ rss: z.number(), heapUsed: z.number(), external: z.number() }) }).optional(),
   }),
 });
 
@@ -107,6 +109,8 @@ export const projectBackendStatus = defineRpc({
     instanceId: z.string().optional(),
     lastSuccessfulAt: z.string().optional(),
     failureSince: z.string().optional(),
+    hostTransport: z.object({ state: z.string(), active: z.number(), reconnects: z.number(), failures: z.number(), lastSuccessfulAt: z.string().nullable(), lastFailure: z.string().nullable() }).optional(),
+    rpcMetrics: z.object({ windowStartedAt: z.string(), active: z.number(), peak: z.number(), methods: z.record(z.string(), z.object({ count: z.number(), failures: z.number(), maxMs: z.number() })), memory: z.object({ rss: z.number(), heapUsed: z.number(), external: z.number() }) }).optional(),
   }),
 });
 

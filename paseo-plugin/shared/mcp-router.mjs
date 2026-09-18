@@ -36,10 +36,18 @@ const roleTools = [
   { name: "workbench_reviewer_read", description: "Read the review snapshot through the read-only Reviewer boundary." },
   { name: "workbench_reviewer_result", description: "Submit a structured Reviewer result for the current snapshot." },
 ];
+// An independent execution session needs the public coordinator tools while it
+// is working, and it also needs the completion channel promised by its
+// handoff. Keep that combination explicit instead of silently making the
+// worker choose between implementation tools and execution_report.
+const independentWorkerTools = [...publicTools, roleTools[0]];
+const independentWorker = process.env.WORKBENCH_EXECUTION_REPORT === "1";
 const tools = process.env.WORKBENCH_REVIEW_ONLY === "1"
   ? [...roleTools.filter((tool) => tool.name === "workbench_reviewer_read" || tool.name === "workbench_reviewer_result"), ...materialTools]
   : process.env.WORKBENCH_EXECUTION_REPORT_ONLY === "1"
   ? [...roleTools.filter((tool) => tool.name === "workbench_execution_report"), ...materialTools]
+  : independentWorker
+  ? independentWorkerTools
   : publicTools;
 const schema = {
   type: "object",
@@ -216,7 +224,7 @@ function callArguments(message) {
   return direct;
 }
 export async function handle(message, lifecycle = {}) {
-  if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version }, ...(tools === publicTools ? { instructions: coordinatorGuidance } : {}) };
+  if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version }, ...(!independentWorker && tools === publicTools ? { instructions: coordinatorGuidance } : {}) };
   if (message.method === "ping") return {};
   if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: extraSchema(tool.name) || (tool.name === "workbench_artifact_register" ? artifactRegisterSchema : tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name === "workbench_workspace_status" ? workspaceStatusSchema : tool.name === "workbench_workspace_submit" ? workspaceSubmitSchema : tool.name === "workbench_workspace_execute" ? workspaceExecuteSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema), annotations: { readOnlyHint: !["workbench_workspace_preview", "workbench_workspace_submit", "workbench_session_message", "workbench_session_stop", "workbench_review_read", "workbench_review_result", "workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: tool.name === "workbench_session_stop" } })) };
   if (message.method !== "tools/call") throw new Error("method_not_found");

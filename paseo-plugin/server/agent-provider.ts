@@ -455,20 +455,32 @@ async function delegateAgent(
       ...runtimeEnvironment(runtime),
       WORKBENCH_WORKER_WORKSPACE: input.workspaceId,
       ...(project ? { WORKBENCH_PROJECT_CONFIG: project.configPath } : {}),
-      ...(bridge ? { WORKBENCH_PASEO_ENDPOINT: bridge.endpoint, WORKBENCH_AGENT_TOKEN: reportToken, ...(restrictedWorker ? { WORKBENCH_EXECUTION_REPORT_ONLY: "1" } : {}) } : {}),
+      ...(bridge ? {
+        WORKBENCH_PASEO_ENDPOINT: bridge.endpoint,
+        WORKBENCH_AGENT_TOKEN: reportToken,
+        ...(restrictedWorker ? { WORKBENCH_EXECUTION_REPORT_ONLY: "1" } : { WORKBENCH_EXECUTION_REPORT: "1" }),
+      } : {}),
     };
+    const workerMcpTools = restrictedWorker
+      ? ["workbench_execution_report", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"]
+      : [
+          "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset",
+          "workbench_session_status", "workbench_session_message", "workbench_session_history", "workbench_session_wait", "workbench_session_stop",
+          "workbench_review_read", "workbench_review_result", "workbench_artifact_register",
+          "workbench_workspace_preview", "workbench_workspace_execute", "workbench_workspace_status", "workbench_workspace_submit",
+          "workbench_review_preview", "workbench_review_execute", "workbench_review_status", "workbench_review_stop", "workbench_review_resume",
+          "workbench_execution_report",
+        ];
+    const existingPreapproved = childConfig.toolPolicy?.preapproved || [];
+    const workerPreapproved = workerMcpTools.map(tool => ({ kind: "mcp" as const, server: workerMcpServer, tool }));
+    const preapproved = [...existingPreapproved, ...workerPreapproved].filter((grant, index, all) => (
+      all.findIndex(candidate => candidate.kind === grant.kind && candidate.server === grant.server && candidate.tool === grant.tool) === index
+    ));
     const workerConfig = {
       ...childConfig,
       provider: selectedProvider,
       ...(bridge ? {
-        ...(restrictedWorker ? { toolPolicy: {
-          ...(childConfig.toolPolicy || {}),
-          preapproved: [
-            ...(childConfig.toolPolicy?.preapproved || []),
-            { kind: "mcp" as const, server: workerMcpServer, tool: "workbench_execution_report" },
-            ...["workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp" as const, server: workerMcpServer, tool })),
-          ],
-        } } : {}),
+        toolPolicy: { ...(childConfig.toolPolicy || {}), preapproved },
         mcpServers: {
           ...(childConfig.mcpServers || {}),
           [workerMcpServer]: {

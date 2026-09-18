@@ -60,6 +60,20 @@ test("review and execution MCP processes expose only their role tools", () => {
   assert.deepEqual(JSON.parse(execution.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_execution_report", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"]);
 });
 
+test("independent execution MCP keeps public tools and completion reporting", () => {
+  const input = '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n';
+  const worker = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], {
+    encoding: "utf8",
+    input,
+    env: { ...mcpEnv, WORKBENCH_EXECUTION_REPORT: "1" },
+  });
+  assert.equal(worker.status, 0, worker.stderr);
+  const names = JSON.parse(worker.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name);
+  assert.ok(names.includes("workbench_workspace_submit"));
+  assert.ok(names.includes("workbench_execution_report"));
+  assert.equal(names.includes("workbench_reviewer_result"), false);
+});
+
 test("MCP initialization gives coordinator guidance only to interactive sessions", () => {
   for (const role of ["interactive", "WORKBENCH_REVIEW_ONLY", "WORKBENCH_EXECUTION_REPORT_ONLY"]) {
     const result = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], {

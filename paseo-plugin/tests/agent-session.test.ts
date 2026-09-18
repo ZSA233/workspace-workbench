@@ -120,11 +120,15 @@ test("default execution creates an independent Agent without a parent", async ()
     assert.equal((creates[0].config as { modeId: string }).modeId, "auto");
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.relationship"], "independent");
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.parent"], undefined);
-    const independentConfig = creates[0].config as { mcpServers: Record<string, { env?: Record<string, string> }> };
+    const independentConfig = creates[0].config as { mcpServers: Record<string, { env?: Record<string, string> }>; toolPolicy: { preapproved: Array<{ server: string; tool: string }> } };
     assert.ok(independentConfig.mcpServers["workspace-workbench"]);
     assert.equal(independentConfig.mcpServers["workspace-workbench-report"], undefined);
     assert.equal(independentConfig.mcpServers["workspace-workbench"].env?.WORKBENCH_EXECUTION_REPORT_ONLY, undefined);
+    assert.equal(independentConfig.mcpServers["workspace-workbench"].env?.WORKBENCH_EXECUTION_REPORT, "1");
     assert.equal((creates[0].env as Record<string, string>).WORKBENCH_EXECUTION_REPORT_ONLY, undefined);
+    assert.equal((creates[0].env as Record<string, string>).WORKBENCH_EXECUTION_REPORT, "1");
+    assert.ok(independentConfig.toolPolicy.preapproved.some((grant) => grant.server === "workspace-workbench" && grant.tool === "workbench_workspace_submit"));
+    assert.ok(independentConfig.toolPolicy.preapproved.some((grant) => grant.server === "workspace-workbench" && grant.tool === "workbench_execution_report"));
   } finally {
     if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS;
     else process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS = previous;

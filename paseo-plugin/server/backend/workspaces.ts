@@ -553,6 +553,11 @@ export class Workspaces {
           path.endsWith(".json"),
         )) {
           const item = readJson(join(reviews, path));
+          // Review result receipts are stored beside review sessions and have
+          // no lifecycle `status`. They are historical evidence, not an
+          // active task, so they must not keep a removed workspace from being
+          // cleaned up.
+          if (typeof item.status !== "string") continue;
           if (
             item.workspaceId === id &&
             ![

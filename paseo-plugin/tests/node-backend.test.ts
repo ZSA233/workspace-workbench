@@ -154,6 +154,27 @@ test("Node backend preserves public rejection codes and idempotent records", asy
   }
 });
 
+test("historical execution reports do not block safe workspace cleanup", async () => {
+  const f = fixture(), service = new Service(f.config);
+  try {
+    const created = await service.handle("workspace.create", { name: "report-receipt", repositories: ["one"] });
+    const reviews = join(f.config.stateRoot, "reviews");
+    mkdirSync(reviews, { recursive: true });
+    writeFileSync(join(reviews, "execution-report.json"), JSON.stringify({
+      workspaceId: created.id,
+      executionAgentId: "worker",
+      report: { status: "ready_for_review", summary: "historical receipt" },
+    }));
+    await service.handle("workspace.remove", { workspaceId: created.id });
+    const preview = await service.handle("workspace.cleanup", { workspaceId: created.id });
+    assert.equal(preview.preview, true);
+    await service.handle("workspace.cleanup", { workspaceId: created.id, confirm: true });
+  } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test("native additions recover partial failures, timeouts, and preserve modified branches", async () => {
   const f = fixture(),
     service = new Service(f.config);

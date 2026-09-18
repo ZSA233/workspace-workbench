@@ -1,4 +1,6 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { defineRpc } from "@getpaseo/plugin";
+import { z } from "zod";
 import { HostConnection } from "./server/host-connection";
 import { RpcMetrics } from "./server/rpc-metrics";
 import { sessionOperation, coordinatorReview } from "./shared/session-tools";
@@ -125,6 +127,17 @@ export default function contribute(server: PluginServerContext) {
   measured.handle(projectRuntimeSettingsUpdate, (input) => withProject(input, () => handleProjectRuntimeSettingsUpdate(input)));
   measured.handle(projectBackendStart, async (input) => ({ ...await handleProjectBackendStart(input), hostTransport: host.status(), rpcMetrics: metrics.snapshot() }));
   measured.handle(projectBackendStatus, async (input) => ({ ...await handleProjectBackendStatus(input), hostTransport: host.status(), rpcMetrics: metrics.snapshot() }));
+  if (process.env.WORKBENCH_TEST_HOST_DROP === "1") {
+    const isolatedHostFault = defineRpc({ name: "workspace.workbench.test.host-fault",
+      input: z.object({ action: z.enum(["drop", "probe"]) }),
+      output: z.object({ ok: z.boolean(), state: z.string(), reconnects: z.number() }) });
+    measured.handle(isolatedHostFault, async input => {
+      if (input.action === "drop") await host.injectDisconnectForIsolatedTest();
+      else await host.run(api => api.agents.list({ page: { limit: 1 } }), true);
+      const status = host.status();
+      return { ok: true, state: status.state, reconnects: status.reconnects };
+    });
+  }
   measured.handle(observerQuery, async (input, context) => {
     const response = await handleObserver(input, context);
     if (input.method !== "observer.versions" || !response.ok || !response.result || typeof response.result !== "object") return response;

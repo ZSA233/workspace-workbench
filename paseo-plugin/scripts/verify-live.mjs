@@ -19,7 +19,6 @@ import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { deflateSync } from "node:zlib";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { HostConnection } from "../server/host-connection.ts";
 import WebSocket from "ws";
 const plugin = resolve(import.meta.dirname, ".."),
   root = realpathSync(mkdtempSync("/tmp/wb-live-")),
@@ -106,6 +105,7 @@ const env = {
   PASEO_HOME: home,
   WORKSPACE_WORKBENCH_PROJECT_REGISTRY: registry,
   WORKSPACE_WORKBENCH_PLUGIN_ROOT: plugin,
+  WORKBENCH_TEST_HOST_DROP: "1",
 };
 delete env.WORKSPACE_WORKBENCH_CONFIG;
 const cli = process.env.PASEO_CLI || "paseo";
@@ -213,34 +213,25 @@ try {
   assert.ok(pluginStatus.rpcMetrics.memory.rss > 0);
   report.checks.push("plugin status distinguishes host API transport, per-method RPC counts and plugin-process memory");
   assert.notEqual(health[0].result.process.pid, health[1].result.process.pid);
-  const socketHandles = () => process._getActiveHandles().filter(handle => handle.constructor?.name === "Socket").length;
-  const socketsBefore = socketHandles();
-  const hostConnection = new HostConnection(() => `ws://127.0.0.1:${port}/ws`);
-  try {
-    for (let i = 0; i < 100; i++) {
-      await hostConnection.run(api => api.agents.list({ page: { limit: 1 } }), true);
-      const managed = hostConnection.managed;
-      assert.ok(managed?.client.transport, "isolated host connection is active");
-      let unsubscribe = () => {};
-      const disconnected = new Promise((resolveDisconnected, rejectDisconnected) => {
-        const timer = setTimeout(() => { unsubscribe(); rejectDisconnected(new Error("injected host disconnect was not observed")); }, 5_000);
-        unsubscribe = managed.client.subscribeConnectionStatus(state => {
-          if (state.status === "connected") return;
-          clearTimeout(timer); unsubscribe(); resolveDisconnected();
-        });
-      });
-      managed.client.transport.close(1000, "isolated fault injection");
-      await disconnected;
-    }
-    await hostConnection.run(api => api.agents.list({ page: { limit: 1 } }), true);
-    assert.equal(hostConnection.status().reconnects, 100);
-    assert.equal(hostConnection.status().active, 0);
-    assert.equal((await rpc(configs[0], "observer.health")).result.process.pid, health[0].result.process.pid);
-    report.hostConnection = hostConnection.status();
-    report.checks.push("one local host API connection recovered from 100 injected transport closes without plugin or backend reload");
-  } finally { await hostConnection.close(); }
-  await delay(150);
-  assert.ok(socketHandles() <= socketsBefore + 2, "host reconnects left socket handles behind");
+  for (let i = 0; i < 100; i++) {
+    const dropped = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "drop" });
+    assert.equal(dropped.ok, true);
+    const recovered = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "probe" });
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.state, "connected");
+  }
+  const recoveredHost = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.backend.status", { projectConfig: configs[0] });
+  assert.equal(recoveredHost.hostTransport.reconnects, 100);
+  assert.equal(recoveredHost.hostTransport.active, 0);
+  const hostConnections = logs.split("\n").flatMap(line => {
+    try { const value = JSON.parse(line); return value.msg === "Client connected via hello" && String(value.clientId || "").startsWith("workbench-plugin-") ? [value] : []; }
+    catch { return []; }
+  });
+  assert.ok(hostConnections.length > 0 && hostConnections.at(-1).resumed === true, "injected reconnects must reuse the host session");
+  assert.ok(hostConnections.at(-1).totalSessions <= 5, "injected reconnects accumulated host sessions");
+  assert.equal((await rpc(configs[0], "observer.health")).result.process.pid, health[0].result.process.pid);
+  report.hostConnection = { ...recoveredHost.hostTransport, hostSessions: hostConnections.at(-1).totalSessions };
+  report.checks.push("plugin-owned host API connection recovered from 100 injected transport closes without plugin or backend reload");
   report.checks.push(
     "actual plugin loaded; separate Node backend PIDs for two projects",
   );

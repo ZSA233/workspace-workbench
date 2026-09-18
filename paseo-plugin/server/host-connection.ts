@@ -116,6 +116,24 @@ export class HostConnection {
       lastSuccessfulAt: this.lastSuccessfulAt, lastFailure: this.lastFailure ? "host_transport_unavailable" : null };
   }
 
+  async injectDisconnectForIsolatedTest(): Promise<void> {
+    if (process.env.WORKBENCH_TEST_HOST_DROP !== "1") throw new Error("host_fault_injection_disabled");
+    await this.api();
+    const client = this.managed!.client as DaemonClient;
+    const transport = (client as unknown as { transport?: { close(code: number, reason: string): void } }).transport;
+    if (!transport) throw new Error("host_transport_not_connected");
+    let unsubscribe = () => {};
+    const disconnected = new Promise<void>((resolveDisconnected, rejectDisconnected) => {
+      const timer = setTimeout(() => { unsubscribe(); rejectDisconnected(new Error("host_disconnect_not_observed")); }, 5_000);
+      unsubscribe = client.subscribeConnectionStatus(state => {
+        if (state.status === "connected") return;
+        clearTimeout(timer); unsubscribe(); resolveDisconnected();
+      });
+    });
+    transport.close(1000, "isolated fault injection");
+    await disconnected;
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     const managed = this.managed;

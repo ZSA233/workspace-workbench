@@ -102,6 +102,7 @@ for (const config of configs) {
 }
 const env = {
   ...process.env,
+  NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --expose-gc`.trim(),
   PASEO_HOME: home,
   WORKSPACE_WORKBENCH_PROJECT_REGISTRY: registry,
   WORKSPACE_WORKBENCH_PLUGIN_ROOT: plugin,
@@ -213,6 +214,11 @@ try {
   assert.ok(pluginStatus.rpcMetrics.memory.rss > 0);
   report.checks.push("plugin status distinguishes host API transport, per-method RPC counts and plugin-process memory");
   assert.notEqual(health[0].result.process.pid, health[1].result.process.pid);
+  for (let i = 0; i < 5; i++) {
+    await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "drop" });
+    await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "probe" });
+  }
+  const initialPluginHeap = (await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "gc" })).heapUsed;
   for (let i = 0; i < 100; i++) {
     const dropped = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "drop" });
     assert.equal(dropped.ok, true);
@@ -221,8 +227,11 @@ try {
     assert.equal(recovered.state, "connected");
   }
   const recoveredHost = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.backend.status", { projectConfig: configs[0] });
-  assert.equal(recoveredHost.hostTransport.reconnects, 100);
+  assert.equal(recoveredHost.hostTransport.reconnects, 105);
   assert.equal(recoveredHost.hostTransport.active, 0);
+  const recoveredPluginHeap = (await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "gc" })).heapUsed;
+  const retainedPluginHeapIncrease = recoveredPluginHeap - initialPluginHeap;
+  assert.ok(retainedPluginHeapIncrease <= 20 * 1024 * 1024, `plugin heap grew by ${retainedPluginHeapIncrease} bytes after 100 reconnects`);
   const hostConnections = logs.split("\n").flatMap(line => {
     try { const value = JSON.parse(line); return value.msg === "Client connected via hello" && String(value.clientId || "").startsWith("workbench-plugin-") ? [value] : []; }
     catch { return []; }
@@ -230,8 +239,9 @@ try {
   assert.ok(hostConnections.length > 0 && hostConnections.at(-1).resumed === true, "injected reconnects must reuse the host session");
   assert.ok(hostConnections.at(-1).totalSessions <= 5, "injected reconnects accumulated host sessions");
   assert.equal((await rpc(configs[0], "observer.health")).result.process.pid, health[0].result.process.pid);
-  report.hostConnection = { ...recoveredHost.hostTransport, hostSessions: hostConnections.at(-1).totalSessions };
+  report.hostConnection = { ...recoveredHost.hostTransport, hostSessions: hostConnections.at(-1).totalSessions, warmupReconnects: 5, measuredReconnects: 100, retainedPluginHeapIncrease };
   report.checks.push("plugin-owned host API connection recovered from 100 injected transport closes without plugin or backend reload");
+  report.checks.push("after connection warmup, 100 plugin-child reconnects retained less than 20 MB after GC");
   report.checks.push(
     "actual plugin loaded; separate Node backend PIDs for two projects",
   );

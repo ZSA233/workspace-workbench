@@ -129,13 +129,18 @@ export default function contribute(server: PluginServerContext) {
   measured.handle(projectBackendStatus, async (input) => ({ ...await handleProjectBackendStatus(input), hostTransport: host.status(), rpcMetrics: metrics.snapshot() }));
   if (process.env.WORKBENCH_TEST_HOST_DROP === "1") {
     const isolatedHostFault = defineRpc({ name: "workspace.workbench.test.host-fault",
-      input: z.object({ action: z.enum(["drop", "probe"]) }),
-      output: z.object({ ok: z.boolean(), state: z.string(), reconnects: z.number() }) });
+      input: z.object({ action: z.enum(["drop", "probe", "gc"]) }),
+      output: z.object({ ok: z.boolean(), state: z.string(), reconnects: z.number(), heapUsed: z.number().optional() }) });
     measured.handle(isolatedHostFault, async input => {
       if (input.action === "drop") await host.injectDisconnectForIsolatedTest();
-      else await host.run(api => api.agents.list({ page: { limit: 1 } }), true);
+      else if (input.action === "probe") await host.run(api => api.agents.list({ page: { limit: 1 } }), true);
+      else {
+        if (typeof global.gc !== "function") throw new Error("isolated_gc_unavailable");
+        global.gc();
+      }
       const status = host.status();
-      return { ok: true, state: status.state, reconnects: status.reconnects };
+      return { ok: true, state: status.state, reconnects: status.reconnects,
+        ...(input.action === "gc" ? { heapUsed: process.memoryUsage().heapUsed } : {}) };
     });
   }
   measured.handle(observerQuery, async (input, context) => {

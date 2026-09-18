@@ -36,12 +36,13 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
   const status = response.result.tools.find((tool) => tool.name === "workbench_workspace_status")!;
   assert.match(preview.description, /without Git changes/);
   assert.match(preview.description, /canonical request/);
-  assert.match(execute.description, /canonical previewed Workspace/);
+  assert.match(execute.description, /requestId alone/);
   assert.match(status.description, /request ID/);
   for (const tool of response.result.tools) {
     assert.ok(tool.description.length < 180);
     if (tool.name === "workbench_artifact_register") assert.deepEqual(tool.inputSchema.required, ["artifact"]);
-    if (["workbench_workspace_preview", "workbench_workspace_execute"].includes(tool.name)) assert.deepEqual(tool.inputSchema.required, ["requestId", "handoff"]);
+    if (tool.name === "workbench_workspace_preview") assert.deepEqual(tool.inputSchema.required, ["requestId", "handoff"]);
+    if (tool.name === "workbench_workspace_execute") assert.deepEqual(tool.inputSchema.required, ["requestId"]);
     if (tool.name === "workbench_workspace_status") assert.deepEqual(tool.inputSchema.required, ["requestId"]);
     if (tool.name === "workbench_workspace_submit") assert.deepEqual(tool.inputSchema.required, ["task"]);
     if (["workbench_review_preview", "workbench_review_status", "workbench_review_stop", "workbench_review_resume"].includes(tool.name)) assert.deepEqual(tool.inputSchema.required, ["workspaceId"]);

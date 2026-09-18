@@ -15,6 +15,7 @@ import { workflowRequest, workflowSubmitRequest, type WorkflowRequest, type Work
 
 type Progress = {
   bundle?: BundleRef;
+  request?: WorkflowRequest;
   identity: string;
   identityVersion?: 2;
   workspaceId?: string;
@@ -193,6 +194,22 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
     }
     return { ok: true, progress: previous, execution: previous.workspaceId ? await handleWorkspaceBinding({ workspaceId: previous.workspaceId }, context) : null };
   }
+  // A preview is the canonical execution input. The execute tool can be
+  // retried with only its requestId, which avoids asking an agent to recreate
+  // a large handoff object byte-for-byte after a successful preview.
+  if (action === "execute" && !("handoff" in request)) {
+    if (!previous?.request) {
+      return {
+        ok: false,
+        action: "blocked",
+        requestId: request.requestId,
+        sideEffects: [],
+        requiresExecution: false,
+        error: { code: "preview_request_unavailable", message: "This preview predates canonical request storage; run preview again with a new requestId before execute" },
+      };
+    }
+    request = previous.request;
+  }
   const rawRequest = workflowRequest.parse(request);
   if (action === "execute" && !previous && !submitted) {
     return { ok: false, action: "blocked", sideEffects: [], requiresExecution: false, error: { code: "preview_required", message: getWorkbenchCopy(rawRequest.handoff.reviewLocale).workspacePreviewRequired } };
@@ -219,7 +236,23 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
       && compatiblePrevious.stage === "validated"
       && !compatiblePrevious.workspaceId
       && !compatiblePrevious.result;
-    if (!legacyRetry) throw new Error("request_identity_conflict");
+    if (!legacyRetry) {
+      if (action === "execute") {
+        return {
+          ok: false,
+          action: "blocked",
+          requestId: fullRequest.requestId,
+          sideEffects: [],
+          requiresExecution: false,
+          error: {
+            code: "request_identity_conflict",
+            message: "Execute input differs from the saved preview. Retry execute with requestId only, or run a new preview with a new requestId.",
+            details: { previousStage: compatiblePrevious.stage, previewRequestAvailable: Boolean(compatiblePrevious.request) },
+          },
+        };
+      }
+      throw new Error("request_identity_conflict");
+    }
     compatiblePrevious = { ...compatiblePrevious, identity, identityVersion: 2 };
   }
   if (action === "preview") {
@@ -229,7 +262,7 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
     const repos = (catalog.result as { repositories?: Array<{ id: string; worktreePath?: string; sourcePath?: string }> }).repositories || [];
     const material = previous?.bundle ? readBundle(previous.bundle) : !previous ? await createPreviewBundle({ ownerAgentId: parentAgentId, ownerCwd: parent.cwd, identity,
       handoff: fullRequest.handoff, runtime: { repositories: repos.flatMap(repo => repo.worktreePath || repo.sourcePath ? [{ id: repo.id, worktreePath: (repo.worktreePath || repo.sourcePath)! }] : []) }, context }) : null;
-    if (!previous) writeState(key, { identity, identityVersion: 2, workspaceId: fullRequest.workspaceId, stage: "previewed", previewedAt: new Date().toISOString(), ...(material ? { bundle: material.bundle } : {}) });
+    if (!previous) writeState(key, { identity, identityVersion: 2, request: fullRequest, workspaceId: fullRequest.workspaceId, stage: "previewed", previewedAt: new Date().toISOString(), ...(material ? { bundle: material.bundle } : {}) });
     return { ok: true, action: fullRequest.workspaceId ? "reuse" : "create", request: fullRequest, catalog: catalog.result,
       sideEffects: material ? ["handoff.bundle"] : [], requiresExecution: true,
       materials: material ? { bundle: material.bundle, ready: !material.blockers.length, blockers: material.blockers, warnings: material.warnings, sourceCount: material.sources.length, requiredSources: material.sources.filter(s => s.required).map(s => s.id), conversation: material.conversation } : null,
@@ -247,7 +280,8 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
   const active = flights.get(flightKey);
   if (active) return active;
   const run = (async () => {
-    let progress: Progress = compatiblePrevious || { identity, identityVersion: 2, workspaceId: fullRequest.workspaceId, stage: "validated" };
+    let progress: Progress = compatiblePrevious || { identity, identityVersion: 2, request: fullRequest, workspaceId: fullRequest.workspaceId, stage: "validated" };
+    if (!progress.request) progress = { ...progress, request: fullRequest };
     if (progress.identity !== identity) progress = { ...progress, identity, identityVersion: 2 };
     const verifyExecution = async () => {
       const snapshot = (await context.paseo.agents.ref(parentAgentId).refresh())?.agent;

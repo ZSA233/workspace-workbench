@@ -28,7 +28,7 @@ test("preview is read-only; execute prepares, creates one child, retries without
   let planning = true, creates = 0;
   const calls: string[] = [];
   let worker: PaseoAgent | null = null;
-  const paseo = { agents: { ref: (id: string) => ({ refresh: async () => ({ agent: id === "parent" ? parent(root, planning) : worker }), send: async () => { throw new Error("unexpected redelivery"); } }), list: async () => ({ entries: worker ? [{ agent: worker }] : [], pageInfo: { hasMore: false } }) }, workspaces: { open: async () => ({ id: "paseo-fixture", agents: { create: async (options: { config: unknown; labels: Record<string,string>; parent?: string }) => { creates++; assert.equal((options.config as { modeId: string }).modeId, "auto"); assert.equal(options.parent, undefined); assert.equal(options.labels["workspace-workbench.relationship"], "independent"); worker = { ...parent(root + "/tree"), id: "child", labels: options.labels, status: "idle", workspaceId: "paseo-fixture" }; return { id: "child", current: () => worker }; } } }) } } as unknown as PaseoApi;
+  const paseo = { agents: { ref: (id: string) => ({ refresh: async () => ({ agent: id === "parent" ? parent(root, planning) : worker }), send: async () => { throw new Error("unexpected redelivery"); } }), list: async () => ({ entries: worker ? [{ agent: worker }] : [], pageInfo: { hasMore: false } }) }, workspaces: { open: async () => ({ id: "paseo-fixture", agents: { create: async (options: { config: unknown; labels: Record<string,string>; parent?: string }) => { creates++; assert.equal((options.config as { modeId: string }).modeId, "auto"); assert.equal(options.parent, undefined); assert.equal(options.labels["workspace-workbench.relationship"], "independent"); worker = { ...parent(root + "/tree"), id: "child", labels: options.labels, status: "idle", workspaceId: "paseo-fixture" }; return { id: "child", current: () => worker, send: async () => {} }; } } }) } } as unknown as PaseoApi;
   const query = async (input: { method: string }) => {
     calls.push(input.method);
     if (input.method === "workspace.list") return { ok: true, result: { capabilities: { create: true, agent: true, prepare: true } } };
@@ -56,7 +56,8 @@ test("preview is read-only; execute prepares, creates one child, retries without
     await assert.rejects(run("execute"), /主控仍在计划模式/);
     assert.equal(creates, 0);
     planning = false;
-    await run("execute");
+    const resumedById = await withProject({ projectConfig: config }, () => orchestrate("execute", workflowStatusRequest.parse({ requestId: "one" }), "parent", { paseo, query }));
+    assert.equal((resumedById as { ok?: boolean }).ok, true);
     assert.equal(creates, 1);
     assert.ok(calls.indexOf("workspace.create") < calls.indexOf("workspace.prepare"));
     await run("execute", canonicalRequest);
@@ -66,7 +67,9 @@ test("preview is read-only; execute prepares, creates one child, retries without
     assert.equal((status as { ok?: boolean }).ok, true);
     const normalizedStatus = await withProject({ projectConfig: config }, () => orchestrate("status", workflowStatusRequest.parse({ requestId: "one" }), "parent", { paseo, query }));
     assert.equal((normalizedStatus as { ok?: boolean }).ok, true);
-    await assert.rejects(withProject({ projectConfig: config }, () => orchestrate("execute", { ...request, name: "conflict" }, "parent", { paseo, query })), /identity_conflict/);
+    const conflict = await withProject({ projectConfig: config }, () => orchestrate("execute", { ...request, name: "conflict" }, "parent", { paseo, query }));
+    assert.equal((conflict as { ok?: boolean }).ok, false);
+    assert.equal((conflict as { error?: { code?: string } }).error?.code, "request_identity_conflict");
     const invalid = workflowRequest.parse({ requestId: "invalid", name: "invalid", repositories: [root + "/missing"], handoff: { goal: "Invalid fixture" } });
     const invalidPreview = await run("preview", invalid);
     assert.equal((invalidPreview as { ok?: boolean }).ok, false);

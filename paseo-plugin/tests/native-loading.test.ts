@@ -59,6 +59,8 @@ test("full Prism reproduces native prototype crash; core and grammars load witho
   assert.equal(vm.runInContext('Prism.tokenize("name = \\\"fixture\\\"", Prism.languages.toml)[0].type', context), "key");
   const source = readFileSync(new URL("../client/syntax.tsx", import.meta.url), "utf8");
   assert.ok(!source.includes('from "prismjs/prism.js"'));
+  assert.ok(!source.includes("prism-react-renderer"));
+  assert.ok(readFileSync(new URL("../client/prism-normalize.ts", import.meta.url), "utf8").includes("normalizePrismTokens"));
   for (const language of ["jsx", "tsx", "json5", "toml", "css"]) {
     assert.ok(source.includes(`prismjs/components/prism-${language}`));
   }

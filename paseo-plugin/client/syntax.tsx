@@ -1,9 +1,9 @@
 import "./prism-environment";
 import { memo } from "react";
-import { normalizeTokens } from "prism-react-renderer/dist/index.mjs";
 // The full prism.js entry includes prism-file-highlight, which touches
 // Element.prototype in native hosts that expose only a partial document shim.
 import Prism from "./prism-core";
+import { normalizePrismTokens } from "./prism-normalize";
 import { Platform, Text, type StyleProp, type TextStyle } from "react-native";
 import type { Grammar } from "prismjs";
 
@@ -144,7 +144,7 @@ function tokenLines(code: string, language: string, grammar: Grammar): SyntaxTok
     tokenCache.set(key, cached);
     return cached.tokens;
   }
-  const tokens = normalizeTokens(Prism.tokenize(code, grammar)) as SyntaxToken[][];
+  const tokens = normalizePrismTokens(Prism.tokenize(code, grammar)) as SyntaxToken[][];
   while (tokenCache.size >= TOKEN_CACHE_LIMIT || tokenCacheChars + code.length > TOKEN_CACHE_MAX_CHARS) {
     const oldest = tokenCache.keys().next().value;
     if (typeof oldest !== "string") break;

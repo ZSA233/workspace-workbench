@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import { currentProject } from "./projects.ts";
-import { readState } from "./orchestration-state.ts";
+import { liveAgentIdentity } from "./agent-identity.ts";
 import type { ReviewArtifactReference, ReviewArtifactKind } from "../shared/review-packet.ts";
 import type { ArtifactListResponse, ArtifactRegisterResponse } from "../shared/artifacts.ts";
 
@@ -290,10 +290,8 @@ export function artifactSnapshotContent(artifact: ResolvedWorkbenchArtifact): { 
 }
 
 export async function authorizeArtifactCaller(input: { token: string }, context: { paseo: PaseoApi }): Promise<{ cwd?: string }> {
-  const identity = readState<{ agentId?: string; cwd?: string; revoked?: boolean }>(`context:${input.token}`);
-  if (!identity || identity.revoked || !identity.agentId) throw new Error("artifact_caller_context_invalid");
-  const snapshot = await context.paseo.agents.ref(identity.agentId).refresh();
-  if (!snapshot?.agent || snapshot.agent.archivedAt || (identity.cwd && snapshot.agent.cwd !== identity.cwd)) throw new Error("artifact_caller_context_changed");
+  const identity = await liveAgentIdentity(input.token, context.paseo);
+  if (!identity) throw new Error("artifact_caller_context_invalid");
   return { cwd: identity.cwd };
 }
 

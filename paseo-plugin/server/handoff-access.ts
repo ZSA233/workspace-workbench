@@ -4,6 +4,7 @@ import { readReviewSession } from "./agent-review.ts";
 import { readBundle, readBundleFile, readBundleEnvironment } from "./handoff-bundles.ts";
 import { materialLimits, type MaterialRequest, type BundleRef } from "../shared/handoff-materials.ts";
 import type { AgentContext } from "./agent-provider.ts";
+import { liveAgentIdentity } from "./agent-identity.ts";
 
 export function chunkText(bytes: Buffer, offset: number) {
   let start = Math.min(offset, bytes.length);
@@ -16,7 +17,7 @@ export function chunkText(bytes: Buffer, offset: number) {
 export async function handleHandoffMaterials(input: MaterialRequest, context: AgentContext): Promise<Record<string, unknown>> {
   const binding = input.workspaceId ? getAgentBinding(input.workspaceId) : null;
   const session = input.workspaceId ? readReviewSession(input.workspaceId) : null;
-  const identity = input.token ? readState<{ agentId: string; cwd: string; revoked?: boolean }>(`context:${input.token}`) : null;
+  const identity = input.token ? await liveAgentIdentity(input.token, context.paseo) : null;
   const reviewAuth = session ? readReviewState<{ token: string; reviewerAgentId: string }>(`agent-review:auth:${session.id}`) : null;
   const reviewer = Boolean(input.token && reviewAuth?.token === input.token && session?.status === "reviewing" && reviewAuth.reviewerAgentId === session.reviewerAgentId);
   const ref: BundleRef | undefined = input.bundle || (reviewer ? session?.materials : binding?.pendingHandoffBundle || binding?.handoffBundle);
@@ -25,7 +26,7 @@ export async function handleHandoffMaterials(input: MaterialRequest, context: Ag
   let reader = "host-ui";
   if (input.token) {
     reader = reviewer ? reviewAuth!.reviewerAgentId : identity?.agentId || "";
-    if (!reader || !reviewer && (!identity || identity.revoked)) throw new Error("handoff_access_denied");
+    if (!reader || !reviewer && !identity) throw new Error("handoff_access_denied");
     const snapshot = (await context.paseo.agents.ref(reader).refresh())?.agent;
     if (!snapshot || snapshot.archivedAt || !reviewer && snapshot.cwd !== identity!.cwd) throw new Error("handoff_reader_changed");
     if (reviewer) {

@@ -9,9 +9,9 @@ import { readState, writeState, digest } from "./orchestration-state.ts";
 import { agentContextQuery } from "../shared/handoff.ts";
 import { orchestrationRpc } from "../shared/orchestration.ts";
 import { orchestrate } from "./orchestrator.ts";
+import { liveAgentIdentity, type AgentIdentity } from "./agent-identity.ts";
 import { allAgentBindings, getAgentBinding, putAgentBinding, type AgentBinding } from "./agent-store.ts";
 
-type AgentIdentity = { agentId: string; cwd: string; revoked?: boolean };
 function bridgeConfig(configPath: string) {
   const config = JSON.parse(readFileSync(configPath, "utf8"));
   const bridge = config.agent?.bridge;
@@ -50,7 +50,8 @@ export function registerAgentIntegration(server: PluginServerContext): () => voi
       // Bind the exact create-time token, never match concurrent creations by cwd.
       if (!token) return request;
       const pending = readState<AgentIdentity>(`context:${token}`);
-      if (!pending || pending.revoked || pending.cwd !== request.cwd || pending.agentId && pending.agentId !== request.agentId) throw new Error("agent_context_changed");
+      const currentSession = readState<{ token: string }>(`session:${request.agentId}`);
+      if (!pending || pending.revoked && currentSession?.token !== token || pending.cwd !== request.cwd || pending.agentId && pending.agentId !== request.agentId) throw new Error("agent_context_changed");
       const prior = readState<{ token: string }>(`session:${request.agentId}`);
       if (prior && prior.token !== token) writeState(`context:${prior.token}`, { agentId: request.agentId, cwd: request.cwd, revoked: true });
       writeState(`context:${token}`, { agentId: request.agentId, cwd: request.cwd });
@@ -60,18 +61,15 @@ export function registerAgentIntegration(server: PluginServerContext): () => voi
   })];
   server.handle(orchestrationRpc, (input, context) => withProject(input, async () => {
     api = context.paseo;
-    const identity = readState<AgentIdentity>(`context:${input.token}`);
-    if (!identity || identity.revoked) throw new Error("agent_context_invalid");
-    const parent = (await context.paseo.agents.ref(identity.agentId).refresh())?.agent;
-    if (!parent || parent.archivedAt || parent.cwd !== identity.cwd) throw new Error("agent_context_changed");
+    const identity = await liveAgentIdentity(input.token, context.paseo);
+    if (!identity) throw new Error("agent_context_invalid");
     return orchestrate(input.action, input.request, identity.agentId, context);
   }));
-  server.handle(agentContextQuery, (input) => withProject(input, () => {
+  server.handle(agentContextQuery, (input, context) => withProject(input, async () => {
     const session = readState<{ token: string }>(`session:${input.agentId}`);
     if (!session) return { ok: true, available: false as const, reason: "not_injected" as const };
-    const identity = readState<AgentIdentity>(`context:${session.token}`);
+    const identity = await liveAgentIdentity(session.token, context.paseo);
     if (!identity) return { ok: true, available: false as const, reason: "mismatched" as const };
-    if (identity.revoked) return { ok: true, available: false as const, reason: "revoked" as const };
     if (identity.agentId !== input.agentId) return { ok: true, available: false as const, reason: "mismatched" as const };
     return { ok: true, available: true as const, reason: "ready" as const };
   }));

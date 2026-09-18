@@ -19,6 +19,7 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { currentProject, registeredProjects, withProject } from "./projects.ts";
 import { getAgentBinding } from "./agent-store.ts";
 import { readReviewState, readState, removeReviewState, writeReviewState, writeState, digest } from "./orchestration-state.ts";
+import { liveAgentIdentity } from "./agent-identity.ts";
 import type { AgentContext } from "./agent-provider.ts";
 import { queryObserver } from "./observer.ts";
 import { artifactImageAttachments, artifactSnapshotContent, materializeReviewArtifact, resolveArtifactReference } from "./artifacts.ts";
@@ -506,12 +507,10 @@ async function authorizeReviewCaller(token: string | undefined, context: AgentCo
   if (!token) return;
   const project = currentProject();
   if (!project) throw new Error("project_context_required");
-  const identity = readState<{ agentId?: string; cwd?: string; revoked?: boolean }>(`context:${token}`);
-  if (!identity || identity.revoked || !identity.agentId) throw new Error("review_caller_context_invalid");
+  const identity = await liveAgentIdentity(token, context.paseo);
+  if (!identity) throw new Error("review_caller_context_invalid");
   const callerCwd = identity.cwd;
   if (!callerCwd || ![project.sourceRoot, project.workspaceRoot].some((root) => pathWithin(root, callerCwd))) throw new Error("review_caller_project_mismatch");
-  const snapshot = await context.paseo.agents.ref(identity.agentId).refresh();
-  if (!snapshot?.agent || snapshot.agent.archivedAt || (identity.cwd && !samePath(snapshot.agent.cwd, identity.cwd))) throw new Error("review_caller_context_changed");
 }
 
 function runtimeIdentity(runtime: Runtime): string {

@@ -8,6 +8,7 @@ import { sessionLimits, type SessionOperation } from "../shared/session-tools.ts
 import { withWorkspaceScope } from "./workspace-scope.ts";
 import { readReviewSession, prepareSessionSupplement, cancelAgentIfSupported } from "./agent-review.ts";
 import { resolveArtifactReference, resolvedArtifactImageAttachments, artifactSnapshotContent } from "./artifacts.ts";
+import { liveAgentIdentity } from "./agent-identity.ts";
 
 export async function authorizeSession(workspaceId: string, token: string | undefined, context: AgentContext, signal?: AbortSignal) {
   if (signal?.aborted) throw new Error("session_wait_finished");
@@ -15,11 +16,9 @@ export async function authorizeSession(workspaceId: string, token: string | unde
   if (!binding) throw new Error("workspace_session_missing");
   const coordinatorId = binding.parentAgentId || binding.requestedByAgentId;
   if (token) {
-    const identity = readState<{ agentId: string; cwd: string; revoked?: boolean }>(`context:${token}`);
-    if (!identity || identity.revoked || !coordinatorId || identity.agentId !== coordinatorId) throw new Error("session_caller_not_coordinator");
-    const caller = (await context.paseo.agents.ref(identity.agentId).refresh())?.agent;
+    const identity = await liveAgentIdentity(token, context.paseo);
+    if (!identity || !coordinatorId || identity.agentId !== coordinatorId) throw new Error("session_caller_not_coordinator");
     if (signal?.aborted) throw new Error("session_wait_finished");
-    if (!caller || caller.archivedAt || caller.cwd !== identity.cwd) throw new Error("session_caller_changed");
   }
   const worker = (await context.paseo.agents.ref(binding.agentId).refresh())?.agent;
   if (signal?.aborted) throw new Error("session_wait_finished");

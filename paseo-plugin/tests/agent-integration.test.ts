@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { PluginServerContext, PluginBeforeRequests } from "@getpaseo/plugin/server";
 import { registerAgentIntegration } from "../server/agent-integration.ts";
 import { withProject } from "../server/projects.ts";
-import { readState } from "../server/orchestration-state.ts";
+import { readState, writeState } from "../server/orchestration-state.ts";
 import { getAgentBinding, putAgentBinding } from "../server/agent-store.ts";
 
 test("MCP binds exact identity; workers do not recurse; notifications steer and retry durably", async () => {
@@ -17,7 +17,7 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
   process.env.WORKSPACE_WORKBENCH_CONFIG = config;
   const hooks = new Map<string, (input: unknown) => unknown>();
   const events = new Map<string, (event: unknown, context: unknown) => Promise<void>>();
-  const rpcHandlers = new Map<string, (input: unknown) => unknown>();
+  const rpcHandlers = new Map<string, (input: unknown, context?: unknown) => unknown>();
   const server = { before: (name: string, handler: (input: unknown) => unknown) => { hooks.set(name, handler); return () => {}; }, on: (name: string, handler: (event: unknown, context: unknown) => Promise<void>) => { events.set(name, handler); return () => {}; }, handle: (contract: { name: string }, handler: (input: unknown) => unknown) => { rpcHandlers.set(contract.name, handler); } } as unknown as PluginServerContext;
   const cleanup = registerAgentIntegration(server);
   try {
@@ -50,10 +50,21 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
     hooks.get("agent.session_open")!({ request: open });
     const contextRpc = rpcHandlers.get("workspace.workbench.agent_context");
     assert.ok(contextRpc);
-    assert.deepEqual(await contextRpc!({ projectConfig: config, agentId: "parent" }), { ok: true, available: true, reason: "ready" });
-    assert.deepEqual(await contextRpc!({ projectConfig: config, agentId: "not-injected" }), { ok: true, available: false, reason: "not_injected" });
+    const liveContext = { paseo: { agents: { ref: () => ({ refresh: async () => ({ agent: { cwd: root, archivedAt: null } }) }) } } };
+    assert.deepEqual(await contextRpc!({ projectConfig: config, agentId: "parent" }, liveContext), { ok: true, available: true, reason: "ready" });
+    assert.deepEqual(await contextRpc!({ projectConfig: config, agentId: "not-injected" }, liveContext), { ok: true, available: false, reason: "not_injected" });
     const saved = withProject({ projectConfig: config }, () => readState<{ agentId: string }>(`context:${injected.env!.WORKBENCH_AGENT_TOKEN}`));
     assert.equal(saved?.agentId, "parent");
+    const orchestrationRpc = rpcHandlers.get("workspace.workbench.orchestrate");
+    assert.ok(orchestrationRpc);
+    const currentToken = injected.env!.WORKBENCH_AGENT_TOKEN!;
+    withProject({ projectConfig: config }, () => writeState(`context:${currentToken}`, { agentId: "parent", cwd: root, revoked: true }));
+    const resumed = await orchestrationRpc!({ projectConfig: config, token: currentToken, action: "status", request: { requestId: "missing" } }, liveContext) as { error?: { code: string } };
+    assert.equal(resumed.error?.code, "workflow_not_found", "a live resumed agent reaches the ordinary status lookup");
+    assert.equal(withProject({ projectConfig: config }, () => readState<{ revoked: boolean }>(`context:${currentToken}`))?.revoked, false);
+    withProject({ projectConfig: config }, () => writeState(`context:${currentToken}`, { agentId: "parent", cwd: root, revoked: true }));
+    hooks.get("agent.session_open")!({ request: open });
+    assert.equal(withProject({ projectConfig: config }, () => readState<{ revoked: boolean }>(`context:${currentToken}`))?.revoked, undefined);
     assert.throws(() => hooks.get("agent.session_open")!({ request: { ...open, agentId: "another" } }), /context_changed/);
     const worker = { ...request, env: { WORKBENCH_WORKER_WORKSPACE: "sample" } };
     assert.equal(hooks.get("agent.create")!({ request: worker }), worker);

@@ -210,7 +210,9 @@ function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeRe
     `Repositories: ${(runtime.repositories || []).map(repo => `${repo.id}: ${repo.worktreePath} (${repo.branch})`).join("; ")}`,
     `Goal: ${handoff.goal.slice(0, 2000)}`, `Start mode: ${handoff.startMode}`,
     `First call workbench_handoff_read with bundle=${JSON.stringify(bundle)}. Read HANDOFF.md, SOURCES.md and all required sources before implementation; search conversation history when context is unclear.`,
-    "The Workspace and runtime are prepared. Verify your working directory. Do not create or delegate another Workspace or Agent.",
+    relationship === "child"
+      ? "The Workspace and runtime are prepared. Verify your working directory. Do not create or delegate another Workspace or Agent."
+      : "The Workspace and runtime are prepared. Verify your working directory. You may request another independent Workspace through Workbench when the task requires it; do not recreate this assigned Workspace.",
     "Implementation details may be improved using source material and code evidence. Confirm changes to goals, scope, explicit decisions or acceptance with the coordinator.",
     handoff.startMode === "plan-first" ? "Planning only: do not edit or change host mode; wait for explicit execution authorization." : "Implement the approved task and its constraints from HANDOFF.md.",
     `Report completion through workbench_execution_report with materialsVersion: ${bundle.version}, ready_for_review, changes, tests and limitations. If blocked, report needs_input or failed.`,
@@ -228,7 +230,7 @@ function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeRe
     "Workspace Workbench Agent handoff",
     relationship === "child"
       ? "You are the execution child, not the coordinator. The Workspace has already been created and prepared. Execute this approved task; do not create or delegate another Workspace or Agent, and do not repeat planning unless start mode is plan-first."
-      : "You are an independent execution session. The Workspace has already been created and prepared. Execute this approved task; do not create or delegate another Workspace or Agent, and do not repeat planning unless start mode is plan-first.",
+    : "You are an independent execution session. The Workspace has already been created and prepared. Execute this approved task; you may create another independent Workspace through Workbench when the task requires it, but do not recreate this assigned Workspace or delegate the same task.",
     "",
     `Workspace: ${workspaceId}`,
     `Assigned directory: ${runtime.treePath}`,
@@ -447,27 +449,29 @@ async function delegateAgent(
     if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, relationship, stage: "creating" });
     const reportToken = randomUUID();
     const bridge = project ? workerBridge(project.configPath) : null;
+    const restrictedWorker = relationship === "child";
+    const workerMcpServer = restrictedWorker ? "workspace-workbench-report" : "workspace-workbench";
     const workerEnv: Record<string, string> = {
       ...runtimeEnvironment(runtime),
       WORKBENCH_WORKER_WORKSPACE: input.workspaceId,
       ...(project ? { WORKBENCH_PROJECT_CONFIG: project.configPath } : {}),
-      ...(bridge ? { WORKBENCH_PASEO_ENDPOINT: bridge.endpoint, WORKBENCH_AGENT_TOKEN: reportToken, WORKBENCH_EXECUTION_REPORT_ONLY: "1" } : {}),
+      ...(bridge ? { WORKBENCH_PASEO_ENDPOINT: bridge.endpoint, WORKBENCH_AGENT_TOKEN: reportToken, ...(restrictedWorker ? { WORKBENCH_EXECUTION_REPORT_ONLY: "1" } : {}) } : {}),
     };
     const workerConfig = {
       ...childConfig,
       provider: selectedProvider,
       ...(bridge ? {
-        toolPolicy: {
+        ...(restrictedWorker ? { toolPolicy: {
           ...(childConfig.toolPolicy || {}),
           preapproved: [
             ...(childConfig.toolPolicy?.preapproved || []),
-            { kind: "mcp" as const, server: "workspace-workbench-report", tool: "workbench_execution_report" },
-            ...["workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp" as const, server: "workspace-workbench-report", tool })),
+            { kind: "mcp" as const, server: workerMcpServer, tool: "workbench_execution_report" },
+            ...["workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp" as const, server: workerMcpServer, tool })),
           ],
-        },
+        } } : {}),
         mcpServers: {
           ...(childConfig.mcpServers || {}),
-          "workspace-workbench-report": {
+          [workerMcpServer]: {
             type: "stdio" as const,
             command: process.execPath,
             args: [bridge.script],

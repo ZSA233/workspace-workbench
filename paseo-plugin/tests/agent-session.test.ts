@@ -120,10 +120,11 @@ test("default execution creates an independent Agent without a parent", async ()
     assert.equal((creates[0].config as { modeId: string }).modeId, "auto");
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.relationship"], "independent");
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.parent"], undefined);
-    assert.deepEqual((creates[0].config as { toolPolicy: { preapproved: unknown[] } }).toolPolicy.preapproved, [
-      { kind: "mcp", server: "workspace-workbench-report", tool: "workbench_execution_report" },
-      ...["workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp", server: "workspace-workbench-report", tool })),
-    ]);
+    const independentConfig = creates[0].config as { mcpServers: Record<string, { env?: Record<string, string> }> };
+    assert.ok(independentConfig.mcpServers["workspace-workbench"]);
+    assert.equal(independentConfig.mcpServers["workspace-workbench-report"], undefined);
+    assert.equal(independentConfig.mcpServers["workspace-workbench"].env?.WORKBENCH_EXECUTION_REPORT_ONLY, undefined);
+    assert.equal((creates[0].env as Record<string, string>).WORKBENCH_EXECUTION_REPORT_ONLY, undefined);
   } finally {
     if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS;
     else process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS = previous;
@@ -136,7 +137,9 @@ test("default execution creates an independent Agent without a parent", async ()
 test("explicit child relationship keeps the Paseo parent link", async () => {
   const directory = mkdtempSync(join(tmpdir(), "workbench-agent-session-child-"));
   const previous = process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS;
+  const previousConfig = process.env.WORKSPACE_WORKBENCH_CONFIG;
   process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS = join(directory, "bindings.json");
+  process.env.WORKSPACE_WORKBENCH_CONFIG = configFixture(directory);
   const creates: Array<Record<string, unknown>> = [];
   const worker = { id: "worker", cwd: "/fixture/tree", workspaceId: "paseo", status: "idle", provider: "codex", model: "fixture", features: parentAgent().features, labels: {} };
   const paseo = {
@@ -149,14 +152,20 @@ test("explicit child relationship keeps the Paseo parent link", async () => {
     },
   } as unknown as PaseoApi;
   try {
-    const result = await handleAgentDelegate({ workspaceId: "sample", parentAgentId: "parent", handoff: handoffSchema.parse({ goal: "Execute fixture", relationship: "child" }) }, { paseo, query: async () => ({ ok: true, result: { workspaceId: "sample", managed: true, treePath: "/fixture/tree", capabilities: { agent: true } } }) });
+    const result = await withProject({ projectConfig: process.env.WORKSPACE_WORKBENCH_CONFIG! }, () => handleAgentDelegate({ workspaceId: "sample", parentAgentId: "parent", handoff: handoffSchema.parse({ goal: "Execute fixture", relationship: "child" }) }, { paseo, query: async () => ({ ok: true, result: { workspaceId: "sample", managed: true, treePath: "/fixture/tree", capabilities: { agent: true } } }) }));
     assert.equal(result.ok, true);
     assert.equal(creates[0].parent, "parent");
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.relationship"], "child");
     assert.equal((creates[0].labels as Record<string, string>)["workspace-workbench.parent"], "parent");
+    const childConfig = creates[0].config as { mcpServers: Record<string, unknown>; toolPolicy: { preapproved: unknown[] } };
+    assert.ok(childConfig.mcpServers["workspace-workbench-report"]);
+    assert.equal(childConfig.mcpServers["workspace-workbench"], undefined);
+    assert.equal((creates[0].env as Record<string, string>).WORKBENCH_EXECUTION_REPORT_ONLY, "1");
   } finally {
     if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS;
     else process.env.WORKSPACE_WORKBENCH_AGENT_BINDINGS = previous;
+    if (previousConfig === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG;
+    else process.env.WORKSPACE_WORKBENCH_CONFIG = previousConfig;
     rmSync(directory, { recursive: true, force: true });
   }
 });

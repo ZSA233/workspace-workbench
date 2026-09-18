@@ -144,7 +144,9 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
   const query = context.query || queryObserver;
   const parent = (await context.paseo.agents.ref(parentAgentId).refresh())?.agent;
   if (!parent) throw new Error("parent_agent_unavailable");
-  if ((action === "execute" || action === "submit" || action === "submit-execute") && parent.labels?.["workspace-workbench.role"] === "workspace-worker") throw new Error("execution_child_must_not_delegate");
+  if ((action === "execute" || action === "submit" || action === "submit-execute")
+    && parent.labels?.["workspace-workbench.role"] === "workspace-worker"
+    && (parent.labels?.["workspace-workbench.relationship"] || "child") === "child") throw new Error("execution_child_must_not_delegate");
   const project = currentProject();
   if (!project) throw new Error("project_context_required");
   if (resolveProject({ directory: parent.cwd }).configPath !== project.configPath) throw new Error("parent_project_mismatch");

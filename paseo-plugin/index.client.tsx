@@ -30,6 +30,17 @@ function contributeClient(client: PluginClientContext) {
   function registerPanel(panel: Parameters<PluginClientContext["addWorkspacePanel"]>[0]) {
     return atInitializationStage(`panel:${panel.id}`, () => client.addWorkspacePanel(panel));
   }
+  function registerOptionalPanel(panel: Parameters<PluginClientContext["addWorkspacePanel"]>[0]) {
+    try {
+      return registerPanel(panel);
+    } catch (error) {
+      // A host may not expose a secondary panel location or its icon registry
+      // on every platform. Keep the core Workbench surface usable and leave a
+      // diagnostic instead of failing plugin initialization globally.
+      console.error("workbench_optional_panel_registration_failed", panel.id, error);
+      return () => {};
+    }
+  }
   function registerCommand(command: Parameters<PluginClientContext["addCommandCenterItem"]>[0]) {
     return atInitializationStage(`command:${command.id}`, () => client.addCommandCenterItem(command));
   }
@@ -103,7 +114,7 @@ function contributeClient(client: PluginClientContext) {
       locations: ["explorer"],
       Component: WorkbenchPanel,
     }),
-    registerPanel({
+    registerOptionalPanel({
       id: "workspace-workbench-file",
       title: "Workspace Changes",
       // GitBranch is available in the native icon registry. Keep the
@@ -114,7 +125,7 @@ function contributeClient(client: PluginClientContext) {
       locations: ["workspace"],
       Component: FileReviewPanel,
     }),
-    registerPanel({
+    registerOptionalPanel({
       id: "workspace-workbench-file-agent",
       title: "Workspace Changes",
       icon: "GitBranch",

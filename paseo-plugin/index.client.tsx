@@ -106,7 +106,10 @@ function contributeClient(client: PluginClientContext) {
     registerPanel({
       id: "workspace-workbench-file",
       title: "Workspace Changes",
-      icon: "FileDiff",
+      // GitBranch is available in the native icon registry. Keep the
+      // registration icon conservative; the panel itself still renders the
+      // detailed diff UI after it has opened.
+      icon: "GitBranch",
       context: "workspace",
       locations: ["workspace"],
       Component: FileReviewPanel,
@@ -114,7 +117,7 @@ function contributeClient(client: PluginClientContext) {
     registerPanel({
       id: "workspace-workbench-file-agent",
       title: "Workspace Changes",
-      icon: "FileDiff",
+      icon: "GitBranch",
       context: "agent",
       locations: ["workspace"],
       Component: FileReviewPanel,

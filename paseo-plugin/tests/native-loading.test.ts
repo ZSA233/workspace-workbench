@@ -15,6 +15,7 @@ test("initialization isolates UI imports, uses a built-in icon and preserves fai
   assert.ok(!entry.includes('from "./client/panel"'));
   assert.ok(!entry.includes('from "./client/file-review"'));
   assert.ok(!entry.includes('icon: HeaderIcon'));
+  assert.ok(!entry.includes('icon: "FileDiff"'));
   for (const file of ["../client/file-review.tsx", "../client/graph/canvas-web.tsx"]) {
     assert.ok(!readFileSync(new URL(file, import.meta.url), "utf8").includes('require("react-native-svg'));
   }

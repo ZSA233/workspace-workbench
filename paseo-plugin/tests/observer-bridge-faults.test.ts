@@ -42,6 +42,24 @@ test('a version change cannot be hidden by the bridge response TTL',async()=>{
   } finally {await f.close();}
 });
 
+test('selection saves invalidate the roster and never cache a write response',async()=>{
+  let generation=0;
+  const f=await fixture(socket=>socket.write(JSON.stringify({ok:true,result:{generation:++generation}})+'\n'));
+  try {
+    const list=()=>f.bridge.call({method:'workspace.list',params:{includeRemoved:true}});
+    const generation=(response:Awaited<ReturnType<typeof list>>)=>Number((response.result as {generation?:number}|undefined)?.generation);
+    const first=await list();
+    assert.equal(generation(await list()),generation(first));
+    for(const method of ['main.repositories.save','linked.workspaces.save'] as const) {
+      const saved=await f.bridge.call({method,params:{revision:1,repositories:[]}});
+      const repeated=await f.bridge.call({method,params:{revision:1,repositories:[]}});
+      assert.notEqual(generation(saved),generation(repeated));
+      const refreshed=await list();
+      assert.ok(generation(refreshed)>generation(repeated));
+    }
+  } finally {await f.close();}
+});
+
 test('short bridge cache evicts old unique responses instead of retaining them indefinitely',async()=>{
   const f=await fixture(socket=>socket.write(JSON.stringify({ok:true,result:{observation:{state:'ready'},value:'x'.repeat(1024)}})+'\n'));
   try {

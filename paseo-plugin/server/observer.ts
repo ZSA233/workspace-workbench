@@ -36,6 +36,11 @@ type SocketRequest = {
 
 const allowedMethods = new Set<string>(observerMethods);
 const versionedMethods = new Set<string>(["observer.versions", "workspace.detail", "repository.graph", "repository.changes", "repository.diff"]);
+const mutationMethods = new Set<string>([
+  "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
+  "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete",
+  "main.repositories.save", "linked.workspaces.save",
+]);
 const BRIDGE_CACHE_ENTRIES = 128;
 const BRIDGE_CACHE_BYTES = 8 * 1024 * 1024;
 const BRIDGE_IN_FLIGHT = 16;
@@ -169,7 +174,7 @@ export class ObserverBridge {
     const key = `${configuredSocketPath()}:${input.method}:${JSON.stringify(input.params || {})}`;
     const projectPrefix = `${configuredSocketPath()}:`;
     this.trimCache();
-    const cached = versionedMethods.has(input.method) ? undefined : this.cache.get(key);
+    const cached = versionedMethods.has(input.method) || mutationMethods.has(input.method) ? undefined : this.cache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.response;
     this.cache.delete(key);
     const active = this.inFlight.get(key);
@@ -179,10 +184,10 @@ export class ObserverBridge {
     const request: SocketRequest = { id: String(++this.sequence), method: input.method, params: input.params || {} };
     const pending = this.request(request, configuredBridgeTimeoutMs())
       .then((response) => {
-        if (response.ok && ["observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete"].includes(input.method)) {
+        if (response.ok && mutationMethods.has(input.method)) {
           for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
         }
-        if (!versionedMethods.has(input.method) && (!input.method.startsWith("workspace.") || !["workspace.create", "workspace.orphan.preview", "workspace.orphan.adopt", "workspace.addRepositories", "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete", "workspace.runtime"].includes(input.method))) {
+        if (!versionedMethods.has(input.method) && !mutationMethods.has(input.method) && (!input.method.startsWith("workspace.") || !["workspace.orphan.preview", "workspace.runtime"].includes(input.method))) {
           if (cacheable(response)) {
             const bytes = Buffer.byteLength(JSON.stringify(response));
             if (bytes <= BRIDGE_CACHE_BYTES) {

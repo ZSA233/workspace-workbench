@@ -53,3 +53,31 @@ test("RPC diagnostics retain only a bounded current window and omit inputs", asy
   assert.equal(snapshot.methods["workspace.workbench.orchestrate"].failures, 1);
   assert.equal(JSON.stringify(snapshot).includes("not recorded"), false);
 });
+
+test("timed-out host connection keeps one SDK recovery instead of accumulating waiters", async () => {
+  let state: "connecting" | "connected" | "disposed" = "connecting";
+  let connects = 0;
+  let resolveConnect!: () => void;
+  const pending = new Promise<void>(resolve => { resolveConnect = resolve; });
+  const connection = new HostConnection(() => "ws://127.0.0.1:6767/ws", () => ({
+    endpoint: "ws://127.0.0.1:6767/ws",
+    api: {} as PaseoApi,
+    client: {
+      connect: () => { connects++; return pending; },
+      close: async () => { state = "disposed"; },
+      getConnectionState: () => ({ status: state }),
+    },
+  }) as ConstructorParameters<typeof HostConnection>[1] extends (...args: never[]) => infer Result ? Result : never, 20);
+  try {
+    await assert.rejects(connection.api(), /host_transport_unavailable/);
+    for (let i = 0; i < 100; i++) {
+      await assert.rejects(connection.api(), /host_transport_unavailable/);
+    }
+    assert.equal(connects, 1, "timed-out requests must not attach new SDK connect attempts");
+    state = "connected";
+    resolveConnect();
+    await connection.api();
+    assert.equal(connection.status().state, "connected");
+    assert.equal(connects, 1);
+  } finally { await connection.close(); }
+});

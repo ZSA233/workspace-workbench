@@ -38,18 +38,24 @@ const transportFailure = (error: unknown) => /Transport not connected|Connection
 export class HostConnection {
   private readonly endpoint: () => string;
   private readonly factory: Factory;
+  private readonly connectBudgetMs: number;
   private managed: Managed | null = null;
   private connecting: Promise<PaseoApi> | null = null;
+  // The SDK keeps this attempt alive while it reconnects. After our bounded
+  // wait expires, later calls must not attach more waiters to that promise.
+  private sdkConnecting: Promise<void> | null = null;
   private closed = false;
   private active = 0;
   private failures = 0;
+  private cleanupFailures = 0;
   private reconnects = 0;
   private lastSuccessfulAt: string | null = null;
   private lastFailure: string | null = null;
 
-  constructor(endpoint = localEndpoint, factory: Factory = createManaged) {
+  constructor(endpoint = localEndpoint, factory: Factory = createManaged, connectBudgetMs = 6_000) {
     this.endpoint = endpoint;
     this.factory = factory;
+    this.connectBudgetMs = connectBudgetMs;
   }
 
   async api(): Promise<PaseoApi> {
@@ -60,23 +66,34 @@ export class HostConnection {
     if (this.managed && this.managed.endpoint !== endpoint && this.active === 0) {
       const old = this.managed;
       this.managed = null;
-      void old.client.close().catch(() => {});
+      this.sdkConnecting = null;
+      void this.dispose(old);
     }
     const managed = this.managed || (this.managed = this.factory(endpoint));
     if (managed.client.getConnectionState().status === "connected") return managed.api;
+    if (this.sdkConnecting) throw new Error("host_transport_unavailable");
     const wasConnected = this.lastSuccessfulAt !== null;
+    const sdkConnecting = Promise.resolve().then(() => managed.client.connect());
+    this.sdkConnecting = sdkConnecting;
+    void sdkConnecting.then(() => {
+      if (this.sdkConnecting !== sdkConnecting || managed !== this.managed || this.closed) return;
+      this.sdkConnecting = null;
+      if (managed.client.getConnectionState().status !== "connected") return;
+      if (wasConnected) this.reconnects++;
+      this.lastSuccessfulAt = new Date().toISOString();
+      this.lastFailure = null;
+    }, () => {
+      if (this.sdkConnecting === sdkConnecting) this.sdkConnecting = null;
+    });
     const flight = (async () => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
-          managed.client.connect(),
-          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("host_transport_connect_timeout")), 6_000); }),
+          sdkConnecting,
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("host_transport_connect_timeout")), this.connectBudgetMs); }),
         ]);
         if (managed.client.getConnectionState().status !== "connected") throw new Error("host_transport_connect_incomplete");
         if (this.closed || managed !== this.managed) throw new Error("host_transport_closed");
-        if (wasConnected) this.reconnects++;
-        this.lastSuccessfulAt = new Date().toISOString();
-        this.lastFailure = null;
         return managed.api;
       } catch (error) {
         this.failures++;
@@ -112,7 +129,7 @@ export class HostConnection {
 
   status() {
     return { state: this.closed ? "closed" : this.managed?.client.getConnectionState().status || "idle",
-      active: this.active, reconnects: this.reconnects, failures: this.failures,
+      active: this.active, reconnects: this.reconnects, failures: this.failures, cleanupFailures: this.cleanupFailures,
       lastSuccessfulAt: this.lastSuccessfulAt, lastFailure: this.lastFailure ? "host_transport_unavailable" : null };
   }
 
@@ -138,6 +155,12 @@ export class HostConnection {
     this.closed = true;
     const managed = this.managed;
     this.managed = null;
-    await managed?.client.close().catch(() => {});
+    this.sdkConnecting = null;
+    if (managed) await this.dispose(managed);
+  }
+
+  private async dispose(managed: Managed): Promise<void> {
+    try { await managed.client.close(); }
+    catch { this.cleanupFailures++; }
   }
 }

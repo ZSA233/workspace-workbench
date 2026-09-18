@@ -33,7 +33,10 @@ export const workflowSubmitRequest = z.object({
 });
 export const orchestrationRpc = defineRpc({
   name: "workspace.workbench.orchestrate",
-  input: z.object({ projectConfig: z.string(), token: z.string().min(1), action: z.enum(["preview", "execute", "status", "submit"]), request: z.union([workflowRequest, workflowStatusRequest, workflowSubmitRequest]) }),
+  // Submit includes requestId, so it must be checked before the narrower
+  // status shape. Zod objects strip unknown fields; putting status first
+  // silently removed submit.task before the handler could read it.
+  input: z.object({ projectConfig: z.string(), token: z.string().min(1), action: z.enum(["preview", "execute", "status", "submit"]), request: z.union([workflowRequest, workflowSubmitRequest, workflowStatusRequest]) }),
   output: z.unknown(),
 });
 export type WorkflowRequest = z.infer<typeof workflowRequest>;

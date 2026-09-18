@@ -8,9 +8,19 @@ import { childExecutionConfig } from "../server/execution-policy.ts";
 import { orchestrate } from "../server/orchestrator.ts";
 import { withProject } from "../server/projects.ts";
 import { readState } from "../server/orchestration-state.ts";
-import { workflowRequest, workflowStatusRequest, workflowSubmitRequest } from "../shared/orchestration.ts";
+import { orchestrationRpc, workflowRequest, workflowStatusRequest, workflowSubmitRequest } from "../shared/orchestration.ts";
 
 const parent = (cwd: string, plan = false) => ({ id: "parent", cwd, provider: "codex", model: "fixture", currentModeId: "auto", availableModes: [{ id: "auto" }, { id: "full-access" }], pendingPermissions: [], features: [{ id: "plan_mode", type: "toggle", value: plan }] }) as unknown as PaseoAgent;
+
+test("submit request keeps task when requestId is present", () => {
+  const parsed = (orchestrationRpc as unknown as { input: { parse(value: unknown): { request: { task?: string } } } }).input.parse({
+    projectConfig: "/fixture/project.json",
+    token: "token",
+    action: "submit",
+    request: { requestId: "submit-with-id", task: "keep this task" },
+  });
+  assert.equal(parsed.request.task, "keep this task");
+});
 test("provider modes fail closed and inherit the current permission by default", () => {
   assert.throws(() => childExecutionConfig(parent("/fixture", true), false), /主控仍在计划模式/);
   assert.throws(() => childExecutionConfig({ ...parent("/fixture"), features: [] }, false), /未返回主控实际计划状态/);

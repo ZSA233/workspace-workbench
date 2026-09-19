@@ -6,6 +6,7 @@ import { responseObservationState } from "./model.ts";
 
 const STALE_FAILURE_LIMIT = DEFAULT_OBSERVATION_TIMING.staleFailureLimit;
 const STALE_AFTER_MS = DEFAULT_OBSERVATION_TIMING.staleWindowsMs.detail;
+export const RECOVERABLE_FAILURE_GRACE_MS = 10_000;
 
 export type ObservationStatus = "loading" | "fresh" | "refreshing" | "degraded" | "expired" | "unavailable";
 export type ObservationResponseClass = "ready" | "refreshing" | "degraded" | "unavailable";
@@ -57,6 +58,8 @@ export type ObserverSnapshot = {
   initialFailure: boolean;
   lastObservedAt: string | null;
   failureCount: number;
+  /** Milliseconds since the current failure streak began, or null when healthy. */
+  failureAgeMs: number | null;
   lastSuccessfulAt: string | null;
   status: ObservationStatus;
   refreshing: boolean;
@@ -132,9 +135,12 @@ export function observationStatusFor(
   response: ObserverResponse | undefined,
   failed: boolean,
   expired: boolean,
+  failureAgeMs: number | null = null,
 ): ObservationStatus {
-  if (!response) return failed ? "unavailable" : "loading";
+  const recovering = failed && failureAgeMs !== null && failureAgeMs < RECOVERABLE_FAILURE_GRACE_MS;
+  if (!response) return failed ? (recovering ? "loading" : "unavailable") : "loading";
   if (expired) return "expired";
+  if (recovering) return "refreshing";
   return failed || responseObservationState(response) !== "ready"
     ? "degraded"
     : "fresh";
@@ -247,6 +253,9 @@ export function useLastSuccessfulResponse(
   const failureAge = Number.isFinite(lastSuccessTimestamp)
     ? Math.max(0, Date.now() - lastSuccessTimestamp)
     : 0;
+  const failureAgeMs = entry.firstFailureAt === null
+    ? null
+    : Math.max(0, Date.now() - entry.firstFailureAt);
   const staleAfterMs = Math.max(1_000, options.staleAfterMs || STALE_AFTER_MS);
   const cacheTimestamp = entry.cacheUpdatedAt ? Date.parse(entry.cacheUpdatedAt) : NaN;
   const cacheAgeMs = Number.isFinite(cacheTimestamp)
@@ -261,7 +270,7 @@ export function useLastSuccessfulResponse(
         (cacheAgeMs !== null && cacheAgeMs >= staleAfterMs)))),
   );
   const stale = Boolean(displayResponse && (failed || expired));
-  const status = observationStatusFor(displayResponse, failed, expired);
+  const status = observationStatusFor(displayResponse, failed, expired, failureAgeMs);
 
   return {
     response: displayResponse,
@@ -271,6 +280,7 @@ export function useLastSuccessfulResponse(
     initialFailure: !entry.response && failed,
     lastObservedAt: entry.lastObservedAt,
     failureCount: entry.failureCount,
+    failureAgeMs,
     lastSuccessfulAt: entry.lastSuccessfulAt,
     status,
     refreshing: entry.refreshing,

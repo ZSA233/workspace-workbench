@@ -24,4 +24,6 @@ test("transport failures remain unavailable while successful responses stay read
   assert.equal(classifyObservationResponse({ ok: false, error: { code: "observer_timeout", message: "timeout" } }), "unavailable");
   assert.equal(classifyObservationResponse({ ok: true, result: { observation: { state: "ready" } } }), "ready");
   assert.equal(classifyObservationResponse(undefined), null);
+  assert.equal(observationStatusFor(undefined, true, false, 1_000), "loading");
+  assert.equal(observationStatusFor(undefined, true, false, 10_000), "unavailable");
 });

@@ -59,11 +59,7 @@ export function responseErrorCode(response: ObserverResponse | undefined): strin
 
 export function isRecoverableObserverFailure(response: ObserverResponse | undefined, error: unknown): boolean {
   const code = responseErrorCode(response);
-  if (code) {
-    return isTransientIssueCode(code)
-      && code !== "observer_unavailable"
-      && code !== "observer_connection_refused";
-  }
+  if (code) return isTransientIssueCode(code);
   return Boolean(error);
 }
 
@@ -207,18 +203,17 @@ export function visibleIssues(issues: Issue[]): Issue[] {
 }
 
 export function queryFailureForDisplay(
-  snapshot: { response: ObserverResponse | undefined; failed: boolean },
+  snapshot: { response: ObserverResponse | undefined; failed: boolean; failureAgeMs?: number | null },
   response: ObserverResponse | undefined,
   error: unknown,
   strings: WorkbenchCopy = copy,
 ): string | null {
   if (response && !response.ok) {
     const code = response.error?.code || "";
-    if (snapshot.response && isTransientIssueCode(code)) return null;
-    if (isTransientIssueCode(code)
-      && code !== "observer_unavailable"
-      && code !== "observer_connection_refused") {
-      return snapshot.response ? null : strings.text_f496a15d9d;
+    if (isTransientIssueCode(code)) {
+      const failureAgeMs = typeof snapshot.failureAgeMs === "number" ? snapshot.failureAgeMs : null;
+      if (snapshot.response || failureAgeMs === null || failureAgeMs < 10_000) return null;
+      return response.error?.message || strings.text_f496a15d9d;
     }
     return response.error?.message || issueDisplayLabel(code, strings);
   }
@@ -227,7 +222,10 @@ export function queryFailureForDisplay(
     if (typeof observation?.cacheState === "string") return null;
   }
   if (snapshot.response) return null;
-  if (error) return strings.text_b30f770e31;
+  if (error) {
+    const failureAgeMs = typeof snapshot.failureAgeMs === "number" ? snapshot.failureAgeMs : null;
+    return failureAgeMs !== null && failureAgeMs < 10_000 ? null : strings.text_b30f770e31;
+  }
   return snapshot.failed ? strings.text_b71f1b83e5 : null;
 }
 

@@ -79,12 +79,22 @@ export function useObservationVersions(projectConfig: string | undefined, worksp
   const rpcRef = useRef(rpc); rpcRef.current = rpc;
   const idsKey = JSON.stringify([...new Set(workspaceIds.filter(Boolean))].sort());
   useEffect(() => {
-    if (!enabled || !projectConfig) return;
+    if (!enabled || !projectConfig) {
+      // A failed poll must not remain visible after the panel is backgrounded
+      // or the subscription is removed. It is a stale diagnostic, not a
+      // current observation failure.
+      setIssue(null);
+      return;
+    }
     let controller = controllers.get(projectConfig);
     const reader: Reader = ids => rpcRef.current({ projectConfig, method: 'observer.versions', params: { workspaceIds: ids } });
     if (!controller) { controller = new ProjectVersions(projectConfig, client); controllers.set(projectConfig, controller); }
     else controller.client = client;
-    return controller.add({ ids: JSON.parse(idsKey), issue: setIssue, reader });
+    const remove = controller.add({ ids: JSON.parse(idsKey), issue: setIssue, reader });
+    return () => {
+      remove();
+      setIssue(null);
+    };
   }, [projectConfig, idsKey, enabled, client]);
   return issue;
 }

@@ -25,7 +25,7 @@ import type { Handoff } from "../shared/handoff";
 import type { ReviewPacket } from "../shared/review-packet";
 import { artifactList } from "../shared/artifacts";
 import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpdate, type AgentPermissionMode, type AgentRelationship, type AgentSessionPatch } from "../shared/agent-session";
-import { observerQuery } from "../shared/observer";
+import { observerQuery, type ObserverResponse } from "../shared/observer";
 import { projectsQuery, type ProjectInfo } from "../shared/projects";
 import { projectBackendStart, projectStorageQuery } from "../shared/setup";
 import {
@@ -52,7 +52,7 @@ type WorkspaceFilter,
 type WorkspaceSummary,
 type WorkspaceTask
 } from "./model";
-import { boundedRefresh, useBoundedCacheRefresh, useLastSuccessfulResponse, type ObserverSnapshot } from "./observation";
+import { boundedRefresh, RECOVERABLE_FAILURE_GRACE_MS, useBoundedCacheRefresh, useLastSuccessfulResponse, type ObserverSnapshot } from "./observation";
 import { useRefreshOnForeground } from "./foreground-refresh";
 import { useForegroundActivity } from "./foreground-activity";
 import { useObserverPreferences } from "./preferences";
@@ -92,6 +92,32 @@ type ObservationArea = {
   fetching: boolean;
 };
 
+function queryDiagnosticDetails(
+  response: ObserverResponse | undefined,
+  error: unknown,
+  query: { isPending: boolean; isFetching: boolean; isError: boolean },
+  snapshot: ObserverSnapshot,
+): Record<string, string> {
+  const result = response?.ok && response.result && typeof response.result === "object"
+    ? response.result as { observation?: { state?: unknown; cacheState?: unknown; refreshing?: unknown }; issues?: unknown[] }
+    : undefined;
+  const issue = result?.issues?.find((item) => item && typeof item === "object" && typeof (item as { code?: unknown }).code === "string") as { code?: unknown } | undefined;
+  return {
+    pending: String(query.isPending),
+    fetching: String(query.isFetching),
+    queryError: query.isError ? (error instanceof Error ? error.message : "query_error") : "",
+    response: response ? (response.ok ? "ok" : `error:${response.error?.code || "unknown"}`) : "none",
+    observationState: String(result?.observation?.state || ""),
+    cacheState: String(result?.observation?.cacheState || ""),
+    cacheRefreshing: String(result?.observation?.refreshing === true),
+    resultIssue: String(issue?.code || ""),
+    snapshotStatus: snapshot.status,
+    snapshotFailureCount: String(snapshot.failureCount),
+    snapshotFailureAgeMs: String(snapshot.failureAgeMs ?? ""),
+    snapshotRefreshing: String(snapshot.refreshing),
+  };
+}
+
 function observationStatusLabel(status: ObserverSnapshot["status"], strings = copy): string {
   if (status === "loading") return strings.text_fcabadb2a7;
   if (status === "refreshing") return strings.observationRefreshing;
@@ -109,6 +135,31 @@ function observationAreaDetail(area: ObservationArea, strings = copy): string {
       : area.snapshot.status;
   const timestamp = area.snapshot.lastObservedAt ? ` · ${formatObservedTime(area.snapshot.lastObservedAt, strings)}` : "";
   return `${area.label}: ${observationStatusLabel(status, strings)}${timestamp}`;
+}
+
+type ObserverQueryState = {
+  data?: ObserverResponse;
+  error?: unknown;
+  isFetching: boolean;
+  refetch: () => Promise<unknown>;
+};
+
+/** Retry only transport-style observer failures, and stop once the UI has a
+ * truthful unavailable state. A successful response or a structured business
+ * error ends this loop. */
+function useTransientObserverRetry(query: ObserverQueryState, snapshot: ObserverSnapshot, enabled: boolean): void {
+  const refetchRef = useRef(query.refetch);
+  refetchRef.current = query.refetch;
+  useEffect(() => {
+    if (!enabled || query.isFetching || !snapshot.initialFailure || !isRecoverableObserverFailure(query.data, query.error)) return;
+    if ((snapshot.failureAgeMs ?? 0) >= RECOVERABLE_FAILURE_GRACE_MS) return;
+    const age = snapshot.failureAgeMs ?? 0;
+    const delay = Math.min(2_000, Math.max(250, 250 * 2 ** Math.min(3, snapshot.failureCount)));
+    const remaining = Math.max(0, RECOVERABLE_FAILURE_GRACE_MS - age);
+    if (!remaining) return;
+    const timer = setTimeout(() => { void refetchRef.current().catch(() => {}); }, Math.min(delay, remaining));
+    return () => clearTimeout(timer);
+  }, [enabled, query.data, query.error, query.isFetching, snapshot.failureAgeMs, snapshot.failureCount, snapshot.initialFailure]);
 }
 
 const PREFERENCE_SCOPE_FALLBACK = "global";
@@ -517,6 +568,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listState = useLastSuccessfulResponse("workspace-list", listQuery.data, { error: listQuery.error, staleAfterMs: observationTiming.staleWindowsMs.list });
   const listResult = resultOf<ListResult>(listState.response);
   const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
+  reportNativeDiagnostic("project-panel-list-state", queryDiagnosticDetails(listQuery.data, listQuery.error, listQuery, listState));
+  useTransientObserverRetry(listQuery, listState, Boolean(projectConfig && foreground));
   const listReady = Boolean(listResult);
   const orphanPreviewQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "orphan-preview", orphanId],
@@ -533,7 +586,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   useEffect(() => { if (listReady) props.onProjectReady?.(); }, [listReady, props.onProjectReady]);
   const listUnavailable = !listReady
     && listState.initialFailure
-    && !isRecoverableObserverFailure(listQuery.data, listQuery.error);
+    && (!isRecoverableObserverFailure(listQuery.data, listQuery.error)
+      || (listState.failureAgeMs ?? RECOVERABLE_FAILURE_GRACE_MS) >= RECOVERABLE_FAILURE_GRACE_MS);
   const observedWorkspaces = useMemo(
     () => (listReady ? sortWorkspaces(listResult?.workspaces || []) : []),
     [listReady, listResult?.workspaces],
@@ -705,9 +759,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   });
   const detail = resultOf<DetailResult>(detailState.response);
   const detailFailure = queryFailureForDisplay(detailState, detailQuery.data, detailQuery.error, localizedCopy);
+  reportNativeDiagnostic("project-panel-detail-state", queryDiagnosticDetails(detailQuery.data, detailQuery.error, detailQuery, detailState));
+  useTransientObserverRetry(detailQuery, detailState, Boolean(projectConfig && foreground && selectedWorkspaceId && selectedWorkspace && listReady));
   const detailUnavailable = !detail
     && detailState.initialFailure
-    && !isRecoverableObserverFailure(detailQuery.data, detailQuery.error);
+    && (!isRecoverableObserverFailure(detailQuery.data, detailQuery.error)
+      || (detailState.failureAgeMs ?? RECOVERABLE_FAILURE_GRACE_MS) >= RECOVERABLE_FAILURE_GRACE_MS);
   const displayDetail = listReady && detail?.workspace.id === selectedWorkspaceId
     ? detail
     : null;
@@ -764,6 +821,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const graphState = useLastSuccessfulResponse(`repository-graph:${selectedWorkspaceId}:${selectedRepoPath}`, graphQuery.data, { error: graphQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository });
   const graph = resultOf<GraphResult>(graphState.response);
   const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error, localizedCopy);
+  reportNativeDiagnostic("project-panel-graph-state", queryDiagnosticDetails(graphQuery.data, graphQuery.error, graphQuery, graphState));
+  useTransientObserverRetry(graphQuery, graphState, Boolean(projectConfig && foreground && selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable));
   const changesScope: ChangeScope = selectedCommit ? "commit" : changeScope;
   const changesQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "repository-changes", selectedWorkspaceId, selectedRepoPath, changesScope, selectedCommit],
@@ -790,6 +849,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   );
   const changes = resultOf<ChangesResult>(changesState.response);
   const changesFailure = queryFailureForDisplay(changesState, changesQuery.data, changesQuery.error, localizedCopy);
+  reportNativeDiagnostic("project-panel-changes-state", queryDiagnosticDetails(changesQuery.data, changesQuery.error, changesQuery, changesState));
+  useTransientObserverRetry(changesQuery, changesState, Boolean(projectConfig && foreground && selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable));
 
   useEffect(() => {
     if (changeTreeMode !== null || !changes) return;
@@ -1048,8 +1109,26 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       changesState.expired ||
       (tab === "review" && reviewState.expired),
   );
-  const observationRefreshing = manualRefreshing || observationAreas.some((area) => area.fetching || area.snapshot.refreshing);
+  const observationRecovering = observationAreas.some((area) =>
+    area.snapshot.initialFailure && (area.snapshot.failureAgeMs ?? RECOVERABLE_FAILURE_GRACE_MS) < RECOVERABLE_FAILURE_GRACE_MS,
+  );
+  const observationRefreshing = manualRefreshing || observationRecovering || observationAreas.some((area) => area.fetching || area.snapshot.refreshing);
   const observationDegraded = observationAreas.some((area) => area.snapshot.status === "degraded");
+  reportNativeDiagnostic("project-panel-observation-state", {
+    foreground: String(foreground),
+    listReady: String(listReady),
+    listUnavailable: String(listUnavailable),
+    listStatus: listState.status,
+    detailStatus: detailState.status,
+    graphStatus: graphState.status,
+    changesStatus: changesState.status,
+    unavailableArea: unavailableArea?.label || "",
+    observationIssue: observationIssue || "",
+    observerError: observerError || "",
+    refreshing: String(observationRefreshing),
+    expired: String(observationExpired),
+    degraded: String(observationDegraded),
+  });
   const lastSuccessfulAt = observationAreas.reduce<string | null>((latest, area) => {
     const candidate = area.snapshot.lastObservedAt;
     if (!candidate) return latest;

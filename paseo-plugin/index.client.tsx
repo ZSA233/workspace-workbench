@@ -31,7 +31,10 @@ export default function contribute(client: PluginClientContext) {
 function contributeClient(client: PluginClientContext) {
   const workspaceApi = ((client as unknown as { paseo?: { workspaces?: WorkspaceApiCompatibility } }).paseo)?.workspaces;
   function registerPanel(panel: Parameters<PluginClientContext["addWorkspacePanel"]>[0]) {
-    return atInitializationStage(`panel:${panel.id}`, () => client.addWorkspacePanel(panel));
+    reportNativeDiagnostic("registration-before", { stage: `panel:${panel.id}` });
+    const cleanup = atInitializationStage(`panel:${panel.id}`, () => client.addWorkspacePanel(panel));
+    reportNativeDiagnostic("registration-after", { stage: `panel:${panel.id}` });
+    return cleanup;
   }
   function registerOptionalPanel(panel: Parameters<PluginClientContext["addWorkspacePanel"]>[0]) {
     try {
@@ -41,11 +44,15 @@ function contributeClient(client: PluginClientContext) {
       // on every platform. Keep the core Workbench surface usable and leave a
       // diagnostic instead of failing plugin initialization globally.
       console.error("workbench_optional_panel_registration_failed", panel.id, error);
+      reportNativeDiagnostic("registration-failed", { stage: `panel:${panel.id}`, message: error instanceof Error ? error.message : String(error) });
       return () => {};
     }
   }
   function registerCommand(command: Parameters<PluginClientContext["addCommandCenterItem"]>[0]) {
-    return atInitializationStage(`command:${command.id}`, () => client.addCommandCenterItem(command));
+    reportNativeDiagnostic("registration-before", { stage: `command:${command.id}` });
+    const cleanup = atInitializationStage(`command:${command.id}`, () => client.addCommandCenterItem(command));
+    reportNativeDiagnostic("registration-after", { stage: `command:${command.id}` });
+    return cleanup;
   }
   const platform: string = atInitializationStage("platform", () => Platform.OS);
   if (platform !== "web") {
@@ -99,14 +106,20 @@ function contributeClient(client: PluginClientContext) {
     const copy = getWorkbenchCopy(localeFromHostProps(props));
     return <View style={{ flex: 1 }}><Text style={{ padding: 12, color: props.theme.colors.statusWarning }}>{copy.openFailed}</Text><WorkbenchSurfacePanel {...props} /></View>;
   }
+  reportNativeDiagnostic("registration-before", { stage: "surface" });
   const surfaceCleanup = atInitializationStage("surface", () => client.addSurface(observerSurfaceId, ContextualSurface));
+  reportNativeDiagnostic("registration-after", { stage: "surface" });
+  reportNativeDiagnostic("registration-before", { stage: "failure-surface" });
   const failureCleanup = atInitializationStage("failure-surface", () => client.addSurface("workspace-workbench-open-failed", FailureSurface));
+  reportNativeDiagnostic("registration-after", { stage: "failure-surface" });
+  reportNativeDiagnostic("registration-before", { stage: "sidebar" });
   const sidebarCleanup = atInitializationStage("sidebar", () => client.addSidebarItem({
     id: "workspace-workbench-sidebar",
     title: "Workspace Workbench",
     icon: "GitBranch",
     surface: observerSurfaceId,
   }));
+  reportNativeDiagnostic("registration-after", { stage: "sidebar" });
   const panelCleanups = [
     surfaceCleanup,
     failureCleanup,

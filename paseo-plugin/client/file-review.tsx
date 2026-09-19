@@ -7,7 +7,7 @@ import {
   type PluginWorkspacePanelProps,
   useRpc,
 } from "@getpaseo/plugin/client";
-import { FlatList, Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
+import { FlatList, Icon, ScrollView } from "./native-components";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { copy, formatCopyFrom, type WorkbenchCopy } from "../shared/copy";

@@ -2,7 +2,7 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { ScrollView } from "@getpaseo/plugin/client/react-native";
+import { ScrollView } from "../native-components";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { createHistoryLoadGate } from "../graph/pagination";
 import { ActivityIndicator,Platform,Pressable,Text,View,type ViewStyle } from "react-native";

@@ -1,5 +1,5 @@
 import { useRpc } from "@getpaseo/plugin/client";
-import { ScrollView, TextInput } from "@getpaseo/plugin/client/react-native";
+import { ScrollView, TextInput } from "../native-components";
 import { useQuery } from "@tanstack/react-query";
 import { Pressable, Text, View } from "react-native";
 import { useEffect, useState } from "react";

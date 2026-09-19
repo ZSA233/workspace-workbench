@@ -1,4 +1,4 @@
-import { Modal } from "@getpaseo/plugin/client/react-native";
+import { Modal } from "../native-components";
 import { Platform, Pressable, Text, View } from "react-native";
 import { formatCopyFrom } from "../../shared/copy";
 import type { WorkspaceLifecycleResponse } from "../../shared/workspace-lifecycle";

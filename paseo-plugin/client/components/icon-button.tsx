@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ActivityIndicator, Platform, Pressable, Text, View } from "react-native";
-import { Icon, useToast } from "@getpaseo/plugin/client/react-native";
+import { Icon, useToast } from "../native-components";
 
 export function IconButton({ label, icon, active, busy = false, color, background, onPress }: {
   label: string; icon: string; active?: boolean; busy?: boolean; color: string; background?: string; onPress(): void;

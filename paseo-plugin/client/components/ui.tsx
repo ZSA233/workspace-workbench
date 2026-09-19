@@ -2,7 +2,7 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { Icon,ScrollView } from "@getpaseo/plugin/client/react-native";
+import { Icon,ScrollView } from "../native-components";
 import { createContext,useContext,useEffect,useMemo,useRef,useState,type ReactNode } from "react";
 import { ActivityIndicator,PanResponder,Platform,Pressable,StyleSheet,Text,View,type ViewStyle,type ScrollViewProps } from "react-native";
 import { copy, formatCopyFrom, type WorkbenchCopy } from "../../shared/copy";

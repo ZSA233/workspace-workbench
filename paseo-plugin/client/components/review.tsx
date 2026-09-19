@@ -2,7 +2,7 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { TextInput } from "@getpaseo/plugin/client/react-native";
+import { TextInput } from "../native-components";
 import { useState } from "react";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import {

@@ -8,7 +8,7 @@ type PluginAgentPanelProps,
 type PluginSurfaceProps,
 type PluginWorkspacePanelProps,
 } from "@getpaseo/plugin/client";
-import { copyText,Modal,ScrollView,TextInput,useToast } from "@getpaseo/plugin/client/react-native";
+import { copyText,Modal,ScrollView,TextInput,useToast } from "./native-components";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback,useEffect,useMemo,useRef,useState } from "react";
 import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,View,type ViewStyle } from "react-native";

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FlatList, Icon, Modal, TextInput } from "@getpaseo/plugin/client/react-native";
+import { FlatList, Icon, Modal, TextInput } from "../native-components";
 import { useQuery } from "@tanstack/react-query";
 import { PanResponder, Platform, Pressable, Text, useWindowDimensions, View } from "react-native";
 import type { ObserverMethod, ObserverResponse } from "../../shared/observer";

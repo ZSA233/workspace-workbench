@@ -2,7 +2,7 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { Icon } from "../native-components";
 import { useEffect,useState } from "react";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { formatCopyFrom } from "../../shared/copy";

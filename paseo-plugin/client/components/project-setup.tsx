@@ -1,6 +1,7 @@
 import { useRpc } from "@getpaseo/plugin/client";
 import { useQuery } from "@tanstack/react-query";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { ScrollView } from "../native-components";
 import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { useEffect, useState, type ReactNode } from "react";
 import { projectSetupSave, projectSetupScan, type ProjectBackendStatus, type ProjectSetupScan, type ProjectSetupSave } from "../../shared/setup.ts";

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRpc } from "@getpaseo/plugin/client";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
+import { ScrollView } from "../native-components";
 import { handoffMaterials, type BundleRef } from "../../shared/handoff-materials";
 import { useWorkbenchCopy } from "../i18n";
 import type { makeStyles } from "./ui";

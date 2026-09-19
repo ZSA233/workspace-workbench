@@ -5,6 +5,9 @@ import {
   ScrollView as NativeScrollView,
   Text,
   TextInput as NativeTextInput,
+  type FlatListProps,
+  type ScrollViewProps,
+  type TextInputProps,
   View,
 } from "react-native";
 import {
@@ -15,19 +18,31 @@ import {
   ScrollView as hostScrollView,
   TextInput as hostTextInput,
   useToast as hostUseToast,
+  type ModalComponent,
+  type ModalContentProps,
+  type ModalProps,
 } from "@getpaseo/plugin/client/react-native";
-import type { ReactNode } from "react";
+import { createElement, type ComponentType, type ReactNode, type Ref } from "react";
 
 type IconProps = { name: string; size?: number; color?: string };
+
+type Renderable = ComponentType<any> | { $$typeof: symbol };
+
+function isRenderable(value: unknown): value is Renderable {
+  return typeof value === "function" || (typeof value === "object" && value !== null && "$$typeof" in value);
+}
+
+function renderComponent(candidate: unknown, fallback: unknown, props: unknown, children?: ReactNode): ReactNode {
+  const component = isRenderable(candidate) ? candidate : isRenderable(fallback) ? fallback : null;
+  if (!component) return null;
+  return children === undefined ? createElement(component as any, props as any) : createElement(component as any, props as any, children);
+}
 
 // Native Paseo builds do not always ship the complete injected component set.
 // Keep the web host's richer controls, but never create an element from an
 // undefined native export.
 export function Icon({ name, size = 16, color }: IconProps) {
-  if (Platform.OS === "web" && hostIcon) {
-    const HostIcon = hostIcon;
-    return <HostIcon name={name} size={size} color={color} />;
-  }
+  if (Platform.OS === "web" && isRenderable(hostIcon)) return renderComponent(hostIcon, null, { name, size, color });
   const glyph = name === "ChevronDown" || name === "ChevronUp"
     ? "⌄"
     : name === "ChevronRight"
@@ -37,12 +52,20 @@ export function Icon({ name, size = 16, color }: IconProps) {
         : name === "Lock"
           ? "▣"
           : "•";
-  return <Text style={{ color, fontSize: size, lineHeight: size }}>{glyph}</Text>;
+  return isRenderable(Text) ? createElement(Text as any, { style: { color, fontSize: size, lineHeight: size } }, glyph) : null;
 }
 
-export const ScrollView = hostScrollView || NativeScrollView;
-export const FlatList = hostFlatList || NativeFlatList;
-export const TextInput = hostTextInput || NativeTextInput;
+export function ScrollView(props: ScrollViewProps) {
+  return renderComponent(hostScrollView, NativeScrollView, props);
+}
+
+export function FlatList<Item>(props: FlatListProps<Item> & { ref?: Ref<NativeFlatList<Item>> }) {
+  return renderComponent(hostFlatList, NativeFlatList, props);
+}
+
+export function TextInput(props: TextInputProps) {
+  return renderComponent(hostTextInput, NativeTextInput, props);
+}
 
 function NativeModalCompat({ open, onOpenChange, title, children }: {
   open: boolean;
@@ -50,27 +73,39 @@ function NativeModalCompat({ open, onOpenChange, title, children }: {
   title: string;
   children: ReactNode;
 }) {
+  if (!isRenderable(NativeModal) || !isRenderable(View) || !isRenderable(Text)) return null;
   return (
-    <NativeModal transparent visible={open} onRequestClose={() => onOpenChange(false)}>
-      <View style={{ flex: 1, justifyContent: "center", padding: 16 }}>
-        <View style={{ maxHeight: "90%", padding: 12, backgroundColor: "#202124", borderRadius: 8 }}>
-          <Text style={{ color: "#fff", fontWeight: "700", marginBottom: 8 }}>{title}</Text>
-          {children}
-        </View>
-      </View>
-    </NativeModal>
+    createElement(NativeModal as any, { transparent: true, visible: open, onRequestClose: () => onOpenChange(false) },
+      createElement(View as any, { style: { flex: 1, justifyContent: "center", padding: 16 } },
+        createElement(View as any, { style: { maxHeight: "90%", padding: 12, backgroundColor: "#202124", borderRadius: 8 } },
+          createElement(Text as any, { style: { color: "#fff", fontWeight: "700", marginBottom: 8 } }, title),
+          children
+        ),
+      ),
+    )
   );
 }
 
-NativeModalCompat.Content = function Content({ children, style, contentContainerStyle }: {
+const NativeModalContent = function Content({ children, style, contentContainerStyle }: {
   children: ReactNode;
   style?: any;
   contentContainerStyle?: any;
 }) {
-  return <View style={[style, contentContainerStyle]}>{children}</View>;
+  return isRenderable(View) ? createElement(View as any, { style: [style, contentContainerStyle] }, children) : null;
 };
 
-export const Modal = hostModal || NativeModalCompat;
+const NativeModalComponent = Object.assign(NativeModalCompat, { Content: NativeModalContent });
+
+export const Modal = Object.assign(function Modal(props: ModalProps) {
+  const hostContent = isRenderable((hostModal as any)?.Content) ? (hostModal as any).Content : null;
+  const component = isRenderable(hostModal) && hostContent ? hostModal : NativeModalComponent;
+  return createElement(component as any, props);
+}, {
+  Content(props: ModalContentProps) {
+    const hostContent = isRenderable((hostModal as any)?.Content) ? (hostModal as any).Content : null;
+    return hostContent ? createElement(hostContent as any, props) : createElement(NativeModalContent, props);
+  },
+}) as ModalComponent;
 
 export function useToast() {
   if (typeof hostUseToast === "function") return hostUseToast();

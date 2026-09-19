@@ -2,8 +2,6 @@ import { useObservationRefresh } from "./use-observation-refresh";
 import { useObservationVersions } from "./use-observation-versions";
 import {
 useRpc,
-usePaseo,
-useWorkspace,
 type PluginAgentPanelProps,
 type PluginSurfaceProps,
 type PluginWorkspacePanelProps,
@@ -58,8 +56,9 @@ import { boundedRefresh, useBoundedCacheRefresh, useLastSuccessfulResponse, type
 import { useRefreshOnForeground } from "./foreground-refresh";
 import { useForegroundActivity } from "./foreground-activity";
 import { useObserverPreferences } from "./preferences";
-import { readSurfaceWorkspace, type WorkbenchSurfaceProps } from "./surface-context";
+import { type WorkbenchSurfaceProps, useWorkbenchWorkspaceSnapshot } from "./surface-context";
 import { localeFromHostProps, useWorkbenchCopy, WorkbenchLocaleProvider, useWorkbenchLocale } from "./i18n";
+import { reportNativeDiagnostic } from "./native-diagnostics";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -199,39 +198,25 @@ import { reviewModels, reviewSessionControl, reviewSessionList, reviewSessionQue
 
 export function WorkbenchPanel(props: PanelProps) {
   const hostWorkspaceId = workspaceIdFromProps(props);
-  const paseoWorkspace = useWorkspace(
-    hostWorkspaceId,
-    (workspace) => (workspace ? { directory: workspace.directory, name: workspace.name } : null),
-  );
+  const paseoWorkspace = useWorkbenchWorkspaceSnapshot(hostWorkspaceId);
+  reportNativeDiagnostic("panel-implementation-entry", { kind: props.context, workspaceId: hostWorkspaceId });
   return <WorkbenchLocaleProvider locale={localeFromHostProps(props)}><ObserverPanelContent {...props} hostWorkspaceId={hostWorkspaceId} paseoWorkspace={paseoWorkspace} /></WorkbenchLocaleProvider>;
 }
 
 export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   const locale = localeFromHostProps(props);
-  const localizedCopy = getWorkbenchCopy(locale);
-  const paseo = usePaseo();
   const workspaceId = props.target?.workspaceId || "";
-  const workspace = useQuery({
-    queryKey: ["workbench-surface-workspace", props.host.id, workspaceId],
-    queryFn: () => readSurfaceWorkspace(paseo, workspaceId),
-    enabled: Boolean(workspaceId), retry: false, refetchOnWindowFocus: false,
-  });
-  useEffect(() => {
-    if (!workspaceId) return;
-    return paseo.workspaces.ref(workspaceId).subscribe(() => { void workspace.refetch(); });
-  }, [paseo, workspaceId, workspace.refetch]);
-  if (workspaceId && !workspace.data) return <WorkbenchLocaleProvider locale={locale}><View style={{ padding: 12, gap: 8 }}>
-    <Text style={{ color: props.theme.colors.foregroundMuted }}>{workspace.isPending ? localizedCopy.hostWorkspaceLoading : localizedCopy.hostWorkspaceUnavailable}</Text>
-    {workspace.isError ? <Pressable accessibilityRole="button" onPress={() => { void workspace.refetch(); }}><Text style={{ color: props.theme.colors.foreground }}>{localizedCopy.refreshNow}</Text></Pressable> : null}
-  </View></WorkbenchLocaleProvider>;
+  const paseoWorkspace = useWorkbenchWorkspaceSnapshot(workspaceId);
+  reportNativeDiagnostic("surface-implementation-entry", { workspaceId, snapshot: paseoWorkspace ? "ready" : "missing" });
   const context = props.target?.agentId
     ? { context: "agent" as const, workspaceId, agentId: props.target.agentId }
     : { context: "workspace" as const, workspaceId };
-  return <WorkbenchLocaleProvider locale={locale}><ObserverPanelContent {...props} {...context} hostWorkspaceId={workspaceId} paseoWorkspace={workspace.data || null} /></WorkbenchLocaleProvider>;
+  return <WorkbenchLocaleProvider locale={locale}><ObserverPanelContent {...props} {...context} hostWorkspaceId={workspaceId} paseoWorkspace={paseoWorkspace} /></WorkbenchLocaleProvider>;
 }
 
 export function ObserverPanelContent(props: ObserverPanelContentProps) {
   const localizedCopy = useWorkbenchCopy();
+  reportNativeDiagnostic("observer-content-entry", { context: props.context, workspaceId: props.hostWorkspaceId, directory: props.paseoWorkspace?.directory || "" });
   const getProjects = useRpc(projectsQuery);
   const directory = props.paseoWorkspace?.directory || "";
   const projects = useQuery({ queryKey: ["workbench-projects", props.host.id, directory], queryFn: () => getProjects({ directory: directory || undefined }), refetchOnWindowFocus: false, retry: false });

@@ -1,14 +1,44 @@
-import type { PaseoApi } from "@getpaseo/client";
+import { useSyncExternalStore } from "react";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
+
+export type WorkbenchWorkspaceSnapshot = {
+  id: string;
+  directory: string;
+  name: string;
+};
 
 export type WorkbenchSurfaceProps = PluginSurfaceProps & {
   target?: { workspaceId: string; agentId?: string };
 };
 
-/** Surface hosts do not supply the Workspace Panel's state-hook provider. */
-export async function readSurfaceWorkspace(paseo: PaseoApi, workspaceId: string) {
-  const handle = paseo.workspaces.ref(workspaceId);
-  const workspace = await handle.refresh();
-  if (!workspace || !handle.directory) throw new Error("host_workspace_unavailable");
-  return { directory: handle.directory, name: handle.name || workspaceId };
+const snapshots = new Map<string, WorkbenchWorkspaceSnapshot>();
+const listeners = new Set<() => void>();
+
+export function setWorkbenchWorkspaceSnapshot(snapshot: WorkbenchWorkspaceSnapshot): void {
+  if (!snapshot.id || !snapshot.directory) return;
+  const previous = snapshots.get(snapshot.id);
+  if (previous?.directory === snapshot.directory && previous.name === snapshot.name) return;
+  snapshots.set(snapshot.id, snapshot);
+  listeners.forEach((listener) => listener());
+}
+
+export function removeWorkbenchWorkspaceSnapshot(id: string): void {
+  if (!snapshots.delete(id)) return;
+  listeners.forEach((listener) => listener());
+}
+
+export function clearWorkbenchWorkspaceSnapshots(): void {
+  if (!snapshots.size) return;
+  snapshots.clear();
+  listeners.forEach((listener) => listener());
+}
+
+export function useWorkbenchWorkspaceSnapshot(workspaceId: string): WorkbenchWorkspaceSnapshot | null {
+  // Keep this store local to the plugin. It avoids depending on the optional
+  // host state provider, which is not present in every native Surface host.
+  return useSyncExternalStore(
+    (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+    () => workspaceId ? snapshots.get(workspaceId) || null : null,
+    () => workspaceId ? snapshots.get(workspaceId) || null : null,
+  );
 }

@@ -1,4 +1,6 @@
 import type { PluginAgentPanelProps, PluginWorkspacePanelProps, PluginSurfaceProps } from "@getpaseo/plugin/client";
+import { View } from "react-native";
+import type { ReactNode } from "react";
 import { atInitializationStage } from "./initialization";
 import type { WorkbenchSurfaceProps } from "./surface-context";
 import { reportNativeDiagnostic } from "./native-diagnostics";
@@ -26,6 +28,8 @@ export function WorkbenchPanel(props: PanelProps) {
 }
 function LazyWorkbenchPanel(props: PanelProps) {
   const Component = loadPanels().WorkbenchPanel;
+  reportNativeDiagnostic("panel-component-resolved", { kind: "workspace", type: componentType(Component) });
+  if (!isComponent(Component)) return <NativePanelLoadFailure name="WorkbenchPanel" />;
   return <Component {...props} />;
 }
 export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
@@ -34,6 +38,8 @@ export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
 }
 function LazyWorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   const Component = loadPanels().WorkbenchSurfacePanel;
+  reportNativeDiagnostic("panel-component-resolved", { kind: "surface", type: componentType(Component) });
+  if (!isComponent(Component)) return <NativePanelLoadFailure name="WorkbenchSurfacePanel" />;
   return <Component {...props} />;
 }
 export function FileReviewPanel(props: PanelProps) {
@@ -43,5 +49,20 @@ export function FileReviewPanel(props: PanelProps) {
 function LazyFileReviewPanel(props: PanelProps) {
   review ||= atInitializationStage("diff-module", () => require("./file-review") as typeof import("./file-review"));
   const Component = review.FileReviewPanel;
+  reportNativeDiagnostic("panel-component-resolved", { kind: "file", type: componentType(Component) });
+  if (!isComponent(Component)) return <NativePanelLoadFailure name="FileReviewPanel" />;
   return <Component {...props} />;
+}
+
+function isComponent(value: unknown): value is (props: any) => ReactNode {
+  return typeof value === "function";
+}
+
+function componentType(value: unknown): string {
+  return typeof value === "function" ? `function:${value.name || "anonymous"}` : value === undefined ? "undefined" : value === null ? "null" : typeof value;
+}
+
+function NativePanelLoadFailure({ name }: { name: string }) {
+  void name;
+  return <View />;
 }

@@ -11,6 +11,7 @@ import { localeFromHostProps } from "./client/i18n";
 import { clientDiagnostic } from "./shared/client-diagnostics";
 import { nativeComponentInventory } from "./client/native-components";
 import { configureNativeDiagnosticReporter, reportNativeDiagnostic } from "./client/native-diagnostics";
+import { clearWorkbenchWorkspaceSnapshots, removeWorkbenchWorkspaceSnapshot, setWorkbenchWorkspaceSnapshot } from "./client/surface-context";
 
 const observerSurfaceId = "workbench";
 
@@ -20,8 +21,8 @@ const observerSurfaceId = "workbench";
 // panels continue to work when that API is absent.
 type WorkspaceApiCompatibility = {
   open?: (directory: string) => Promise<{ id: string }>;
-  subscribe?: (handler: (update: { kind: string; id: string; workspace?: { id: string } }) => void) => () => void;
-  list?: (options?: { subscribe?: Record<string, never> }) => Promise<{ entries: Array<{ id: string }> }>;
+  subscribe?: (handler: (update: { kind: string; id: string; workspace?: { id: string; directory?: string | null; name?: string | null } }) => void) => () => void;
+  list?: (options?: { subscribe?: Record<string, never> }) => Promise<{ entries: Array<{ id: string; directory?: string | null; name?: string | null }> }>;
 };
 
 export default function contribute(client: PluginClientContext) {
@@ -227,8 +228,10 @@ function contributeClient(client: PluginClientContext) {
     unsubscribeWorkspaces = atInitializationStage("workspace-subscription", () => workspaceApi.subscribe!((update) => {
       if (update.kind === "upsert" && update.workspace) {
         addHeaderButton(update.workspace.id);
+        if (update.workspace.directory) setWorkbenchWorkspaceSnapshot({ id: update.workspace.id, directory: update.workspace.directory, name: update.workspace.name || update.workspace.id });
       } else {
         removeHeaderButton(update.id);
+        removeWorkbenchWorkspaceSnapshot(update.id);
         clearFileReviews(update.id);
       }
     }));
@@ -238,7 +241,10 @@ function contributeClient(client: PluginClientContext) {
     void workspaceApi
       .list({ subscribe: {} })
       .then(({ entries }) => {
-        for (const workspace of entries) addHeaderButton(workspace.id);
+        for (const workspace of entries) {
+          addHeaderButton(workspace.id);
+          if (workspace.directory) setWorkbenchWorkspaceSnapshot({ id: workspace.id, directory: workspace.directory, name: workspace.name || workspace.id });
+        }
       })
       .catch(() => {
         // The Command Center and Explorer tab menu remain available if the
@@ -273,6 +279,7 @@ function contributeClient(client: PluginClientContext) {
   return () => {
     disposed = true;
     configureNativeDiagnosticReporter(null);
+    clearWorkbenchWorkspaceSnapshots();
     surfaceContext = null;
     surfaceListeners.clear();
     for (const cleanup of contextSurfaces.values()) cleanup();

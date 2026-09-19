@@ -8,7 +8,6 @@ import {
   WorkbenchSurfacePanel as WorkbenchSurfacePanelImplementation,
 } from "./panel";
 import { FileReviewPanel as FileReviewPanelImplementation } from "./file-review";
-import { PanelErrorBoundary } from "./panel-error-boundary";
 import { CLIENT_GENERATION } from "./initialization";
 import { copy } from "../shared/copy";
 
@@ -23,7 +22,10 @@ export function WorkbenchPanel(props: PanelProps) {
   const Component = WorkbenchPanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "workspace", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="WorkbenchPanel" />;
-  return <PanelErrorBoundary entry="workspace-panel"><Component {...props} /></PanelErrorBoundary>;
+  // Do not wrap native entries in a React error boundary. The Android host's
+  // renderer does not support this boundary shape and reports it as an
+  // undefined element before the implementation component is entered.
+  return <Component {...props} />;
 }
 export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   reportStaticPanelLoad();
@@ -31,7 +33,7 @@ export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   const Component = WorkbenchSurfacePanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "surface", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="WorkbenchSurfacePanel" />;
-  return <PanelErrorBoundary entry="surface"><Component {...props} /></PanelErrorBoundary>;
+  return <Component {...props} />;
 }
 export function FileReviewPanel(props: PanelProps) {
   reportStaticPanelLoad();
@@ -39,7 +41,7 @@ export function FileReviewPanel(props: PanelProps) {
   const Component = FileReviewPanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "file", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="FileReviewPanel" />;
-  return <PanelErrorBoundary entry="file-panel"><Component {...props} /></PanelErrorBoundary>;
+  return <Component {...props} />;
 }
 
 function isComponent(value: unknown): value is (props: any) => ReactNode {

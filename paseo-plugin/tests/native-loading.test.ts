@@ -21,7 +21,9 @@ test("initialization isolates UI imports, uses a built-in icon and preserves fai
   assert.ok(!entry.includes('icon: HeaderIcon'));
   assert.ok(!entry.includes('icon: "FileDiff"'));
   assert.ok(entry.includes("registerOptionalPanel"));
-  assert.ok(readFileSync(new URL("../client/entry-panels.tsx", import.meta.url), "utf8").includes("PanelErrorBoundary"));
+  // React error boundaries are not compatible with the Android host renderer;
+  // native entries must render the checked function component directly.
+  assert.ok(!readFileSync(new URL("../client/entry-panels.tsx", import.meta.url), "utf8").includes("PanelErrorBoundary"));
   for (const file of ["../client/file-review.tsx", "../client/graph/canvas-web.tsx"]) {
     assert.ok(!readFileSync(new URL(file, import.meta.url), "utf8").includes('require("react-native-svg'));
   }

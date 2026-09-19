@@ -1,54 +1,39 @@
 import type { PluginAgentPanelProps, PluginWorkspacePanelProps, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { View } from "react-native";
 import type { ReactNode } from "react";
-import { atInitializationStage } from "./initialization";
 import type { WorkbenchSurfaceProps } from "./surface-context";
 import { reportNativeDiagnostic } from "./native-diagnostics";
+import {
+  WorkbenchPanel as WorkbenchPanelImplementation,
+  WorkbenchSurfacePanel as WorkbenchSurfacePanelImplementation,
+} from "./panel";
+import { FileReviewPanel as FileReviewPanelImplementation } from "./file-review";
 
-// Register lightweight function components, not an eagerly evaluated UI graph.
-// A failed module load is reported with its phase and is never cached as success.
 type PanelProps = PluginAgentPanelProps | PluginWorkspacePanelProps;
-let panels: typeof import("./panel") | undefined;
-let review: typeof import("./file-review") | undefined;
-function loadPanels() {
-  if (panels) return panels;
-  reportNativeDiagnostic("panel-module-before-load");
-  try {
-    panels = atInitializationStage("panel-module", () => require("./panel") as typeof import("./panel"));
-    reportNativeDiagnostic("panel-module-loaded", { exports: Object.keys(panels).sort().join(",") });
-    return panels;
-  } catch (error) {
-    reportNativeDiagnostic("panel-module-failed", { message: error instanceof Error ? error.message : String(error) });
-    throw error;
-  }
+
+function reportStaticPanelLoad(): void {
+  reportNativeDiagnostic("panel-module-static-loaded", { exports: "ObserverPanelContent,WorkbenchPanel,WorkbenchSurfacePanel,FileReviewPanel" });
 }
 export function WorkbenchPanel(props: PanelProps) {
+  reportStaticPanelLoad();
   reportNativeDiagnostic("panel-entry", { kind: props.context, workspaceId: props.workspaceId });
-  return <LazyWorkbenchPanel {...props} />;
-}
-function LazyWorkbenchPanel(props: PanelProps) {
-  const Component = loadPanels().WorkbenchPanel;
+  const Component = WorkbenchPanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "workspace", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="WorkbenchPanel" />;
   return <Component {...props} />;
 }
 export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
+  reportStaticPanelLoad();
   reportNativeDiagnostic("surface-entry", { workspaceId: props.target?.workspaceId || "" });
-  return <LazyWorkbenchSurfacePanel {...props} />;
-}
-function LazyWorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
-  const Component = loadPanels().WorkbenchSurfacePanel;
+  const Component = WorkbenchSurfacePanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "surface", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="WorkbenchSurfacePanel" />;
   return <Component {...props} />;
 }
 export function FileReviewPanel(props: PanelProps) {
+  reportStaticPanelLoad();
   reportNativeDiagnostic("file-panel-entry", { kind: props.context, workspaceId: props.workspaceId });
-  return <LazyFileReviewPanel {...props} />;
-}
-function LazyFileReviewPanel(props: PanelProps) {
-  review ||= atInitializationStage("diff-module", () => require("./file-review") as typeof import("./file-review"));
-  const Component = review.FileReviewPanel;
+  const Component = FileReviewPanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "file", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="FileReviewPanel" />;
   return <Component {...props} />;

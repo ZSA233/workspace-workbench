@@ -12,6 +12,7 @@
     "index.client.tsx",
     "index.server.ts",
     "mcp.mjs",
+    "mcp-gateway.mjs",
     "paseo-plugin.json",
     "tsconfig.json",
     "README.md",

@@ -7,9 +7,6 @@ import { coordinatorGuidance } from "./handoff-guidance.mjs";
 
 const require = createRequire(import.meta.url);
 const packageMetadata = require("../package.json");
-const endpoint = process.env.WORKBENCH_PASEO_ENDPOINT;
-const projectConfig = process.env.WORKBENCH_PROJECT_CONFIG;
-const token = process.env.WORKBENCH_AGENT_TOKEN;
 const materialTools = [
   { name: "workbench_handoff_read", description: "Read HANDOFF.md, SOURCES.md or a file segment from the assigned materials version. Fetch required sources before implementation." },
   { name: "workbench_handoff_search", description: "Search original documents and public conversation history, returning excerpts with source locations." },
@@ -43,14 +40,37 @@ const roleTools = [
 // handoff. Keep that combination explicit instead of silently making the
 // worker choose between implementation tools and execution_report.
 const independentWorkerTools = [...publicTools, roleTools[0]];
-const independentWorker = process.env.WORKBENCH_EXECUTION_REPORT === "1";
-const tools = process.env.WORKBENCH_REVIEW_ONLY === "1"
+function runtimeContext(overrides = {}) {
+  const env = { ...process.env, ...overrides };
+  const role = overrides.role || env.WORKBENCH_ROLE ||
+    (env.WORKBENCH_REVIEW_ONLY === "1" ? "reviewer" :
+      env.WORKBENCH_EXECUTION_REPORT_ONLY === "1" ? "execution-report" :
+        env.WORKBENCH_EXECUTION_REPORT === "1" ? "worker" : "interactive");
+  return {
+    endpoint: overrides.endpoint || env.WORKBENCH_PASEO_ENDPOINT,
+    projectConfig: overrides.projectConfig || env.WORKBENCH_PROJECT_CONFIG,
+    token: overrides.token || env.WORKBENCH_AGENT_TOKEN || env.WORKBENCH_REVIEW_TOKEN,
+    role,
+    reviewOnly: role === "reviewer" || env.WORKBENCH_REVIEW_ONLY === "1",
+    executionReportOnly: role === "execution-report" || env.WORKBENCH_EXECUTION_REPORT_ONLY === "1",
+    executionReport: role === "worker" || env.WORKBENCH_EXECUTION_REPORT === "1",
+    workerWorkspace: overrides.workspaceId || env.WORKBENCH_WORKER_WORKSPACE,
+    reviewWorkspace: env.WORKBENCH_REVIEW_WORKSPACE,
+    reviewSession: env.WORKBENCH_REVIEW_SESSION,
+    reviewAgent: env.WORKBENCH_REVIEW_AGENT,
+    executionAgent: env.WORKBENCH_AGENT_ID,
+  };
+}
+
+function toolsFor(runtime) {
+  return runtime.reviewOnly
   ? [...roleTools.filter((tool) => tool.name === "workbench_reviewer_read" || tool.name === "workbench_reviewer_result"), ...materialTools]
-  : process.env.WORKBENCH_EXECUTION_REPORT_ONLY === "1"
+  : runtime.executionReportOnly
   ? [...roleTools.filter((tool) => tool.name === "workbench_execution_report"), ...materialTools]
-  : independentWorker
+  : runtime.executionReport
   ? independentWorkerTools
   : publicTools;
+}
 const schema = {
   type: "object",
   required: ["requestId", "handoff"],
@@ -241,10 +261,58 @@ function callArguments(message) {
   const { name: _name, arguments: _arguments, args: _args, input: _input, ...direct } = params;
   return direct;
 }
-export async function handle(message, lifecycle = {}) {
-  if (message.method === "initialize") return { protocolVersion: message.params?.protocolVersion || "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "workspace-workbench", version: packageMetadata.version }, ...(!independentWorker && tools === publicTools ? { instructions: coordinatorGuidance } : {}) };
+function toolInputSchema(name) {
+  return extraSchema(name) || (name === "workbench_artifact_register" ? artifactRegisterSchema
+    : name === "workbench_reviewer_read" ? reviewerReadSchema
+    : name === "workbench_reviewer_result" ? reviewerResultSchema
+    : name === "workbench_execution_report" ? executionReportSchema
+    : name === "workbench_review_execute" ? reviewExecuteSchema
+    : name === "workbench_workspace_status" ? workspaceStatusSchema
+    : name === "workbench_workspace_operation_status" ? workspaceOperationStatusSchema
+    : name === "workbench_workspace_create" ? workspaceCreateSchema
+    : name === "workbench_workspace_submit" ? workspaceSubmitSchema
+    : name === "workbench_workspace_execute" ? workspaceExecuteSchema
+    : name.startsWith("workbench_workspace_") ? schema
+    : reviewContextSchema);
+}
+
+function toolDescriptor(tool) {
+  return {
+    ...tool,
+    inputSchema: toolInputSchema(tool.name),
+    annotations: {
+      readOnlyHint: !["workbench_workspace_preview", "workbench_workspace_submit", "workbench_workspace_create", "workbench_session_message", "workbench_session_stop", "workbench_review_read", "workbench_review_result", "workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name),
+      destructiveHint: tool.name === "workbench_session_stop",
+    },
+  };
+}
+
+export function toolCatalog(overrides = {}) {
+  return toolsFor(runtimeContext(overrides)).map(toolDescriptor);
+}
+
+function callContext(runtime, args) {
+  return {
+    projectConfig: runtime.projectConfig,
+    token: runtime.token,
+    workspaceId: args.workspaceId || runtime.workerWorkspace || runtime.reviewWorkspace,
+    sessionId: args.sessionId || runtime.reviewSession,
+    reviewerAgentId: args.reviewerAgentId || runtime.reviewAgent || "pending",
+    executionAgentId: args.executionAgentId || runtime.executionAgent || "pending",
+  };
+}
+
+export async function handle(message, lifecycle = {}, overrides = {}) {
+  const runtime = runtimeContext(overrides);
+  const tools = toolsFor(runtime);
+  if (message.method === "initialize") return {
+    protocolVersion: message.params?.protocolVersion || "2024-11-05",
+    capabilities: { tools: {} },
+    serverInfo: { name: "workspace-workbench", version: packageMetadata.version },
+    ...(!runtime.reviewOnly && !runtime.executionReportOnly && !runtime.executionReport ? { instructions: coordinatorGuidance } : {}),
+  };
   if (message.method === "ping") return {};
-  if (message.method === "tools/list") return { tools: tools.map((tool) => ({ ...tool, inputSchema: extraSchema(tool.name) || (tool.name === "workbench_artifact_register" ? artifactRegisterSchema : tool.name === "workbench_reviewer_read" ? reviewerReadSchema : tool.name === "workbench_reviewer_result" ? reviewerResultSchema : tool.name === "workbench_execution_report" ? executionReportSchema : tool.name === "workbench_review_execute" ? reviewExecuteSchema : tool.name === "workbench_workspace_status" ? workspaceStatusSchema : tool.name === "workbench_workspace_operation_status" ? workspaceOperationStatusSchema : tool.name === "workbench_workspace_create" ? workspaceCreateSchema : tool.name === "workbench_workspace_submit" ? workspaceSubmitSchema : tool.name === "workbench_workspace_execute" ? workspaceExecuteSchema : tool.name.startsWith("workbench_workspace_") ? schema : reviewContextSchema), annotations: { readOnlyHint: !["workbench_workspace_preview", "workbench_workspace_submit", "workbench_workspace_create", "workbench_session_message", "workbench_session_stop", "workbench_review_read", "workbench_review_result", "workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name), destructiveHint: tool.name === "workbench_session_stop" } })) };
+  if (message.method === "tools/list") return { tools: tools.map(toolDescriptor) };
   if (message.method !== "tools/call") throw new Error("method_not_found");
   const tool = tools.find((value) => message.params?.name === value.name);
   const args = callArguments(message);
@@ -254,9 +322,9 @@ export async function handle(message, lifecycle = {}) {
   const reviewTool = Boolean(tool && reviewToolNames.has(tool.name));
   const extra = tool && extraSchema(tool.name);
   const directWorkspaceAction = tool?.name === "workbench_workspace_create" || tool?.name === "workbench_workspace_operation_status";
-  if ((!action && !reviewTool && !extra) || !endpoint || !projectConfig || (!directWorkspaceAction && (reviewerAction || materialAction && process.env.WORKBENCH_REVIEW_ONLY === "1" ? !process.env.WORKBENCH_REVIEW_TOKEN : !token))) throw new Error("workbench_context_unavailable");
+  if ((!action && !reviewTool && !extra) || !runtime.endpoint || !runtime.projectConfig || (!directWorkspaceAction && (reviewerAction || materialAction && runtime.reviewOnly ? !runtime.token : !runtime.token))) throw new Error("workbench_context_unavailable");
   const sockets = new Set();
-  const client = new DaemonClient({ url: endpoint, clientId: `workbench-mcp-${randomUUID()}`, clientType: "mcp", reconnect: { enabled: false },
+  const client = new DaemonClient({ url: runtime.endpoint, clientId: `workbench-mcp-${randomUUID()}`, clientType: "mcp", reconnect: { enabled: false },
     webSocketFactory: (url, options) => {
       const socket = new WebSocket(url, options?.protocols, { headers: options?.headers });
       sockets.add(socket); socket.on("error", () => {}); socket.once("close", () => sockets.delete(socket));
@@ -264,42 +332,30 @@ export async function handle(message, lifecycle = {}) {
     },
   });
   if (action === "submit" && typeof args.task !== "string") throw new Error("workbench_submit_task_missing");
+  const context = callContext(runtime, args);
   const result = await withMcpConnection(client, () => (
       directWorkspaceAction
-        ? client.invokePluginRpc("workspace-workbench-paseo", tool.name === "workbench_workspace_create" ? "workspace.workbench.workspace-create" : "workspace.workbench.workspace-operation-status", { ...args, projectConfig })
+        ? client.invokePluginRpc("workspace-workbench-paseo", tool.name === "workbench_workspace_create" ? "workspace.workbench.workspace-create" : "workspace.workbench.workspace-operation-status", { ...args, projectConfig: runtime.projectConfig })
         : materialAction
-        ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.handoff-materials", { ...args, workspaceId: args.workspaceId || process.env.WORKBENCH_WORKER_WORKSPACE || process.env.WORKBENCH_REVIEW_WORKSPACE, projectConfig, token: process.env.WORKBENCH_REVIEW_ONLY === "1" ? process.env.WORKBENCH_REVIEW_TOKEN : token, action: tool.name.split("_").at(-1) })
+        ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.handoff-materials", { ...args, ...context, action: tool.name.split("_").at(-1) })
         : extra
-        ? client.invokePluginRpc("workspace-workbench-paseo", tool.name.startsWith("workbench_session_") ? "workspace.workbench.session" : "workspace.workbench.coordinator-review", { ...args, projectConfig, token, action: tool.name.split("_").at(-1) })
+        ? client.invokePluginRpc("workspace-workbench-paseo", tool.name.startsWith("workbench_session_") ? "workspace.workbench.session" : "workspace.workbench.coordinator-review", { ...args, ...context, action: tool.name.split("_").at(-1) })
         : reviewerAction
-        ? client.invokePluginRpc("workspace-workbench-paseo", action === "reviewer_read" ? "workspace.workbench.agent-review.reviewer-read" : "workspace.workbench.agent-review.reviewer-result", {
-            ...args,
-            projectConfig,
-            workspaceId: args.workspaceId || process.env.WORKBENCH_REVIEW_WORKSPACE,
-            sessionId: args.sessionId || process.env.WORKBENCH_REVIEW_SESSION,
-            reviewerAgentId: args.reviewerAgentId || process.env.WORKBENCH_REVIEW_AGENT || "pending",
-            token: process.env.WORKBENCH_REVIEW_TOKEN,
-          })
+        ? client.invokePluginRpc("workspace-workbench-paseo", action === "reviewer_read" ? "workspace.workbench.agent-review.reviewer-read" : "workspace.workbench.agent-review.reviewer-result", { ...args, ...context })
         : action === "artifact_register"
-          ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.artifact.register", { ...args, projectConfig, token })
+          ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.artifact.register", { ...args, ...context })
         : action === "execution_report"
-          ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.execution-report", {
-              ...args,
-              projectConfig,
-            workspaceId: args.workspaceId || process.env.WORKBENCH_WORKER_WORKSPACE || process.env.WORKBENCH_REVIEW_WORKSPACE,
-              executionAgentId: args.executionAgentId || process.env.WORKBENCH_AGENT_ID || "pending",
-              token,
-            })
+          ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.execution-report", { ...args, ...context })
         : reviewTool
           ? (() => {
-              const context = { ...args, projectConfig, workspaceId: args.workspaceId || process.env.WORKBENCH_WORKER_WORKSPACE || process.env.WORKBENCH_REVIEW_WORKSPACE, token };
-              if (tool.name === "workbench_review_preview") return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.preview", context);
-              if (tool.name === "workbench_review_status") return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.session", context);
+              const reviewContext = { ...args, ...context };
+              if (tool.name === "workbench_review_preview") return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.preview", reviewContext);
+              if (tool.name === "workbench_review_status") return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.session", reviewContext);
               const controlAction = tool.name === "workbench_review_stop" ? "stop" : tool.name === "workbench_review_resume" ? "resume" : args.action === "start" ? null : args.action;
-              if (!controlAction) return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.start", context);
-              return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.control", { ...context, action: controlAction });
+              if (!controlAction) return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.start", reviewContext);
+              return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.control", { ...reviewContext, action: controlAction });
             })()
-          : client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.orchestrate", { action, request: action === "submit" && !args.requestId ? { ...args, requestId: randomUUID() } : args, projectConfig, token })
+          : client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.orchestrate", { action, request: action === "submit" && !args.requestId ? { ...args, requestId: randomUUID() } : args, projectConfig: runtime.projectConfig, token: runtime.token })
   ), { ...lifecycle, forceClose: () => { for (const socket of sockets) socket.terminate(); sockets.clear(); } });
   if (materialAction && result?.image) {
     const { image, ...metadata } = result;

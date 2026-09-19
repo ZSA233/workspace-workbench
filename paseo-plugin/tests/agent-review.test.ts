@@ -548,7 +548,9 @@ test("start creates a real read-only Reviewer from a server snapshot and include
       { kind: "mcp", server: "workbench-review", tool: "workbench_reviewer_result" },
       ...["workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp", server: "workbench-review", tool })),
     ]);
-    assert.equal((config.mcpServers as Record<string, unknown>)["workspace-workbench"], undefined);
+    const reviewerMcp = (config.mcpServers as Record<string, { type?: string; headers?: Record<string, string> }>)["workbench-review"];
+    assert.equal(reviewerMcp?.type, "http");
+    assert.equal(reviewerMcp?.headers?.["X-Workbench-Role"], "reviewer");
     assert.ok(reviewAuthToken(session.id));
     const snapshot = await readReviewerSnapshot({ workspaceId: session.workspaceId, sessionId: session.id, reviewerAgentId: session.reviewerAgentId!, token: reviewAuthToken(session.id)! }, fixture.context);
     assert.equal(snapshot.ok, true);

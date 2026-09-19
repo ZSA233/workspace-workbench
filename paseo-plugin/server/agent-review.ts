@@ -21,6 +21,7 @@ import { getAgentBinding } from "./agent-store.ts";
 import { readReviewState, readState, removeReviewState, writeReviewState, writeState, digest } from "./orchestration-state.ts";
 import { liveAgentIdentity } from "./agent-identity.ts";
 import type { AgentContext } from "./agent-provider.ts";
+import { mcpGatewayConfig } from "./mcp-gateway.ts";
 import { queryObserver } from "./observer.ts";
 import { artifactImageAttachments, artifactSnapshotContent, materializeReviewArtifact, resolveArtifactReference } from "./artifacts.ts";
 import type { Handoff } from "../shared/handoff.ts";
@@ -771,15 +772,15 @@ function bridgeEndpoint(configPath: string): { endpoint: string; script: string 
     try {
       const record = JSON.parse(readFileSync(join(home, "paseo.pid"), "utf8")) as { listen?: string; sockPath?: string };
       target = record.listen || record.sockPath || "";
-    } catch {
-      throw new Error("reviewer_bridge_endpoint_unavailable");
-    }
+    } catch { throw new Error("reviewer_bridge_endpoint_unavailable"); }
   }
   target = target.replace(/^unix:\/\//, "");
   const endpoint = target.startsWith("/") ? `ws+unix://${target}:/ws` : /^(127\.0\.0\.1|localhost):\d+$/.test(target) ? `ws://${target}/ws` : "";
   if (!endpoint) throw new Error("reviewer_bridge_endpoint_unavailable");
   return { endpoint, script: resolve(dirname(configPath), script) };
 }
+
+
 
 const reviewerOutputSchema: Record<string, unknown> = {
   type: "object",
@@ -798,10 +799,9 @@ const reviewerOutputSchema: Record<string, unknown> = {
   },
 };
 
-function reviewMcpEnvironment(session: ReviewSession, reviewerAgentId: string, token: string, bridge: { endpoint: string; script: string }): Record<string, string> {
+function reviewMcpEnvironment(session: ReviewSession, reviewerAgentId: string, token: string): Record<string, string> {
   return {
     WORKBENCH_PROJECT_CONFIG: session.projectConfig,
-    WORKBENCH_PASEO_ENDPOINT: bridge.endpoint,
     WORKBENCH_REVIEW_TOKEN: token,
     WORKBENCH_REVIEW_SESSION: session.id,
     WORKBENCH_REVIEW_WORKSPACE: session.workspaceId,
@@ -887,11 +887,11 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
   if (!project) throw new Error("project_context_required");
   const model = await resolveReviewerModel(session, runtime, context);
   const { localized, role, instructions } = reviewerLanguageParts(session);
-  const bridge = bridgeEndpoint(project.configPath);
   const recovered = await findExistingReviewer(session, context);
   const previousAuth = readReviewState<ReviewAuth>(authKey(session.id));
   const recoveringCreation = session.pendingOperation?.kind === "create_reviewer";
   const token = recoveringCreation && previousAuth?.reviewerAgentId === "pending" ? previousAuth.token : randomUUID();
+  const gateway = await mcpGatewayConfig(project.configPath, token, "reviewer", session.workspaceId);
   if (recovered) {
     if (!runtimeAgentCwdMatches(runtime, recovered.cwd) || recovered.runtimeInfo?.provider !== "codex" || recovered.runtimeInfo?.model !== model.model) throw new Error("reviewer_identity_changed");
     if (!previousAuth || (previousAuth.reviewerAgentId !== recovered.id && previousAuth.reviewerAgentId !== "pending")) throw new Error("reviewer_auth_unrecoverable");
@@ -916,7 +916,7 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
     workspace = await context.paseo.workspaces.open(runtime.treePath!);
     handle = await workspace.agents.create({
       title: `${role} · ${session.workspaceId}`,
-      env: reviewMcpEnvironment(session, "pending", token, bridge),
+      env: reviewMcpEnvironment(session, "pending", token),
       config: {
         provider: `codex/${model.model}`,
         modeId: "auto",
@@ -926,7 +926,7 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
           { kind: "mcp", server: "workbench-review", tool: "workbench_reviewer_result" },
           ...["workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"].map(tool => ({ kind: "mcp" as const, server: "workbench-review", tool })),
         ] },
-        mcpServers: { "workbench-review": { type: "stdio", command: process.execPath, args: [bridge.script], env: reviewMcpEnvironment(session, "pending", token, bridge), alwaysLoad: true } },
+        mcpServers: { "workbench-review": gateway },
       systemPrompt: [
         formatCopyFrom(localized, "reviewSystemRole", [role]),
         localized.reviewSystemReadOnly,

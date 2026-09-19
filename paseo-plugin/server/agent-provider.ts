@@ -2,9 +2,8 @@ import { withWorkspaceScope } from "./workspace-scope.ts";
 import type { BundleRef } from "../shared/handoff-materials.ts";
 import { assertBundleReady } from "./handoff-bundles.ts";
 import { randomUUID } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { delimiter, isAbsolute, resolve } from "node:path";
 import { currentProject } from "./projects.ts";
 import { digest, readState, writeState } from "./orchestration-state.ts";
 import { childExecutionConfig, assertCoordinatorExecution, assertInitialWorkerMode, actualPlanningState, ExecutionPolicyError } from "./execution-policy.ts";
@@ -18,6 +17,7 @@ import { configuredExecutionModel, readReviewSession, recordExecutionHandoff } f
 import { resolveAgentRelationship } from "./agent-session.ts";
 import { getWorkbenchCopy } from "../shared/copy.ts";
 import type { AgentRelationship } from "../shared/agent-session.ts";
+import { mcpGatewayConfig } from "./mcp-gateway.ts";
 import { artifactSnapshotContent, resolveArtifactReference, resolvedArtifactImageAttachments, type ResolvedWorkbenchArtifact } from "./artifacts.ts";
 import {
   agentDelegate,
@@ -73,28 +73,6 @@ function runtimeEnvironment(runtime: RuntimeResult): Record<string, string> {
   }
   if (pathEntries.length) variables.PATH = [...pathEntries, process.env.PATH || ""].filter(Boolean).join(delimiter);
   return variables;
-}
-
-function workerBridge(configPath: string): { endpoint: string; script: string } | null {
-  try {
-    const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
-    const agent = raw.agent && typeof raw.agent === "object" && !Array.isArray(raw.agent) ? raw.agent as Record<string, unknown> : null;
-    const bridge = agent?.bridge && typeof agent.bridge === "object" && !Array.isArray(agent.bridge) ? agent.bridge as Record<string, unknown> : null;
-    const script = bridge?.script;
-    const configured = bridge?.endpoint;
-    if (typeof script !== "string" || typeof configured !== "string") return null;
-    let target = configured;
-    if (configured === "auto") {
-      const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
-      const record = JSON.parse(readFileSync(join(home, "paseo.pid"), "utf8")) as { listen?: string; sockPath?: string };
-      target = record.listen || record.sockPath || "";
-    }
-    target = target.replace(/^unix:\/\//, "");
-    const endpoint = target.startsWith("/") ? `ws+unix://${target}:/ws` : /^(127\.0\.0\.1|localhost):\d+$/.test(target) ? `ws://${target}/ws` : "";
-    return endpoint ? { endpoint, script: resolve(dirname(configPath), script) } : null;
-  } catch {
-    return null;
-  }
 }
 
 function compactAgent(agent: PaseoAgent | null, binding: AgentBinding | null) {
@@ -448,15 +426,14 @@ async function delegateAgent(
     paseoWorkspace = await context.paseo.workspaces.open(runtime.treePath);
     if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, relationship, stage: "creating" });
     const reportToken = randomUUID();
-    const bridge = project ? workerBridge(project.configPath) : null;
     const restrictedWorker = relationship === "child";
     const workerMcpServer = restrictedWorker ? "workspace-workbench-report" : "workspace-workbench";
+    const gateway = project ? await mcpGatewayConfig(project.configPath, reportToken, restrictedWorker ? "execution-report" : "worker", input.workspaceId) : null;
     const workerEnv: Record<string, string> = {
       ...runtimeEnvironment(runtime),
       WORKBENCH_WORKER_WORKSPACE: input.workspaceId,
       ...(project ? { WORKBENCH_PROJECT_CONFIG: project.configPath } : {}),
-      ...(bridge ? {
-        WORKBENCH_PASEO_ENDPOINT: bridge.endpoint,
+      ...(gateway ? {
         WORKBENCH_AGENT_TOKEN: reportToken,
         ...(restrictedWorker ? { WORKBENCH_EXECUTION_REPORT_ONLY: "1" } : { WORKBENCH_EXECUTION_REPORT: "1" }),
       } : {}),
@@ -479,17 +456,11 @@ async function delegateAgent(
     const workerConfig = {
       ...childConfig,
       provider: selectedProvider,
-      ...(bridge ? {
+      ...(gateway ? {
         toolPolicy: { ...(childConfig.toolPolicy || {}), preapproved },
         mcpServers: {
           ...(childConfig.mcpServers || {}),
-          [workerMcpServer]: {
-            type: "stdio" as const,
-            command: process.execPath,
-            args: [bridge.script],
-            env: workerEnv,
-            alwaysLoad: true,
-          },
+          [workerMcpServer]: gateway,
         },
       } : {}),
     };
@@ -509,7 +480,7 @@ async function delegateAgent(
         "workspace-workbench.handoff": handoffHash,
       },
     });
-    if (project && bridge) writeState(`context:${reportToken}`, { agentId: created.id, cwd: runtime.treePath, workspaceId: input.workspaceId });
+    if (project && gateway) writeState(`context:${reportToken}`, { agentId: created.id, cwd: runtime.treePath, workspaceId: input.workspaceId });
     if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, relationship, stage: "created", agentId: created.id });
     const now = new Date().toISOString();
     const binding: AgentBinding = {

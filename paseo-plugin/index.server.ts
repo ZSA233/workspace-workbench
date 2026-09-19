@@ -20,6 +20,8 @@ import { projectBackendStart, projectBackendStatus, projectRuntimeSettingsGet, p
 import { registeredProjects, withProject } from "./server/projects";
 import { closeBackends } from "./server/backend-manager";
 import { handleClientDiagnostic } from "./server/client-diagnostics";
+import { diagnosticsQuery, mcpStatusQuery } from "./shared/diagnostics";
+import { handleDiagnostics, handleMcpStatus } from "./server/diagnostics";
 import { handleProjectBackendStart, handleProjectBackendStatus, handleProjectRuntimeSettingsGet, handleProjectRuntimeSettingsUpdate, handleProjectSetupSave, handleProjectSetupScan, handleProjectStorage } from "./server/setup";
 import { registerAgentIntegration } from "./server/agent-integration";
 import { orchestrate } from "./server/orchestrator";
@@ -27,6 +29,7 @@ import { clientDiagnostic } from "./shared/client-diagnostics";
 import { digest } from "./server/orchestration-state";
 import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpdate } from "./shared/agent-session";
 import { handleAgentSessionProviders, handleAgentSessionSettingsGet, handleAgentSessionSettingsUpdate } from "./server/agent-session";
+import { defaultMcpGatewayEntry, McpGatewayManager, setMcpGateway } from "./server/mcp-gateway";
 import { artifactList, artifactRegister } from "./shared/artifacts";
 import { listArtifacts, registerArtifact } from "./server/artifacts";
 import { handleWorkspaceLifecycle } from "./server/workspace-lifecycle";
@@ -66,6 +69,8 @@ import {
 export default function contribute(server: PluginServerContext) {
   const host = new HostConnection();
   const metrics = new RpcMetrics();
+  const gateway = new McpGatewayManager(defaultMcpGatewayEntry());
+  setMcpGateway(gateway);
   const measured: PluginServerContext = {
     ...server,
     handle: (contract, handler) => server.handle(contract, (input, context) => {
@@ -137,6 +142,8 @@ export default function contribute(server: PluginServerContext) {
   measured.handle(projectSetupSave, handleProjectSetupSave);
   measured.handle(projectStorageQuery, handleProjectStorage);
   measured.handle(clientDiagnostic, handleClientDiagnostic);
+  measured.handle(diagnosticsQuery, input => handleDiagnostics(input, metrics));
+  measured.handle(mcpStatusQuery, () => handleMcpStatus());
   measured.handle(projectRuntimeSettingsGet, (input) => withProject(input, () => handleProjectRuntimeSettingsGet(input)));
   measured.handle(projectRuntimeSettingsUpdate, (input) => withProject(input, () => handleProjectRuntimeSettingsUpdate(input)));
   measured.handle(projectBackendStart, async (input) => ({ ...await handleProjectBackendStart(input), hostTransport: host.status(), rpcMetrics: metrics.snapshot() }));
@@ -173,5 +180,5 @@ export default function contribute(server: PluginServerContext) {
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
   withHost.handle(workspaceLifecycle, (input, context) => withProject(input, () => handleWorkspaceLifecycle(input, context)));
-  return async () => { cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); await Promise.all([closeBackends(), host.close()]); };
+  return async () => { cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); await Promise.all([gateway.close(), closeBackends(), host.close()]); setMcpGateway(null); };
 }

@@ -50,9 +50,12 @@ export function serveMcp(handle, { input = process.stdin, output = process.stdou
     } catch (e) { error(message?.id ?? null, e instanceof Error ? e.message : 'workbench_failed'); }
   });
   function cancel(record, reason) {
+    if (!requests.has(record.message.id)) return;
     record.controller.abort(reason);
     if (record.phase === 'queued') {
-      queue.splice(queue.indexOf(record), 1); clearTimeout(record.timer); requests.delete(record.message.id);
+      const index = queue.indexOf(record);
+      if (index >= 0) queue.splice(index, 1);
+      clearTimeout(record.timer); requests.delete(record.message.id);
       error(record.message.id, `workbench_not_dispatched:${reason}`);
     }
   }

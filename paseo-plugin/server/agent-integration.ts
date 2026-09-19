@@ -1,8 +1,7 @@
 import { sessionChanged } from "./session-observation.ts";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { dirname, resolve, join } from "node:path";
-import { homedir } from "node:os";
+import { resolve } from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { registeredProjects, resolveProject, withProject } from "./projects.ts";
 import { readState, writeState, digest } from "./orchestration-state.ts";
@@ -11,38 +10,31 @@ import { orchestrationRpc } from "../shared/orchestration.ts";
 import { orchestrate } from "./orchestrator.ts";
 import { liveAgentIdentity, type AgentIdentity } from "./agent-identity.ts";
 import { allAgentBindings, getAgentBinding, putAgentBinding, type AgentBinding } from "./agent-store.ts";
+import { getMcpGateway, mcpGatewayConfig } from "./mcp-gateway.ts";
 
-function bridgeConfig(configPath: string) {
+function bridgeConfig(configPath: string): { enabled: true } | null {
   const config = JSON.parse(readFileSync(configPath, "utf8"));
   const bridge = config.agent?.bridge;
-  if (config.agent?.provider !== "paseo" || !bridge?.script || !bridge?.endpoint) return null;
-  // Do not inject one stdio MCP process into every interactive Agent by
-  // default.  That multiplied long-lived sessions and put unrelated Git
-  // observation behind the host's global request queue.  Explicit handoff
-  // workers still receive their own scoped MCP configuration from the
-  // delegate path; interactive injection is an opt-in project setting.
-  if (bridge.autoInject !== true && process.env.WORKBENCH_ENABLE_AGENT_MCP !== "1") return null;
-  const record = bridge.endpoint === "auto" ? JSON.parse(readFileSync(join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "paseo.pid"), "utf8")) : null;
-  const target = String(record ? record.listen || record.sockPath || "" : bridge.endpoint).replace(/^unix:\/\//, "");
-  const endpoint = target.startsWith("/") ? `ws+unix://${target}:/ws` : /^(127\.0\.0\.1|localhost):\d+$/.test(target) ? `ws://${target}/ws` : "";
-  if (!endpoint) throw new Error("paseo_local_endpoint_required");
-  return { script: resolve(dirname(configPath), bridge.script), endpoint };
+  if (config.agent?.provider !== "paseo" || !bridge || typeof bridge !== "object" || Array.isArray(bridge)) return null;
+  if ((bridge as Record<string, unknown>).autoInject === false) return null;
+  return { enabled: true };
 }
 
 export function registerAgentIntegration(server: PluginServerContext, currentApi?: () => Promise<import("@getpaseo/client").PaseoApi>): () => void {
   let api: import("@getpaseo/client").PaseoApi | null = null;
-  const cleanups = [server.before("agent.create", ({ request }) => {
+  const cleanups = [server.before("agent.create", async ({ request }) => {
     if (request.env?.WORKBENCH_WORKER_WORKSPACE || request.env?.WORKBENCH_REVIEW_ONLY) return request;
     let project;
     try { project = resolveProject({ directory: request.config.cwd }); } catch { return request; }
     const bridge = bridgeConfig(project.configPath);
     if (!bridge) return request;
     const token = randomUUID();
-    const environment = { WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath, WORKBENCH_PASEO_ENDPOINT: bridge.endpoint };
+    const gateway = await mcpGatewayConfig(project.configPath, token, "interactive");
+    const environment = { WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath };
     withProject({ projectConfig: project.configPath }, () => writeState(`context:${token}`, { agentId: "", cwd: request.config.cwd }));
     // Paseo also copies systemPrompt into mode overrides; keep tool guidance in MCP.
     return { ...request, env: { ...request.env, ...environment }, config: { ...request.config,
-      mcpServers: { ...request.config.mcpServers, "workspace-workbench": { type: "stdio" as const, command: process.execPath, args: [bridge.script], env: environment, alwaysLoad: true } },
+      mcpServers: { ...request.config.mcpServers, "workspace-workbench": gateway },
     } };
   }), server.before("agent.session_open", ({ request }) => {
     if (request.env.WORKBENCH_WORKER_WORKSPACE || request.env.WORKBENCH_REVIEW_ONLY) return request;
@@ -62,7 +54,7 @@ export function registerAgentIntegration(server: PluginServerContext, currentApi
       if (prior && prior.token !== token) writeState(`context:${prior.token}`, { agentId: request.agentId, cwd: request.cwd, revoked: true });
       writeState(`context:${token}`, { agentId: request.agentId, cwd: request.cwd });
       writeState(`session:${request.agentId}`, { token });
-      return { ...request, env: { ...request.env, WORKBENCH_AGENT_ID: request.agentId, WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath, WORKBENCH_PASEO_ENDPOINT: bridge.endpoint } };
+      return { ...request, env: { ...request.env, WORKBENCH_AGENT_ID: request.agentId, WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath } };
     });
   })];
   server.handle(orchestrationRpc, (input, context) => withProject(input, async () => {
@@ -122,7 +114,10 @@ export function registerAgentIntegration(server: PluginServerContext, currentApi
   cleanups.push(server.on("agent.archived", async (event, context) => {
     for (const project of registeredProjects()) withProject({ projectConfig: project.configPath }, () => {
       const session = readState<{ token: string }>(`session:${event.agent.id}`);
-      if (session) writeState(`context:${session.token}`, { agentId: event.agent.id, cwd: event.agent.cwd, revoked: true });
+      if (session) {
+        writeState(`context:${session.token}`, { agentId: event.agent.id, cwd: event.agent.cwd, revoked: true });
+        getMcpGateway().revokeToken(session.token);
+      }
     });
     await notify(event.agent.id, "archived", event.archivedAt, context);
   }));

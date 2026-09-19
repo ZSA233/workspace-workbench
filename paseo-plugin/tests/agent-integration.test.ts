@@ -22,7 +22,7 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
   const cleanup = registerAgentIntegration(server);
   try {
     const request: PluginBeforeRequests["agent.create"] = { config: { provider: "codex", cwd: root, modeId: "auto", toolPolicy: { preapproved: [] } } };
-    const injected = hooks.get("agent.create")!({ request }) as typeof request;
+    const injected = await hooks.get("agent.create")!({ request }) as typeof request;
     assert.deepEqual(injected.config.toolPolicy, request.config.toolPolicy);
     assert.equal(Object.hasOwn(injected.config, "systemPrompt"), false);
     // Preserve caller-owned prompts and mode/model settings without inserting
@@ -32,8 +32,8 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
         const original = { ...request, config: { ...request.config, provider, model: "fixture",
           systemPrompt: "Caller instructions", featureValues: { plan_mode: planning },
           providerOptions: { custom: "preserved" } } };
-        const once = hooks.get("agent.create")!({ request: original }) as typeof original;
-        const twice = hooks.get("agent.create")!({ request: once }) as typeof original;
+        const once = await hooks.get("agent.create")!({ request: original }) as typeof original;
+        const twice = await hooks.get("agent.create")!({ request: once }) as typeof original;
         for (const result of [once, twice]) {
           const { mcpServers: _mcp, ...settings } = result.config;
           assert.deepEqual(settings, original.config);
@@ -42,10 +42,11 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
       }
     }
     const bridge = injected.config.mcpServers?.["workspace-workbench"];
-    assert.equal(bridge?.type, "stdio");
+    assert.equal(bridge?.type, "http");
     assert.equal(bridge?.alwaysLoad, true);
-    if (bridge?.type !== "stdio") throw new Error("missing bridge");
-    assert.equal(bridge.env?.WORKBENCH_AGENT_TOKEN, injected.env?.WORKBENCH_AGENT_TOKEN);
+    if (bridge?.type !== "http") throw new Error("missing bridge");
+    assert.match(bridge.url, /^http:\/\/127\.0\.0\.1:/);
+    assert.match(bridge.headers?.Authorization || "", /Bearer/);
     const open = { agentId: "parent", cwd: root, purpose: "interactive", env: injected.env };
     hooks.get("agent.session_open")!({ request: open });
     const contextRpc = rpcHandlers.get("workspace.workbench.agent_context");
@@ -67,7 +68,7 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
     assert.equal(withProject({ projectConfig: config }, () => readState<{ revoked: boolean }>(`context:${currentToken}`))?.revoked, undefined);
     assert.throws(() => hooks.get("agent.session_open")!({ request: { ...open, agentId: "another" } }), /context_changed/);
     const worker = { ...request, env: { WORKBENCH_WORKER_WORKSPACE: "sample" } };
-    assert.equal(hooks.get("agent.create")!({ request: worker }), worker);
+    assert.deepEqual(await hooks.get("agent.create")!({ request: worker }), worker);
     withProject({ projectConfig: config }, () => putAgentBinding({ workspaceId: "fixture", agentId: "fixture-worker", relationship: "child", parentAgentId: "fixture-parent", paseoWorkspaceId: "paseo-fixture", cwd: root, provider: "codex/fixture", createdAt: "now", updatedAt: "now" }));
     let attempts = 0;
     const event = { agent: { id: "fixture-worker" }, turnId: "one", outcome: { kind: "completed" } };

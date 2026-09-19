@@ -25,6 +25,10 @@ function fixture() {
   writeFileSync(join(child, "README"), "pinned\n");
   git(child, "add", "README"); git(child, "commit", "-qm", "initial");
   git(outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q", child, "halh");
+  // The submodule checkout has its own Git config. Do not rely on a developer
+  // or CI runner's global identity when later scenarios create child commits.
+  git(join(outer, "halh"), "config", "user.name", "Fixture");
+  git(join(outer, "halh"), "config", "user.email", "fixture@example.invalid");
   git(outer, "commit", "-qam", "initial");
   const pinned = git(outer, "rev-parse", "HEAD:halh");
   const configPath = join(root, "project.json");

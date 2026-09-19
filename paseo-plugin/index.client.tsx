@@ -63,6 +63,7 @@ function contributeClient(client: PluginClientContext) {
   const surfaceListeners = new Set<() => void>();
   let surfaceMounts = 0;
   function ContextualSurface(props: PluginSurfaceProps) {
+    reportNativeDiagnostic("contextual-surface-entry", { hostId: props.host.id });
     const context = useSyncExternalStore((listener) => { surfaceListeners.add(listener); return () => { surfaceListeners.delete(listener); }; }, () => surfaceContext, () => surfaceContext);
     useEffect(() => {
       surfaceMounts++;

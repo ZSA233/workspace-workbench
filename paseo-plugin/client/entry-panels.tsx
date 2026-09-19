@@ -22,6 +22,7 @@ function loadPanels() {
   }
 }
 export function WorkbenchPanel(props: PanelProps) {
+  reportNativeDiagnostic("panel-entry", { kind: props.context, workspaceId: props.workspaceId });
   return <PanelErrorBoundary><LazyWorkbenchPanel {...props} /></PanelErrorBoundary>;
 }
 function LazyWorkbenchPanel(props: PanelProps) {
@@ -29,6 +30,7 @@ function LazyWorkbenchPanel(props: PanelProps) {
   return <Component {...props} />;
 }
 export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
+  reportNativeDiagnostic("surface-entry", { workspaceId: props.target?.workspaceId || "" });
   return <PanelErrorBoundary><LazyWorkbenchSurfacePanel {...props} /></PanelErrorBoundary>;
 }
 function LazyWorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
@@ -36,6 +38,7 @@ function LazyWorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   return <Component {...props} />;
 }
 export function FileReviewPanel(props: PanelProps) {
+  reportNativeDiagnostic("file-panel-entry", { kind: props.context, workspaceId: props.workspaceId });
   return <PanelErrorBoundary><LazyFileReviewPanel {...props} /></PanelErrorBoundary>;
 }
 function LazyFileReviewPanel(props: PanelProps) {

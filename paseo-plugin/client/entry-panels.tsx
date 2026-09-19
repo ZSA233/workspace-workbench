@@ -1,7 +1,6 @@
 import type { PluginAgentPanelProps, PluginWorkspacePanelProps, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { atInitializationStage } from "./initialization";
 import type { WorkbenchSurfaceProps } from "./surface-context";
-import { PanelErrorBoundary } from "./panel-error-boundary";
 import { reportNativeDiagnostic } from "./native-diagnostics";
 
 // Register lightweight function components, not an eagerly evaluated UI graph.
@@ -23,7 +22,7 @@ function loadPanels() {
 }
 export function WorkbenchPanel(props: PanelProps) {
   reportNativeDiagnostic("panel-entry", { kind: props.context, workspaceId: props.workspaceId });
-  return <PanelErrorBoundary><LazyWorkbenchPanel {...props} /></PanelErrorBoundary>;
+  return <LazyWorkbenchPanel {...props} />;
 }
 function LazyWorkbenchPanel(props: PanelProps) {
   const Component = loadPanels().WorkbenchPanel;
@@ -31,7 +30,7 @@ function LazyWorkbenchPanel(props: PanelProps) {
 }
 export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   reportNativeDiagnostic("surface-entry", { workspaceId: props.target?.workspaceId || "" });
-  return <PanelErrorBoundary><LazyWorkbenchSurfacePanel {...props} /></PanelErrorBoundary>;
+  return <LazyWorkbenchSurfacePanel {...props} />;
 }
 function LazyWorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   const Component = loadPanels().WorkbenchSurfacePanel;
@@ -39,7 +38,7 @@ function LazyWorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
 }
 export function FileReviewPanel(props: PanelProps) {
   reportNativeDiagnostic("file-panel-entry", { kind: props.context, workspaceId: props.workspaceId });
-  return <PanelErrorBoundary><LazyFileReviewPanel {...props} /></PanelErrorBoundary>;
+  return <LazyFileReviewPanel {...props} />;
 }
 function LazyFileReviewPanel(props: PanelProps) {
   review ||= atInitializationStage("diff-module", () => require("./file-review") as typeof import("./file-review"));

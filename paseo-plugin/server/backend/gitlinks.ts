@@ -26,8 +26,8 @@ function parseEntries(output: string): Gitlink[] {
   });
 }
 
-export async function indexGitlinks(root: string, timeout: number): Promise<Gitlink[]> {
-  const git = new Git(root, timeout);
+export async function indexGitlinks(root: string, timeout: number, signal?: AbortSignal): Promise<Gitlink[]> {
+  const git = new Git(root, timeout, undefined, signal);
   const output = (await git.run(["ls-files", "--stage", "-z"])).stdout;
   for (const entry of output.split("\0")) {
     if (!entry.startsWith("160000 ")) continue;
@@ -41,16 +41,16 @@ export async function indexGitlinks(root: string, timeout: number): Promise<Gitl
   return links;
 }
 
-export async function commitGitlinks(root: string, ref: string, timeout: number): Promise<Gitlink[]> {
-  const git = new Git(root, timeout);
+export async function commitGitlinks(root: string, ref: string, timeout: number, signal?: AbortSignal): Promise<Gitlink[]> {
+  const git = new Git(root, timeout, undefined, signal);
   const links = parseEntries((await git.run(["ls-tree", "-rz", ref])).stdout);
   for (const link of links) childPath(root, link.path);
   return links;
 }
 
-export async function gitlinkDetails(root: string, timeout: number) {
+export async function gitlinkDetails(root: string, timeout: number, signal?: AbortSignal) {
   const [committed, indexed] = await Promise.all([
-    commitGitlinks(root, "HEAD", timeout), indexGitlinks(root, timeout),
+    commitGitlinks(root, "HEAD", timeout, signal), indexGitlinks(root, timeout, signal),
   ]);
   const committedByPath = new Map(committed.map(link => [link.path, link.sha]));
   const indexedByPath = new Map(indexed.map(link => [link.path, link.sha]));
@@ -64,7 +64,7 @@ export async function gitlinkDetails(root: string, timeout: number) {
       try {
         if (!existsSync(child)) issue = "repository_missing";
         else {
-          const git = new Git(child, timeout);
+          const git = new Git(child, timeout, undefined, signal);
           if (await git.root() !== child) issue = "repository_invalid";
           else checkoutSha = await git.head();
         }

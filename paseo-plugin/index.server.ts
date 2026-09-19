@@ -16,7 +16,7 @@ import { observerSettings } from "./shared/settings";
 import { projectsQuery } from "./shared/projects";
 import { projectBackendStart, projectBackendStatus, projectRuntimeSettingsGet, projectRuntimeSettingsUpdate, projectSetupSave, projectSetupScan, projectStorageQuery } from "./shared/setup";
 import { registeredProjects, withProject } from "./server/projects";
-import { closeBackends, startBackend } from "./server/backend-manager";
+import { closeBackends } from "./server/backend-manager";
 import { handleClientDiagnostic } from "./server/client-diagnostics";
 import { handleProjectBackendStart, handleProjectBackendStatus, handleProjectRuntimeSettingsGet, handleProjectRuntimeSettingsUpdate, handleProjectSetupSave, handleProjectSetupScan, handleProjectStorage } from "./server/setup";
 import { registerAgentIntegration } from "./server/agent-integration";
@@ -99,9 +99,9 @@ export default function contribute(server: PluginServerContext) {
   withHost.handle(handoffMaterials, (input, context) => withProject(input, () => handleHandoffMaterials(input, context)));
   withHost.handle(sessionOperation, (input, context) => withProject(input, () => handleSessionOperation(input, context)));
   withHost.handle(coordinatorReview, (input, context) => withProject(input, () => handleCoordinatorReview(input, context)));
-  // Start all registered projects through one generation-owned supervisor.
-  // Failure remains project-specific and is retried on the next request.
-  void Promise.allSettled(registeredProjects().map(project => startBackend(project.configPath)));
+  // Backends are started on demand by the active project request.  Warming all
+  // registered projects here amplified cold-start Git work and made an idle
+  // panel look unavailable while unrelated projects were still starting.
   withHost.handle(reviewSessionQuery, (input, context) => withProject(input, () => handleReviewSessionQuery(input, context)));
   measured.handle(reviewSessionList, (input) => withProject(input, () => handleReviewSessionList(input)));
   measured.handle(reviewSessionEvents, (input) => withProject(input, () => handleReviewSessionEvents(input)));

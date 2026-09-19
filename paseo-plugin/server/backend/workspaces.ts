@@ -40,9 +40,22 @@ function pythonJson(value: any): string {
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
 }
+type OrphanScanSnapshot = {
+  state: "ready" | "scanning" | "stale" | "failed";
+  candidates: Json[];
+  scannedDirectories: number;
+  startedAt?: string;
+  completedAt?: string;
+  reason?: string;
+  promise?: Promise<void>;
+};
+
 export class Workspaces {
   config: Config;
   readonly mutations = new SerialQueue();
+  onOrphanScanChanged?: () => void;
+  private orphanScan: OrphanScanSnapshot = { state: "stale", candidates: [], scannedDirectories: 0 };
+  private orphanScanRevision = 0;
   constructor(config: Config) {
     this.config = config;
     for (const root of [
@@ -124,11 +137,11 @@ export class Workspaces {
     atomicJson(this.linkedSelectionPath(), { schemaVersion: 1, revision: current.revision + 1, roots });
     return this.linkedCandidates();
   }
-  async refreshLinked(workspace: Json): Promise<Json> {
+  async refreshLinked(workspace: Json, signal?: AbortSignal): Promise<Json> {
     if (workspace.kind !== "linked-live") return workspace;
     try {
       const root = workspace.sourceRoot;
-      const links = await indexGitlinks(root, this.config.gitTimeout);
+      const links = await indexGitlinks(root, this.config.gitTimeout, signal);
       return { ...workspace, repositories: this.linkedRepositories(root, links) };
     } catch (error) { return { ...workspace, issues: [issue(error)] }; }
   }
@@ -236,17 +249,76 @@ export class Workspaces {
   recordPath(id: string) {
     return join(this.config.recordsRoot, `${slug(id)}.json`);
   }
-  orphanCandidates() { return orphanCandidates(this.config, (path, treePath) => {
-    const record = this.read(path);
-    return !!record && canonical(record.treePath) === treePath &&
-      !(record.origin === "adopted" && ["adopting", "adopt_failed"].includes(record.state));
-  }).map(candidate => {
-    const record = this.read(this.recordPath(candidate.id));
-    return { ...candidate, recordInvalid: !!candidate.recordInvalid && !record,
-      resume: record?.origin === "adopted" && ["adopting", "adopt_failed"].includes(record.state) };
-  }); }
-  async orphanPreview(id: string) {
-    const preview = await orphanPreview(this.config, id);
+  private startOrphanScan(force = false): void {
+    if (this.orphanScan.promise) return;
+    if (!force && this.orphanScan.state === "ready" && this.orphanScan.completedAt && Date.now() - Date.parse(this.orphanScan.completedAt) < 300_000) return;
+    const previous = this.orphanScan;
+    const revision = this.orphanScanRevision;
+    const startedAt = now();
+    this.orphanScan = {
+      state: previous.candidates.length ? "stale" : "scanning",
+      candidates: previous.candidates,
+      scannedDirectories: previous.scannedDirectories,
+      startedAt,
+      ...(previous.completedAt ? { completedAt: previous.completedAt } : {}),
+    };
+    const promise = orphanCandidates(this.config, (path, treePath) => {
+      const record = this.read(path);
+      return !!record && canonical(record.treePath) === treePath &&
+        !(record.origin === "adopted" && ["adopting", "adopt_failed"].includes(record.state));
+    }).then((scan) => {
+      const candidates = scan.candidates.map(candidate => {
+        const record = this.read(this.recordPath(candidate.id));
+        return { ...candidate, recordInvalid: !!candidate.recordInvalid && !record,
+          resume: record?.origin === "adopted" && ["adopting", "adopt_failed"].includes(record.state) };
+      });
+      if (revision !== this.orphanScanRevision) {
+        this.orphanScan = { state: "stale", candidates: this.orphanScan.candidates, scannedDirectories: scan.scannedDirectories, startedAt, completedAt: this.orphanScan.completedAt, reason: "mutation" };
+        this.onOrphanScanChanged?.();
+        return;
+      }
+      this.orphanScan = { state: "ready", candidates, scannedDirectories: scan.scannedDirectories, startedAt, completedAt: now() };
+      this.onOrphanScanChanged?.();
+    }).catch((error) => {
+      if (error instanceof WorkbenchError && error.code === "observer_cancelled") return;
+      this.orphanScan = { state: "failed", candidates: previous.candidates, scannedDirectories: previous.scannedDirectories, startedAt, completedAt: previous.completedAt, reason: issue(error).code };
+      this.onOrphanScanChanged?.();
+    }).finally(() => {
+      if (this.orphanScan.promise === promise) delete this.orphanScan.promise;
+    });
+    this.orphanScan.promise = promise;
+  }
+  async orphanSnapshot(force = false, waitMs = 250, signal?: AbortSignal): Promise<OrphanScanSnapshot> {
+    const waitForFresh = force || this.orphanScan.reason === "mutation";
+    this.startOrphanScan(force);
+    const pending = this.orphanScan.promise;
+    if (pending && (waitForFresh || this.orphanScan.candidates.length === 0) && waitMs > 0) {
+      const boundedWait = new Promise<void>((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const onAbort = () => {
+          if (timer) clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+          reject(new WorkbenchError("observer_cancelled", "observation cancelled"));
+        };
+        if (signal?.aborted) return onAbort();
+        signal?.addEventListener("abort", onAbort, { once: true });
+        timer = setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, waitMs);
+      });
+      await Promise.race([pending, boundedWait]);
+    }
+    const { promise: _promise, ...snapshot } = this.orphanScan;
+    return snapshot;
+  }
+  invalidateOrphanScan(): void {
+    this.orphanScanRevision++;
+    this.orphanScan = { ...this.orphanScan, state: this.orphanScan.promise ? "scanning" : "stale", completedAt: undefined, reason: "mutation" };
+  }
+  async orphanCandidates(): Promise<Json[]> { return (await this.orphanSnapshot()).candidates; }
+  async orphanPreview(id: string, signal?: AbortSignal) {
+    const preview = await orphanPreview(this.config, id, signal);
     const record = this.read(this.recordPath(id));
     if (record?.origin === "adopted" && ["adopting", "adopt_failed"].includes(record.state))
       return { ...preview, fingerprint: record.adoption.fingerprint, plannedBranches: record.adoption.branches,

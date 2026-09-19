@@ -69,7 +69,7 @@ type ChangeTreeMode = "tree" | "files";
 type MainRepositorySelection = {
   revision: number;
   sourceRoot: string;
-  scan?: { incomplete: boolean; reason?: "directory_limit" | "entry_limit" | "time_limit"; scannedDirectories: number };
+  scan?: { incomplete: boolean; reason?: "directory_limit" | "entry_limit" | "time_limit" | "cancelled"; scannedDirectories: number };
   repositories: Array<{ id: string; name: string; path: string; configured: boolean; exists: boolean; missing: boolean; selected: boolean }>;
 };
 type LinkedWorkspaceSelection = {

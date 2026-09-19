@@ -22,6 +22,8 @@ type GitWaiter = {
   resolve: () => void;
   reject: (error: WorkbenchError) => void;
   timer?: ReturnType<typeof setTimeout>;
+  signal?: AbortSignal;
+  onAbort?: () => void;
   settled: boolean;
 };
 const waiting: GitWaiter[] = [];
@@ -35,7 +37,9 @@ function removeWaiter(waiter: GitWaiter): void {
   const index = waiting.indexOf(waiter);
   if (index >= 0) waiting.splice(index, 1);
 }
-async function acquireGitSlot(deadline?: number): Promise<void> {
+async function acquireGitSlot(deadline?: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted)
+    throw new WorkbenchError("observer_cancelled", "observation cancelled");
   if (deadline !== undefined && Date.now() >= deadline)
     throw observationTimeout();
   if (running < 4) {
@@ -47,6 +51,7 @@ async function acquireGitSlot(deadline?: number): Promise<void> {
       priority: priority.getStore() || 0,
       resolve,
       reject,
+      signal,
       settled: false,
     };
     const remaining = deadline === undefined ? undefined : deadline - Date.now();
@@ -62,8 +67,18 @@ async function acquireGitSlot(deadline?: number): Promise<void> {
         if (waiter.settled) return;
         removeWaiter(waiter);
         waiter.settled = true;
+        waiter.signal?.removeEventListener("abort", waiter.onAbort!);
         waiter.reject(observationTimeout());
       }, remaining);
+    const onAbort = () => {
+      if (waiter.settled) return;
+      removeWaiter(waiter);
+      waiter.settled = true;
+      if (waiter.timer) clearTimeout(waiter.timer);
+      waiter.reject(new WorkbenchError("observer_cancelled", "observation cancelled"));
+    };
+    waiter.onAbort = onAbort;
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 function releaseGitSlot(): void {
@@ -72,14 +87,15 @@ function releaseGitSlot(): void {
     if (waiter.settled) continue;
     waiter.settled = true;
     if (waiter.timer) clearTimeout(waiter.timer);
+    waiter.signal?.removeEventListener("abort", waiter.onAbort!);
     waiter.resolve();
     return;
   }
   running--;
 }
-async function gitSlot<T>(operation: () => Promise<T>, deadline?: number): Promise<T> {
+async function gitSlot<T>(operation: () => Promise<T>, deadline?: number, signal?: AbortSignal): Promise<T> {
   let acquired = false;
-  await acquireGitSlot(deadline);
+  await acquireGitSlot(deadline, signal);
   acquired = true;
   try {
     if (deadline !== undefined && Date.now() >= deadline)
@@ -93,12 +109,15 @@ export class Git {
   path: string;
   timeout: number;
   deadline?: number;
-  constructor(path: string, timeout = 3000, deadline?: number) {
+  signal?: AbortSignal;
+  constructor(path: string, timeout = 3000, deadline?: number, signal?: AbortSignal) {
     this.path = canonical(path);
     this.timeout = timeout;
     this.deadline = deadline;
+    this.signal = signal;
   }
   async run(args: string[], check = true) {
+    if (this.signal?.aborted) throw new WorkbenchError("observer_cancelled", "Git request cancelled");
     let result;
     try {
       result = await gitSlot(() =>
@@ -120,10 +139,12 @@ export class Git {
                 GIT_TERMINAL_PROMPT: "0",
                 GIT_EXTERNAL_DIFF: "",
               },
+              signal: this.signal,
             },
           );
         },
         this.deadline,
+        this.signal,
       );
       if (this.deadline !== undefined && Date.now() >= this.deadline)
         throw observationTimeout();

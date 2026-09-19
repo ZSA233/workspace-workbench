@@ -1,7 +1,7 @@
 import { lstat, opendir, realpath, stat } from "node:fs/promises";
 import { join, relative, resolve, isAbsolute } from "node:path";
 
-export type ScanResult = { roots: string[]; incomplete: boolean; reason?: "directory_limit" | "entry_limit" | "time_limit"; scannedDirectories: number };
+export type ScanResult = { roots: string[]; incomplete: boolean; reason?: "directory_limit" | "entry_limit" | "time_limit" | "cancelled"; scannedDirectories: number };
 export type ScanOptions = {
   roots: string[];
   sourceRoot: string;
@@ -13,6 +13,7 @@ export type ScanOptions = {
   maxDirectories?: number;
   maxEntries?: number;
   maxDurationMs?: number;
+  signal?: AbortSignal;
 };
 
 function within(path: string, root: string): boolean {
@@ -40,6 +41,7 @@ export async function scanGitRoots(options: ScanOptions): Promise<ScanResult> {
   let reason: ScanResult["reason"];
   let entriesVisited = 0;
   while (queue.length) {
+    if (options.signal?.aborted) { reason = "cancelled"; break; }
     if (visited.size >= maxDirectories) { reason = "directory_limit"; break; }
     if (Date.now() >= deadline) { reason = "time_limit"; break; }
     const current = queue.shift()!;
@@ -60,6 +62,7 @@ export async function scanGitRoots(options: ScanOptions): Promise<ScanResult> {
     try {
       const directory = await opendir(path);
       for await (const entry of directory) {
+        if (options.signal?.aborted) { reason = "cancelled"; break; }
         entriesVisited++;
         if (entriesVisited % 100 === 0) await new Promise<void>(done => setImmediate(done));
         if (entriesVisited >= maxEntries) { reason = "entry_limit"; break; }

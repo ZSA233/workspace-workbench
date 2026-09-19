@@ -53,23 +53,25 @@ export class Observation {
     this.cache = cache;
     this.scheduler = scheduler;
   }
-  git(repo: Json, deadline?: number) {
+  git(repo: Json, deadline?: number, signal?: AbortSignal) {
     return new Git(
       repo.worktreePath || repo.sourcePath,
       this.workspaces.config.gitTimeout,
       deadline,
+      signal,
     );
   }
-  private async withinDeadline<T>(work: Promise<T>, deadline?: number): Promise<T> {
-    if (deadline === undefined) return work;
-    const remaining = deadline - Date.now();
-    if (remaining <= 0)
+  private async withinDeadline<T>(work: Promise<T>, deadline?: number, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) throw new WorkbenchError("observer_cancelled", "observation cancelled");
+    if (deadline === undefined && !signal) return work;
+    const remaining = deadline === undefined ? undefined : deadline - Date.now();
+    if (remaining !== undefined && remaining <= 0)
       throw new WorkbenchError(
         "observation_timeout",
         "observation deadline exceeded",
       );
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(
+      const timer = deadline === undefined ? undefined : setTimeout(
         () =>
           reject(
             new WorkbenchError(
@@ -79,13 +81,17 @@ export class Observation {
           ),
         remaining,
       );
+      const onAbort = () => reject(new WorkbenchError("observer_cancelled", "observation cancelled"));
+      signal?.addEventListener("abort", onAbort, { once: true });
       work.then(
         (value) => {
-          clearTimeout(timer);
+          if (timer) clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
           resolve(value);
         },
         (error) => {
-          clearTimeout(timer);
+          if (timer) clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
           reject(error);
         },
       );
@@ -134,14 +140,14 @@ export class Observation {
       ...(this.runtime ? { toolchain: this.runtime.summary(workspace) } : {}),
     };
   }
-  async repository(repo: Json, deadline?: number): Promise<Json> {
+  async repository(repo: Json, deadline?: number, signal?: AbortSignal): Promise<Json> {
     const path = repo.worktreePath || repo.sourcePath;
     return this.cache.read(`summary:${path}`, this.scheduler.token(path),
-      () => this.repositorySnapshot(repo, deadline), true, true, { repoPath: path });
+      () => this.repositorySnapshot(repo, deadline, signal), true, true, { repoPath: path });
   }
-  private async repositorySnapshot(repo: Json, deadline?: number): Promise<Json> {
+  private async repositorySnapshot(repo: Json, deadline?: number, signal?: AbortSignal): Promise<Json> {
     const started = Date.now(),
-      git = this.git(repo, deadline);
+      git = this.git(repo, deadline, signal);
     const result: Json = {
       ...repo,
       status: "clean",
@@ -232,6 +238,7 @@ export class Observation {
           result.changesLoaded = false;
         })(),
         deadline,
+        signal,
       );
     } catch (error) {
       result.status = "error";
@@ -240,15 +247,17 @@ export class Observation {
     if (!["error", "missing", "invalid"].includes(result.status)) this.scheduler.observed(git.path);
     return { ...result, observedAt: now(), durationMs: Date.now() - started };
   }
-  async list(params: Json) {
-    const orphanCandidates = this.workspaces.orphanCandidates(),
+  async list(params: Json, signal?: AbortSignal) {
+    const orphanScan = await this.workspaces.orphanSnapshot(params.force === true, 250, signal),
+      orphanCandidates = orphanScan.candidates,
       orphanIds = new Set(orphanCandidates.map((candidate: Json) => candidate.id)),
       c = this.workspaces.config,
       workspaces = this.workspaces
         .list()
         .filter((w) => (params.includeRemoved || w.state !== "removed") &&
           !(orphanIds.has(w.id) && ["record_invalid", "adopting", "adopt_failed"].includes(w.state)));
-    const discovered = await discover(c);
+    const discovered = await discover(c, false, signal);
+    if (signal?.aborted) throw new WorkbenchError("observer_cancelled", "observation cancelled");
     return {
       schemaVersion: protocol,
       project: { id: c.projectId, displayName: c.displayName },
@@ -257,6 +266,13 @@ export class Observation {
       capabilities: this.workspaces.capabilities(),
       discoveredCandidates: discovered.repositories,
       discovery: { incomplete: discovered.incomplete, ...(discovered.reason ? { reason: discovered.reason } : {}), scannedDirectories: discovered.scannedDirectories },
+      orphanScan: {
+        state: orphanScan.state,
+        scannedDirectories: orphanScan.scannedDirectories,
+        ...(orphanScan.reason ? { reason: orphanScan.reason } : {}),
+        ...(orphanScan.startedAt ? { startedAt: orphanScan.startedAt } : {}),
+        ...(orphanScan.completedAt ? { completedAt: orphanScan.completedAt } : {}),
+      },
       observation: {
         state: "ready",
         observedAt: now(),
@@ -271,8 +287,8 @@ export class Observation {
   async workspaceFingerprint(workspace: Json) {
     return stable(workspace) + workspace.repositories.map((repo: Json) => this.scheduler.token(repo.worktreePath || repo.sourcePath)).join(":");
   }
-  async detail(params: Json) {
-    const workspace = await this.workspaces.refreshLinked(this.workspaces.get(String(params.workspaceId || "")));
+  async detail(params: Json, signal?: AbortSignal) {
+    const workspace = await this.workspaces.refreshLinked(this.workspaces.get(String(params.workspaceId || "")), signal);
     await Promise.all(workspace.repositories.map((repo: Json) => this.scheduler.register(workspace.id,
       repo.worktreePath || repo.sourcePath, () => this.repository(repo, Date.now() + this.workspaces.config.observationTimeout))));
     if (params.force) this.scheduler.force(workspace.id);
@@ -282,7 +298,7 @@ export class Observation {
       await this.workspaceFingerprint(workspace),
       async () => {
         const start = Date.now(),
-          deadline = start + this.workspaces.config.observationTimeout,
+          deadline = start + Math.min(this.workspaces.config.observationTimeout, Number(params.observationBudgetMs) || this.workspaces.config.observationTimeout),
           repositories: Json[] = [];
         // Keep four repository workers active. A slow repository occupies one
         // worker until its deadline, while completed workers continue with
@@ -294,6 +310,7 @@ export class Observation {
             repositories[index] = await this.repository(
               workspace.repositories[index],
               deadline,
+              signal,
             );
           }
         };
@@ -323,7 +340,7 @@ export class Observation {
           schemaVersion: protocol,
           workspace: this.summary(workspace, repositories),
           repositories,
-          ...(workspace.layout === "gitlink" ? { gitlinks: await gitlinkDetails(workspace.treePath, this.workspaces.config.gitTimeout).catch(error => [{ path: "", issue: issue(error).code }]) } : {}),
+          ...(workspace.layout === "gitlink" ? { gitlinks: await gitlinkDetails(workspace.treePath, this.workspaces.config.gitTimeout, signal).catch(error => [{ path: "", issue: issue(error).code }]) } : {}),
           observation: {
             state: transient ? "partial" : "ready",
             validationKey: `workspace:${workspace.id}`, validationToken,
@@ -334,7 +351,7 @@ export class Observation {
       }, true, false, { workspaceId: workspace.id },
     );
   }
-  async repositoryQuery(method: string, params: Json) {
+  async repositoryQuery(method: string, params: Json, signal?: AbortSignal) {
     if (method === "repository.diff") {
       if (typeof params.path !== "string" || !params.path)
         throw new WorkbenchError("path_required", "path is required");
@@ -344,7 +361,7 @@ export class Observation {
           "diff path must remain inside the repository",
         );
     }
-    const workspace = await this.workspaces.refreshLinked(this.workspaces.get(String(params.workspaceId || ""))),
+    const workspace = await this.workspaces.refreshLinked(this.workspaces.get(String(params.workspaceId || "")), signal),
       repo = this.workspaces.repository(
         workspace,
         params.repoPath || params.repositoryId || "",
@@ -365,10 +382,10 @@ export class Observation {
       `${method}:${workspace.id}:${stable(params)}`,
       this.scheduler.token(git.path, method === "repository.graph" || params.scope === "branch" || params.scope === "commit" ? "refs" : "working") + stable(repo) + marker,
       async () => {
-        const deadline = Date.now() + this.workspaces.config.observationTimeout;
+        const deadline = Date.now() + Math.min(this.workspaces.config.observationTimeout, Number(params.observationBudgetMs) || this.workspaces.config.observationTimeout);
         return this.withinDeadline(
           (async () => {
-            const git = this.git(repo, deadline),
+            const git = this.git(repo, deadline, signal),
               [, upstream] = await git.upstream(),
               baseSha = repo.baseSha || upstream,
               scope = params.scope || "branch",
@@ -436,6 +453,7 @@ export class Observation {
             };
           })(),
           deadline,
+          signal,
         );
       }, true, false, { workspaceId: workspace.id, repoPath: git.path },
     );

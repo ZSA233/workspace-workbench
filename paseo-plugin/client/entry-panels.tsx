@@ -8,6 +8,7 @@ import {
   WorkbenchSurfacePanel as WorkbenchSurfacePanelImplementation,
 } from "./panel";
 import { FileReviewPanel as FileReviewPanelImplementation } from "./file-review";
+import { PanelErrorBoundary } from "./panel-error-boundary";
 
 type PanelProps = PluginAgentPanelProps | PluginWorkspacePanelProps;
 
@@ -20,7 +21,7 @@ export function WorkbenchPanel(props: PanelProps) {
   const Component = WorkbenchPanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "workspace", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="WorkbenchPanel" />;
-  return <Component {...props} />;
+  return <PanelErrorBoundary><Component {...props} /></PanelErrorBoundary>;
 }
 export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   reportStaticPanelLoad();
@@ -28,7 +29,7 @@ export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   const Component = WorkbenchSurfacePanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "surface", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="WorkbenchSurfacePanel" />;
-  return <Component {...props} />;
+  return <PanelErrorBoundary><Component {...props} /></PanelErrorBoundary>;
 }
 export function FileReviewPanel(props: PanelProps) {
   reportStaticPanelLoad();
@@ -36,7 +37,7 @@ export function FileReviewPanel(props: PanelProps) {
   const Component = FileReviewPanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "file", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="FileReviewPanel" />;
-  return <Component {...props} />;
+  return <PanelErrorBoundary><Component {...props} /></PanelErrorBoundary>;
 }
 
 function isComponent(value: unknown): value is (props: any) => ReactNode {

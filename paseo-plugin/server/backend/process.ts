@@ -8,6 +8,7 @@ export async function command(
     timeout?: number;
     env?: NodeJS.ProcessEnv;
     maxBytes?: number;
+    signal?: AbortSignal;
   },
 ) {
   return new Promise<{ stdout: string; stderr: string; code: number }>(
@@ -29,6 +30,7 @@ export async function command(
         stderr: Buffer[] = [];
       let bytes = 0,
         failure: WorkbenchError | null = null;
+      let settled = false;
       const timer = setTimeout(() => {
         failure = new WorkbenchError(
           "process_timeout",
@@ -46,16 +48,27 @@ export async function command(
           kill();
         } else chunks.push(chunk);
       };
+      const onAbort = () => {
+        if (settled || failure) return;
+        failure = new WorkbenchError("observer_cancelled", `${executable} cancelled`);
+        kill();
+      };
+      if (options.signal?.aborted) onAbort();
+      else options.signal?.addEventListener("abort", onAbort, { once: true });
       child.stdout.on("data", (chunk) => collect(stdout, chunk));
       child.stderr.on("data", (chunk) => collect(stderr, chunk));
       child.once("error", (error) => {
+        settled = true;
         clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
         reject(new WorkbenchError("process_unavailable", error.message));
       });
       // Resolve only on close: no caller starts a replacement while a timed-out
       // mutation is still writing files.
       child.once("close", (code) => {
+        settled = true;
         clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
         if (failure) reject(failure);
         else
           resolve({

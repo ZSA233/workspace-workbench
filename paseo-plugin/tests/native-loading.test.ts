@@ -21,7 +21,7 @@ test("initialization isolates UI imports, uses a built-in icon and preserves fai
   assert.ok(!entry.includes('icon: HeaderIcon'));
   assert.ok(!entry.includes('icon: "FileDiff"'));
   assert.ok(entry.includes("registerOptionalPanel"));
-  assert.ok(!readFileSync(new URL("../client/entry-panels.tsx", import.meta.url), "utf8").includes("PanelErrorBoundary"));
+  assert.ok(readFileSync(new URL("../client/entry-panels.tsx", import.meta.url), "utf8").includes("PanelErrorBoundary"));
   for (const file of ["../client/file-review.tsx", "../client/graph/canvas-web.tsx"]) {
     assert.ok(!readFileSync(new URL(file, import.meta.url), "utf8").includes('require("react-native-svg'));
   }
@@ -29,7 +29,7 @@ test("initialization isolates UI imports, uses a built-in icon and preserves fai
   const previous = console.error;
   console.error = () => {};
   try {
-    assert.throws(() => atInitializationStage("panel-module", () => { calls++; throw new TypeError("prototype unavailable"); }), /init-v4\/panel-module.*prototype/);
+    assert.throws(() => atInitializationStage("panel-module", () => { calls++; throw new TypeError("prototype unavailable"); }), /init-v5\/panel-module.*prototype/);
     assert.equal(atInitializationStage("panel-module", () => { calls++; return "recovered"; }), "recovered");
     assert.equal(calls, 2);
   } finally { console.error = previous; }

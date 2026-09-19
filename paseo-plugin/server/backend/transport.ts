@@ -19,6 +19,11 @@ import {
   WorkbenchError,
   type Json,
 } from "./storage.ts";
+const cancellableMethods = new Set([
+  "observer.versions", "workspace.list", "workspace.detail", "workspace.identify",
+  "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff",
+  "review-set.compare", "review-set.brief",
+]);
 export async function socketAlive(path: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const socket = createConnection(path);
@@ -31,18 +36,18 @@ export async function socketAlive(path: string): Promise<boolean> {
       if (["ENOENT", "ECONNREFUSED"].includes(e.code || "")) resolve(false);
       else reject(e);
     });
-    socket.setTimeout(800, () => {
+    socket.setTimeout(2000, () => {
       socket.destroy();
       reject(
         new WorkbenchError(
-          "observer_busy",
-          "existing socket did not answer; retained",
+          "observer_owner_slow",
+          "existing socket did not answer within the stale-check budget; retained",
         ),
       );
     });
   });
 }
-export async function response(service: Service, raw: string): Promise<Json> {
+export async function response(service: Service, raw: string, signal?: AbortSignal): Promise<Json> {
   let id: unknown = null;
   try {
     const request = JSON.parse(raw);
@@ -60,6 +65,7 @@ export async function response(service: Service, raw: string): Promise<Json> {
       result: await service.handle(
         String(request.method || ""),
         request.params || {},
+        signal,
       ),
     };
   } catch (error) {
@@ -101,7 +107,10 @@ export async function serveSocket(
   }
   const releaseLease = acquireProjectLease(service.config.recordsRoot);
   const sockets = new Set<Socket>(),
-    tasks = new Set<Promise<unknown>>();
+    tasks = new Set<Promise<unknown>>(),
+    pendingTasks = new Map<Promise<unknown>, { socket: Socket; controller: AbortController; cancellable: boolean; method: string; startedAt: number; aborted: boolean }>();
+  let cancelledRequests = 0;
+  let completedRequests = 0;
   let bound: { ino: number; dev: number } | null = null;
   let closing = false,
     closed: Promise<void> | null = null;
@@ -109,6 +118,16 @@ export async function serveSocket(
     if (closed) return closed;
     closing = true;
     closed = (async () => {
+      // A shutdown must not wait for read-only work that can no longer return
+      // to a client.  Abort first so Git children and their queue slots are
+      // released before the service drains.
+      for (const entry of pendingTasks.values()) {
+        if (entry.cancellable && !entry.aborted) {
+          entry.aborted = true;
+          cancelledRequests++;
+          entry.controller.abort();
+        }
+      }
       await Promise.allSettled([...tasks]);
       try {
         await service.close();
@@ -129,7 +148,15 @@ export async function serveSocket(
   };
   const server = createServer((socket) => {
     sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
+    socket.once("close", () => {
+      sockets.delete(socket);
+      for (const entry of pendingTasks.values())
+        if (entry.socket === socket && entry.cancellable && !entry.aborted) {
+          entry.aborted = true;
+          cancelledRequests++;
+          entry.controller.abort();
+        }
+    });
     let buffer = "",
       pending = 0;
     socket.setEncoding("utf8");
@@ -169,6 +196,10 @@ export async function serveSocket(
                   instanceId,
                   closing,
                   activeRequests: tasks.size,
+                  activeReadRequests: [...pendingTasks.values()].filter(entry => entry.cancellable).length,
+                  oldestRequestMs: pendingTasks.size ? Math.max(...[...pendingTasks.values()].map(entry => Date.now() - entry.startedAt)) : 0,
+                  cancelledRequests,
+                  completedRequests,
                 },
               },
             }) + "\n",
@@ -236,15 +267,22 @@ export async function serveSocket(
           pending--;
           continue;
         }
-        const task = response(service, line)
+        let parsedMethod = "";
+        try { parsedMethod = String((JSON.parse(line) as { method?: unknown }).method || ""); } catch {}
+        const controller = new AbortController();
+        let task: Promise<unknown>;
+        task = response(service, line, controller.signal)
           .then((value) => {
             if (!socket.destroyed) socket.write(JSON.stringify(value) + "\n");
           })
           .finally(() => {
             pending--;
             tasks.delete(task);
+            pendingTasks.delete(task);
+            completedRequests++;
           });
         tasks.add(task);
+        pendingTasks.set(task, { socket, controller, cancellable: cancellableMethods.has(parsedMethod), method: parsedMethod, startedAt: Date.now(), aborted: false });
       }
     });
   });

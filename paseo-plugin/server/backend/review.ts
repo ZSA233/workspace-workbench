@@ -6,6 +6,7 @@ export async function compare(
   workspaces: Workspaces,
   params: Json,
   includeBrief = false,
+  signal?: AbortSignal,
 ) {
   if (!Array.isArray(params.workspaceIds) || !params.workspaceIds.length)
     throw new WorkbenchError("workspace_required", "workspaceIds are required");
@@ -23,7 +24,7 @@ export async function compare(
       );
     for (const repo of workspace.repositories) {
       const targetRef = String(targets[repo.repoPath] || repo.baseRef || ""),
-        git = new Git(repo.worktreePath, workspaces.config.gitTimeout);
+        git = new Git(repo.worktreePath, workspaces.config.gitTimeout, undefined, signal);
       const entry: Json = {
         workspaceId: id,
         repoPath: repo.repoPath,

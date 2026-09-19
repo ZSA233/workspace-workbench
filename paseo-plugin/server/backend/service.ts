@@ -41,6 +41,7 @@ export class Service {
       this.runtime,
       this.cache,
     );
+    this.workspaces.onOrphanScanChanged = () => this.observation.scheduler.rosterChanged();
     this.cache.onProduced = scope => this.observation.scheduler.published(scope);
   }
   health() {
@@ -69,7 +70,7 @@ export class Service {
       observationScheduler: this.observation.scheduler.health(),
     };
   }
-  async handle(method: string, params: Json = {}): Promise<Json> {
+  async handle(method: string, params: Json = {}, signal?: AbortSignal): Promise<Json> {
     if (managementMethods.has(method))
       return this.workspaces.mutations.run(async () => {
         if (!["observer.reload", "main.repositories.save", "linked.workspaces.save"].includes(method) && !this.config.managementEnabled)
@@ -80,6 +81,7 @@ export class Service {
         try {
           return await this.mutate(method, params);
         } finally {
+          this.workspaces.invalidateOrphanScan();
           this.cache.clear();
           this.observation.scheduler.force();
           this.observation.scheduler.rosterChanged();
@@ -91,11 +93,11 @@ export class Service {
       case "observer.health":
         return this.health();
       case "workspace.list":
-        return this.observation.list(params);
+        return this.observation.list(params, signal);
       case "workspace.orphan.preview":
-        return this.workspaces.orphanPreview(String(params.workspaceId || ""));
+        return this.workspaces.orphanPreview(String(params.workspaceId || ""), signal);
       case "workspace.detail":
-        return this.observation.detail(params);
+        return this.observation.detail(params, signal);
       case "workspace.identify":
         return this.workspaces.identify(
           String(params.directory || this.config.sourceRoot),
@@ -173,10 +175,10 @@ export class Service {
       case "repository.graph":
       case "repository.changes":
       case "repository.diff":
-        return this.observation.repositoryQuery(method, params);
+        return this.observation.repositoryQuery(method, params, signal);
       case "review-set.compare":
       case "review-set.brief":
-        return compare(this.workspaces, params, method === "review-set.brief");
+        return compare(this.workspaces, params, method === "review-set.brief", signal);
       default:
         throw new WorkbenchError(
           method.startsWith("agent.")

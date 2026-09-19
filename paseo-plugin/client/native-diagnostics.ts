@@ -1,3 +1,5 @@
+import { CLIENT_GENERATION } from "./initialization";
+
 export type NativeDiagnostic = {
   phase: string;
   platform: string;
@@ -18,7 +20,7 @@ export function configureNativeDiagnosticReporter(next: { platform: string; repo
 
 export function reportNativeDiagnostic(phase: string, details: Record<string, string> = {}): void {
   const normalized = Object.fromEntries(Object.entries(details).map(([key, value]) => [key, String(value).slice(0, 4000)]));
-  const event: NativeDiagnostic = { phase, platform, details: normalized };
+  const event: NativeDiagnostic = { phase, platform, details: { pluginGeneration: CLIENT_GENERATION, ...normalized } };
   const key = `${phase}:${JSON.stringify(normalized)}`;
   if (emitted.has(key)) return;
   emitted.add(key);

@@ -197,7 +197,7 @@ export function repositoryPath(config: Config, repo: Repository): string {
     );
   return candidate;
 }
-export async function discover(config: Config, includeManual = false) {
+export async function discover(config: Config, includeManual = false, signal?: AbortSignal) {
   if (config.discovery.mode === "manual" && !includeManual)
     return { repositories: [] as Json[], incomplete: false, scannedDirectories: 0 };
   const results: Json[] = [],
@@ -211,6 +211,7 @@ export async function discover(config: Config, includeManual = false) {
     excludePaths: [config.stateRoot, config.recordsRoot, config.treesRoot, config.workspaceRoot],
     descendIntoRepositories: [...explicit],
     followSymlinks: config.discovery.followSymlinks,
+    signal,
   });
   for (const real of scan.roots) {
     if (explicit.has(real) || [...explicit].some(path => path !== real && inside(path, real))) continue;

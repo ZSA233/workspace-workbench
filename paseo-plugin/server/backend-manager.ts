@@ -102,9 +102,17 @@ export async function startBackend(projectConfig: string): Promise<ProjectBacken
   try {
     const route = resolveProject({ projectConfig });
     await manager().ensure(route, version());
-    const response = await backendRequest(route.socketPath, "observer.health").catch(() => null);
+    let response: Json | null = null;
+    let healthError: unknown;
+    try { response = await backendRequest(route.socketPath, "observer.health"); }
+    catch (error) { healthError = error; }
+    if (!response?.ok) {
+      const message = healthError instanceof Error ? healthError.message : "Backend is still recovering";
+      const state = recordBackendFailure(projectConfig, message);
+      return statusFor(route, Date.now() - Date.parse(state.failureSince!) < 10_000 ? "recovering" : "failed", message, response?.result);
+    }
     recordBackendSuccess(route.configPath);
-    return statusFor(route, "ready", undefined, response?.ok ? response.result : null);
+    return statusFor(route, "ready", undefined, response.result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     try { const route = resolveProject({ projectConfig }), state = recordBackendFailure(projectConfig, message); return statusFor(route, message.includes("retained") && Date.now() - Date.parse(state.failureSince!) < 10_000 ? "recovering" : "failed", message); }

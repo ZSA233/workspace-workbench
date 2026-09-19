@@ -16,7 +16,7 @@ export async function backendRequest(
   path: string,
   method: string,
   params: Json = {},
-  timeout = 1500,
+  timeout = 5000,
 ): Promise<Json | null> {
   if (Buffer.byteLength(path) > (process.platform === "darwin" ? 103 : 107))
     throw new WorkbenchError(
@@ -40,8 +40,8 @@ export async function backendRequest(
         finish(
           null,
           new WorkbenchError(
-            "observer_busy",
-            "socket owner did not answer; retained",
+            "observer_owner_slow",
+            "socket owner did not answer within the health budget; retained",
           ),
         ),
       timeout,
@@ -71,6 +71,19 @@ export async function backendRequest(
         finish(null, new Error("backend closed without a response"));
     });
   });
+}
+function ownedBackendAlive(route: ProjectRoute): boolean {
+  try {
+    const owner = optionalJson(`${route.socketPath}.owner.json`);
+    if (!owner || owner.implementation !== "node" ||
+      owner.configPath !== canonical(route.configPath) ||
+      typeof owner.pid !== "number" || owner.pid <= 0)
+      return false;
+    process.kill(owner.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 async function waitGone(route: ProjectRoute, instanceId?: string) {
   const deadline = Date.now() + 8000;
@@ -248,7 +261,15 @@ export class BackendSupervisor {
     );
   }
   private async start(route: ProjectRoute, version: string) {
-    const probe = await backendRequest(route.socketPath, "observer.health");
+    let probe: Json | null = null;
+    try {
+      probe = await backendRequest(route.socketPath, "observer.health");
+    } catch (error) {
+      // A slow health response is not proof that the owned backend died. Keep
+      // its socket and process intact; the next read can use the same owner.
+      if (error instanceof WorkbenchError && error.code === "observer_owner_slow" && ownedBackendAlive(route)) return;
+      throw error;
+    }
     const current = this.children.get(route.configPath);
     if (
       probe?.ok &&

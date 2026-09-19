@@ -1,4 +1,5 @@
-export const INITIALIZATION_REVISION = "init-v4";
+export const INITIALIZATION_REVISION = "init-v5";
+export const CLIENT_GENERATION = `client-${INITIALIZATION_REVISION}`;
 
 export function atInitializationStage<T>(stage: string, load: () => T): T {
   try { return load(); }

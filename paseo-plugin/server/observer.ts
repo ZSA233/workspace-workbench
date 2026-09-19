@@ -20,6 +20,7 @@ import {
   observerQuery,
   type ObserverResponse,
 } from "../shared/observer.ts";
+import type { Json } from "./backend/storage.ts";
 
 type QueryInput = {
   projectConfig?: string;
@@ -44,9 +45,20 @@ const mutationMethods = new Set<string>([
 const BRIDGE_CACHE_ENTRIES = 128;
 const BRIDGE_CACHE_BYTES = 8 * 1024 * 1024;
 const BRIDGE_IN_FLIGHT = 16;
+const READ_METHODS = new Set<string>([
+  "observer.versions", "workspace.list", "workspace.detail", "workspace.identify",
+  "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff",
+  "review-set.compare", "review-set.brief",
+]);
+// Paseo currently gives plugin RPC calls a shorter host budget than the
+// backend's historical observation timeout.  Read calls must finish (or close
+// their socket and cancel backend work) before that host budget expires.
+const READ_BRIDGE_TIMEOUT_MS = 5_500;
+const READ_OBSERVATION_BUDGET_MS = 5_000;
 const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
 
-function configuredBridgeTimeoutMs(): number {
+function configuredBridgeTimeoutMs(method?: string): number {
+  const configured = (() => {
   const project = currentProject();
   if (project) {
     try {
@@ -57,6 +69,20 @@ function configuredBridgeTimeoutMs(): number {
     }
   }
   return DEFAULT_OBSERVATION_TIMING.bridgeTimeoutMs;
+  })();
+  return method && READ_METHODS.has(method)
+    ? Math.min(configured, READ_BRIDGE_TIMEOUT_MS)
+    : configured;
+}
+
+function requestParams(input: QueryInput): Record<string, unknown> {
+  if (!READ_METHODS.has(input.method) || !["workspace.detail", "repository.graph", "repository.changes", "repository.diff"].includes(input.method))
+    return input.params || {};
+  const configured = Number(input.params?.observationBudgetMs);
+  const budget = Number.isFinite(configured) && configured > 0
+    ? Math.min(configured, READ_OBSERVATION_BUDGET_MS)
+    : READ_OBSERVATION_BUDGET_MS;
+  return { ...(input.params || {}), observationBudgetMs: budget };
 }
 
 class BridgeError extends Error {
@@ -100,6 +126,11 @@ export class ObserverBridge {
   private readonly cancellations = new Set<() => void>();
   private readonly inFlight = new Map<string, Promise<ObserverResponse>>();
   private readonly cache = new Map<string, { expiresAt: number; response: ObserverResponse; bytes: number }>();
+  private readonly methodStats = new Map<string, { requests: number; completed: number; failures: number; maxMs: number }>();
+  private totalRequests = 0;
+  private completedRequests = 0;
+  private failedRequests = 0;
+  private timeoutRequests = 0;
 
   private trimCache() {
     for (const [key, value] of this.cache) if (value.expiresAt <= Date.now()) this.cache.delete(key);
@@ -109,6 +140,18 @@ export class ObserverBridge {
       bytes -= this.cache.get(key)!.bytes;
       this.cache.delete(key);
     }
+  }
+
+  health(): Json {
+    return {
+      activeRequests: this.inFlight.size,
+      cacheEntries: this.cache.size,
+      totalRequests: this.totalRequests,
+      completedRequests: this.completedRequests,
+      failedRequests: this.failedRequests,
+      timeoutRequests: this.timeoutRequests,
+      methods: [...this.methodStats.entries()].sort((a, b) => b[1].requests - a[1].requests).slice(0, 32).map(([method, stats]) => ({ method, ...stats })),
+    };
   }
 
   private request(request: SocketRequest, timeoutMs: number): Promise<ObserverResponse> {
@@ -171,7 +214,14 @@ export class ObserverBridge {
     if (!allowedMethods.has(input.method)) {
       return { ok: false, error: { code: "method_not_allowed", message: "observer method is not allowed" } };
     }
-    const key = `${configuredSocketPath()}:${input.method}:${JSON.stringify(input.params || {})}`;
+    const params = requestParams(input);
+    this.totalRequests++;
+    const stats = this.methodStats.get(input.method) || { requests: 0, completed: 0, failures: 0, maxMs: 0 };
+    stats.requests++;
+    this.methodStats.set(input.method, stats);
+    if (this.methodStats.size > 64) this.methodStats.delete(this.methodStats.keys().next().value!);
+    const startedAt = Date.now();
+    const key = `${configuredSocketPath()}:${input.method}:${JSON.stringify(params)}`;
     const projectPrefix = `${configuredSocketPath()}:`;
     this.trimCache();
     const cached = versionedMethods.has(input.method) || mutationMethods.has(input.method) ? undefined : this.cache.get(key);
@@ -181,9 +231,12 @@ export class ObserverBridge {
     if (active) return active;
     if (this.inFlight.size >= BRIDGE_IN_FLIGHT && !["observer.health", "observer.versions"].includes(input.method))
       return { ok: false, error: { code: "observer_busy", message: "observer request limit reached; retry" } };
-    const request: SocketRequest = { id: String(++this.sequence), method: input.method, params: input.params || {} };
-    const pending = this.request(request, configuredBridgeTimeoutMs())
+    const request: SocketRequest = { id: String(++this.sequence), method: input.method, params };
+    const pending = this.request(request, configuredBridgeTimeoutMs(input.method))
       .then((response) => {
+        this.completedRequests++;
+        stats.completed++;
+        stats.maxMs = Math.max(stats.maxMs, Date.now() - startedAt);
         if (response.ok && mutationMethods.has(input.method)) {
           for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
         }
@@ -199,6 +252,10 @@ export class ObserverBridge {
         return response;
       })
       .catch(error => {
+        this.failedRequests++;
+        stats.failures++;
+        stats.maxMs = Math.max(stats.maxMs, Date.now() - startedAt);
+        if (error instanceof BridgeError && error.code === "observer_timeout") this.timeoutRequests++;
         if (!replayableMethods.has(input.method) && error instanceof BridgeError)
           return { ok: false, error: { code: "request_uncertain_retry_same_identity", message: "Response unavailable; reconcile the saved operation before retrying" } };
         throw error;
@@ -237,6 +294,8 @@ export async function handleObserver(input: QueryInput, context?: AgentContext):
       try {
         const response = await bridge.call(request);
         if (response.ok) recordBackendSuccess(currentProject()?.configPath);
+        if (request.method === "observer.health" && response.ok && response.result && typeof response.result === "object")
+          return { ...response, result: { ...response.result, bridge: bridge.health() } };
         if (request.method === "observer.versions" && response.ok && response.result && typeof response.result === "object")
           return { ...response, result: { ...response.result, reviewRevision: reviewRevision(), sessionRevision: sessionRevision() } };
         return response;
@@ -249,7 +308,10 @@ export async function handleObserver(input: QueryInput, context?: AgentContext):
         if (!project || !["observer_connection_refused", "observer_unavailable"].includes(code)) throw error;
         const backend = await startBackend(project.configPath);
         if (backend.state !== "ready") throw error;
-        return bridge.call(request);
+        const recovered = await bridge.call(request);
+        if (request.method === "observer.health" && recovered.ok && recovered.result && typeof recovered.result === "object")
+          return { ...recovered, result: { ...recovered.result, bridge: bridge.health() } };
+        return recovered;
       }
     };
     return await (currentProject() ? callWithRecovery() : withProject(input, callWithRecovery));

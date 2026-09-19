@@ -150,6 +150,28 @@ test("unrelated Unix service is neither killed nor unlinked", async () => {
   }
 });
 
+test("a slow health owner is classified as retained instead of a dead socket", async () => {
+  const f = fixture("slow-health");
+  const sockets = new Set<any>();
+  const server = createServer((socket) => {
+    // Accept the probe but deliberately do not answer it.
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => server.listen(f.route.socketPath, resolve));
+  try {
+    await assert.rejects(
+      backendRequest(f.route.socketPath, "observer.health", {}, 20),
+      (error: any) => error?.code === "observer_owner_slow" && /retained/.test(error.message),
+    );
+    assert.ok(existsSync(f.route.socketPath));
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test("unload racing startup does not leave an orphan backend", async () => {
   const f = fixture("unload"),
     supervisor = new BackendSupervisor(entry);

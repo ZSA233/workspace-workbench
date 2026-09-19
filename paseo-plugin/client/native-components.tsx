@@ -23,6 +23,7 @@ import {
   type ModalProps,
 } from "@getpaseo/plugin/client/react-native";
 import { createElement, type ComponentType, type ReactNode, type Ref } from "react";
+import { reportNativeDiagnostic } from "./native-diagnostics";
 
 type IconProps = { name: string; size?: number; color?: string };
 
@@ -34,8 +35,37 @@ function isRenderable(value: unknown): value is Renderable {
 
 function renderComponent(candidate: unknown, fallback: unknown, props: unknown, children?: ReactNode): ReactNode {
   const component = isRenderable(candidate) ? candidate : isRenderable(fallback) ? fallback : null;
-  if (!component) return null;
+  if (!component) {
+    reportNativeDiagnostic("component-missing", {
+      candidate: componentType(candidate),
+      fallback: componentType(fallback),
+    });
+    return null;
+  }
   return children === undefined ? createElement(component as any, props as any) : createElement(component as any, props as any, children);
+}
+
+function componentType(value: unknown): string {
+  if (typeof value === "function") return `function:${value.name || "anonymous"}`;
+  if (value && typeof value === "object" && "$$typeof" in value) return "react-object";
+  return value === undefined ? "undefined" : value === null ? "null" : typeof value;
+}
+
+export function nativeComponentInventory(): Record<string, string> {
+  return {
+    hostIcon: componentType(hostIcon),
+    hostModal: componentType(hostModal),
+    hostModalContent: componentType((hostModal as any)?.Content),
+    hostScrollView: componentType(hostScrollView),
+    hostFlatList: componentType(hostFlatList),
+    hostTextInput: componentType(hostTextInput),
+    nativeModal: componentType(NativeModal),
+    nativeScrollView: componentType(NativeScrollView),
+    nativeFlatList: componentType(NativeFlatList),
+    nativeTextInput: componentType(NativeTextInput),
+    nativeText: componentType(Text),
+    nativeView: componentType(View),
+  };
 }
 
 // Native Paseo builds do not always ship the complete injected component set.

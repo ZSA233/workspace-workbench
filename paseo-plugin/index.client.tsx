@@ -8,6 +8,9 @@ import { copy, getWorkbenchCopy } from "./shared/copy";
 import { FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel } from "./client/entry-panels";
 import { atInitializationStage, INITIALIZATION_REVISION } from "./client/initialization";
 import { localeFromHostProps } from "./client/i18n";
+import { clientDiagnostic } from "./shared/client-diagnostics";
+import { nativeComponentInventory } from "./client/native-components";
+import { configureNativeDiagnosticReporter, reportNativeDiagnostic } from "./client/native-diagnostics";
 
 const observerSurfaceId = "workbench";
 
@@ -45,6 +48,15 @@ function contributeClient(client: PluginClientContext) {
     return atInitializationStage(`command:${command.id}`, () => client.addCommandCenterItem(command));
   }
   const platform: string = atInitializationStage("platform", () => Platform.OS);
+  if (platform !== "web") {
+    configureNativeDiagnosticReporter({
+      platform,
+      report(event) {
+        void client.rpc(clientDiagnostic, event).catch(() => {});
+      },
+    });
+    reportNativeDiagnostic("registration-components", nativeComponentInventory());
+  }
   const openGuard = createOpenGuard();
   const contextSurfaces = new Map<string, () => void>();
   let surfaceContext: { workspaceId: string; agentId?: string; key: string } | null = null;
@@ -246,6 +258,7 @@ function contributeClient(client: PluginClientContext) {
   console.info(`[workbench/${INITIALIZATION_REVISION}] registered`, platform);
   return () => {
     disposed = true;
+    configureNativeDiagnosticReporter(null);
     surfaceContext = null;
     surfaceListeners.clear();
     for (const cleanup of contextSurfaces.values()) cleanup();

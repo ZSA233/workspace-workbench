@@ -1,6 +1,8 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { copy } from "../shared/copy";
+import { reportNativeDiagnostic } from "./native-diagnostics";
+import { Platform } from "react-native";
 
 type Props = { children: ReactNode };
 type State = { error: Error | null };
@@ -19,6 +21,12 @@ export class PanelErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error("workbench_panel_render_failed", error, info.componentStack);
+    reportNativeDiagnostic("panel-render-failed", {
+      message: error.message,
+      stack: error.stack || "",
+      componentStack: info.componentStack || "",
+      platform: Platform.OS,
+    });
   }
 
   render() {

@@ -2,6 +2,7 @@ import type { PluginAgentPanelProps, PluginWorkspacePanelProps, PluginSurfacePro
 import { atInitializationStage } from "./initialization";
 import type { WorkbenchSurfaceProps } from "./surface-context";
 import { PanelErrorBoundary } from "./panel-error-boundary";
+import { reportNativeDiagnostic } from "./native-diagnostics";
 
 // Register lightweight function components, not an eagerly evaluated UI graph.
 // A failed module load is reported with its phase and is never cached as success.
@@ -9,7 +10,16 @@ type PanelProps = PluginAgentPanelProps | PluginWorkspacePanelProps;
 let panels: typeof import("./panel") | undefined;
 let review: typeof import("./file-review") | undefined;
 function loadPanels() {
-  return panels ||= atInitializationStage("panel-module", () => require("./panel") as typeof import("./panel"));
+  if (panels) return panels;
+  reportNativeDiagnostic("panel-module-before-load");
+  try {
+    panels = atInitializationStage("panel-module", () => require("./panel") as typeof import("./panel"));
+    reportNativeDiagnostic("panel-module-loaded", { exports: Object.keys(panels).sort().join(",") });
+    return panels;
+  } catch (error) {
+    reportNativeDiagnostic("panel-module-failed", { message: error instanceof Error ? error.message : String(error) });
+    throw error;
+  }
 }
 export function WorkbenchPanel(props: PanelProps) {
   return <PanelErrorBoundary><LazyWorkbenchPanel {...props} /></PanelErrorBoundary>;

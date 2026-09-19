@@ -369,17 +369,40 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const rawRpc = useRpc(observerQuery);
   reportNativeDiagnostic("project-panel-observer-rpc-ready");
   const rpc = (input: Parameters<typeof rawRpc>[0]) => rawRpc({ ...input, projectConfig });
-  const getStorage = useRpc(projectStorageQuery);
-  const storageQuery = useQuery({
+  let getStorage;
+  try {
+    getStorage = useRpc(projectStorageQuery);
+    reportNativeDiagnostic("project-panel-storage-rpc-ready");
+  } catch (error) {
+    reportNativeRenderError("project-panel-storage-rpc-failed", error);
+    throw error;
+  }
+  let storageQuery;
+  try {
+    storageQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "project-storage"],
     queryFn: () => getStorage({ projectConfig }),
     enabled: Boolean(projectConfig),
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: 60_000,
-  });
-  const startBackend = useRpc(projectBackendStart);
-  const backendQuery = useQuery({
+    });
+    reportNativeDiagnostic("project-panel-storage-query-ready", { pending: String(storageQuery.isPending) });
+  } catch (error) {
+    reportNativeRenderError("project-panel-storage-query-failed", error);
+    throw error;
+  }
+  let startBackend;
+  try {
+    startBackend = useRpc(projectBackendStart);
+    reportNativeDiagnostic("project-panel-backend-rpc-ready");
+  } catch (error) {
+    reportNativeRenderError("project-panel-backend-rpc-failed", error);
+    throw error;
+  }
+  let backendQuery;
+  try {
+    backendQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "backend-start"],
     queryFn: () => startBackend({ projectConfig }),
     enabled: Boolean(projectConfig),
@@ -387,7 +410,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     staleTime: Infinity,
     refetchInterval: false,
     refetchOnWindowFocus: false,
-  });
+    });
+    reportNativeDiagnostic("project-panel-backend-query-ready", { pending: String(backendQuery.isPending) });
+  } catch (error) {
+    reportNativeRenderError("project-panel-backend-query-failed", error);
+    throw error;
+  }
   const observationTiming = useMemo(
     () => observationTimingFromWire(backendQuery.data?.timing),
     [backendQuery.data?.timing],

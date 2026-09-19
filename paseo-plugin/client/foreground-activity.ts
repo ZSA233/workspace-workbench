@@ -4,7 +4,8 @@ import { observeWebForeground, webForeground, type WebForegroundTarget } from ".
 
 function currentForeground(): boolean {
   if (Platform.OS === "web") return webForeground(globalThis as WebForegroundTarget);
-  return !AppState.currentState || AppState.currentState === "active";
+  const appState = AppState as unknown as { currentState?: string } | undefined;
+  return !appState?.currentState || appState.currentState === "active";
 }
 
 export function useForegroundActivity(): boolean {
@@ -12,8 +13,14 @@ export function useForegroundActivity(): boolean {
   useEffect(() => {
     if (Platform.OS === "web") return observeWebForeground(globalThis as WebForegroundTarget, setActive);
     setActive(currentForeground());
-    const subscription = AppState.addEventListener("change", (state) => setActive(state === "active"));
-    return () => subscription.remove();
+    const appState = AppState as unknown as { addEventListener?: (event: string, listener: (state: string) => void) => { remove?: () => void } | undefined } | undefined;
+    if (!appState?.addEventListener) return;
+    try {
+      const subscription = appState.addEventListener("change", (state) => setActive(state === "active"));
+      return () => { try { subscription?.remove?.(); } catch { /* optional native API */ } };
+    } catch {
+      return;
+    }
   }, []);
   return active;
 }

@@ -53,11 +53,13 @@ export function useRefreshOnForeground(enabled: boolean, refresh: () => void): v
       };
     }
 
-    let previousState = AppState.currentState;
-    const subscription = AppState.addEventListener("change", (nextState) => {
+    const appState = AppState as unknown as { currentState?: string; addEventListener?: (event: string, listener: (state: string) => void) => { remove?: () => void } | undefined } | undefined;
+    if (!appState?.addEventListener) return;
+    let previousState = appState.currentState;
+    const subscription = appState.addEventListener("change", (nextState) => {
       if (nextState === "active" && previousState !== "active") trigger();
       previousState = nextState;
     });
-    return () => subscription.remove();
+    return () => { try { subscription?.remove?.(); } catch { /* optional native API */ } };
   }, [enabled]);
 }

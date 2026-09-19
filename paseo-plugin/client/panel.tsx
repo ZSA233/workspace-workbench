@@ -10,7 +10,7 @@ import { copyText,Modal,ScrollView,TextInput,useToast } from "./native-component
 import { useQuery } from "@tanstack/react-query";
 import { useCallback,useEffect,useMemo,useRef,useState } from "react";
 import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,View,type ViewStyle } from "react-native";
-import { copy, getWorkbenchCopy, localizedReviewError } from "../shared/copy";
+import { copy, getWorkbenchCopy, localizedReviewError, type WorkbenchCopy, type WorkbenchLocale } from "../shared/copy";
 
 import {
   agentContextQuery,
@@ -167,6 +167,13 @@ function pathContains(root: string, directory: string): boolean {
   return current === base || current.startsWith(`${base}/`);
 }
 
+function reportNativeRenderError(phase: string, error: unknown): void {
+  reportNativeDiagnostic(phase, {
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error && error.stack ? error.stack : "",
+  });
+}
+
 // React Native's shared cursor type only exposes `auto` and `pointer`, while
 // the web renderer forwards the full CSS cursor value. Keep the native style
 // portable and add the vertical resize affordance only where it is supported.
@@ -217,10 +224,31 @@ export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
 export function ObserverPanelContent(props: ObserverPanelContentProps) {
   const localizedCopy = useWorkbenchCopy();
   reportNativeDiagnostic("observer-content-entry", { context: props.context, workspaceId: props.hostWorkspaceId, directory: props.paseoWorkspace?.directory || "" });
-  const getProjects = useRpc(projectsQuery);
+  let getProjects: ReturnType<typeof useRpc<typeof projectsQuery["input"], typeof projectsQuery["output"]>>;
+  try {
+    getProjects = useRpc(projectsQuery);
+    reportNativeDiagnostic("observer-rpc-hook-ready", { method: "projects-query" });
+  } catch (error) {
+    reportNativeRenderError("observer-rpc-hook-failed", error);
+    throw error;
+  }
   const directory = props.paseoWorkspace?.directory || "";
-  const projects = useQuery({ queryKey: ["workbench-projects", props.host.id, directory], queryFn: () => getProjects({ directory: directory || undefined }), refetchOnWindowFocus: false, retry: false });
-  const memory = useProjectMemory(props.host.id);
+  let projects;
+  try {
+    projects = useQuery({ queryKey: ["workbench-projects", props.host.id, directory], queryFn: () => getProjects({ directory: directory || undefined }), refetchOnWindowFocus: false, retry: false });
+    reportNativeDiagnostic("observer-project-query-ready", { pending: String(projects.isPending) });
+  } catch (error) {
+    reportNativeRenderError("observer-project-query-failed", error);
+    throw error;
+  }
+  let memory;
+  try {
+    memory = useProjectMemory(props.host.id);
+    reportNativeDiagnostic("observer-memory-hook-ready", { ready: String(memory.ready) });
+  } catch (error) {
+    reportNativeRenderError("observer-memory-hook-failed", error);
+    throw error;
+  }
   const [pickingProject, setPickingProject] = useState(false);
   const [chosen, setChosen] = useState("");
   const [setupProject, setSetupProject] = useState<ProjectInfo | null>(null);
@@ -230,8 +258,13 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     setSetupProject(null);
     setChosen("");
   }, [directory]);
-  if (!directory && !memory.ready) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoading}</Text>;
-  if (directory && !active) return <ProjectSetup
+  if (!directory && !memory.ready) {
+    reportNativeDiagnostic("observer-first-branch", { branch: "memory-loading" });
+    return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoading}</Text>;
+  }
+  if (directory && !active) {
+    reportNativeDiagnostic("observer-first-branch", { branch: "project-setup" });
+    return <ProjectSetup
     directory={directory}
     theme={props.theme}
     onSaved={(project) => {
@@ -239,11 +272,16 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
       setChosen(project.configPath);
       void projects.refetch();
     }}
-  />;
-  if (!active || pickingProject) return <View style={{ padding: 12, gap: 8 }}>
+    />;
+  }
+  if (!active || pickingProject) {
+    reportNativeDiagnostic("observer-first-branch", { branch: "project-picker" });
+    return <View style={{ padding: 12, gap: 8 }}>
     <Text style={{ color: props.theme.colors.foreground }}>{projects.isPending ? localizedCopy.projectLoading : projects.isError ? localizedCopy.projectLoadFailed : !projects.data?.length ? localizedCopy.noRegisteredProjects : localizedCopy.selectProject}</Text>
     {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => { setChosen(p.configPath); setSetupProject(null); setPickingProject(false); }}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
-  </View>;
+    </View>;
+  }
+  reportNativeDiagnostic("observer-first-branch", { branch: "project-panel", project: active.configPath });
   return <View style={{ flex: 1 }}>
     <ProjectPanel key={active.configPath} {...props} projectConfig={active.configPath} onProjectReady={() => memory.remember(active.configPath)} onSwitchProject={!directory && (projects.data?.length || 0) > 1 ? () => setPickingProject(true) : undefined} />
   </View>;
@@ -251,11 +289,26 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
 
 function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string; onProjectReady?: () => void; onSwitchProject?: () => void }) {
   const { projectConfig } = props;
-  const foreground = useForegroundActivity();
+  reportNativeDiagnostic("project-panel-entry", { projectConfig });
+  let foreground: boolean;
+  try {
+    foreground = useForegroundActivity();
+  } catch (error) {
+    reportNativeRenderError("project-panel-foreground-failed", error);
+    throw error;
+  }
+  reportNativeDiagnostic("project-panel-foreground-ready", { active: String(foreground) });
   const { hostWorkspaceId, paseoWorkspace } = props;
   const { theme, layout } = props;
-  const localizedCopy = useWorkbenchCopy();
-  const locale = useWorkbenchLocale();
+  let localizedCopy: WorkbenchCopy;
+  let locale: WorkbenchLocale;
+  try {
+    localizedCopy = useWorkbenchCopy();
+    locale = useWorkbenchLocale();
+  } catch (error) {
+    reportNativeRenderError("project-panel-locale-failed", error);
+    throw error;
+  }
   const preferenceScopeKey = `project:${projectConfig}:paseo-workspace:${hostWorkspaceId || PREFERENCE_SCOPE_FALLBACK}`;
   const [panelWidth, setPanelWidth] = useState(0);
   const [panelHeight, setPanelHeight] = useState(0);
@@ -289,14 +342,32 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const openRuntimeSettings = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setStorageMenuOpen(false); setReviewSettingsOpen(false); setRuntimeSettingsOpen(true); }, []);
   const compact = layout.compact || (panelWidth > 0 && panelWidth < 480);
   const styles = useMemo(() => makeStyles(theme, compact), [theme, compact]);
-  const preferences = useObserverPreferences(preferenceScopeKey);
+  let preferences: ReturnType<typeof useObserverPreferences>;
+  try {
+    preferences = useObserverPreferences(preferenceScopeKey);
+  } catch (error) {
+    reportNativeRenderError("project-panel-preferences-failed", error);
+    throw error;
+  }
+  reportNativeDiagnostic("project-panel-preferences-ready", { ready: String(preferences.ready) });
   useEffect(() => {
     let mounted = true;
-    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => { if (mounted) setReduceMotion(enabled); }).catch(() => {});
-    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduceMotion);
-    return () => { mounted = false; subscription.remove(); };
+    const accessibility = AccessibilityInfo as unknown as {
+      isReduceMotionEnabled?: () => Promise<boolean>;
+      addEventListener?: (event: string, listener: (enabled: boolean) => void) => { remove?: () => void } | undefined;
+    } | undefined;
+    try {
+      void accessibility?.isReduceMotionEnabled?.().then((enabled) => { if (mounted) setReduceMotion(enabled); }).catch(() => {});
+      const subscription = accessibility?.addEventListener?.("reduceMotionChanged", setReduceMotion);
+      return () => { mounted = false; try { subscription?.remove?.(); } catch { /* optional native API */ } };
+    } catch (error) {
+      reportNativeRenderError("accessibility-init-failed", error);
+      return () => { mounted = false; };
+    }
   }, []);
+  reportNativeDiagnostic("project-panel-accessibility-ready");
   const rawRpc = useRpc(observerQuery);
+  reportNativeDiagnostic("project-panel-observer-rpc-ready");
   const rpc = (input: Parameters<typeof rawRpc>[0]) => rawRpc({ ...input, projectConfig });
   const getStorage = useRpc(projectStorageQuery);
   const storageQuery = useQuery({

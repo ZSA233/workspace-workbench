@@ -35,3 +35,29 @@ test("workspace submit preserves task across MCP argument envelopes", async () =
     DaemonClient.prototype.invokePluginRpc = originalInvoke;
   }
 });
+
+test("workspace create uses the direct Git operation RPC instead of Agent orchestration", async () => {
+  const originalConnect = DaemonClient.prototype.connect;
+  const originalClose = DaemonClient.prototype.close;
+  const originalInvoke = DaemonClient.prototype.invokePluginRpc;
+  const seen: unknown[] = [];
+  DaemonClient.prototype.connect = async function () {};
+  DaemonClient.prototype.close = async function () {};
+  DaemonClient.prototype.invokePluginRpc = async function (...args: unknown[]) {
+    seen.push(args);
+    return { ok: true, operationId: "create-direct-1", workspaceId: "direct" };
+  };
+  try {
+    const response = await handle({ method: "tools/call", params: {
+      name: "workbench_workspace_create",
+      arguments: { requestId: "create-direct-1", name: "direct", repositories: ["one"] },
+    } });
+    assert.equal(response.isError, false);
+    assert.equal((seen.at(-1) as unknown[])[1], "workspace.workbench.workspace-create");
+    assert.equal(((seen.at(-1) as unknown[])[2] as { requestId: string }).requestId, "create-direct-1");
+  } finally {
+    DaemonClient.prototype.connect = originalConnect;
+    DaemonClient.prototype.close = originalClose;
+    DaemonClient.prototype.invokePluginRpc = originalInvoke;
+  }
+});

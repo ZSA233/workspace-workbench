@@ -130,11 +130,19 @@ test("Node backend preserves public rejection codes and idempotent records", asy
         return true;
       });
     }
-    const request = { name: "sample", repositories: ["one"], baseRefs: { one: "HEAD" } };
+    const request = { requestId: "create-sample-1", name: "sample", repositories: ["one"], baseRefs: { one: "HEAD" } };
     const created = await service.handle("workspace.create", request);
     const repeated = await service.handle("workspace.create", request);
     assert.equal(repeated.requestHash, created.requestHash);
     assert.equal(repeated.createdAt, created.createdAt);
+    assert.equal(repeated.operationId, "create-sample-1");
+    const operation = await service.handle("workspace.operation.status", { operationId: "create-sample-1" });
+    assert.equal(operation.workspaceId, created.id);
+    assert.equal(operation.stage, "active");
+    await assert.rejects(
+      service.handle("workspace.create", { ...request, repositories: ["two"], baseRefs: { two: "HEAD" } }),
+      (error: any) => error?.code === "request_identity_conflict",
+    );
     const added = await service.handle("workspace.addRepositories", {
       workspaceId: created.id,
       repositories: ["two"],

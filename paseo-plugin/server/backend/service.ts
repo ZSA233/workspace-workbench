@@ -102,6 +102,8 @@ export class Service {
         return this.workspaces.identify(
           String(params.directory || this.config.sourceRoot),
         );
+      case "workspace.operation.status":
+        return this.workspaces.operationStatus(String(params.operationId || ""));
       case "main.repositories.list":
         return this.workspaces.mainCandidates();
       case "linked.workspaces.list":

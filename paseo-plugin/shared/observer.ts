@@ -9,6 +9,7 @@ export const observerMethods = [
   "workspace.detail",
   "workspace.identify",
   "workspace.runtime",
+  "workspace.operation.status",
   "workspace.reviewRuntime",
   "workspace.create",
   "workspace.orphan.preview",

@@ -246,6 +246,19 @@ try {
     "actual plugin loaded; separate Node backend PIDs for two projects",
   );
   report.checks.push("actual worker health exposes the shared observation timing and instance identity");
+  const directCreate = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.workspace-create", {
+    projectConfig: configs[0], requestId: "direct-live-create", name: "direct-live-create", repositories: ["one"], baseRefs: {},
+  });
+  assert.equal(directCreate.ok, true, JSON.stringify(directCreate));
+  assert.equal(directCreate.operationId, "direct-live-create");
+  const directStatus = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.workspace-operation-status", {
+    projectConfig: configs[0], operationId: "direct-live-create",
+  });
+  assert.equal(directStatus.ok, true, JSON.stringify(directStatus));
+  assert.equal(directStatus.workspaceId, directCreate.workspaceId);
+  await rpc(configs[0], "workspace.remove", { workspaceId: directCreate.workspaceId });
+  await rpc(configs[0], "workspace.cleanup", { workspaceId: directCreate.workspaceId, confirm: true });
+  report.checks.push("direct Workspace create/status RPC completed without Agent context or handoff");
   const created = await rpc(configs[0], "workspace.create", {
     name: "sample",
     repositories: ["one"],

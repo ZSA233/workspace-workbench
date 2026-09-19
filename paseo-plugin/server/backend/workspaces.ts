@@ -40,6 +40,11 @@ function pythonJson(value: any): string {
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
 }
+
+function createRequestParams(params: Json): Json {
+  const { requestId: _requestId, operationId: _operationId, ...stableParams } = params;
+  return stableParams;
+}
 type OrphanScanSnapshot = {
   state: "ready" | "scanning" | "stale" | "failed";
   candidates: Json[];
@@ -788,7 +793,7 @@ export class Workspaces {
   private async createGitlink(params: Json) {
     if (!params.name?.trim()) throw new WorkbenchError("workspace_name_required", "workspace name is required");
     if (params.repositories !== undefined) throw new WorkbenchError("request_invalid", "Gitlink members are fixed by the outer commit");
-    const id = slug(params.id || params.name), requestHash = hash(pythonJson(params));
+    const id = slug(params.id || params.name), requestHash = hash(pythonJson(createRequestParams(params)));
     if (id === "main" || id.startsWith("linked-")) throw new WorkbenchError("workspace_id_reserved", "reserved workspace id");
     const branch = String(params.branchName || `feature/${id}`);
     if (!/^[A-Za-z0-9._/-]+$/.test(branch) || branch.includes("..") || branch.startsWith("/"))
@@ -797,10 +802,18 @@ export class Workspaces {
     let workspace: Json;
     if (existsSync(record)) {
       workspace = this.get(id);
-      if (workspace.layout !== "gitlink" || workspace.requestHash !== requestHash ||
-        !["active", "creating", "create_failed"].includes(workspace.state))
+      if (workspace.layout !== "gitlink" || !["active", "creating", "create_failed"].includes(workspace.state))
         throw new WorkbenchError("workspace_exists", "workspace already exists");
-      if (workspace.state === "active") return workspace;
+      if (workspace.requestHash !== requestHash) {
+        if (params.requestId && workspace.operationId === String(params.requestId))
+          throw new WorkbenchError("request_identity_conflict", "The saved Workspace operation has different Git inputs", { operationId: params.requestId, workspaceId: workspace.id, stage: workspace.state });
+        throw new WorkbenchError("workspace_exists", "workspace already exists");
+      }
+      if (params.requestId && !workspace.operationId) {
+        workspace.operationId = String(params.requestId);
+        this.save(workspace, false);
+      }
+      if (workspace.state === "active") return { ...workspace, operationId: workspace.operationId || params.requestId || id, reused: true };
     } else {
       const source = this.get(String(params.sourceWorkspaceId || ""));
       if (source.kind !== "linked-live" || !inside(source.sourceRoot, this.config.sourceRoot))
@@ -836,7 +849,7 @@ export class Workspaces {
         if ((await git.run(["show-ref", "--verify", `refs/heads/${branch}`], false)).code === 0)
           throw new WorkbenchError("branch_exists", `branch already exists in ${plan.repoPath}`);
       }
-      workspace = { schemaVersion: 1, requestHash, id, displayName: params.name.trim(), kind: "managed",
+      workspace = { schemaVersion: 1, requestHash, ...(params.requestId ? { operationId: String(params.requestId) } : {}), id, displayName: params.name.trim(), kind: "managed",
         layout: "gitlink", managed: true, state: "creating", sourceWorkspaceId: source.id,
         sourceRoot: root, treePath, branchName: branch, repositories: plans,
         repositoryIds: plans.map(plan => plan.id), createdAt: now() };
@@ -846,7 +859,7 @@ export class Workspaces {
       for (const plan of workspace.repositories) await this.materializeGitlink(plan, workspace);
       workspace.state = "active";
       delete workspace.issues;
-      return this.save(workspace, false);
+      return { ...this.save(workspace, false), operationId: workspace.operationId || params.requestId || id };
     } catch (error) {
       workspace.state = "create_failed";
       workspace.issues = [issue(error)];
@@ -862,7 +875,7 @@ export class Workspaces {
         "workspace name is required",
       );
     const id = slug(params.id || params.name),
-      requestHash = hash(pythonJson(params));
+      requestHash = hash(pythonJson(createRequestParams(params)));
     if (id === "main")
       throw new WorkbenchError(
         "workspace_id_reserved",
@@ -873,15 +886,21 @@ export class Workspaces {
     let workspace: Json;
     if (existsSync(path)) {
       workspace = this.get(id);
-      if (
-        workspace.requestHash !== requestHash ||
-        !["active", "creating", "create_failed"].includes(workspace.state)
-      )
+      if (!["active", "creating", "create_failed"].includes(workspace.state))
         throw new WorkbenchError(
           "workspace_exists",
           "workspace already exists",
         );
-      if (workspace.state === "active") return this.save(workspace);
+      if (workspace.requestHash !== requestHash) {
+        if (params.requestId && workspace.operationId === String(params.requestId))
+          throw new WorkbenchError("request_identity_conflict", "The saved Workspace operation has different Git inputs", { operationId: params.requestId, workspaceId: workspace.id, stage: workspace.state });
+        throw new WorkbenchError("workspace_exists", "workspace already exists");
+      }
+      if (params.requestId && !workspace.operationId) {
+        workspace.operationId = String(params.requestId);
+        this.save(workspace, false);
+      }
+      if (workspace.state === "active") return { ...this.save(workspace), operationId: workspace.operationId || params.requestId || id, reused: true };
     } else {
       const treePath = canonical(join(this.config.treesRoot, id));
       if (!inside(treePath, this.config.treesRoot) || existsSync(treePath))
@@ -892,6 +911,7 @@ export class Workspaces {
       workspace = {
         schemaVersion: 1,
         requestHash,
+        ...(params.requestId ? { operationId: String(params.requestId) } : {}),
         id,
         displayName: params.name.trim(),
         kind: "managed",
@@ -935,7 +955,7 @@ export class Workspaces {
       }
       workspace.state = "active";
       delete workspace.issues;
-      return this.save(workspace);
+      return { ...this.save(workspace), operationId: workspace.operationId || params.requestId || id };
     } catch (error) {
       workspace.state = "create_failed";
       workspace.issues = [issue(error)];
@@ -946,6 +966,18 @@ export class Workspaces {
         workspace.issues,
       );
     }
+  }
+  operationStatus(operationId: string): Json {
+    if (!operationId.trim()) throw new WorkbenchError("operation_id_required", "operationId is required");
+    const match = this.list().find(item => item.operationId === operationId || item.id === operationId);
+    if (!match) throw new WorkbenchError("operation_not_found", "Workspace operation was not found");
+    return {
+      operationId,
+      workspaceId: match.id,
+      treePath: match.treePath || null,
+      stage: match.state || "unknown",
+      result: match,
+    };
   }
   async add(params: Json) {
     const workspace = this.get(String(params.workspaceId || ""));

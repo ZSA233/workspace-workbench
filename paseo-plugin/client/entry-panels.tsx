@@ -1,5 +1,5 @@
 import type { PluginAgentPanelProps, PluginWorkspacePanelProps, PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { View } from "react-native";
+import { Text, View } from "react-native";
 import type { ReactNode } from "react";
 import type { WorkbenchSurfaceProps } from "./surface-context";
 import { reportNativeDiagnostic } from "./native-diagnostics";
@@ -9,6 +9,8 @@ import {
 } from "./panel";
 import { FileReviewPanel as FileReviewPanelImplementation } from "./file-review";
 import { PanelErrorBoundary } from "./panel-error-boundary";
+import { CLIENT_GENERATION } from "./initialization";
+import { copy } from "../shared/copy";
 
 type PanelProps = PluginAgentPanelProps | PluginWorkspacePanelProps;
 
@@ -21,7 +23,7 @@ export function WorkbenchPanel(props: PanelProps) {
   const Component = WorkbenchPanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "workspace", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="WorkbenchPanel" />;
-  return <PanelErrorBoundary><Component {...props} /></PanelErrorBoundary>;
+  return <PanelErrorBoundary entry="workspace-panel"><Component {...props} /></PanelErrorBoundary>;
 }
 export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   reportStaticPanelLoad();
@@ -29,7 +31,7 @@ export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   const Component = WorkbenchSurfacePanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "surface", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="WorkbenchSurfacePanel" />;
-  return <PanelErrorBoundary><Component {...props} /></PanelErrorBoundary>;
+  return <PanelErrorBoundary entry="surface"><Component {...props} /></PanelErrorBoundary>;
 }
 export function FileReviewPanel(props: PanelProps) {
   reportStaticPanelLoad();
@@ -37,7 +39,7 @@ export function FileReviewPanel(props: PanelProps) {
   const Component = FileReviewPanelImplementation;
   reportNativeDiagnostic("panel-component-resolved", { kind: "file", type: componentType(Component) });
   if (!isComponent(Component)) return <NativePanelLoadFailure name="FileReviewPanel" />;
-  return <PanelErrorBoundary><Component {...props} /></PanelErrorBoundary>;
+  return <PanelErrorBoundary entry="file-panel"><Component {...props} /></PanelErrorBoundary>;
 }
 
 function isComponent(value: unknown): value is (props: any) => ReactNode {
@@ -49,6 +51,6 @@ function componentType(value: unknown): string {
 }
 
 function NativePanelLoadFailure({ name }: { name: string }) {
-  void name;
-  return <View />;
+  reportNativeDiagnostic("component-resolution-failed", { componentName: name, stage: "component_resolution", generation: CLIENT_GENERATION });
+  return <View style={{ flex: 1, padding: 12, gap: 6 }}><Text>{copy.openFailed}</Text><Text selectable>{`${name} · ${CLIENT_GENERATION}`}</Text></View>;
 }

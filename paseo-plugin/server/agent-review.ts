@@ -222,7 +222,13 @@ function atomicJson(path: string, value: unknown): void {
 function readProjectReview(): ReviewPreferencePatch {
   const raw = projectConfigRaw().review;
   const parsed = reviewPreferencePatchSchema.safeParse(raw && typeof raw === "object" ? raw : {});
-  return parsed.success ? parsed.data : {};
+  if (!parsed.success) return {};
+  // Automatic lifecycle is a deliberate opt-in. Keep the stored project
+  // setting intact, but expose the effective safe mode until the project
+  // enables WORKBENCH_ENABLE_REVIEW_LIFECYCLE.
+  if (parsed.data.mode === "automatic" && process.env.WORKBENCH_ENABLE_REVIEW_LIFECYCLE !== "1")
+    return { ...parsed.data, mode: "off", autoFix: false };
+  return parsed.data;
 }
 
 function preferenceLayers(): { project: ReviewPreferencePatch; global: Partial<ReviewPreferences>; models: ReviewModelOverride; effective: ReviewPreferences; sources: Record<string, "project" | "global" | "default" | "project-model" | "global-model" | "follow-execution"> } {
@@ -1280,7 +1286,9 @@ async function startReviewInternal(input: { workspaceId: string; projectConfig: 
     }
   }
   const layers = preferenceLayers();
-  if (layers.effective.mode === "off") throw new Error("review_disabled");
+  // `off` disables automatic lifecycle triggers. An explicit user request is
+  // still allowed to start a read-only review; the caller has clearly opted
+  // into this operation.
   const preferences = {
     ...layers.effective,
     ...(input.locale ? { locale: input.locale } : {}),

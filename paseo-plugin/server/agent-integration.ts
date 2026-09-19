@@ -16,6 +16,12 @@ function bridgeConfig(configPath: string) {
   const config = JSON.parse(readFileSync(configPath, "utf8"));
   const bridge = config.agent?.bridge;
   if (config.agent?.provider !== "paseo" || !bridge?.script || !bridge?.endpoint) return null;
+  // Do not inject one stdio MCP process into every interactive Agent by
+  // default.  That multiplied long-lived sessions and put unrelated Git
+  // observation behind the host's global request queue.  Explicit handoff
+  // workers still receive their own scoped MCP configuration from the
+  // delegate path; interactive injection is an opt-in project setting.
+  if (bridge.autoInject !== true && process.env.WORKBENCH_ENABLE_AGENT_MCP !== "1") return null;
   const record = bridge.endpoint === "auto" ? JSON.parse(readFileSync(join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "paseo.pid"), "utf8")) : null;
   const target = String(record ? record.listen || record.sockPath || "" : bridge.endpoint).replace(/^unix:\/\//, "");
   const endpoint = target.startsWith("/") ? `ws+unix://${target}:/ws` : /^(127\.0\.0\.1|localhost):\d+$/.test(target) ? `ws://${target}/ws` : "";

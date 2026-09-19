@@ -36,7 +36,7 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
-const versionedMethods = new Set<string>(["observer.versions", "workspace.detail", "repository.graph", "repository.changes", "repository.diff"]);
+const versionedMethods = new Set<string>(["observer.versions", "workspace.detail", "workspace.operation.status", "repository.graph", "repository.changes", "repository.diff"]);
 const mutationMethods = new Set<string>([
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
   "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete",
@@ -47,6 +47,7 @@ const BRIDGE_CACHE_BYTES = 8 * 1024 * 1024;
 const BRIDGE_IN_FLIGHT = 16;
 const READ_METHODS = new Set<string>([
   "observer.versions", "workspace.list", "workspace.detail", "workspace.identify",
+  "workspace.operation.status",
   "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff",
   "review-set.compare", "review-set.brief",
 ]);
@@ -55,7 +56,12 @@ const READ_METHODS = new Set<string>([
 // their socket and cancel backend work) before that host budget expires.
 const READ_BRIDGE_TIMEOUT_MS = 5_500;
 const READ_OBSERVATION_BUDGET_MS = 5_000;
-const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
+// Keep this value free of Node-only imports: the Paseo plugin server bundle is
+// also analyzed as a shared module by the native host. The package build ID
+// is reported by the backend; this generation identifies the observer bridge
+// process itself.
+const SERVER_BUILD_ID = "observer-bridge-v2";
+const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(method?: string): number {
   const configured = (() => {
@@ -119,6 +125,26 @@ function cacheable(response: ObserverResponse): boolean {
   if (!result || typeof result !== "object") return true;
   const observation = (result as { observation?: { state?: unknown } }).observation;
   return !observation?.state || observation.state === "ready";
+}
+
+function withObservationMetadata(response: ObserverResponse): ObserverResponse {
+  if (!response.ok || !response.result || typeof response.result !== "object") return response;
+  const result = response.result as Record<string, unknown>;
+  const processInfo = result.process && typeof result.process === "object" ? result.process as Record<string, unknown> : null;
+  const backendInstanceId = typeof processInfo?.instanceId === "string"
+    ? processInfo.instanceId
+    : typeof result.instanceId === "string" ? result.instanceId : undefined;
+  return {
+    ...response,
+    result: {
+      ...result,
+      pluginBuildId: SERVER_BUILD_ID,
+      pluginGeneration: `${SERVER_BUILD_ID}:${process.pid}`,
+      ...(backendInstanceId ? { backendInstanceId } : {}),
+      observedAt: new Date().toISOString(),
+      ...(Array.isArray(result.issues) ? { issues: result.issues } : {}),
+    },
+  };
 }
 
 export class ObserverBridge {
@@ -249,7 +275,7 @@ export class ObserverBridge {
             }
           }
         }
-        return response;
+        return withObservationMetadata(response);
       })
       .catch(error => {
         this.failedRequests++;
@@ -295,9 +321,9 @@ export async function handleObserver(input: QueryInput, context?: AgentContext):
         const response = await bridge.call(request);
         if (response.ok) recordBackendSuccess(currentProject()?.configPath);
         if (request.method === "observer.health" && response.ok && response.result && typeof response.result === "object")
-          return { ...response, result: { ...response.result, bridge: bridge.health() } };
+          return withObservationMetadata({ ...response, result: { ...response.result, bridge: bridge.health() } });
         if (request.method === "observer.versions" && response.ok && response.result && typeof response.result === "object")
-          return { ...response, result: { ...response.result, reviewRevision: reviewRevision(), sessionRevision: sessionRevision() } };
+          return withObservationMetadata({ ...response, result: { ...response.result, reviewRevision: reviewRevision(), sessionRevision: sessionRevision() } });
         return response;
       } catch (error) {
         const code = error instanceof BridgeError ? error.code : "";
@@ -310,8 +336,8 @@ export async function handleObserver(input: QueryInput, context?: AgentContext):
         if (backend.state !== "ready") throw error;
         const recovered = await bridge.call(request);
         if (request.method === "observer.health" && recovered.ok && recovered.result && typeof recovered.result === "object")
-          return { ...recovered, result: { ...recovered.result, bridge: bridge.health() } };
-        return recovered;
+          return withObservationMetadata({ ...recovered, result: { ...recovered.result, bridge: bridge.health() } });
+        return withObservationMetadata(recovered);
       }
     };
     return await (currentProject() ? callWithRecovery() : withProject(input, callWithRecovery));

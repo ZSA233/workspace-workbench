@@ -7,6 +7,8 @@ import { sessionOperation, coordinatorReview } from "./shared/session-tools";
 import { handleSessionOperation } from "./server/session-tools";
 import { handoffMaterials } from "./shared/handoff-materials";
 import { handleHandoffMaterials } from "./server/handoff-access";
+import { workspaceCreate, workspaceOperationStatus } from "./shared/workspace-operations";
+import { handleWorkspaceCreate, handleWorkspaceOperationStatus } from "./server/workspace-operations";
 
 import { handleAgentDelegate, handleAgentStatus, handleWorkspaceBinding, handleWorkspaceDelegate } from "./server/agent-provider";
 import { closeObserverBridge, handleObserver, observerQuery } from "./server/observer";
@@ -57,8 +59,9 @@ import {
   handleReviewSettingsUpdate,
   handleReviewerReadRpc,
   handleReviewerResultRpc,
+  reviewLifecycleEnabled,
   registerReviewLifecycle,
-} from "./server/agent-review";
+} from "./server/review/index";
 
 export default function contribute(server: PluginServerContext) {
   const host = new HostConnection();
@@ -120,8 +123,16 @@ export default function contribute(server: PluginServerContext) {
   withHost.handle(reviewerRead, (input, context) => withProject(input, () => handleReviewerReadRpc(input, context)));
   withHost.handle(reviewerResult, (input, context) => withProject(input, () => handleReviewerResultRpc(input, context)));
   const cleanupAgents = registerAgentIntegration(withHost, () => host.api());
-  const cleanupReviewLifecycle = registerReviewLifecycle(withHost);
+  // Review lifecycle hooks are opt-in.  Git observation and Workspace
+  // creation must never start, steer or repair an Agent implicitly.
+  const cleanupReviewLifecycle = reviewLifecycleEnabled()
+    ? registerReviewLifecycle(withHost)
+    : () => {};
   measured.handle(projectsQuery, async (input) => registeredProjects({ directory: input.directory }));
+  // Git worktree operations intentionally bypass the Agent host connection.
+  // Delegation/handoff remains a separate operation with its own identity.
+  measured.handle(workspaceCreate, handleWorkspaceCreate);
+  measured.handle(workspaceOperationStatus, handleWorkspaceOperationStatus);
   measured.handle(projectSetupScan, handleProjectSetupScan);
   measured.handle(projectSetupSave, handleProjectSetupSave);
   measured.handle(projectStorageQuery, handleProjectStorage);

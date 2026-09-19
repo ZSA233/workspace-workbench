@@ -12,7 +12,7 @@ import { getAgentBinding, putAgentBinding } from "../server/agent-store.ts";
 test("MCP binds exact identity; workers do not recurse; notifications steer and retry durably", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "workbench-injection-")));
   const config = join(root, "project.json");
-  writeFileSync(config, JSON.stringify({ sourceRoot: root, workspaceRoot: root, stateRoot: root, agent: { provider: "paseo", bridge: { script: "mcp.mjs", endpoint: "127.0.0.1:6767" } } }));
+  writeFileSync(config, JSON.stringify({ sourceRoot: root, workspaceRoot: root, stateRoot: root, agent: { provider: "paseo", bridge: { script: "mcp.mjs", endpoint: "127.0.0.1:6767", autoInject: true } } }));
   const previous = process.env.WORKSPACE_WORKBENCH_CONFIG;
   process.env.WORKSPACE_WORKBENCH_CONFIG = config;
   const hooks = new Map<string, (input: unknown) => unknown>();

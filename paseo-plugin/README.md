@@ -93,6 +93,15 @@ detached HEAD 的子仓逐个选择是否从当前提交创建分支。选择保
 
 ## 运行时和交接
 
+Workspace 创建与 Agent 交接是两个独立动作。`workbench_workspace_create` 只创建或恢复
+Git worktree，不要求 Agent token、handoff 或 Reviewer；返回 `operationId` 后可用
+`workbench_workspace_operation_status` 查询。需要执行 Agent 时，再显式使用交接入口，子会话
+会固定在新 worktree 中，当前会话不会切换 cwd。审核默认关闭，只有用户主动启动时才运行。
+
+交互式 Agent 默认不会自动注入 Workbench MCP，以避免每个会话都创建一个长期 MCP 进程。
+项目确实需要交互式 Agent 直接调用 Workbench 时，可在 `agent.bridge` 中显式设置
+`autoInject: true`；交接创建的子 Agent 不受此开关影响，会使用自己的受限 MCP 配置。
+
 项目仓库可以声明 Go、Python 或 Node 运行时。这里的 Python 是业务项目的可选运行时，
 Workbench 后端自身不再启动或下载 Python。
 

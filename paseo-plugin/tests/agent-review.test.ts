@@ -63,7 +63,9 @@ function harness(): Harness {
   const config = join(root, "project.json");
   writeFileSync(config, JSON.stringify({
     schemaVersion: 1,
-    review: { reviewerTarget: "independent" },
+    // Review is off by default in real projects. The review fixture opts in
+    // explicitly so these tests exercise the manual state machine.
+    review: { reviewerTarget: "independent", mode: "manual", autoFix: true },
     project: { id: "fixture", displayName: "Fixture" },
     sourceRoot: root,
     stateRoot: join(root, "state"),
@@ -150,8 +152,10 @@ async function withFixture<T>(fixture: Harness, callback: () => T | Promise<T>):
   process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = join(fixture.root, "isolated-registry.json");
   const previous = process.env.WORKSPACE_WORKBENCH_REVIEW_SETTINGS;
   const previousConfig = process.env.WORKSPACE_WORKBENCH_CONFIG;
+  const previousLifecycle = process.env.WORKBENCH_ENABLE_REVIEW_LIFECYCLE;
   process.env.WORKSPACE_WORKBENCH_REVIEW_SETTINGS = join(fixture.root, "review-settings.json");
   process.env.WORKSPACE_WORKBENCH_CONFIG = fixture.config;
+  process.env.WORKBENCH_ENABLE_REVIEW_LIFECYCLE = "1";
   try { return await withProject({ projectConfig: fixture.config }, callback); }
   finally {
     if (previousRegistry === undefined) delete process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY;
@@ -160,6 +164,8 @@ async function withFixture<T>(fixture: Harness, callback: () => T | Promise<T>):
     else process.env.WORKSPACE_WORKBENCH_REVIEW_SETTINGS = previous;
     if (previousConfig === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG;
     else process.env.WORKSPACE_WORKBENCH_CONFIG = previousConfig;
+    if (previousLifecycle === undefined) delete process.env.WORKBENCH_ENABLE_REVIEW_LIFECYCLE;
+    else process.env.WORKBENCH_ENABLE_REVIEW_LIFECYCLE = previousLifecycle;
     fixture.cleanup();
   }
 }

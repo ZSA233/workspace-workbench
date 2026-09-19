@@ -31,9 +31,9 @@ export type ReviewModelOverride = z.infer<typeof reviewModelOverrideSchema>;
 export const reviewGlobalPatchSchema = reviewPreferencePatchSchema.merge(reviewModelOverrideSchema);
 
 export const reviewPreferencesSchema = z.object({
-  reviewerTarget: z.enum(["coordinator", "independent"]).default("coordinator"),
-  mode: reviewModeSchema.default("manual"),
-  autoFix: z.boolean().default(true),
+  reviewerTarget: z.enum(["coordinator", "independent"]).default("independent"),
+  mode: reviewModeSchema.default("off"),
+  autoFix: z.boolean().default(false),
   maxRounds: z.number().int().min(1).max(10).default(3),
   reviewerRole: z.string().trim().min(1).default("Code reviewer"),
   instructions: z.string().default("Check requirement fit, correctness, regressions and tests; keep the implementation simple."),

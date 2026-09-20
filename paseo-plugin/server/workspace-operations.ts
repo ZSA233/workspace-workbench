@@ -2,7 +2,7 @@ import { withProject } from "./projects.ts";
 import { handleObserver } from "./observer.ts";
 import type { ObserverResponse } from "../shared/observer.ts";
 import { issue } from "./backend/storage.ts";
-import type { WorkspaceCreateInput, WorkspaceOperationStatusInput } from "../shared/workspace-operations.ts";
+import type { WorkspaceAddRepositoriesInput, WorkspaceCreateInput, WorkspaceOperationStatusInput } from "../shared/workspace-operations.ts";
 
 function failed(error: unknown) {
   const value = issue(error);
@@ -47,6 +47,31 @@ export async function handleWorkspaceOperationStatus(input: WorkspaceOperationSt
     return await withProject({ projectConfig: input.projectConfig }, async () => {
       const response = await handleObserver({ method: "workspace.operation.status", params: { operationId: input.operationId } });
       return operationResult(input.operationId, response);
+    });
+  } catch (error) { return failed(error); }
+}
+
+export async function handleWorkspaceAddRepositories(input: WorkspaceAddRepositoriesInput) {
+  try {
+    return await withProject({ projectConfig: input.projectConfig }, async () => {
+      const response = await handleObserver({
+        method: "workspace.addRepositories",
+        params: {
+          workspaceId: input.workspaceId,
+          repositories: input.repositories,
+          baseRefs: input.baseRefs,
+        },
+      });
+      if (!response.ok) return { ok: false, workspaceId: input.workspaceId, addedRepositories: [], existingRepositories: [], error: response.error };
+      const result = response.result && typeof response.result === "object" ? response.result as Record<string, unknown> : {};
+      return {
+        ok: true,
+        workspaceId: input.workspaceId,
+        stage: "active",
+        addedRepositories: Array.isArray(result.addedRepositories) ? result.addedRepositories.filter((value): value is string => typeof value === "string") : [],
+        existingRepositories: Array.isArray(result.existingRepositories) ? result.existingRepositories.filter((value): value is string => typeof value === "string") : [],
+        result,
+      };
     });
   } catch (error) { return failed(error); }
 }

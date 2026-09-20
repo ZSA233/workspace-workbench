@@ -61,3 +61,67 @@ test("workspace create uses the direct Git operation RPC instead of Agent orches
     DaemonClient.prototype.invokePluginRpc = originalInvoke;
   }
 });
+
+test("workspace add repositories uses the direct Git operation RPC", async () => {
+  const originalConnect = DaemonClient.prototype.connect;
+  const originalClose = DaemonClient.prototype.close;
+  const originalInvoke = DaemonClient.prototype.invokePluginRpc;
+  const seen: unknown[] = [];
+  DaemonClient.prototype.connect = async function () {};
+  DaemonClient.prototype.close = async function () {};
+  DaemonClient.prototype.invokePluginRpc = async function (...args: unknown[]) {
+    seen.push(args);
+    return { ok: true, workspaceId: "existing", addedRepositories: ["schema"] };
+  };
+  const previousToken = process.env.WORKBENCH_AGENT_TOKEN;
+  delete process.env.WORKBENCH_AGENT_TOKEN;
+  try {
+    const response = await handle({ method: "tools/call", params: {
+      name: "workbench_workspace_add_repositories",
+      arguments: { workspaceId: "existing", repositories: ["schema"] },
+    } });
+    assert.equal(response.isError, false);
+    assert.equal((seen.at(-1) as unknown[])[1], "workspace.workbench.workspace-add-repositories");
+  } finally {
+    if (previousToken === undefined) delete process.env.WORKBENCH_AGENT_TOKEN;
+    else process.env.WORKBENCH_AGENT_TOKEN = previousToken;
+    DaemonClient.prototype.connect = originalConnect;
+    DaemonClient.prototype.close = originalClose;
+    DaemonClient.prototype.invokePluginRpc = originalInvoke;
+  }
+});
+
+test("workspace status reports the missing requestId instead of orchestration union errors", async () => {
+  const response = await handle({ method: "tools/call", params: {
+    name: "workbench_workspace_status",
+    arguments: { workspaceId: "existing" },
+  } });
+  assert.equal(response.isError, true);
+  assert.match(String((response.content as Array<{ text?: string }>)[0]?.text), /workspace_status_request_id_required/);
+});
+
+test("workspace status with requestId keeps the handoff status route", async () => {
+  const originalConnect = DaemonClient.prototype.connect;
+  const originalClose = DaemonClient.prototype.close;
+  const originalInvoke = DaemonClient.prototype.invokePluginRpc;
+  const seen: unknown[] = [];
+  DaemonClient.prototype.connect = async function () {};
+  DaemonClient.prototype.close = async function () {};
+  DaemonClient.prototype.invokePluginRpc = async function (...args: unknown[]) {
+    seen.push(args);
+    return { ok: true, requestId: "handoff-1", state: "active" };
+  };
+  try {
+    const response = await handle({ method: "tools/call", params: {
+      name: "workbench_workspace_status",
+      arguments: { requestId: "handoff-1", workspaceId: "existing" },
+    } });
+    assert.equal(response.isError, false);
+    assert.equal((seen.at(-1) as unknown[])[1], "workspace.workbench.orchestrate");
+    assert.equal(((seen.at(-1) as unknown[])[2] as { request: { requestId: string } }).request.requestId, "handoff-1");
+  } finally {
+    DaemonClient.prototype.connect = originalConnect;
+    DaemonClient.prototype.close = originalClose;
+    DaemonClient.prototype.invokePluginRpc = originalInvoke;
+  }
+});

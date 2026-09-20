@@ -10,7 +10,7 @@ import { atInitializationStage, INITIALIZATION_REVISION } from "./client/initial
 import { localeFromHostProps } from "./client/i18n";
 import { clientDiagnostic } from "./shared/client-diagnostics";
 import { nativeComponentInventory } from "./client/native-components";
-import { configureNativeDiagnosticReporter, reportNativeDiagnostic } from "./client/native-diagnostics";
+import { configureNativeDiagnosticReporter, installNativeRenderErrorHook, reportNativeDiagnostic } from "./client/native-diagnostics";
 import { clearWorkbenchWorkspaceSnapshots, removeWorkbenchWorkspaceSnapshot, setWorkbenchWorkspaceSnapshot } from "./client/surface-context";
 
 const observerSurfaceId = "workbench";
@@ -56,6 +56,7 @@ function contributeClient(client: PluginClientContext) {
     return cleanup;
   }
   const platform: string = atInitializationStage("platform", () => Platform.OS);
+  let removeNativeRenderErrorHook = () => {};
   if (platform !== "web") {
     configureNativeDiagnosticReporter({
       platform,
@@ -63,6 +64,7 @@ function contributeClient(client: PluginClientContext) {
         void client.rpc(clientDiagnostic, event).catch(() => {});
       },
     });
+    removeNativeRenderErrorHook = installNativeRenderErrorHook();
     reportNativeDiagnostic("registration-components", nativeComponentInventory());
   }
   const openGuard = createOpenGuard();
@@ -278,6 +280,7 @@ function contributeClient(client: PluginClientContext) {
   console.info(`[workbench/${INITIALIZATION_REVISION}] registered`, platform);
   return () => {
     disposed = true;
+    removeNativeRenderErrorHook();
     configureNativeDiagnosticReporter(null);
     clearWorkbenchWorkspaceSnapshots();
     surfaceContext = null;

@@ -7,8 +7,8 @@ import { sessionOperation, coordinatorReview } from "./shared/session-tools";
 import { handleSessionOperation } from "./server/session-tools";
 import { handoffMaterials } from "./shared/handoff-materials";
 import { handleHandoffMaterials } from "./server/handoff-access";
-import { workspaceCreate, workspaceOperationStatus } from "./shared/workspace-operations";
-import { handleWorkspaceCreate, handleWorkspaceOperationStatus } from "./server/workspace-operations";
+import { workspaceAddRepositories, workspaceCreate, workspaceOperationStatus } from "./shared/workspace-operations";
+import { handleWorkspaceAddRepositories, handleWorkspaceCreate, handleWorkspaceOperationStatus } from "./server/workspace-operations";
 
 import { handleAgentDelegate, handleAgentStatus, handleWorkspaceBinding, handleWorkspaceDelegate } from "./server/agent-provider";
 import { closeObserverBridge, handleObserver, observerQuery } from "./server/observer";
@@ -138,6 +138,7 @@ export default function contribute(server: PluginServerContext) {
   // Delegation/handoff remains a separate operation with its own identity.
   measured.handle(workspaceCreate, handleWorkspaceCreate);
   measured.handle(workspaceOperationStatus, handleWorkspaceOperationStatus);
+  measured.handle(workspaceAddRepositories, handleWorkspaceAddRepositories);
   measured.handle(projectSetupScan, handleProjectSetupScan);
   measured.handle(projectSetupSave, handleProjectSetupSave);
   measured.handle(projectStorageQuery, handleProjectStorage);

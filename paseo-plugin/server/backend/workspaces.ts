@@ -995,7 +995,9 @@ export class Workspaces {
         Object.create(null),
         workspace.repositoryAdditions || {},
       ),
-      plans: Json[] = [];
+      plans: Json[] = [],
+      existingRepositories: string[] = [],
+      addedRepositories: string[] = [];
     for (const { repo, baseRef } of this.select(params)) {
       const existing = workspace.repositories.find(
           (item: Json) => item.id === repo.id,
@@ -1007,6 +1009,7 @@ export class Workspaces {
             "repository_base_conflict",
             "repository already added with a different base",
           );
+        existingRepositories.push(repo.id);
         continue;
       }
       if (pending && pending.branch !== `obs/${workspace.id}/${repo.id}`)
@@ -1030,6 +1033,7 @@ export class Workspaces {
       try {
         await this.materialize(plan, workspace);
         workspace.repositories.push(plan);
+        addedRepositories.push(plan.id);
         workspace.repositoryIds = workspace.repositories.map(
           (repo: Json) => repo.id,
         );
@@ -1042,7 +1046,11 @@ export class Workspaces {
         throw error;
       }
     }
-    return this.save(workspace);
+    return {
+      ...this.save(workspace),
+      addedRepositories,
+      existingRepositories,
+    };
   }
   async impact(workspace: Json) {
     const repositories: Json[] = [],

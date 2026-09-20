@@ -5,6 +5,7 @@ const projectConfig = z.string().trim().min(1);
 const requestId = z.string().trim().min(1).max(200).optional();
 const repositoryRefs = z.array(z.string().trim().min(1)).min(1).optional();
 const baseRefs = z.record(z.string().trim().min(1), z.string().trim().min(1)).default({});
+const requiredRepositoryRefs = z.array(z.string().trim().min(1)).min(1);
 
 /**
  * The Git operation boundary deliberately has no Agent, Reviewer or handoff
@@ -50,5 +51,27 @@ export const workspaceOperationStatus = defineRpc({
   }),
 });
 
+/** Add repositories to an existing flat managed Workspace without involving
+ * an Agent, handoff, Reviewer or parent session. */
+export const workspaceAddRepositories = defineRpc({
+  name: "workspace.workbench.workspace-add-repositories",
+  input: z.object({
+    projectConfig,
+    workspaceId: z.string().trim().min(1),
+    repositories: requiredRepositoryRefs,
+    baseRefs,
+  }),
+  output: z.object({
+    ok: z.boolean(),
+    workspaceId: z.string().optional(),
+    stage: z.string().optional(),
+    addedRepositories: z.array(z.string()).default([]),
+    existingRepositories: z.array(z.string()).default([]),
+    result: z.unknown().optional(),
+    error: z.object({ code: z.string(), message: z.string(), details: z.unknown().optional() }).optional(),
+  }),
+});
+
 export type WorkspaceCreateInput = z.infer<typeof workspaceCreate.input>;
 export type WorkspaceOperationStatusInput = z.infer<typeof workspaceOperationStatus.input>;
+export type WorkspaceAddRepositoriesInput = z.infer<typeof workspaceAddRepositories.input>;

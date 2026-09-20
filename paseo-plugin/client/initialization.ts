@@ -1,4 +1,4 @@
-export const INITIALIZATION_REVISION = "init-v5";
+export const INITIALIZATION_REVISION = "init-v6-android-safe";
 export const CLIENT_GENERATION = `client-${INITIALIZATION_REVISION}`;
 
 export function atInitializationStage<T>(stage: string, load: () => T): T {

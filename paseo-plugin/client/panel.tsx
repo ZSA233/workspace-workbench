@@ -467,6 +467,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     reportNativeRenderError("project-panel-backend-query-failed", error);
     throw error;
   }
+  // Do not race the first Git observer request with backend startup. During a
+  // cold start the socket can exist before it is ready to serve, which used to
+  // turn the initial workspace list into a misleading observer_timeout.
+  const backendReady = backendQuery.data?.state === "ready";
+  reportNativeDiagnostic("project-panel-backend-readiness", { ready: String(backendReady), state: String(backendQuery.data?.state || "pending") });
   const observationTiming = useMemo(
     () => observationTimingFromWire(backendQuery.data?.timing),
     [backendQuery.data?.timing],
@@ -558,7 +563,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "workspace-list"],
     queryFn: () => rpc({ method: "workspace.list", params: { includeRemoved: true } }),
-    enabled: Boolean(projectConfig),
+    enabled: Boolean(projectConfig && backendReady),
     refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
@@ -569,18 +574,20 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listResult = resultOf<ListResult>(listState.response);
   const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
   reportNativeDiagnostic("project-panel-list-state", queryDiagnosticDetails(listQuery.data, listQuery.error, listQuery, listState));
-  useTransientObserverRetry(listQuery, listState, Boolean(projectConfig && foreground));
+  useTransientObserverRetry(listQuery, listState, Boolean(projectConfig && backendReady && foreground));
   const listReady = Boolean(listResult);
   const orphanPreviewQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "orphan-preview", orphanId],
     queryFn: () => rpc({ method: "workspace.orphan.preview", params: { workspaceId: orphanId } }),
-    enabled: Boolean(projectConfig && orphanId), retry: false, staleTime: 0, refetchOnWindowFocus: false,
+    enabled: Boolean(projectConfig && backendReady && orphanId), retry: false, staleTime: 0, refetchOnWindowFocus: false,
   });
   const orphanPreview = resultOf<OrphanPreview>(orphanPreviewQuery.data);
   useEffect(() => { setOrphanBranches(orphanPreview?.plannedBranches || {}); setOrphanError(""); }, [orphanId, orphanPreview?.fingerprint]);
-  const observationIssue = useObservationVersions(projectConfig, [selectedWorkspaceId], listReady && foreground);
+  const observationVersionsEnabled = listReady && foreground && Platform.OS === "web";
+  const observationIssue = useObservationVersions(projectConfig, [selectedWorkspaceId], observationVersionsEnabled);
+  if (Platform.OS !== "web") reportNativeDiagnostic("observation-versions-native-disabled", { reason: "android-render-diagnostic" });
   useEffect(() => {
-    if (backendQuery.data?.state !== "ready" || listReady) return;
+    if (!backendReady || listReady) return;
     void listQuery.refetch();
   }, [backendQuery.data?.state, listReady, listQuery.refetch]);
   useEffect(() => { if (listReady) props.onProjectReady?.(); }, [listReady, props.onProjectReady]);
@@ -599,7 +606,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const mainRepositoriesQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "main-repositories"],
     queryFn: () => rpc({ method: "main.repositories.list", params: {} }),
-    enabled: Boolean(projectConfig && mainRepositoriesOpen),
+    enabled: Boolean(projectConfig && backendReady && mainRepositoriesOpen),
     retry: false,
     staleTime: 0,
   });
@@ -610,7 +617,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const linkedWorkspacesQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "linked-workspaces"],
     queryFn: () => rpc({ method: "linked.workspaces.list", params: {} }),
-    enabled: Boolean(projectConfig && linkedWorkspacesOpen), retry: false, staleTime: 0,
+    enabled: Boolean(projectConfig && backendReady && linkedWorkspacesOpen), retry: false, staleTime: 0,
   });
   const linkedWorkspaces = resultOf<LinkedWorkspaceSelection>(linkedWorkspacesQuery.data);
   useEffect(() => {
@@ -684,7 +691,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const identifyQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "identify", workspaceDirectory],
     queryFn: () => rpc({ method: "workspace.identify", params: { directory: workspaceDirectory } }),
-    enabled: Boolean(workspaceDirectory && preferences.hydrated && !selectionResolved && listReady),
+    enabled: Boolean(workspaceDirectory && backendReady && preferences.hydrated && !selectionResolved && listReady),
     refetchInterval: false,
     refetchIntervalInBackground: false,
     retry: false,
@@ -745,7 +752,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const detailQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "workspace-detail", selectedWorkspaceId],
     queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, mode: "summary", refreshToolchain: false } }),
-    enabled: Boolean(selectedWorkspaceId && selectedWorkspace && listReady),
+    enabled: Boolean(selectedWorkspaceId && selectedWorkspace && backendReady && listReady),
     refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
@@ -760,7 +767,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const detail = resultOf<DetailResult>(detailState.response);
   const detailFailure = queryFailureForDisplay(detailState, detailQuery.data, detailQuery.error, localizedCopy);
   reportNativeDiagnostic("project-panel-detail-state", queryDiagnosticDetails(detailQuery.data, detailQuery.error, detailQuery, detailState));
-  useTransientObserverRetry(detailQuery, detailState, Boolean(projectConfig && foreground && selectedWorkspaceId && selectedWorkspace && listReady));
+  useTransientObserverRetry(detailQuery, detailState, Boolean(projectConfig && backendReady && foreground && selectedWorkspaceId && selectedWorkspace && listReady));
   const detailUnavailable = !detail
     && detailState.initialFailure
     && (!isRecoverableObserverFailure(detailQuery.data, detailQuery.error)
@@ -811,7 +818,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         maxCommits: graphView.maxCommits,
       },
     }),
-    enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable),
+    enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && backendReady && listReady && !selectedWorkspaceUnavailable),
     refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
@@ -822,7 +829,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const graph = resultOf<GraphResult>(graphState.response);
   const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error, localizedCopy);
   reportNativeDiagnostic("project-panel-graph-state", queryDiagnosticDetails(graphQuery.data, graphQuery.error, graphQuery, graphState));
-  useTransientObserverRetry(graphQuery, graphState, Boolean(projectConfig && foreground && selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable));
+  useTransientObserverRetry(graphQuery, graphState, Boolean(projectConfig && backendReady && foreground && selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable));
   const changesScope: ChangeScope = selectedCommit ? "commit" : changeScope;
   const changesQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "repository-changes", selectedWorkspaceId, selectedRepoPath, changesScope, selectedCommit],
@@ -835,7 +842,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         commitSha: selectedCommit || undefined,
       },
     }),
-    enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable),
+    enabled: Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && backendReady && listReady && !selectedWorkspaceUnavailable),
     refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
@@ -850,7 +857,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const changes = resultOf<ChangesResult>(changesState.response);
   const changesFailure = queryFailureForDisplay(changesState, changesQuery.data, changesQuery.error, localizedCopy);
   reportNativeDiagnostic("project-panel-changes-state", queryDiagnosticDetails(changesQuery.data, changesQuery.error, changesQuery, changesState));
-  useTransientObserverRetry(changesQuery, changesState, Boolean(projectConfig && foreground && selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable));
+  useTransientObserverRetry(changesQuery, changesState, Boolean(projectConfig && backendReady && foreground && selectedWorkspaceId && selectedRepoPath && selectedRepository && listReady && !selectedWorkspaceUnavailable));
 
   useEffect(() => {
     if (changeTreeMode !== null || !changes) return;
@@ -885,7 +892,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         ),
       },
     }),
-    enabled: tab === "review" && reviewIds.length > 0 && listReady,
+    enabled: tab === "review" && reviewIds.length > 0 && backendReady && listReady,
     refetchInterval: false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
@@ -908,12 +915,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const agentReviewQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "agent-review", selectedWorkspaceId, reviewSessionId],
     queryFn: () => reviewSessionRpc({ projectConfig, workspaceId: selectedWorkspaceId, ...(reviewSessionId ? { sessionId: reviewSessionId } : {}) }),
-    enabled: Boolean(selectedWorkspaceId && listReady), refetchInterval: false, refetchOnWindowFocus: false, retry: false,
+    enabled: Boolean(selectedWorkspaceId && backendReady && listReady), refetchInterval: false, refetchOnWindowFocus: false, retry: false,
   });
   const agentReviewHistoryQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "agent-review-history", selectedWorkspaceId],
     queryFn: () => reviewSessionListRpc({ projectConfig, workspaceId: selectedWorkspaceId }),
-    enabled: Boolean(selectedWorkspaceId && listReady), refetchInterval: false, refetchOnWindowFocus: false, retry: false,
+    enabled: Boolean(selectedWorkspaceId && backendReady && listReady), refetchInterval: false, refetchOnWindowFocus: false, retry: false,
   });
   const reviewSettingsQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "agent-review-settings"],
@@ -933,7 +940,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const reviewModelsQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "agent-review-models", selectedWorkspaceId],
     queryFn: () => reviewModelsRpc({ projectConfig, workspaceId: selectedWorkspaceId }),
-    enabled: Boolean(projectConfig && selectedWorkspaceId && listReady), staleTime: 5 * 60_000, refetchOnWindowFocus: false, retry: false,
+    enabled: Boolean(projectConfig && backendReady && selectedWorkspaceId && listReady), staleTime: 5 * 60_000, refetchOnWindowFocus: false, retry: false,
   });
   const agentReview = (agentReviewQuery.data?.session || null) as ReviewSession | null;
   const reviewPreferences = reviewSettingsQuery.data?.effective;

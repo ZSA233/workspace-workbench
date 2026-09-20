@@ -95,7 +95,10 @@ detached HEAD 的子仓逐个选择是否从当前提交创建分支。选择保
 
 Workspace 创建与 Agent 交接是两个独立动作。`workbench_workspace_create` 只创建或恢复
 Git worktree，不要求 Agent token、handoff 或 Reviewer；返回 `operationId` 后可用
-`workbench_workspace_operation_status` 查询。需要执行 Agent 时，再显式使用交接入口，子会话
+`workbench_workspace_operation_status` 查询。普通平铺 Workspace 遗漏仓库时，可用
+`workbench_workspace_add_repositories` 在原 Workspace 中幂等补充，不会创建新 Workspace 或
+Agent 会话；Gitlink Workspace 的成员仍由外层指针固定。`workbench_workspace_status` 用于
+handoff 的 `requestId`，不能用 `workspaceId` 单独代替；需要执行 Agent 时，再显式使用交接入口，子会话
 会固定在新 worktree 中，当前会话不会切换 cwd。审核默认关闭，只有用户主动启动时才运行。
 
 交互式 Agent 在项目配置存在 `agent.bridge` 时默认使用插件级共享 HTTP MCP 网关；这不会为每个

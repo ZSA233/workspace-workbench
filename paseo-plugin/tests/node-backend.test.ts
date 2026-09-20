@@ -149,6 +149,15 @@ test("Node backend preserves public rejection codes and idempotent records", asy
       baseRefs: { two: "HEAD" },
     });
     assert.equal(added.repositories.length, 2);
+    assert.deepEqual(added.addedRepositories, ["two"]);
+    assert.deepEqual(added.existingRepositories, []);
+    const repeatedAdd = await service.handle("workspace.addRepositories", {
+      workspaceId: created.id,
+      repositories: ["two"],
+      baseRefs: { two: "HEAD" },
+    });
+    assert.deepEqual(repeatedAdd.addedRepositories, []);
+    assert.deepEqual(repeatedAdd.existingRepositories, ["two"]);
     assert.deepEqual(
       JSON.parse(readFileSync(join(added.treePath, ".workspace/manifest.json"), "utf8")).repositories,
       added.repositories,

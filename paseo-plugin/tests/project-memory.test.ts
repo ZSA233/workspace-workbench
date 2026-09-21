@@ -19,4 +19,6 @@ test("context precedes global memory; unmatched contexts stay in setup", () => {
   const source = readFileSync(new URL("../index.client.tsx", import.meta.url), "utf8");
   assert.ok(source.includes('const observerSurfaceId = "workbench"'));
   assert.ok(source.includes('title: "Workspace Workbench"'));
+  const panel = readFileSync(new URL("../client/panel.tsx", import.meta.url), "utf8");
+  assert.ok(panel.includes('useProjectMemory(props.hostWorkspaceId || "global")'));
 });

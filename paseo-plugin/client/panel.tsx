@@ -297,7 +297,11 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }
   let memory;
   try {
-    memory = useProjectMemory(props.hostWorkspaceId || props.host.id);
+    // The global sidebar has no host Workspace ID. Its host instance ID can
+    // change between surfaces, so using it here made the project picker forget
+    // the last choice on every new conversation. Workspace panels still scope
+    // memory to their concrete Paseo Workspace.
+    memory = useProjectMemory(props.hostWorkspaceId || "global");
     reportNativeDiagnostic("observer-memory-hook-ready", { ready: String(memory.ready) });
   } catch (error) {
     reportNativeRenderError("observer-memory-hook-failed", error);

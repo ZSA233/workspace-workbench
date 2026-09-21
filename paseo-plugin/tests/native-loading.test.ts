@@ -67,13 +67,31 @@ test("full Prism reproduces native prototype crash; core and grammars load witho
   assert.equal(vm.runInContext('Prism.tokenize("const x = 1", Prism.languages.javascript)[0].type', context), "keyword");
   assert.equal(vm.runInContext('Prism.tokenize("const view = <Button />", Prism.languages.tsx)[0].type', context), "keyword");
   assert.equal(vm.runInContext('Prism.tokenize("name = \\\"fixture\\\"", Prism.languages.toml)[0].type', context), "key");
-  const source = readFileSync(new URL("../client/syntax.tsx", import.meta.url), "utf8");
-  assert.ok(!source.includes('from "prismjs/prism.js"'));
-  assert.ok(!source.includes("prism-react-renderer"));
+  const nativeSyntax = readFileSync(new URL("../client/syntax.tsx", import.meta.url), "utf8");
+  const webSyntax = readFileSync(new URL("../client/syntax-web.tsx", import.meta.url), "utf8");
+  // The native entry must not statically load Prism or any grammar. A
+  // platform check around a static import is too late for Android's partial
+  // DOM shim; only the web-only module may contain these imports.
+  assert.ok(!nativeSyntax.includes("prismjs"));
+  assert.ok(!nativeSyntax.includes("prism-react-renderer"));
+  assert.ok(nativeSyntax.includes('import("./syntax-web")'));
+  assert.ok(nativeSyntax.includes("PlainCode"));
+  assert.ok(!webSyntax.includes('from "prismjs/prism.js"'));
+  assert.ok(!webSyntax.includes("prism-react-renderer"));
   assert.ok(readFileSync(new URL("../client/prism-normalize.ts", import.meta.url), "utf8").includes("normalizePrismTokens"));
   for (const language of ["jsx", "tsx", "json5", "toml", "css"]) {
-    assert.ok(source.includes(`prismjs/components/prism-${language}`));
+    assert.ok(webSyntax.includes(`prismjs/components/prism-${language}`));
   }
+});
+
+test("native diff controls do not mount injected web host lists", () => {
+  const source = readFileSync(new URL("../client/native-components.tsx", import.meta.url), "utf8");
+  assert.match(source, /Platform\.OS === "web"[\s\S]*renderComponent\(hostScrollView/);
+  assert.match(source, /Platform\.OS === "web"[\s\S]*renderComponent\(hostFlatList/);
+  assert.match(source, /Platform\.OS === "web"[\s\S]*renderComponent\(hostTextInput/);
+  assert.match(source, /Platform\.OS === "web" && isRenderable\(hostModal\)/);
+  const nativeSyntax = readFileSync(new URL("../client/syntax.tsx", import.meta.url), "utf8");
+  assert.match(nativeSyntax, /Platform\.OS === "web"[\s\S]*import\("\.\/syntax-web"\)/);
 });
 
 test("desktop opens Explorer; native surfaces keep workspace and Agent identities", () => {

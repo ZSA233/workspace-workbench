@@ -86,15 +86,24 @@ export function Icon({ name, size = 16, color }: IconProps) {
 }
 
 export function ScrollView(props: ScrollViewProps) {
-  return renderComponent(hostScrollView, NativeScrollView, props);
+  // Host controls are web-oriented injections. Android/iOS must use the
+  // platform renderer directly; some host implementations install DOM/event
+  // effects that are not valid in a native surface.
+  return Platform.OS === "web"
+    ? renderComponent(hostScrollView, NativeScrollView, props)
+    : renderComponent(null, NativeScrollView, props);
 }
 
 export function FlatList<Item>(props: FlatListProps<Item> & { ref?: Ref<NativeFlatList<Item>> }) {
-  return renderComponent(hostFlatList, NativeFlatList, props);
+  return Platform.OS === "web"
+    ? renderComponent(hostFlatList, NativeFlatList, props)
+    : renderComponent(null, NativeFlatList, props);
 }
 
 export function TextInput(props: TextInputProps) {
-  return renderComponent(hostTextInput, NativeTextInput, props);
+  return Platform.OS === "web"
+    ? renderComponent(hostTextInput, NativeTextInput, props)
+    : renderComponent(null, NativeTextInput, props);
 }
 
 function NativeModalCompat({ open, onOpenChange, title, children }: {
@@ -128,12 +137,12 @@ const NativeModalComponent = Object.assign(NativeModalCompat, { Content: NativeM
 
 export const Modal = Object.assign(function Modal(props: ModalProps) {
   const hostContent = isRenderable((hostModal as any)?.Content) ? (hostModal as any).Content : null;
-  const component = isRenderable(hostModal) && hostContent ? hostModal : NativeModalComponent;
+  const component = Platform.OS === "web" && isRenderable(hostModal) && hostContent ? hostModal : NativeModalComponent;
   return createElement(component as any, props);
 }, {
   Content(props: ModalContentProps) {
     const hostContent = isRenderable((hostModal as any)?.Content) ? (hostModal as any).Content : null;
-    return hostContent ? createElement(hostContent as any, props) : createElement(NativeModalContent, props);
+    return Platform.OS === "web" && hostContent ? createElement(hostContent as any, props) : createElement(NativeModalContent, props);
   },
 }) as ModalComponent;
 

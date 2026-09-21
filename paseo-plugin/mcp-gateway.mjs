@@ -19,11 +19,20 @@ let closing = false;
 const maxConcurrent = 4;
 const maxQueue = 16;
 const budgetMs = 55_000;
+const readTools = new Set([
+  "workbench_session_status", "workbench_session_history", "workbench_session_wait",
+  "workbench_workspace_status", "workbench_workspace_operation_status",
+  "workbench_workspace_create", "workbench_workspace_add_repositories",
+  "workbench_review_preview", "workbench_review_status",
+]);
 function projectHash(path) { return path ? createHash("sha256").update(path).digest("hex").slice(0, 12) : null; }
 function toolName(message) {
   return message?.method === "tools/call" && message?.params && typeof message.params.name === "string"
     ? message.params.name
     : undefined;
+}
+function requestBudget(message) {
+  return message?.method === "tools/call" && readTools.has(toolName(message)) ? 6_000 : budgetMs;
 }
 
 function json(res, status, body, headers = {}) {
@@ -81,12 +90,13 @@ async function run(item) {
   const started = Date.now();
   const controller = new AbortController();
   item.controller = controller;
-  const timer = setTimeout(() => controller.abort("deadline"), budgetMs);
+  const requestBudgetMs = requestBudget(item.message);
+  const timer = setTimeout(() => controller.abort("deadline"), requestBudgetMs);
   diagnostics.record({ event: "mcp_request_started", phase: "dispatch", transport: "http", requestId: item.requestId, method: item.message?.method, tool: toolName(item.message), role: item.context.role, projectHash: projectHash(item.context.projectConfig), queueMs: Math.max(0, started - item.enqueuedAt) });
   try {
     const result = await handle(item.message, {
       signal: controller.signal,
-      deadline: Date.now() + budgetMs,
+      deadline: Date.now() + requestBudgetMs,
       diagnose: event => diagnostics.record({ ...event, event: event.code === "cleanup_failed" ? "mcp_cleanup_failed" : "mcp_request_phase", requestId: item.requestId, phase: event.phase }),
     }, item.context);
     if (!item.response.writableEnded && !item.response.destroyed) json(item.response, 200, { jsonrpc: "2.0", id: item.message.id ?? null, result: item.message.method === "ping" || item.message.method === "initialize" ? { ...result, _meta: { workbench: { transport: "http", pluginGeneration, gatewayGeneration: generation, gatewayPid: process.pid, version: packageMetadata.version } } } : result });

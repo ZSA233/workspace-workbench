@@ -14,6 +14,8 @@ export type McpGatewayConfig = {
 };
 type GatewayState = { port?: number; key?: string; pid?: number; parentPid?: number; generation?: string };
 type ChildEntry = { child: ChildProcess; port: number; key: string; generation: string; startedAt: string; stderr: string };
+const MAX_LEASES = 256;
+const LEASE_TTL_MS = 30 * 60_000;
 
 function paseoHome(): string { return process.env.PASEO_HOME || join(homedir(), ".paseo"); }
 function stateDir(): string { return join(paseoHome(), "workspace-workbench"); }
@@ -91,7 +93,15 @@ export class McpGatewayManager {
 
   async configForRequest(projectConfig: string, token: string, role: McpGatewayRole, workspaceId?: string): Promise<McpGatewayConfig> {
     const config = await this.ensure();
-    if (token) this.activeLeases.set(token, { role, projectConfig, lastSeen: Date.now() });
+    if (token) {
+      this.activeLeases.delete(token);
+      while (this.activeLeases.size >= MAX_LEASES) {
+        const oldest = this.activeLeases.keys().next().value;
+        if (!oldest) break;
+        this.activeLeases.delete(oldest);
+      }
+      this.activeLeases.set(token, { role, projectConfig, lastSeen: Date.now() });
+    }
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
       "X-Workbench-Gateway-Key": config.headers["X-Workbench-Gateway-Key"],
@@ -174,10 +184,13 @@ export class McpGatewayManager {
   }
 
   status() {
-    for (const [token, lease] of this.activeLeases) if (Date.now() - lease.lastSeen > 24 * 60 * 60_000) this.activeLeases.delete(token);
+    for (const [token, lease] of this.activeLeases) if (Date.now() - lease.lastSeen > LEASE_TTL_MS) this.activeLeases.delete(token);
     const entry = this.entry;
     return {
       state: this.closed ? "closed" : entry && entry.child.exitCode === null ? "ready" : this.flight ? "starting" : "idle",
+      transport: "http",
+      scope: "plugin-generation",
+      legacyStdio: "external-session-owned",
       pid: entry?.child.pid || null,
       parentPid: process.pid,
       port: entry?.port || readState().port || null,
@@ -235,4 +248,4 @@ export async function mcpGatewayConfig(projectConfig: string, token: string, rol
   };
   return activeGateway.configForRequest(projectConfig, token, role, workspaceId);
 }
-export function mcpGatewayStatus(): ReturnType<McpGatewayManager["status"]> { return activeGateway?.status() || { state: "uninitialized", pid: null, parentPid: process.pid, port: null, generation: null, startedAt: null, activeLeases: 0, restartCount: 0, cleanupFailures: 0, lastSuccessAt: null, diagnostics: { file: "", dropped: 0 } }; }
+export function mcpGatewayStatus(): ReturnType<McpGatewayManager["status"]> { return activeGateway?.status() || { state: "uninitialized", transport: "http", scope: "plugin-generation", legacyStdio: "external-session-owned", pid: null, parentPid: process.pid, port: null, generation: null, startedAt: null, activeLeases: 0, restartCount: 0, cleanupFailures: 0, lastSuccessAt: null, diagnostics: { file: "", dropped: 0 } }; }

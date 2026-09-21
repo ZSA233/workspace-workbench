@@ -5,6 +5,15 @@ export function serveMcp(handle, { input = process.stdin, output = process.stdou
   const metrics = { completed: 0, timedOut: 0, cleanupFailures: 0 };
   const write = (message) => { if (!output.destroyed) output.write(JSON.stringify(message) + '\n'); };
   const error = (id, message) => write({ jsonrpc: '2.0', id, error: { code: -32603, message } });
+  const readTools = new Set([
+    'workbench_session_status', 'workbench_session_history', 'workbench_session_wait',
+    'workbench_workspace_status', 'workbench_workspace_operation_status',
+    'workbench_workspace_create', 'workbench_workspace_add_repositories',
+    'workbench_review_preview', 'workbench_review_status',
+  ]);
+  const requestBudget = message => message?.method !== 'tools/call'
+    ? budgetMs
+    : readTools.has(message?.params?.name) ? Math.min(budgetMs, 6_000) : budgetMs;
   const diagnose = (record, event) => {
     record.phase = event.phase;
     if (event.code === 'timeout') metrics.timedOut++;
@@ -43,9 +52,10 @@ export function serveMcp(handle, { input = process.stdin, output = process.stdou
         return;
       }
       if (closed || (active >= concurrency && queue.length >= queueLimit)) { error(message.id, 'workbench_busy_not_dispatched'); return; }
-      const record = { message, controller: new AbortController(), receivedAt: Date.now(), deadline: Date.now() + budgetMs, phase: 'queued', timer: undefined };
+      const requestBudgetMs = requestBudget(message);
+      const record = { message, controller: new AbortController(), receivedAt: Date.now(), deadline: Date.now() + requestBudgetMs, phase: 'queued', timer: undefined };
       requests.set(message.id, record);
-      record.timer = setTimeout(() => { metrics.timedOut++; cancel(record, 'deadline'); }, budgetMs);
+      record.timer = setTimeout(() => { metrics.timedOut++; cancel(record, 'deadline'); }, requestBudgetMs);
       queue.push(record); drain();
     } catch (e) { error(message?.id ?? null, e instanceof Error ? e.message : 'workbench_failed'); }
   });

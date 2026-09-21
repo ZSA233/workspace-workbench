@@ -15,9 +15,10 @@ test("initialization isolates UI imports, uses a built-in icon and preserves fai
   assert.ok(!entry.includes('from "./client/panel"'));
   assert.ok(!entry.includes('from "./client/file-review"'));
   const panelEntry = readFileSync(new URL("../client/entry-panels.tsx", import.meta.url), "utf8");
-  assert.ok(panelEntry.includes('from "./panel"'));
-  assert.ok(!panelEntry.includes('require("./panel")'));
-  assert.ok(!panelEntry.includes('require("./file-review")'));
+  assert.ok(panelEntry.includes('import("./panel")'));
+  assert.ok(panelEntry.includes('import("./file-review")'));
+  assert.ok(!panelEntry.includes('from "./panel"'));
+  assert.ok(!panelEntry.includes('from "./file-review"'));
   assert.ok(!entry.includes('icon: HeaderIcon'));
   assert.ok(!entry.includes('icon: "FileDiff"'));
   assert.ok(entry.includes("registerOptionalPanel"));

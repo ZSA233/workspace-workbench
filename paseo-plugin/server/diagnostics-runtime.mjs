@@ -2,9 +2,9 @@ import { appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:
 import { join } from "node:path";
 
 const MAX_EVENTS = 1000;
-const MAX_BYTES = 4 * 1024 * 1024;
+const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_FILES_PER_COMPONENT = 2;
-const queues = new Map();
+const MAX_PENDING = 256;
 
 function safe(value, depth = 0) {
   if (depth > 3) return "[depth]";
@@ -55,14 +55,26 @@ export function createDiagnosticSink({ root, component, pid = process.pid, gener
   void mkdir(root, { recursive: true }).then(() => pruneComponentFiles(root, component, file));
   let closed = false;
   let dropped = 0;
+  let draining = false;
+  const pending = [];
   const write = async event => {
-    if (closed) return;
     try {
       await mkdir(root, { recursive: true });
       await appendFile(file, `${JSON.stringify(event)}\n`, "utf8");
       await trimFile(file);
     } catch {
       dropped++;
+    }
+  };
+  const important = event => /failed|timeout|cancel|reject|shutdown|exit|parent_missing|cleanup/i.test(String(event.event || "")) || Boolean(event.errorCode);
+  const drain = async () => {
+    if (draining) return;
+    draining = true;
+    try {
+      while (pending.length) await write(pending.shift());
+    } finally {
+      draining = false;
+      if (pending.length && !closed) void drain();
     }
   };
   const record = (event, extra = {}) => {
@@ -76,15 +88,24 @@ export function createDiagnosticSink({ root, component, pid = process.pid, gener
       ...event,
       ...extra,
     });
-    const pending = (queues.get(file) || Promise.resolve()).then(() => write(payload));
-    queues.set(file, pending.catch(() => {}));
+    if (pending.length >= MAX_PENDING) {
+      const ordinary = pending.findIndex(item => !important(item));
+      if (ordinary >= 0) pending.splice(ordinary, 1);
+      else { dropped++; return; }
+      dropped++;
+    }
+    pending.push(payload);
+    void drain();
     console.error("workbench_diagnostic", JSON.stringify(payload));
   };
   return {
     file,
     record,
-    status: () => ({ file, dropped }),
-    async close() { closed = true; await queues.get(file); queues.delete(file); },
+    status: () => ({ file, dropped, queued: pending.length, draining }),
+    async close() {
+      closed = true;
+      while (pending.length) await write(pending.shift());
+    },
   };
 }
 

@@ -20,6 +20,11 @@ const maxConcurrent = 4;
 const maxQueue = 16;
 const budgetMs = 55_000;
 function projectHash(path) { return path ? createHash("sha256").update(path).digest("hex").slice(0, 12) : null; }
+function toolName(message) {
+  return message?.method === "tools/call" && message?.params && typeof message.params.name === "string"
+    ? message.params.name
+    : undefined;
+}
 
 function json(res, status, body, headers = {}) {
   if (res.headersSent || res.destroyed) return;
@@ -77,7 +82,7 @@ async function run(item) {
   const controller = new AbortController();
   item.controller = controller;
   const timer = setTimeout(() => controller.abort("deadline"), budgetMs);
-  diagnostics.record({ event: "mcp_request_started", phase: "dispatch", transport: "http", requestId: item.requestId, method: item.message?.method, role: item.context.role, projectHash: projectHash(item.context.projectConfig) });
+  diagnostics.record({ event: "mcp_request_started", phase: "dispatch", transport: "http", requestId: item.requestId, method: item.message?.method, tool: toolName(item.message), role: item.context.role, projectHash: projectHash(item.context.projectConfig), queueMs: Math.max(0, started - item.enqueuedAt) });
   try {
     const result = await handle(item.message, {
       signal: controller.signal,
@@ -85,11 +90,11 @@ async function run(item) {
       diagnose: event => diagnostics.record({ ...event, event: event.code === "cleanup_failed" ? "mcp_cleanup_failed" : "mcp_request_phase", requestId: item.requestId, phase: event.phase }),
     }, item.context);
     if (!item.response.writableEnded && !item.response.destroyed) json(item.response, 200, { jsonrpc: "2.0", id: item.message.id ?? null, result: item.message.method === "ping" || item.message.method === "initialize" ? { ...result, _meta: { workbench: { transport: "http", pluginGeneration, gatewayGeneration: generation, gatewayPid: process.pid, version: packageMetadata.version } } } : result });
-    diagnostics.record({ event: "mcp_request_finished", phase: "cleanup", transport: "http", requestId: item.requestId, method: item.message?.method, durationMs: Date.now() - started });
+    diagnostics.record({ event: "mcp_request_finished", phase: "cleanup", transport: "http", requestId: item.requestId, method: item.message?.method, tool: toolName(item.message), projectHash: projectHash(item.context.projectConfig), queueMs: Math.max(0, started - item.enqueuedAt), durationMs: Date.now() - started });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!item.response.writableEnded && !item.response.destroyed) json(item.response, /request_too_large/.test(message) ? 413 : 500, rpcError(item.message?.id, -32603, message));
-    diagnostics.record({ event: controller.signal.aborted ? "mcp_request_timeout" : "mcp_request_finished", phase: controller.signal.aborted ? "cleanup" : "dispatch", transport: "http", requestId: item.requestId, method: item.message?.method, durationMs: Date.now() - started, errorCode: controller.signal.aborted ? "request_timeout" : "request_failed", reason: message });
+    diagnostics.record({ event: controller.signal.aborted ? "mcp_request_timeout" : "mcp_request_finished", phase: controller.signal.aborted ? "cleanup" : "dispatch", transport: "http", requestId: item.requestId, method: item.message?.method, tool: toolName(item.message), projectHash: projectHash(item.context.projectConfig), queueMs: Math.max(0, started - item.enqueuedAt), durationMs: Date.now() - started, errorCode: controller.signal.aborted ? "request_timeout" : "request_failed", reason: message });
   } finally {
     clearTimeout(timer);
     active.delete(item);
@@ -138,11 +143,11 @@ async function onRequest(req, res) {
   if (!message || typeof message !== "object" || Array.isArray(message)) { if (!res.destroyed) json(res, 400, rpcError(null, -32600, "invalid_jsonrpc_request")); return; }
   if (message.id === undefined) { if (!res.destroyed) json(res, 202, undefined); return; }
   if (closing || running >= maxConcurrent && queue.length >= maxQueue) {
-    diagnostics.record({ event: "mcp_request_rejected", phase: "dispatch", transport: "http", requestId: String(message.id || randomUUID()), method: message.method, errorCode: closing ? "gateway_closing" : "queue_full" });
+    diagnostics.record({ event: "mcp_request_rejected", phase: "dispatch", transport: "http", requestId: String(message.id || randomUUID()), method: message.method, tool: toolName(message), errorCode: closing ? "gateway_closing" : "queue_full" });
     if (!res.destroyed) json(res, 429, rpcError(message.id, -32004, "workbench_busy_not_dispatched"));
     return;
   }
-  const item = { message, response: res, requestId: String(message.id || randomUUID()), context: requestContext(req), controller: null, phase: "queued", canceled: false };
+  const item = { message, response: res, requestId: String(message.id || randomUUID()), context: requestContext(req), controller: null, phase: "queued", canceled: false, enqueuedAt: Date.now() };
   const onDisconnect = () => {
     if (!res.writableEnded) cancelQueuedOrActive(item, "client_disconnected");
   };

@@ -1,4 +1,4 @@
-import { CLIENT_GENERATION } from "./initialization";
+import { CLIENT_GENERATION } from "./initialization.ts";
 
 export type NativeDiagnostic = {
   phase: string;

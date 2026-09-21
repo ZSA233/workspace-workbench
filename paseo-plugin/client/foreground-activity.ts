@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AppState, Platform } from "react-native";
 import { observeWebForeground, webForeground, type WebForegroundTarget } from "./web-foreground";
-import { reportNativeDiagnostic } from "./native-diagnostics";
+import { reportNativeDiagnostic } from "./native-diagnostics.ts";
 
 function currentForeground(): boolean {
   if (Platform.OS === "web") return webForeground(globalThis as WebForegroundTarget);

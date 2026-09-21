@@ -4,7 +4,7 @@ import { useRpc } from "@getpaseo/plugin/client";
 
 import { observerSettings, observerSettingsRpc } from "../shared/settings";
 import { effectiveReviewMode, type ReviewMode } from "./review-mode";
-import { reportNativeDiagnostic } from "./native-diagnostics";
+import { reportNativeDiagnostic } from "./native-diagnostics.ts";
 
 function parseMode(value: unknown): ReviewMode | null {
   return value === "split" || value === "unified" ? value : null;
@@ -29,7 +29,6 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
     reportNativeDiagnostic("hook-effect-start", { hook: "review-preferences-read" });
     if (native) {
       reportNativeDiagnostic("hook-effect-complete", { hook: "review-preferences-read", result: "native-local" });
-      setReady(true);
       return;
     }
     let disposed = false;
@@ -72,6 +71,11 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
   }, [native, read, scopeKey, write]);
 
   useEffect(() => {
+    // Native panels keep this preference local. Do not touch the readiness
+    // refs or enqueue persistence work on Android; the extra effect/update
+    // path is unnecessary there and can run while the native diff surface is
+    // still mounting.
+    if (native) return;
     reportNativeDiagnostic("hook-effect-start", { hook: "review-preferences-ready" });
     readyRef.current = ready;
     const pending = ready ? pendingRef.current : null;
@@ -79,7 +83,7 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
       pendingRef.current = null;
       persist(pending);
     }
-  }, [persist, ready]);
+  }, [native, persist, ready]);
 
   const setMode = useCallback((mode: ReviewMode) => {
     setSavedMode(mode);

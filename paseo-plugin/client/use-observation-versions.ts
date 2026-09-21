@@ -3,7 +3,7 @@ import { useRpc } from '@getpaseo/plugin/client';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { observerQuery, type ObserverResponse } from '../shared/observer';
 import { versionDelta, shouldRefreshVersionedQuery, type Versions } from './version-invalidation';
-import { reportNativeDiagnostic } from './native-diagnostics';
+import { reportNativeDiagnostic } from './native-diagnostics.ts';
 
 type Subscription = { ids: string[]; issue: (value: string | null) => void; reader: Reader };
 type Reader = (ids: string[]) => Promise<ObserverResponse>;

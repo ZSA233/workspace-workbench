@@ -5,7 +5,6 @@ import { Git, type GitFile } from "./git.ts";
 import { Workspaces } from "./workspaces.ts";
 import { Runtime } from "./runtime.ts";
 import { ObservationCache } from "./cache.ts";
-import { discover } from "./config.ts";
 import { gitlinkDetails } from "./gitlinks.ts";
 import {
   hash,
@@ -259,7 +258,7 @@ export class Observation {
         .list()
         .filter((w) => (params.includeRemoved || w.state !== "removed") &&
           !(orphanIds.has(w.id) && ["record_invalid", "adopting", "adopt_failed"].includes(w.state)));
-    const discovered = await discover(c, false, signal);
+    const discovered = await this.workspaces.discoverySnapshot(false, 0, signal);
     if (signal?.aborted) throw new WorkbenchError("observer_cancelled", "observation cancelled");
     return {
       schemaVersion: protocol,
@@ -268,7 +267,7 @@ export class Observation {
       orphanCandidates,
       capabilities: this.workspaces.capabilities(),
       discoveredCandidates: discovered.repositories,
-      discovery: { incomplete: discovered.incomplete, ...(discovered.reason ? { reason: discovered.reason } : {}), scannedDirectories: discovered.scannedDirectories },
+      discovery: { state: discovered.state, incomplete: discovered.incomplete, ...(discovered.reason ? { reason: discovered.reason } : {}), scannedDirectories: discovered.scannedDirectories, ...(discovered.startedAt ? { startedAt: discovered.startedAt } : {}), ...(discovered.completedAt ? { completedAt: discovered.completedAt } : {}) },
       orphanScan: {
         state: orphanScan.state,
         scannedDirectories: orphanScan.scannedDirectories,

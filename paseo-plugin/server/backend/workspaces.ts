@@ -54,13 +54,25 @@ type OrphanScanSnapshot = {
   reason?: string;
   promise?: Promise<void>;
 };
+type DiscoveryScanSnapshot = {
+  state: "ready" | "scanning" | "stale" | "failed";
+  repositories: Json[];
+  incomplete: boolean;
+  scannedDirectories: number;
+  reason?: string;
+  startedAt?: string;
+  completedAt?: string;
+  promise?: Promise<void>;
+};
 
 export class Workspaces {
   config: Config;
   readonly mutations = new SerialQueue();
   onOrphanScanChanged?: () => void;
+  onDiscoveryChanged?: () => void;
   private orphanScan: OrphanScanSnapshot = { state: "stale", candidates: [], scannedDirectories: 0 };
   private orphanScanRevision = 0;
+  private discoveryScans = new Map<boolean, DiscoveryScanSnapshot>();
   constructor(config: Config) {
     this.config = config;
     for (const root of [
@@ -186,7 +198,7 @@ export class Workspaces {
       id: repo.id, name: repo.name, path: repositoryPath(this.config, repo),
       configured: true, exists: existsSync(repositoryPath(this.config, repo)),
     }));
-    const scan = await discover(this.config, true);
+    const scan = await this.discoverySnapshot(true, 250);
     const found = scan.repositories.map((repo) => ({
       id: String(repo.id), name: String(repo.display_name || repo.id), path: canonical(String(repo.path)),
       configured: false, exists: existsSync(String(repo.path)),
@@ -211,6 +223,74 @@ export class Workspaces {
         ...repo, selected: selected.has(canonical(String(repo.path))), missing: !repo.exists,
       })),
     };
+  }
+
+  private startDiscoveryScan(includeManual: boolean, force = false): void {
+    const previous = this.discoveryScans.get(includeManual) || { state: "stale", repositories: [], incomplete: false, scannedDirectories: 0 };
+    if (previous.promise) return;
+    if (!force && previous.state === "ready" && previous.completedAt && Date.now() - Date.parse(previous.completedAt) < 300_000) return;
+    const startedAt = now();
+    this.discoveryScans.set(includeManual, {
+      ...previous,
+      state: previous.repositories.length ? "stale" : "scanning",
+      startedAt,
+      ...(previous.completedAt ? { completedAt: previous.completedAt } : {}),
+    });
+    const promise = discover(this.config, includeManual).then((scan) => {
+      this.discoveryScans.set(includeManual, {
+        state: "ready",
+        repositories: scan.repositories,
+        incomplete: scan.incomplete,
+        scannedDirectories: scan.scannedDirectories,
+        ...(scan.reason ? { reason: String(scan.reason) } : {}),
+        startedAt,
+        completedAt: now(),
+      });
+      this.onDiscoveryChanged?.();
+    }).catch((error) => {
+      this.discoveryScans.set(includeManual, {
+        state: "failed",
+        repositories: previous.repositories,
+        incomplete: previous.incomplete,
+        scannedDirectories: previous.scannedDirectories,
+        ...(previous.reason ? { reason: previous.reason } : {}),
+        startedAt,
+        ...(previous.completedAt ? { completedAt: previous.completedAt } : {}),
+        reason: issue(error).code,
+      });
+      this.onDiscoveryChanged?.();
+    }).finally(() => {
+      const current = this.discoveryScans.get(includeManual);
+      if (current?.promise === promise) {
+        const { promise: _promise, ...snapshot } = current;
+        this.discoveryScans.set(includeManual, snapshot);
+      }
+    });
+    this.discoveryScans.set(includeManual, { ...this.discoveryScans.get(includeManual)!, promise });
+  }
+
+  async discoverySnapshot(includeManual = false, waitMs = 0, signal?: AbortSignal): Promise<Omit<DiscoveryScanSnapshot, "promise">> {
+    this.startDiscoveryScan(includeManual);
+    const current = this.discoveryScans.get(includeManual)!;
+    if (current.promise && waitMs > 0) {
+      const wait = new Promise<void>((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const onAbort = () => {
+          if (timer) clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+          reject(new WorkbenchError("observer_cancelled", "observation cancelled"));
+        };
+        if (signal?.aborted) return onAbort();
+        signal?.addEventListener("abort", onAbort, { once: true });
+        timer = setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, waitMs);
+      });
+      await Promise.race([current.promise, wait]);
+    }
+    const { promise: _promise, ...snapshot } = this.discoveryScans.get(includeManual)!;
+    return snapshot;
   }
   async saveMainSelection(params: Json): Promise<Json> {
     const current = await this.mainCandidates();

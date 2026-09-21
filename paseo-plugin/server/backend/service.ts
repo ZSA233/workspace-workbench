@@ -42,6 +42,7 @@ export class Service {
       this.cache,
     );
     this.workspaces.onOrphanScanChanged = () => this.observation.scheduler.rosterChanged();
+    this.workspaces.onDiscoveryChanged = () => this.observation.scheduler.rosterChanged();
     this.cache.onProduced = scope => this.observation.scheduler.published(scope);
   }
   health() {

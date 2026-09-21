@@ -71,6 +71,13 @@ export default function contribute(server: PluginServerContext) {
   const metrics = new RpcMetrics();
   const gateway = new McpGatewayManager(defaultMcpGatewayEntry());
   setMcpGateway(gateway);
+  // Keep the plugin-owned HTTP endpoint alive for the whole generation. Agent
+  // sessions retain the URL they received during injection; waiting until a
+  // later injection to start the gateway leaves those existing sessions with
+  // a dead port immediately after plugin reload.
+  void gateway.ensure().catch(error => {
+    console.error("workbench_gateway_start_failed", error instanceof Error ? error.message : String(error));
+  });
   const measured: PluginServerContext = {
     ...server,
     handle: (contract, handler) => server.handle(contract, (input, context) => {

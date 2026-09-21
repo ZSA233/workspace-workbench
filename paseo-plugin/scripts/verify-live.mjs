@@ -212,6 +212,11 @@ try {
   assert.equal(pluginStatus.hostTransport.state, "connected");
   assert.ok(pluginStatus.rpcMetrics.methods["workspace.workbench.query:observer.health"].count >= 1);
   assert.ok(pluginStatus.rpcMetrics.memory.rss > 0);
+  const gatewayStatus = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.mcp.status", {});
+  assert.equal(gatewayStatus.transport, "http");
+  assert.equal(gatewayStatus.scope, "plugin-generation");
+  assert.equal(gatewayStatus.state, "ready");
+  report.checks.push("plugin generation starts one stable HTTP MCP gateway before the first Agent request");
   report.checks.push("plugin status distinguishes host API transport, per-method RPC counts and plugin-process memory");
   assert.notEqual(health[0].result.process.pid, health[1].result.process.pid);
   for (let i = 0; i < 5; i++) {

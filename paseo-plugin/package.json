@@ -1,6 +1,6 @@
 {
   "name": "workspace-workbench-paseo",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Paseo plugin for Workspace Workbench multi-repository observation.",
   "type": "module",
   "private": false,

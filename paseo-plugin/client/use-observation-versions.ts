@@ -3,6 +3,7 @@ import { useRpc } from '@getpaseo/plugin/client';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { observerQuery, type ObserverResponse } from '../shared/observer';
 import { versionDelta, shouldRefreshVersionedQuery, type Versions } from './version-invalidation';
+import { reportNativeDiagnostic } from './native-diagnostics';
 
 type Subscription = { ids: string[]; issue: (value: string | null) => void; reader: Reader };
 type Reader = (ids: string[]) => Promise<ObserverResponse>;
@@ -79,11 +80,13 @@ export function useObservationVersions(projectConfig: string | undefined, worksp
   const rpcRef = useRef(rpc); rpcRef.current = rpc;
   const idsKey = JSON.stringify([...new Set(workspaceIds.filter(Boolean))].sort());
   useEffect(() => {
+    reportNativeDiagnostic("hook-effect-start", { hook: "observation-versions" });
     if (!enabled || !projectConfig) {
       // A failed poll must not remain visible after the panel is backgrounded
       // or the subscription is removed. It is a stale diagnostic, not a
       // current observation failure.
       setIssue(null);
+      reportNativeDiagnostic("hook-effect-complete", { hook: "observation-versions", result: "disabled" });
       return;
     }
     let controller = controllers.get(projectConfig);
@@ -91,6 +94,7 @@ export function useObservationVersions(projectConfig: string | undefined, worksp
     if (!controller) { controller = new ProjectVersions(projectConfig, client); controllers.set(projectConfig, controller); }
     else controller.client = client;
     const remove = controller.add({ ids: JSON.parse(idsKey), issue: setIssue, reader });
+    reportNativeDiagnostic("hook-effect-complete", { hook: "observation-versions", result: "subscribed" });
     return () => {
       remove();
       setIssue(null);

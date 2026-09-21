@@ -49,6 +49,7 @@ import { editorCodeFontFamily, HighlightedCode } from "./syntax";
 import { Svg, Rect } from "./graph/svg-web";
 import { observerAccent } from "./theme";
 import { useWorkbenchCopy } from "./i18n";
+import { reportNativeDiagnostic } from "./native-diagnostics";
 
 type FilePanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 const MIN_SPLIT_PANEL_WIDTH = 860;
@@ -87,6 +88,7 @@ function scopeLabel(scope: FileReviewSelection["scope"], strings: WorkbenchCopy 
 }
 
 export function FileReviewPanel(props: FilePanelProps) {
+  reportNativeDiagnostic("file-review-render", { entry: "FileReviewPanel" });
   const foreground = useForegroundActivity();
   const copy = useWorkbenchCopy();
   const hostWorkspaceId = props.workspaceId;
@@ -115,10 +117,12 @@ export function FileReviewPanel(props: FilePanelProps) {
   );
   const seenBackendInstanceId = useRef<string | null>(null);
   useEffect(() => {
+    reportNativeDiagnostic("hook-effect-start", { hook: "file-review-backend-instance" });
     seenBackendInstanceId.current = null;
   }, [activeSelection?.projectConfig]);
 
   useEffect(() => {
+    reportNativeDiagnostic("hook-effect-start", { hook: "file-review-selection-sync" });
     if (!activeSelection) {
       return;
     }
@@ -312,6 +316,7 @@ function DiffViewer({
   theme: FilePanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
+  reportNativeDiagnostic("file-review-diff-render", { entry: "DiffViewer" });
   const copy = useWorkbenchCopy();
   const parsed = useMemo(() => parseUnifiedPatch(diff.patch), [diff.patch]);
   const rows = useMemo(() => buildDiffDisplayRows(parsed, mode), [mode, parsed]);

@@ -3,6 +3,7 @@ import { useRpc } from "@getpaseo/plugin/client";
 
 import { observerSettings, observerSettingsRpc } from "../shared/settings";
 import { effectiveReviewMode, type ReviewMode } from "./review-mode";
+import { reportNativeDiagnostic } from "./native-diagnostics";
 
 function parseMode(value: unknown): ReviewMode | null {
   return value === "split" || value === "unified" ? value : null;
@@ -23,6 +24,7 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
   const queue = useRef(Promise.resolve());
 
   useEffect(() => {
+    reportNativeDiagnostic("hook-effect-start", { hook: "review-preferences-read" });
     let disposed = false;
     void read({}).then((result) => {
       if (disposed || result.status !== "ready") return;
@@ -31,6 +33,7 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
       const mode = parseMode(parsed.data.reviewModeByPaseoWorkspace[scopeKey]);
       setSavedMode(mode);
     }).catch(() => {}).finally(() => {
+      reportNativeDiagnostic("hook-effect-complete", { hook: "review-preferences-read", result: "settled" });
       if (!disposed) setReady(true);
     });
     return () => { disposed = true; };
@@ -61,6 +64,7 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
   }, [read, scopeKey, write]);
 
   useEffect(() => {
+    reportNativeDiagnostic("hook-effect-start", { hook: "review-preferences-ready" });
     readyRef.current = ready;
     const pending = ready ? pendingRef.current : null;
     if (pending) {

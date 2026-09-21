@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import type { ObserverResponse } from "../shared/observer.ts";
 import { DEFAULT_OBSERVATION_TIMING } from "../shared/observation-timing.ts";
 import { responseObservationState } from "./model.ts";
+import { reportNativeDiagnostic } from "./native-diagnostics.ts";
 
 const STALE_FAILURE_LIMIT = DEFAULT_OBSERVATION_TIMING.staleFailureLimit;
 const STALE_AFTER_MS = DEFAULT_OBSERVATION_TIMING.staleWindowsMs.detail;
@@ -309,6 +310,7 @@ export function useBoundedCacheRefresh(
   const refreshing = metadata.refreshing;
   const cacheUpdatedAt = metadata.cacheUpdatedAt;
   useEffect(() => {
+    reportNativeDiagnostic("hook-effect-start", { hook: "bounded-cache-refresh" });
     if (!enabled || !refreshing) return;
     const token = `${key}:${cacheUpdatedAt || "unknown"}`;
     if (attempted.current.has(token)) return;

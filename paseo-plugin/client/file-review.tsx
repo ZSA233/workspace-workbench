@@ -1,7 +1,6 @@
 import { useObservationVersions } from "./use-observation-versions";
 import { useForegroundActivity } from "./foreground-activity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import {
   type PluginAgentPanelProps,
   type PluginWorkspacePanelProps,
@@ -14,7 +13,6 @@ import { copy, formatCopyFrom, type WorkbenchCopy } from "../shared/copy";
 import { observerQuery, type ObserverResponse } from "../shared/observer";
 import { projectBackendStatus } from "../shared/setup";
 import {
-  DEFAULT_OBSERVATION_TIMING,
   observationTimingFromWire,
 } from "../shared/observation-timing";
 import {
@@ -53,6 +51,46 @@ import { reportNativeDiagnostic } from "./native-diagnostics";
 
 type FilePanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 const MIN_SPLIT_PANEL_WIDTH = 860;
+
+type AsyncRequestState<T> = {
+  data?: T;
+  error?: unknown;
+  isLoading: boolean;
+};
+
+/**
+ * File review has two one-shot reads. Keeping them on a small local request
+ * lifecycle avoids mounting a second React Query observer tree inside the
+ * native workspace panel when a file is selected. It also gives cancellation
+ * and stale-result protection without changing the RPC contract.
+ */
+function useAsyncRequest<T>(key: string, enabled: boolean, request: () => Promise<T>): AsyncRequestState<T> & { refetch(): Promise<{ data?: T; error?: unknown }> } {
+  const [state, setState] = useState<AsyncRequestState<T>>({ isLoading: enabled });
+  const generation = useRef(0);
+  const run = useCallback(async (): Promise<{ data?: T; error?: unknown }> => {
+    if (!enabled) return {};
+    const current = ++generation.current;
+    setState((previous) => ({ ...previous, isLoading: true, error: undefined }));
+    try {
+      const data = await request();
+      if (current === generation.current) setState({ data, isLoading: false });
+      return { data };
+    } catch (error) {
+      if (current === generation.current) setState({ error, isLoading: false });
+      return { error };
+    }
+  }, [enabled, request]);
+  useEffect(() => {
+    generation.current++;
+    if (!enabled) {
+      setState({ isLoading: false });
+      return;
+    }
+    void run();
+    return () => { generation.current++; };
+  }, [enabled, key, run]);
+  return { ...state, refetch: run };
+}
 
 function resultOf<T>(response: ObserverResponse | undefined): T | null {
   if (!response?.ok) return null;
@@ -103,14 +141,16 @@ export function FileReviewPanel(props: FilePanelProps) {
   const rpc = useRpc(observerQuery);
   const observationIssue = useObservationVersions(activeSelection?.projectConfig, activeSelection ? [activeSelection.workspaceId] : [], foreground);
   const backendStatusRpc = useRpc(projectBackendStatus);
-  const backendStatusQuery = useQuery({
-    queryKey: ["workspace-workbench", "file-review-backend", activeSelection?.projectConfig],
-    queryFn: () => backendStatusRpc({ projectConfig: activeSelection?.projectConfig || "" }),
-    enabled: Boolean(activeSelection?.projectConfig),
-    refetchInterval: foreground ? DEFAULT_OBSERVATION_TIMING.refreshIntervalsMs.list : false,
-    refetchOnWindowFocus: false,
-    retry: false,
-  });
+  const backendProjectConfig = activeSelection?.projectConfig || "";
+  const backendStatusRequest = useCallback(
+    () => backendStatusRpc({ projectConfig: backendProjectConfig }),
+    [backendProjectConfig, backendStatusRpc],
+  );
+  const backendStatusQuery = useAsyncRequest(
+    `backend:${backendProjectConfig}`,
+    Boolean(activeSelection?.projectConfig),
+    backendStatusRequest,
+  );
   const observationTiming = useMemo(
     () => observationTimingFromWire(backendStatusQuery.data?.timing),
     [backendStatusQuery.data?.timing],
@@ -132,20 +172,17 @@ export function FileReviewPanel(props: FilePanelProps) {
     }
   }, [activeKey, activeSelection, hostWorkspaceId]);
 
-  const diffQuery = useQuery({
-    queryKey: [
-      "workspace-workbench",
-      "file-review",
-      activeSelection?.projectConfig,
-      hostWorkspaceId,
-      activeSelection?.workspaceId,
-      activeSelection?.repoPath,
-      activeSelection?.path,
-      activeSelection?.scope,
-      activeSelection?.commitSha,
-    ],
-    queryFn: () =>
-      rpc({
+  const diffKey = JSON.stringify([
+    activeSelection?.projectConfig || "",
+    hostWorkspaceId,
+    activeSelection?.workspaceId || "",
+    activeSelection?.repoPath || "",
+    activeSelection?.path || "",
+    activeSelection?.scope || "",
+    activeSelection?.commitSha || "",
+  ]);
+  const diffRequest = useCallback(
+    () => rpc({
         method: "repository.diff",
         projectConfig: activeSelection?.projectConfig,
         params: {
@@ -155,13 +192,10 @@ export function FileReviewPanel(props: FilePanelProps) {
           scope: activeSelection?.scope,
           commitSha: activeSelection?.commitSha || undefined,
         },
-    }),
-    enabled: Boolean(activeSelection),
-    refetchInterval: false,
-    refetchOnWindowFocus: false,
-    retry: false,
-    staleTime: observationTiming.clientQueryStaleTimeMs,
-  });
+      }),
+    [activeSelection, rpc],
+  );
+  const diffQuery = useAsyncRequest(diffKey, Boolean(activeSelection), diffRequest);
   const diffState = useLastSuccessfulResponse(
     `file-review:${hostWorkspaceId}:${activeSelection ? selectionKey(activeSelection) : ""}`,
     diffQuery.data,

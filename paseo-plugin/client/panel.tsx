@@ -25,7 +25,7 @@ import type { Handoff } from "../shared/handoff";
 import type { ReviewPacket } from "../shared/review-packet";
 import { artifactList } from "../shared/artifacts";
 import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpdate, type AgentPermissionMode, type AgentRelationship, type AgentSessionPatch } from "../shared/agent-session";
-import { observerQuery, type ObserverResponse } from "../shared/observer";
+import { observerQuery } from "../shared/observer";
 import { projectsQuery, type ProjectInfo } from "../shared/projects";
 import { projectBackendStart, projectStorageQuery } from "../shared/setup";
 import {
@@ -52,13 +52,16 @@ type WorkspaceFilter,
 type WorkspaceSummary,
 type WorkspaceTask
 } from "./model";
-import { boundedRefresh, RECOVERABLE_FAILURE_GRACE_MS, useBoundedCacheRefresh, useLastSuccessfulResponse, type ObserverSnapshot } from "./observation";
+import { boundedRefresh, RECOVERABLE_FAILURE_GRACE_MS, useBoundedCacheRefresh, useLastSuccessfulResponse } from "./observation";
 import { useRefreshOnForeground } from "./foreground-refresh";
 import { useForegroundActivity } from "./foreground-activity";
 import { useObserverPreferences } from "./preferences";
 import { type WorkbenchSurfaceProps, useWorkbenchWorkspaceSnapshot, useWorkbenchWorkspaceSnapshotStatus } from "./surface-context";
 import { localeFromHostProps, useWorkbenchCopy, WorkbenchLocaleProvider, useWorkbenchLocale } from "./i18n";
 import { reportNativeDiagnostic } from "./native-diagnostics";
+import { queryDiagnosticDetails, observationAreaDetail, type ObservationArea } from "./panel/observation-display";
+import { useTransientObserverRetry } from "./panel/use-transient-observer-retry";
+import { projectPreferenceScopeKey } from "./panel/scope";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -86,83 +89,6 @@ type OrphanPreview = {
   resume?: boolean;
 };
 
-type ObservationArea = {
-  label: string;
-  snapshot: ObserverSnapshot;
-  fetching: boolean;
-};
-
-function queryDiagnosticDetails(
-  response: ObserverResponse | undefined,
-  error: unknown,
-  query: { isPending: boolean; isFetching: boolean; isError: boolean },
-  snapshot: ObserverSnapshot,
-): Record<string, string> {
-  const result = response?.ok && response.result && typeof response.result === "object"
-    ? response.result as { observation?: { state?: unknown; cacheState?: unknown; refreshing?: unknown }; issues?: unknown[] }
-    : undefined;
-  const issue = result?.issues?.find((item) => item && typeof item === "object" && typeof (item as { code?: unknown }).code === "string") as { code?: unknown } | undefined;
-  return {
-    pending: String(query.isPending),
-    fetching: String(query.isFetching),
-    queryError: query.isError ? (error instanceof Error ? error.message : "query_error") : "",
-    response: response ? (response.ok ? "ok" : `error:${response.error?.code || "unknown"}`) : "none",
-    observationState: String(result?.observation?.state || ""),
-    cacheState: String(result?.observation?.cacheState || ""),
-    cacheRefreshing: String(result?.observation?.refreshing === true),
-    resultIssue: String(issue?.code || ""),
-    snapshotStatus: snapshot.status,
-    snapshotFailureCount: String(snapshot.failureCount),
-    snapshotFailureAgeMs: String(snapshot.failureAgeMs ?? ""),
-    snapshotRefreshing: String(snapshot.refreshing),
-  };
-}
-
-function observationStatusLabel(status: ObserverSnapshot["status"], strings = copy): string {
-  if (status === "loading") return strings.text_fcabadb2a7;
-  if (status === "refreshing") return strings.observationRefreshing;
-  if (status === "degraded") return strings.observationDegraded;
-  if (status === "expired") return strings.observationStale;
-  if (status === "unavailable") return strings.observationUnavailable;
-  return strings.observationStatus;
-}
-
-function observationAreaDetail(area: ObservationArea, strings = copy): string {
-  const status = area.snapshot.status === "expired"
-    ? "expired"
-    : area.fetching || area.snapshot.refreshing
-      ? "refreshing"
-      : area.snapshot.status;
-  const timestamp = area.snapshot.lastObservedAt ? ` · ${formatObservedTime(area.snapshot.lastObservedAt, strings)}` : "";
-  return `${area.label}: ${observationStatusLabel(status, strings)}${timestamp}`;
-}
-
-type ObserverQueryState = {
-  data?: ObserverResponse;
-  error?: unknown;
-  isFetching: boolean;
-  refetch: () => Promise<unknown>;
-};
-
-/** Retry only transport-style observer failures, and stop once the UI has a
- * truthful unavailable state. A successful response or a structured business
- * error ends this loop. */
-function useTransientObserverRetry(query: ObserverQueryState, snapshot: ObserverSnapshot, enabled: boolean): void {
-  const refetchRef = useRef(query.refetch);
-  refetchRef.current = query.refetch;
-  useEffect(() => {
-    if (!enabled || query.isFetching || !snapshot.initialFailure || !isRecoverableObserverFailure(query.data, query.error)) return;
-    if ((snapshot.failureAgeMs ?? 0) >= RECOVERABLE_FAILURE_GRACE_MS) return;
-    const age = snapshot.failureAgeMs ?? 0;
-    const delay = Math.min(2_000, Math.max(250, 250 * 2 ** Math.min(3, snapshot.failureCount)));
-    const remaining = Math.max(0, RECOVERABLE_FAILURE_GRACE_MS - age);
-    if (!remaining) return;
-    const timer = setTimeout(() => { void refetchRef.current().catch(() => {}); }, Math.min(delay, remaining));
-    return () => clearTimeout(timer);
-  }, [enabled, query.data, query.error, query.isFetching, snapshot.failureAgeMs, snapshot.failureCount, snapshot.initialFailure]);
-}
-
-const PREFERENCE_SCOPE_FALLBACK = "global";
 const noSectionDragState = () => {};
 
 function nonEmptyLines(value: string): string[] {
@@ -367,7 +293,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     reportNativeRenderError("project-panel-locale-failed", error);
     throw error;
   }
-  const preferenceScopeKey = `project:${projectConfig}:paseo-workspace:${hostWorkspaceId || PREFERENCE_SCOPE_FALLBACK}`;
+  const preferenceScopeKey = projectPreferenceScopeKey(projectConfig, hostWorkspaceId);
   const [panelWidth, setPanelWidth] = useState(0);
   const [panelHeight, setPanelHeight] = useState(0);
   const [reduceMotion, setReduceMotion] = useState(false);

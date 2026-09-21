@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { workflowRequest } from "./orchestration.ts";
 
 const projectConfig = z.string().trim().min(1);
 const requestId = z.string().trim().min(1).max(200).optional();
@@ -72,6 +73,18 @@ export const workspaceAddRepositories = defineRpc({
   }),
 });
 
+/**
+ * Freeze an optional handoff preview without entering the Paseo Agent host
+ * connection.  The token is checked against the plugin's saved session
+ * identity by the server handler; Git creation remains a separate operation.
+ */
+export const workspacePreview = defineRpc({
+  name: "workspace.workbench.workspace-preview",
+  input: z.object({ projectConfig, token: z.string().trim().min(1), request: workflowRequest }),
+  output: z.unknown(),
+});
+
 export type WorkspaceCreateInput = z.infer<typeof workspaceCreate.input>;
 export type WorkspaceOperationStatusInput = z.infer<typeof workspaceOperationStatus.input>;
 export type WorkspaceAddRepositoriesInput = z.infer<typeof workspaceAddRepositories.input>;
+export type WorkspacePreviewInput = z.infer<typeof workspacePreview.input>;

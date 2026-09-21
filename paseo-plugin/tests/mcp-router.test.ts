@@ -62,6 +62,38 @@ test("workspace create uses the direct Git operation RPC instead of Agent orches
   }
 });
 
+test("workspace preview uses the local plugin RPC instead of the Paseo host orchestration path", async () => {
+  const originalConnect = DaemonClient.prototype.connect;
+  const originalClose = DaemonClient.prototype.close;
+  const originalInvoke = DaemonClient.prototype.invokePluginRpc;
+  const seen: unknown[] = [];
+  DaemonClient.prototype.connect = async function () {};
+  DaemonClient.prototype.close = async function () {};
+  DaemonClient.prototype.invokePluginRpc = async function (...args: unknown[]) {
+    seen.push(args);
+    return { ok: true, action: "create", requiresExecution: true };
+  };
+  const previousToken = process.env.WORKBENCH_AGENT_TOKEN;
+  process.env.WORKBENCH_AGENT_TOKEN = "preview-token";
+  try {
+    const response = await handle({ method: "tools/call", params: {
+      name: "workbench_workspace_preview",
+      arguments: { requestId: "preview-direct-1", name: "direct", repositories: ["one"], handoff: { goal: "inspect" } },
+    } });
+    assert.equal(response.isError, false);
+    assert.equal((seen.at(-1) as unknown[])[1], "workspace.workbench.workspace-preview");
+    const payload = (seen.at(-1) as unknown[])[2] as { token: string; request: { requestId: string } };
+    assert.equal(payload.token, "preview-token");
+    assert.equal(payload.request.requestId, "preview-direct-1");
+  } finally {
+    if (previousToken === undefined) delete process.env.WORKBENCH_AGENT_TOKEN;
+    else process.env.WORKBENCH_AGENT_TOKEN = previousToken;
+    DaemonClient.prototype.connect = originalConnect;
+    DaemonClient.prototype.close = originalClose;
+    DaemonClient.prototype.invokePluginRpc = originalInvoke;
+  }
+});
+
 test("workspace add repositories uses the direct Git operation RPC", async () => {
   const originalConnect = DaemonClient.prototype.connect;
   const originalClose = DaemonClient.prototype.close;

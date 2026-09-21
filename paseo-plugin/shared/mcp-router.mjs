@@ -18,7 +18,7 @@ const publicTools = [
   { name: "workbench_review_read", description: "Accept the assigned coordinator review and read its frozen material; do not edit." },
   { name: "workbench_review_result", description: "Submit the assigned coordinator review result, then end this turn." },
   { name: "workbench_artifact_register", description: "Register a handoff asset from a local path or image data." },
-  { name: "workbench_workspace_preview", description: "Validate the canonical request and freeze handoff materials without Git changes. Check missing required sources before execute; retries reuse the same materials." },
+  { name: "workbench_workspace_preview", description: "Optional local preview that freezes handoff materials without Git changes; it does not require a Paseo host connection. Use direct create for a simple Git Workspace." },
   { name: "workbench_workspace_execute", description: "Run the saved preview; requestId alone is enough after preview. Full input remains accepted. Report success and end this turn." },
   { name: "workbench_workspace_status", description: "Read an uncertain Workspace handoff using its request ID (requestId); use operation_status for a Git operationId." },
   { name: "workbench_workspace_submit", description: "Submit an authorized task and original paths, then create or reuse its Workspace and start the worker without a separate preview." },
@@ -341,12 +341,12 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
   const materialAction = Boolean(tool?.name.startsWith("workbench_handoff_"));
   const reviewTool = Boolean(tool && reviewToolNames.has(tool.name));
   const extra = tool && extraSchema(tool.name);
-  const directWorkspaceAction = tool?.name === "workbench_workspace_create" || tool?.name === "workbench_workspace_add_repositories" || tool?.name === "workbench_workspace_operation_status";
+  const directWorkspaceAction = tool?.name === "workbench_workspace_create" || tool?.name === "workbench_workspace_add_repositories" || tool?.name === "workbench_workspace_operation_status" || tool?.name === "workbench_workspace_preview";
   const delegateAction = tool?.name === "workbench_workspace_delegate";
   if (tool?.name === "workbench_workspace_status" && typeof args.requestId !== "string") {
     return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: { code: "workspace_status_request_id_required", message: "workbench_workspace_status requires the requestId returned by workspace_submit, preview, or execute; use workbench_workspace_operation_status with operationId for Git creation status." } }) }], isError: true };
   }
-  const needsToken = !directWorkspaceAction && !runtime.token;
+  const needsToken = (!directWorkspaceAction || tool?.name === "workbench_workspace_preview") && !runtime.token;
   if ((!action && !reviewTool && !extra) || !runtime.endpoint || !runtime.projectConfig || needsToken) throw new Error("workbench_context_unavailable");
   const sockets = new Set();
   const client = new DaemonClient({ url: runtime.endpoint, clientId: `workbench-mcp-${randomUUID()}`, clientType: "mcp", reconnect: { enabled: false },
@@ -359,12 +359,16 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
   if (action === "submit" && typeof args.task !== "string") throw new Error("workbench_submit_task_missing");
   const context = callContext(runtime, args);
   const result = await withMcpConnection(client, () => (
-      directWorkspaceAction
+        directWorkspaceAction
         ? client.invokePluginRpc("workspace-workbench-paseo", tool.name === "workbench_workspace_create"
           ? "workspace.workbench.workspace-create"
           : tool.name === "workbench_workspace_add_repositories"
             ? "workspace.workbench.workspace-add-repositories"
-            : "workspace.workbench.workspace-operation-status", { ...args, projectConfig: runtime.projectConfig })
+            : tool.name === "workbench_workspace_operation_status"
+              ? "workspace.workbench.workspace-operation-status"
+              : "workspace.workbench.workspace-preview", tool.name === "workbench_workspace_preview"
+                ? { projectConfig: runtime.projectConfig, token: runtime.token, request: args }
+                : { ...args, projectConfig: runtime.projectConfig })
         : materialAction
         ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.handoff-materials", { ...args, ...context, action: tool.name.split("_").at(-1) })
         : delegateAction

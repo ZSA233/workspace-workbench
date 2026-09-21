@@ -39,7 +39,7 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
   const execute = response.result.tools.find((tool) => tool.name === "workbench_workspace_execute")!;
   const status = response.result.tools.find((tool) => tool.name === "workbench_workspace_status")!;
   assert.match(preview.description, /without Git changes/);
-  assert.match(preview.description, /canonical request/);
+  assert.match(preview.description, /local/);
   assert.match(execute.description, /requestId alone/);
   assert.match(status.description, /request ID/);
   for (const tool of response.result.tools) {

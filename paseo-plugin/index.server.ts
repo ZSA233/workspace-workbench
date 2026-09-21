@@ -7,8 +7,8 @@ import { sessionOperation, coordinatorReview } from "./shared/session-tools";
 import { handleSessionOperation } from "./server/session-tools";
 import { handoffMaterials } from "./shared/handoff-materials";
 import { handleHandoffMaterials } from "./server/handoff-access";
-import { workspaceAddRepositories, workspaceCreate, workspaceOperationStatus } from "./shared/workspace-operations";
-import { handleWorkspaceAddRepositories, handleWorkspaceCreate, handleWorkspaceOperationStatus } from "./server/workspace-operations";
+import { workspaceAddRepositories, workspaceCreate, workspaceOperationStatus, workspacePreview } from "./shared/workspace-operations";
+import { handleWorkspaceAddRepositories, handleWorkspaceCreate, handleWorkspaceOperationStatus, handleWorkspacePreview } from "./server/workspace-operations";
 
 import { handleAgentDelegate, handleAgentStatus, handleWorkspaceBinding, handleWorkspaceDelegate } from "./server/agent-provider";
 import { closeObserverBridge, handleObserver, observerQuery } from "./server/observer";
@@ -146,6 +146,9 @@ export default function contribute(server: PluginServerContext) {
   measured.handle(workspaceCreate, handleWorkspaceCreate);
   measured.handle(workspaceOperationStatus, handleWorkspaceOperationStatus);
   measured.handle(workspaceAddRepositories, handleWorkspaceAddRepositories);
+  // Handoff preview is local and read-only.  It deliberately bypasses the
+  // Paseo Agent host connection; execution/delegation remains host-bound.
+  measured.handle(workspacePreview, handleWorkspacePreview);
   measured.handle(projectSetupScan, handleProjectSetupScan);
   measured.handle(projectSetupSave, handleProjectSetupSave);
   measured.handle(projectStorageQuery, handleProjectStorage);

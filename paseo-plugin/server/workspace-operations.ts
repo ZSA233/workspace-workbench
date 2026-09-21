@@ -1,8 +1,10 @@
-import { withProject } from "./projects.ts";
+import { currentProject, resolveProject, withProject } from "./projects.ts";
 import { handleObserver } from "./observer.ts";
 import type { ObserverResponse } from "../shared/observer.ts";
 import { issue } from "./backend/storage.ts";
-import type { WorkspaceAddRepositoriesInput, WorkspaceCreateInput, WorkspaceOperationStatusInput } from "../shared/workspace-operations.ts";
+import { previewWorkflowLocally } from "./orchestrator.ts";
+import { readState } from "./orchestration-state.ts";
+import type { WorkspaceAddRepositoriesInput, WorkspaceCreateInput, WorkspaceOperationStatusInput, WorkspacePreviewInput } from "../shared/workspace-operations.ts";
 
 function failed(error: unknown) {
   const value = issue(error);
@@ -72,6 +74,26 @@ export async function handleWorkspaceAddRepositories(input: WorkspaceAddReposito
         existingRepositories: Array.isArray(result.existingRepositories) ? result.existingRepositories.filter((value): value is string => typeof value === "string") : [],
         result,
       };
+    });
+  } catch (error) { return failed(error); }
+}
+
+/**
+ * Preview only: validate the saved session identity and use the local
+ * Workbench backend.  No Paseo Agent API call is made here, so a slow or
+ * reconnecting host cannot cancel the first Workspace request.
+ */
+export async function handleWorkspacePreview(input: WorkspacePreviewInput) {
+  try {
+    return await withProject({ projectConfig: input.projectConfig }, async () => {
+      const identity = readState<{ agentId?: string; cwd?: string; revoked?: boolean }>(`context:${input.token}`);
+      if (!identity?.agentId || !identity.cwd) throw new Error("agent_context_invalid");
+      if (identity.revoked) {
+        const session = readState<{ token?: string }>(`session:${identity.agentId}`);
+        if (session?.token !== input.token) throw new Error("agent_context_invalid");
+      }
+      if (resolveProject({ directory: identity.cwd }).configPath !== currentProject()!.configPath) throw new Error("parent_project_mismatch");
+      return previewWorkflowLocally(input.request, identity.agentId, identity.cwd);
     });
   } catch (error) { return failed(error); }
 }

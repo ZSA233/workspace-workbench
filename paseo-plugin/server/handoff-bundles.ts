@@ -102,10 +102,15 @@ async function build(input: { ref: BundleRef; ownerAgentId: string; ownerCwd: st
       const deadline = Date.now() + materialLimits.archiveTimeoutMs;
       let cursor: { epoch: string; seq: number } | undefined, archiveBytes = 0;
       try {
-        if (!input.context?.paseo.agents.ref(input.ownerAgentId).timeline) throw new Error("host_timeline_unavailable");
+        // A local preview may intentionally run without a live Paseo host
+        // connection.  Keep the bundle valid and make the missing timeline
+        // explicit in SOURCES.md instead of making basic Workspace creation
+        // depend on the Agent transport.
+        const timeline = input.context?.paseo?.agents.ref(input.ownerAgentId).timeline;
+        if (!timeline) throw new Error("host_timeline_unavailable");
         for (let pageNo = 0; pageNo < materialLimits.archivePages; pageNo++) {
           let timer: ReturnType<typeof setTimeout> | undefined;
-          const page = await Promise.race([input.context.paseo.agents.ref(input.ownerAgentId).timeline.refetch({ limit: materialLimits.pageItems, direction: cursor ? "before" : "tail", ...(cursor ? { cursor } : {}) }), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("archive_deadline")), Math.max(0, deadline - Date.now())); })]).finally(() => clearTimeout(timer));
+          const page = await Promise.race([timeline.refetch({ limit: materialLimits.pageItems, direction: cursor ? "before" : "tail", ...(cursor ? { cursor } : {}) }), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("archive_deadline")), Math.max(0, deadline - Date.now())); })]).finally(() => clearTimeout(timer));
           if (page.error || page.staleCursor || page.gap || cursor && page.reset || conversation.epoch && page.epoch !== conversation.epoch) throw new Error("host_timeline_incomplete");
           conversation.epoch = page.epoch;
           conversation.boundary ??= page.endCursor?.seq;
@@ -162,7 +167,7 @@ async function build(input: { ref: BundleRef; ownerAgentId: string; ownerCwd: st
   } catch (error) { rmSync(staging, { recursive: true, force: true }); throw error; }
 }
 
-export function createPreviewBundle(input: { ownerAgentId: string; ownerCwd: string; identity: string; handoff: Handoff; runtime: ArtifactRuntime; context: AgentContext }): Promise<BundleManifest> {
+export function createPreviewBundle(input: { ownerAgentId: string; ownerCwd: string; identity: string; handoff: Handoff; runtime: ArtifactRuntime; context?: AgentContext }): Promise<BundleManifest> {
   const ref = { id: digest({ owner: input.ownerAgentId, identity: input.identity }), version: 1 };
   const key = directory(ref);
   const prior = flights.get(key); if (prior) return prior;

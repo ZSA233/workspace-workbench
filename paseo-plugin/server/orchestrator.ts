@@ -140,6 +140,86 @@ function normalizeWorkflowRequest(request: WorkflowRequest, value: unknown): Nor
   }
 }
 
+/**
+ * Host-independent preview used by the MCP tool.  Preview is a local
+ * validation/material-freeze step; it must not require a live Paseo Agent
+ * websocket just to inspect the configured repositories.  Delegation and
+ * execution still use the existing host-bound path after this checkpoint.
+ */
+export async function previewWorkflowLocally(
+  request: WorkflowRequest,
+  parentAgentId: string,
+  parentCwd: string,
+  query: typeof queryObserver = queryObserver,
+) {
+  const project = currentProject();
+  if (!project) throw new Error("project_context_required");
+  if (resolveProject({ directory: parentCwd }).configPath !== project.configPath) throw new Error("parent_project_mismatch");
+
+  const rawRequest = workflowRequest.parse(request);
+  const listing = await query({ method: "workspace.list", params: { includeRemoved: true } });
+  if (!listing.ok) return listing;
+  const capabilities = (listing.result as { capabilities?: { create?: boolean; agent?: boolean } }).capabilities;
+  // Preview itself does not start an Agent.  Only a new Workspace needs the
+  // local create capability; an existing Workspace can always be previewed.
+  if (!rawRequest.workspaceId && !rawRequest.sourceWorkspaceId && !capabilities?.create) throw new Error("capability_unavailable");
+  if (!rawRequest.workspaceId && (!rawRequest.name || (!rawRequest.repositories?.length && !rawRequest.sourceWorkspaceId))) throw new Error("workspace_selection_required");
+  if (rawRequest.sourceWorkspaceId && rawRequest.repositories?.length) throw new Error("gitlink_repositories_implicit");
+  const catalog = await query({ method: "workspace.detail", params: { workspaceId: rawRequest.workspaceId || rawRequest.sourceWorkspaceId || "main", summary: true } });
+  if (!catalog.ok) return catalog;
+  const normalized = normalizeWorkflowRequest(rawRequest, catalog.result);
+  if (!normalized.ok) return normalized;
+  const fullRequest = normalized.request;
+  const identity = digest({ request: fullRequest, parentAgentId });
+  const key = `workflow:${parentAgentId}:${fullRequest.requestId}`;
+  const previous = readState<Progress>(key);
+  if (previous && previous.identity !== identity) {
+    return {
+      ok: false,
+      action: "blocked" as const,
+      requestId: fullRequest.requestId,
+      sideEffects: [],
+      requiresExecution: false,
+      error: {
+        code: "request_identity_conflict",
+        message: "This requestId already has a different preview. Retry with the original request or choose a new requestId.",
+        details: { previousStage: previous.stage, previewRequestAvailable: Boolean(previous.request) },
+      },
+    };
+  }
+  const repos = (catalog.result as { repositories?: Array<{ id: string; worktreePath?: string; sourcePath?: string }> }).repositories || [];
+  const material = previous?.bundle
+    ? readBundle(previous.bundle)
+    : !previous
+      ? await createPreviewBundle({
+          ownerAgentId: parentAgentId,
+          ownerCwd: parentCwd,
+          identity,
+          handoff: fullRequest.handoff,
+          runtime: { repositories: repos.flatMap(repo => repo.worktreePath || repo.sourcePath ? [{ id: repo.id, worktreePath: (repo.worktreePath || repo.sourcePath)! }] : []) },
+        })
+      : null;
+  if (!previous) writeState(key, { identity, identityVersion: 2, request: fullRequest, workspaceId: fullRequest.workspaceId, stage: "previewed", previewedAt: new Date().toISOString(), ...(material ? { bundle: material.bundle } : {}) });
+  return {
+    ok: true,
+    action: fullRequest.workspaceId ? "reuse" : "create",
+    request: fullRequest,
+    catalog: catalog.result,
+    sideEffects: material ? ["handoff.bundle"] : [],
+    requiresExecution: true,
+    materials: material ? {
+      bundle: material.bundle,
+      ready: !material.blockers.length,
+      blockers: material.blockers,
+      warnings: material.warnings,
+      sourceCount: material.sources.length,
+      requiredSources: material.sources.filter(source => source.required).map(source => source.id),
+      conversation: material.conversation,
+    } : null,
+    instructions: coordinatorGuidance,
+  };
+}
+
 export async function orchestrate(action: "preview" | "execute" | "status" | "submit" | "submit-execute", request: WorkflowRequest | WorkflowStatusRequest | WorkflowSubmitRequest, parentAgentId: string, context: AgentContext) {
   const query = context.query || queryObserver;
   const parent = (await context.paseo.agents.ref(parentAgentId).refresh())?.agent;

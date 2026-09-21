@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
 import { childExecutionConfig } from "../server/execution-policy.ts";
-import { orchestrate } from "../server/orchestrator.ts";
+import { orchestrate, previewWorkflowLocally } from "../server/orchestrator.ts";
 import { withProject } from "../server/projects.ts";
 import { readState } from "../server/orchestration-state.ts";
 import { orchestrationRpc, workflowRequest, workflowStatusRequest, workflowSubmitRequest } from "../shared/orchestration.ts";
@@ -87,6 +87,28 @@ test("preview is read-only; execute prepares, creates one child, retries without
     assert.equal(creates, 1);
   } finally {
     if (prior === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = prior;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("local preview does not require the Paseo host and records an explicit missing timeline", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "workbench-local-preview-")));
+  const config = join(root, "project.json");
+  writeFileSync(config, JSON.stringify({ sourceRoot: root, workspaceRoot: root, stateRoot: root, agent: { provider: "paseo" } }));
+  const previous = process.env.WORKSPACE_WORKBENCH_CONFIG;
+  process.env.WORKSPACE_WORKBENCH_CONFIG = config;
+  const query = async (input: { method: string }) => {
+    if (input.method === "workspace.list") return { ok: true, result: { capabilities: { create: true, agent: false } } };
+    if (input.method === "workspace.detail") return { ok: true, result: { workspace: { sourceRoot: root }, repositories: [{ id: "repo", repoPath: ".", sourcePath: root, worktreePath: root }] } };
+    throw new Error(`unexpected method ${input.method}`);
+  };
+  try {
+    const request = workflowRequest.parse({ requestId: "local-preview", name: "local", repositories: ["repo"], handoff: { goal: "Inspect locally" } });
+    const result = await withProject({ projectConfig: config }, () => previewWorkflowLocally(request, "parent", root, query));
+    assert.equal((result as { ok?: boolean }).ok, true);
+    assert.equal((result as { materials?: { conversation?: { state?: string } } }).materials?.conversation?.state, "unavailable");
+  } finally {
+    if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = previous;
     rmSync(root, { recursive: true, force: true });
   }
 });

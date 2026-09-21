@@ -39,7 +39,12 @@ export function useProjectMemory(hostId: string) {
         const current = await read({});
         if (current.status !== "ready") return;
         const values = observerSettings.schema.parse(current.values);
-        const result = await write({ revision: current.revision, values: { ...values, lastProjectByHost: { ...values.lastProjectByHost, [hostId]: configPath } } });
+        const lastProjectByHost = { ...values.lastProjectByHost, [hostId]: configPath };
+        // A global surface has no active Paseo Workspace context. Keep a
+        // stable last-used project so opening that surface does not require a
+        // project choice after every conversation switch.
+        if (hostId !== "global") lastProjectByHost.global = configPath;
+        const result = await write({ revision: current.revision, values: { ...values, lastProjectByHost } });
         if (result.status === "saved") return;
       }
     }).catch(() => {});

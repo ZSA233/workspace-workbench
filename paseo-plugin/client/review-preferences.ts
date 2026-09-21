@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Platform } from "react-native";
 import { useRpc } from "@getpaseo/plugin/client";
 
 import { observerSettings, observerSettingsRpc } from "../shared/settings";
@@ -15,6 +16,7 @@ function parseMode(value: unknown): ReviewMode | null {
  * wide panel later.
  */
 export function useReviewModePreference(scopeKey: string, compact: boolean) {
+  const native = Platform.OS !== "web";
   const read = useRpc(observerSettingsRpc.read);
   const write = useRpc(observerSettingsRpc.write);
   const [savedMode, setSavedMode] = useState<ReviewMode | null>(null);
@@ -25,6 +27,11 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
 
   useEffect(() => {
     reportNativeDiagnostic("hook-effect-start", { hook: "review-preferences-read" });
+    if (native) {
+      reportNativeDiagnostic("hook-effect-complete", { hook: "review-preferences-read", result: "native-local" });
+      setReady(true);
+      return;
+    }
     let disposed = false;
     void read({}).then((result) => {
       if (disposed || result.status !== "ready") return;
@@ -37,9 +44,10 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
       if (!disposed) setReady(true);
     });
     return () => { disposed = true; };
-  }, [read, scopeKey]);
+  }, [native, read, scopeKey]);
 
   const persist = useCallback((mode: ReviewMode) => {
+    if (native) return;
     queue.current = queue.current.then(async () => {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const current = await read({});
@@ -61,7 +69,7 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
     }).catch(() => {
       // The local mode remains usable if settings are unavailable.
     });
-  }, [read, scopeKey, write]);
+  }, [native, read, scopeKey, write]);
 
   useEffect(() => {
     reportNativeDiagnostic("hook-effect-start", { hook: "review-preferences-ready" });

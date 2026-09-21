@@ -23,6 +23,21 @@ export const OBSERVATION_TIMING_DEFAULTS = {
   bridgeResponseCacheTtlMs: 1_000,
   clientQueryStaleTimeMs: 1_500,
   followUpDelaysMs: [250, 1_000, 3_000],
+  /**
+   * User-visible reads have a bounded foreground budget.  A project may keep
+   * a larger Git command timeout for background reconciliation, but that
+   * value must not make a panel wait for the whole repository set.
+   */
+  foregroundGitTimeoutMs: 4_500,
+  backendHealthTimeoutMs: 2_000,
+  readBudgetsMs: {
+    health: 2_000,
+    versions: 2_000,
+    list: 3_000,
+    detail: 5_000,
+    repository: 5_000,
+  },
+  cleanupReserveMs: 500,
 } as const;
 
 export type ObservationArea = keyof typeof OBSERVATION_TIMING_DEFAULTS.refreshIntervalsMs;
@@ -52,9 +67,21 @@ export const observationTimingSchema = z.object({
   }),
   staleFailureLimit: z.number().int().positive(),
   followUpDelaysMs: z.array(z.number().int().nonnegative()).max(3),
+  foregroundGitTimeoutMs: z.number().int().positive().default(OBSERVATION_TIMING_DEFAULTS.foregroundGitTimeoutMs),
+  backendHealthTimeoutMs: z.number().int().positive().default(OBSERVATION_TIMING_DEFAULTS.backendHealthTimeoutMs),
+  readBudgetsMs: z.object({
+    health: z.number().int().positive(),
+    versions: z.number().int().positive(),
+    list: z.number().int().positive(),
+    detail: z.number().int().positive(),
+    repository: z.number().int().positive(),
+  }).default(OBSERVATION_TIMING_DEFAULTS.readBudgetsMs),
+  cleanupReserveMs: z.number().int().nonnegative().default(OBSERVATION_TIMING_DEFAULTS.cleanupReserveMs),
 });
 
 export type ObservationTiming = z.infer<typeof observationTimingSchema>;
+
+export type ObservationReadClass = keyof typeof OBSERVATION_TIMING_DEFAULTS.readBudgetsMs;
 
 export class ObservationTimingConfigError extends Error {
   readonly code = "config_invalid";
@@ -145,6 +172,16 @@ export function resolveObservationTiming(
     staleWindowsMs,
     staleFailureLimit: OBSERVATION_TIMING_DEFAULTS.staleFailureLimit,
     followUpDelaysMs: [...OBSERVATION_TIMING_DEFAULTS.followUpDelaysMs],
+    foregroundGitTimeoutMs: Math.round(boundedNumber(limits, "foregroundGitTimeoutSeconds", OBSERVATION_TIMING_DEFAULTS.foregroundGitTimeoutMs / 1000, 1, 30) * 1000),
+    backendHealthTimeoutMs: Math.round(boundedNumber(limits, "backendHealthTimeoutSeconds", OBSERVATION_TIMING_DEFAULTS.backendHealthTimeoutMs / 1000, 0.5, 10) * 1000),
+    readBudgetsMs: {
+      health: Math.round(boundedNumber(limits, "healthBudgetSeconds", OBSERVATION_TIMING_DEFAULTS.readBudgetsMs.health / 1000, 0.5, 10) * 1000),
+      versions: Math.round(boundedNumber(limits, "versionsBudgetSeconds", OBSERVATION_TIMING_DEFAULTS.readBudgetsMs.versions / 1000, 0.5, 10) * 1000),
+      list: Math.round(boundedNumber(limits, "listBudgetSeconds", OBSERVATION_TIMING_DEFAULTS.readBudgetsMs.list / 1000, 1, 15) * 1000),
+      detail: Math.round(boundedNumber(limits, "detailBudgetSeconds", OBSERVATION_TIMING_DEFAULTS.readBudgetsMs.detail / 1000, 1, 20) * 1000),
+      repository: Math.round(boundedNumber(limits, "repositoryBudgetSeconds", OBSERVATION_TIMING_DEFAULTS.readBudgetsMs.repository / 1000, 1, 20) * 1000),
+    },
+    cleanupReserveMs: OBSERVATION_TIMING_DEFAULTS.cleanupReserveMs,
   };
 }
 
@@ -153,7 +190,24 @@ export const DEFAULT_OBSERVATION_TIMING = resolveObservationTiming();
 /** Parse host-provided timing defensively so older backends remain usable. */
 export function observationTimingFromWire(value: unknown): ObservationTiming {
   const parsed = observationTimingSchema.safeParse(value);
-  return parsed.success ? parsed.data : DEFAULT_OBSERVATION_TIMING;
+  if (!parsed.success) return DEFAULT_OBSERVATION_TIMING;
+  return {
+    ...DEFAULT_OBSERVATION_TIMING,
+    ...parsed.data,
+    foregroundGitTimeoutMs: parsed.data.foregroundGitTimeoutMs ?? DEFAULT_OBSERVATION_TIMING.foregroundGitTimeoutMs,
+    backendHealthTimeoutMs: parsed.data.backendHealthTimeoutMs ?? DEFAULT_OBSERVATION_TIMING.backendHealthTimeoutMs,
+    readBudgetsMs: parsed.data.readBudgetsMs ?? DEFAULT_OBSERVATION_TIMING.readBudgetsMs,
+    cleanupReserveMs: parsed.data.cleanupReserveMs ?? DEFAULT_OBSERVATION_TIMING.cleanupReserveMs,
+  };
+}
+
+export function readBudgetMs(method: string, timing: ObservationTiming = DEFAULT_OBSERVATION_TIMING): number {
+  if (method === "observer.health") return timing.readBudgetsMs.health;
+  if (method === "observer.versions") return timing.readBudgetsMs.versions;
+  if (method === "workspace.list") return timing.readBudgetsMs.list;
+  if (["workspace.detail", "workspace.orphan.preview", "review-set.compare", "review-set.brief"].includes(method)) return timing.readBudgetsMs.detail;
+  if (["repository.graph", "repository.changes", "repository.diff"].includes(method)) return timing.readBudgetsMs.repository;
+  return timing.readBudgetsMs.detail;
 }
 
 // Kept as a named policy value for callers that want the shared policy

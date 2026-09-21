@@ -13,6 +13,7 @@ import { loadConfig } from "./backend/config.ts";
 import {
   DEFAULT_OBSERVATION_TIMING,
   OBSERVATION_TIMING_DEFAULTS,
+  readBudgetMs,
 } from "../shared/observation-timing.ts";
 
 import {
@@ -54,8 +55,6 @@ const READ_METHODS = new Set<string>([
 // Paseo currently gives plugin RPC calls a shorter host budget than the
 // backend's historical observation timeout.  Read calls must finish (or close
 // their socket and cancel backend work) before that host budget expires.
-const READ_BRIDGE_TIMEOUT_MS = 5_500;
-const READ_OBSERVATION_BUDGET_MS = 5_000;
 // Keep this value free of Node-only imports: the Paseo plugin server bundle is
 // also analyzed as a shared module by the native host. The package build ID
 // is reported by the backend; this generation identifies the observer bridge
@@ -64,30 +63,27 @@ const SERVER_BUILD_ID = "observer-bridge-v2";
 const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(method?: string): number {
-  const configured = (() => {
   const project = currentProject();
-  if (project) {
-    try {
-      return loadConfig(project.configPath).timing.bridgeTimeoutMs;
-    } catch {
-      // The backend reports config_invalid through its normal startup path.
-      // Keep the bridge bounded while that error is surfaced to the panel.
-    }
+  let timing = DEFAULT_OBSERVATION_TIMING;
+  try { if (project) timing = loadConfig(project.configPath).timing; } catch {
+    // The backend reports config_invalid through its normal startup path.
+    // Keep the bridge bounded while that error is surfaced to the panel.
   }
-  return DEFAULT_OBSERVATION_TIMING.bridgeTimeoutMs;
-  })();
+  const configured = timing.bridgeTimeoutMs;
   return method && READ_METHODS.has(method)
-    ? Math.min(configured, READ_BRIDGE_TIMEOUT_MS)
+    ? Math.min(configured, readBudgetMs(method, timing) + OBSERVATION_TIMING_DEFAULTS.bridgeGraceMs)
     : configured;
 }
 
 function requestParams(input: QueryInput): Record<string, unknown> {
   if (!READ_METHODS.has(input.method) || !["workspace.detail", "repository.graph", "repository.changes", "repository.diff"].includes(input.method))
     return input.params || {};
+  const project = currentProject();
+  const timing = project ? (() => { try { return loadConfig(project.configPath).timing; } catch { return DEFAULT_OBSERVATION_TIMING; } })() : DEFAULT_OBSERVATION_TIMING;
   const configured = Number(input.params?.observationBudgetMs);
   const budget = Number.isFinite(configured) && configured > 0
-    ? Math.min(configured, READ_OBSERVATION_BUDGET_MS)
-    : READ_OBSERVATION_BUDGET_MS;
+    ? Math.min(configured, readBudgetMs(input.method, timing))
+    : readBudgetMs(input.method, timing);
   return { ...(input.params || {}), observationBudgetMs: budget };
 }
 

@@ -173,6 +173,7 @@ export function loadConfig(file: string) {
     cacheEntries: number("cacheMaxEntries", 500, 20, 10000),
     cacheBytes: number("cacheMaxBytes", 33554432, 1048576, 536870912),
     cacheTtl: timing.cacheTtlMs,
+    foregroundGitTimeout: timing.foregroundGitTimeoutMs,
     discovery: {
       mode: discovery.mode || "hybrid",
       roots: (discovery.roots || [sourceRoot]).map((value: string) =>

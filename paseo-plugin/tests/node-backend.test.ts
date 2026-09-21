@@ -19,7 +19,7 @@ import { Service } from "../server/backend/service.ts";
 import { Git } from "../server/backend/git.ts";
 import { ObservationCache } from "../server/backend/cache.ts";
 import { type Json, WorkbenchError } from "../server/backend/storage.ts";
-import { resolveObservationTiming } from "../shared/observation-timing.ts";
+import { observationTimingFromWire, readBudgetMs, resolveObservationTiming } from "../shared/observation-timing.ts";
 
 export function fixture(extra: Json = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "wb-node-")));
@@ -70,6 +70,9 @@ test("observation timing derives one consistent downstream budget", () => {
   assert.equal(timing.clientQueryStaleTimeMs, 1_500);
   assert.equal(timing.staleWindowsMs.detail, timing.refreshIntervalsMs.detail * 3);
   assert.deepEqual(timing.followUpDelaysMs, [250, 1_000, 3_000]);
+  assert.equal(timing.foregroundGitTimeoutMs, 4_500);
+  assert.equal(readBudgetMs("workspace.list", timing), 3_000);
+  assert.equal(readBudgetMs("repository.changes", timing), 5_000);
   assert.throws(
     () => resolveObservationTiming({ gitTimeoutSeconds: 30, observationTimeoutSeconds: 34.9 }),
     /at least 35 seconds/,
@@ -78,6 +81,18 @@ test("observation timing derives one consistent downstream budget", () => {
   assert.equal(changed.observationTimeoutSeconds, 15);
   assert.equal(changed.bridgeTimeoutMs, 17_000);
   assert.equal(changed.clientRefreshTimeoutMs, 18_000);
+});
+
+test("older timing payloads receive bounded read defaults", () => {
+  const timing = resolveObservationTiming({ gitTimeoutSeconds: 30 });
+  const wire = { ...timing } as Record<string, unknown>;
+  delete wire.foregroundGitTimeoutMs;
+  delete wire.backendHealthTimeoutMs;
+  delete wire.readBudgetsMs;
+  delete wire.cleanupReserveMs;
+  const parsed = observationTimingFromWire(wire);
+  assert.equal(parsed.foregroundGitTimeoutMs, 4_500);
+  assert.equal(parsed.readBudgetsMs.list, 3_000);
 });
 
 test("project config rejects an observation budget below the derived minimum", () => {

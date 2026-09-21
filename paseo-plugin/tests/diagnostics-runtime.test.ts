@@ -16,6 +16,5 @@ test("diagnostic sink keeps a bounded queue and preserves failure events", async
   assert.match(text, /request_timeout/);
   assert.ok((await stat(file)).size <= MAX_BYTES);
   assert.equal(MAX_EVENTS, 1_000);
-  assert.equal(sink.status().queued, 0);
+  assert.equal((sink.status() as { queued?: number }).queued, 0);
 });
-

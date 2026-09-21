@@ -56,7 +56,10 @@ export class Observation {
   git(repo: Json, deadline?: number, signal?: AbortSignal) {
     return new Git(
       repo.worktreePath || repo.sourcePath,
-      this.workspaces.config.gitTimeout,
+      Math.min(
+        this.workspaces.config.gitTimeout,
+        this.workspaces.config.foregroundGitTimeout || this.workspaces.config.gitTimeout,
+      ),
       deadline,
       signal,
     );
@@ -340,7 +343,7 @@ export class Observation {
           schemaVersion: protocol,
           workspace: this.summary(workspace, repositories),
           repositories,
-          ...(workspace.layout === "gitlink" ? { gitlinks: await gitlinkDetails(workspace.treePath, this.workspaces.config.gitTimeout, signal).catch(error => [{ path: "", issue: issue(error).code }]) } : {}),
+          ...(workspace.layout === "gitlink" ? { gitlinks: await gitlinkDetails(workspace.treePath, Math.min(this.workspaces.config.gitTimeout, this.workspaces.config.foregroundGitTimeout || this.workspaces.config.gitTimeout), signal).catch(error => [{ path: "", issue: issue(error).code }]) } : {}),
           observation: {
             state: transient ? "partial" : "ready",
             validationKey: `workspace:${workspace.id}`, validationToken,

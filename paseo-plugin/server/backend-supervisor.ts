@@ -91,6 +91,8 @@ async function waitGone(route: ProjectRoute, instanceId?: string) {
     const response = await backendRequest(
       route.socketPath,
       "observer.health",
+      {},
+      2_000,
     ).catch(() => null);
     if (!existsSync(route.socketPath)) return;
     if (
@@ -263,7 +265,9 @@ export class BackendSupervisor {
   private async start(route: ProjectRoute, version: string) {
     let probe: Json | null = null;
     try {
-      probe = await backendRequest(route.socketPath, "observer.health");
+      // Health is a liveness signal, not a user observation. Keep it short,
+      // but treat a slow owned process as retained instead of dead.
+      probe = await backendRequest(route.socketPath, "observer.health", {}, 2_000);
     } catch (error) {
       // A slow health response is not proof that the owned backend died. Keep
       // its socket and process intact; the next read can use the same owner.
@@ -332,7 +336,7 @@ export class BackendSupervisor {
           "backend_start_failed",
           entry.error || "backend exited during startup",
         );
-      const health = await backendRequest(route.socketPath, "observer.health");
+      const health = await backendRequest(route.socketPath, "observer.health", {}, 2_000);
       if (
         health?.ok &&
         health.result?.implementation === "node" &&

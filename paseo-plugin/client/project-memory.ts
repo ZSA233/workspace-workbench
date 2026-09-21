@@ -2,11 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRpc } from "@getpaseo/plugin/client";
 import { observerSettings, observerSettingsRpc } from "../shared/settings.ts";
 
-export function chooseProject<T extends { configPath: string }>(projects: T[], contextual: T | undefined, chosen: string, saved: string, hasContext: boolean) {
+export function chooseProject<T extends { configPath: string }>(projects: T[], contextual: T | undefined, chosen: string, saved: string, hasContext: boolean, requireContext = false) {
   // A workspace directory is authoritative. If it has no matching project,
   // keep the caller in setup instead of silently showing a project remembered
   // from another directory.
   if (hasContext) return contextual;
+  // A host workspace is known but its directory did not resolve to a project.
+  // A manual choice is valid; an old remembered project is not.
+  if (requireContext) return projects.find((project) => project.configPath === chosen);
   return projects.find((project) => project.configPath === chosen)
     || projects.find((project) => project.configPath === saved)
     || (projects.length === 1 ? projects[0] : undefined);

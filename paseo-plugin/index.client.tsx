@@ -11,7 +11,7 @@ import { localeFromHostProps } from "./client/i18n";
 import { clientDiagnostic } from "./shared/client-diagnostics";
 import { nativeComponentInventory } from "./client/native-components";
 import { configureNativeDiagnosticReporter, installNativeRenderErrorHook, reportNativeDiagnostic } from "./client/native-diagnostics";
-import { clearWorkbenchWorkspaceSnapshots, removeWorkbenchWorkspaceSnapshot, setWorkbenchWorkspaceSnapshot } from "./client/surface-context";
+import { clearWorkbenchWorkspaceSnapshots, markWorkbenchWorkspaceSnapshotsReady, removeWorkbenchWorkspaceSnapshot, setWorkbenchWorkspaceSnapshot } from "./client/surface-context";
 
 const observerSurfaceId = "workbench";
 
@@ -243,16 +243,19 @@ function contributeClient(client: PluginClientContext) {
     void workspaceApi
       .list({ subscribe: {} })
       .then(({ entries }) => {
+        if (disposed) return;
         for (const workspace of entries) {
           addHeaderButton(workspace.id);
           if (workspace.directory) setWorkbenchWorkspaceSnapshot({ id: workspace.id, directory: workspace.directory, name: workspace.name || workspace.id });
         }
+        markWorkbenchWorkspaceSnapshotsReady(true);
       })
       .catch(() => {
         // The Command Center and Explorer tab menu remain available if the
         // workspace directory is temporarily unavailable during app startup.
+        if (!disposed) markWorkbenchWorkspaceSnapshotsReady(false);
       });
-  }
+  } else markWorkbenchWorkspaceSnapshotsReady(false);
 
   const commandCleanups = [
     registerCommand({

@@ -56,7 +56,7 @@ import { boundedRefresh, RECOVERABLE_FAILURE_GRACE_MS, useBoundedCacheRefresh, u
 import { useRefreshOnForeground } from "./foreground-refresh";
 import { useForegroundActivity } from "./foreground-activity";
 import { useObserverPreferences } from "./preferences";
-import { type WorkbenchSurfaceProps, useWorkbenchWorkspaceSnapshot } from "./surface-context";
+import { type WorkbenchSurfaceProps, useWorkbenchWorkspaceSnapshot, useWorkbenchWorkspaceSnapshotStatus } from "./surface-context";
 import { localeFromHostProps, useWorkbenchCopy, WorkbenchLocaleProvider, useWorkbenchLocale } from "./i18n";
 import { reportNativeDiagnostic } from "./native-diagnostics";
 
@@ -284,6 +284,9 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     throw error;
   }
   const directory = props.paseoWorkspace?.directory || "";
+  const snapshotStatus = useWorkbenchWorkspaceSnapshotStatus();
+  const hostContextPending = Boolean(props.hostWorkspaceId) && snapshotStatus === "pending";
+  const hostContextRequired = Boolean(props.hostWorkspaceId) && snapshotStatus === "available";
   let projects;
   try {
     projects = useQuery({ queryKey: ["workbench-projects", props.host.id, directory], queryFn: () => getProjects({ directory: directory || undefined }), refetchOnWindowFocus: false, retry: false });
@@ -294,7 +297,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }
   let memory;
   try {
-    memory = useProjectMemory(props.host.id);
+    memory = useProjectMemory(props.hostWorkspaceId || props.host.id);
     reportNativeDiagnostic("observer-memory-hook-ready", { ready: String(memory.ready) });
   } catch (error) {
     reportNativeRenderError("observer-memory-hook-failed", error);
@@ -304,12 +307,12 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   const [chosen, setChosen] = useState("");
   const [setupProject, setSetupProject] = useState<ProjectInfo | null>(null);
   const detected = directory ? projects.data?.filter((p) => [p.sourceRoot, p.workspaceRoot].some((root) => pathContains(root, directory))).sort((a, b) => b.sourceRoot.length - a.sourceRoot.length)[0] : undefined;
-  const active = setupProject || chooseProject(projects.data || [], detected, chosen, memory.saved, Boolean(directory));
+  const active = setupProject || (hostContextPending ? undefined : chooseProject(projects.data || [], detected, chosen, memory.saved, Boolean(directory), hostContextRequired));
   useEffect(() => {
     setSetupProject(null);
     setChosen("");
   }, [directory]);
-  if (!directory && !memory.ready) {
+  if (hostContextPending || (!directory && !memory.ready)) {
     reportNativeDiagnostic("observer-first-branch", { branch: "memory-loading" });
     return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoading}</Text>;
   }

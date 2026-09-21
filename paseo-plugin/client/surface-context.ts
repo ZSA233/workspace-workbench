@@ -13,6 +13,25 @@ export type WorkbenchSurfaceProps = PluginSurfaceProps & {
 
 const snapshots = new Map<string, WorkbenchWorkspaceSnapshot>();
 const listeners = new Set<() => void>();
+type SnapshotSource = "pending" | "available" | "unavailable";
+let snapshotSource: SnapshotSource = "pending";
+
+/** The host directory list is asynchronous; absence of a snapshot is not a
+ * reason to use a project remembered for another host workspace. */
+export function markWorkbenchWorkspaceSnapshotsReady(available: boolean): void {
+  const next: SnapshotSource = available ? "available" : "unavailable";
+  if (snapshotSource === next) return;
+  snapshotSource = next;
+  listeners.forEach((listener) => listener());
+}
+
+export function useWorkbenchWorkspaceSnapshotStatus(): SnapshotSource {
+  return useSyncExternalStore(
+    (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+    () => snapshotSource,
+    () => snapshotSource,
+  );
+}
 
 export function setWorkbenchWorkspaceSnapshot(snapshot: WorkbenchWorkspaceSnapshot): void {
   if (!snapshot.id || !snapshot.directory) return;
@@ -28,7 +47,11 @@ export function removeWorkbenchWorkspaceSnapshot(id: string): void {
 }
 
 export function clearWorkbenchWorkspaceSnapshots(): void {
-  if (!snapshots.size) return;
+  snapshotSource = "pending";
+  if (!snapshots.size) {
+    listeners.forEach((listener) => listener());
+    return;
+  }
   snapshots.clear();
   listeners.forEach((listener) => listener());
 }

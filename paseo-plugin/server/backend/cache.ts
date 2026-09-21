@@ -26,6 +26,7 @@ export class ObservationCache {
   private background = new Set<Promise<unknown>>();
   private failures = new Map<string, string>();
   private generation = 0;
+  private closed = false;
   onProduced?: (scope?: CachePublication) => void;
   config: Config;
   path: string;
@@ -86,6 +87,7 @@ export class ObservationCache {
     };
   }
   private produce(key: string, fingerprint: Fingerprint, work: () => Promise<Json>, scope?: CachePublication) {
+    if (this.closed) throw new WorkbenchError("observer_closed", "observation cache is closed");
     const active = this.flights.get(key);
     if (active) return active;
     if (this.flights.size >= 32) throw new WorkbenchError("observer_busy", "snapshot computation limit reached");
@@ -213,6 +215,7 @@ export class ObservationCache {
     void probe.finally(() => this.background.delete(probe));
   }
   async read(key: string, fingerprint: Fingerprint, work: () => Promise<Json>, versioned = false, waitFresh = false, scope?: CachePublication) {
+    if (this.closed) throw new WorkbenchError("observer_closed", "observation cache is closed");
     const entry = this.entries.get(key);
     const fingerprintMatches =
       typeof fingerprint !== "string" || entry?.fingerprint === fingerprint;
@@ -237,6 +240,8 @@ export class ObservationCache {
   clear() {
     this.generation++;
     this.entries.clear();
+    this.failures.clear();
+    this.probes.clear();
   }
   status() {
     return {
@@ -251,14 +256,23 @@ export class ObservationCache {
       },
       persistent: { format: "json", path: this.path },
       refreshing: this.flights.size,
+      background: this.background.size,
+      probes: this.probes.size,
+      closed: this.closed,
       failedRefreshes: this.failures.size,
       issueCodes: [...new Set(this.failures.values())],
       ttlSeconds: this.config.cacheTtl / 1000,
     };
   }
   async close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.generation++;
     while (this.flights.size || this.background.size)
       await Promise.allSettled([...this.flights.values(), ...this.background]);
     atomicJson(this.path, { version: 1, entries: [...this.entries] });
+    this.entries.clear();
+    this.failures.clear();
+    this.probes.clear();
   }
 }

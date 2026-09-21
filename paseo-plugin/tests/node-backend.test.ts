@@ -450,6 +450,19 @@ test("cache evicts stale data for durable refresh failures", async () => {
   }
 });
 
+test("observation cache closes new work and releases retained entries", async () => {
+  const f = fixture();
+  const cache = new ObservationCache(f.config);
+  try {
+    await cache.read("close-me", "v1", async () => ({ observation: { state: "ready" }, value: "held" }), true, true);
+    assert.equal(cache.status().memory.entries, 1);
+    await cache.close();
+    assert.equal(cache.status().closed, true);
+    assert.equal(cache.status().memory.entries, 0);
+    await assert.rejects(cache.read("after-close", "v1", async () => ({ observation: { state: "ready" } })), /observation cache is closed/);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("repository graph and changes keep ready state during stale branch refresh", async () => {
   const f = fixture({ limits: { cacheTtlSeconds: 0.5 } });
   const service = new Service(f.config);

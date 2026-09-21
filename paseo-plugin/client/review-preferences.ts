@@ -16,7 +16,23 @@ function parseMode(value: unknown): ReviewMode | null {
  * wide panel later.
  */
 export function useReviewModePreference(scopeKey: string, compact: boolean) {
-  const native = Platform.OS !== "web";
+  if (Platform.OS !== "web") return useNativeReviewModePreference(compact);
+  return useWebReviewModePreference(scopeKey, compact);
+}
+
+/**
+ * Native panels intentionally keep this preference in the panel instance.
+ * Do not create the settings RPC or its persistence effects on Android: the
+ * host can unmount a file surface while the panel is still committing, and a
+ * settings request is unrelated to rendering a diff.
+ */
+function useNativeReviewModePreference(compact: boolean) {
+  const [savedMode, setSavedMode] = useState<ReviewMode | null>(null);
+  const setMode = useCallback((mode: ReviewMode) => setSavedMode(mode), []);
+  return { mode: effectiveReviewMode(compact, savedMode), setMode };
+}
+
+function useWebReviewModePreference(scopeKey: string, compact: boolean) {
   const read = useRpc(observerSettingsRpc.read);
   const write = useRpc(observerSettingsRpc.write);
   const [savedMode, setSavedMode] = useState<ReviewMode | null>(null);
@@ -27,10 +43,6 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
 
   useEffect(() => {
     reportNativeDiagnostic("hook-effect-start", { hook: "review-preferences-read" });
-    if (native) {
-      reportNativeDiagnostic("hook-effect-complete", { hook: "review-preferences-read", result: "native-local" });
-      return;
-    }
     let disposed = false;
     void read({}).then((result) => {
       if (disposed || result.status !== "ready") return;
@@ -43,10 +55,9 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
       if (!disposed) setReady(true);
     });
     return () => { disposed = true; };
-  }, [native, read, scopeKey]);
+  }, [read, scopeKey]);
 
   const persist = useCallback((mode: ReviewMode) => {
-    if (native) return;
     queue.current = queue.current.then(async () => {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const current = await read({});
@@ -68,14 +79,9 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
     }).catch(() => {
       // The local mode remains usable if settings are unavailable.
     });
-  }, [native, read, scopeKey, write]);
+  }, [read, scopeKey, write]);
 
   useEffect(() => {
-    // Native panels keep this preference local. Do not touch the readiness
-    // refs or enqueue persistence work on Android; the extra effect/update
-    // path is unnecessary there and can run while the native diff surface is
-    // still mounting.
-    if (native) return;
     reportNativeDiagnostic("hook-effect-start", { hook: "review-preferences-ready" });
     readyRef.current = ready;
     const pending = ready ? pendingRef.current : null;
@@ -83,7 +89,7 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
       pendingRef.current = null;
       persist(pending);
     }
-  }, [native, persist, ready]);
+  }, [persist, ready]);
 
   const setMode = useCallback((mode: ReviewMode) => {
     setSavedMode(mode);

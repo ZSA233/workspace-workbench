@@ -32,7 +32,7 @@ test("initialization isolates UI imports, uses a built-in icon and preserves fai
   const previous = console.error;
   console.error = () => {};
   try {
-    assert.throws(() => atInitializationStage("panel-module", () => { calls++; throw new TypeError("prototype unavailable"); }), /init-v10-native-review-effect-bypass\/panel-module.*prototype/);
+    assert.throws(() => atInitializationStage("panel-module", () => { calls++; throw new TypeError("prototype unavailable"); }), /init-v11-native-review-hook-split\/panel-module.*prototype/);
     assert.equal(atInitializationStage("panel-module", () => { calls++; return "recovered"; }), "recovered");
     assert.equal(calls, 2);
   } finally { console.error = previous; }

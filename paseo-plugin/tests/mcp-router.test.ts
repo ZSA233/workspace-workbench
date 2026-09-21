@@ -91,6 +91,36 @@ test("workspace add repositories uses the direct Git operation RPC", async () =>
   }
 });
 
+test("workspace delegate is explicit and preserves the handoff boundary", async () => {
+  const originalConnect = DaemonClient.prototype.connect;
+  const originalClose = DaemonClient.prototype.close;
+  const originalInvoke = DaemonClient.prototype.invokePluginRpc;
+  const seen: unknown[] = [];
+  DaemonClient.prototype.connect = async function () {};
+  DaemonClient.prototype.close = async function () {};
+  DaemonClient.prototype.invokePluginRpc = async function (...args: unknown[]) {
+    seen.push(args);
+    return { ok: true, action: "created", workspaceId: "existing", agentId: "worker" };
+  };
+  const previousToken = process.env.WORKBENCH_AGENT_TOKEN;
+  process.env.WORKBENCH_AGENT_TOKEN = "delegate-token";
+  try {
+    const response = await handle({ method: "tools/call", params: {
+      name: "workbench_workspace_delegate",
+      arguments: { workspaceId: "existing", parentAgentId: "parent", handoff: { goal: "inspect" } },
+    } });
+    assert.equal(response.isError, false);
+    assert.equal((seen.at(-1) as unknown[])[1], "workspace.workbench.delegate");
+    assert.equal(((seen.at(-1) as unknown[])[2] as { parentAgentId: string }).parentAgentId, "parent");
+  } finally {
+    if (previousToken === undefined) delete process.env.WORKBENCH_AGENT_TOKEN;
+    else process.env.WORKBENCH_AGENT_TOKEN = previousToken;
+    DaemonClient.prototype.connect = originalConnect;
+    DaemonClient.prototype.close = originalClose;
+    DaemonClient.prototype.invokePluginRpc = originalInvoke;
+  }
+});
+
 test("workspace status reports the missing requestId instead of orchestration union errors", async () => {
   const response = await handle({ method: "tools/call", params: {
     name: "workbench_workspace_status",

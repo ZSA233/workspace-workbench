@@ -7,8 +7,6 @@ import { CLIENT_GENERATION } from "./initialization";
 import { copy } from "../shared/copy";
 
 type PanelProps = PluginAgentPanelProps | PluginWorkspacePanelProps;
-
-type PanelProps = PluginAgentPanelProps | PluginWorkspacePanelProps;
 type DeferredProps = { name: string; loader: () => Promise<Record<string, unknown>>; exportName: string; props: object };
 
 function reportStaticPanelLoad(): void {

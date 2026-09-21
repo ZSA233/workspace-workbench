@@ -23,6 +23,7 @@ const publicTools = [
   { name: "workbench_workspace_status", description: "Read an uncertain Workspace handoff using its request ID (requestId); use operation_status for a Git operationId." },
   { name: "workbench_workspace_submit", description: "Submit an authorized task and original paths, then create or reuse its Workspace and start the worker without a separate preview." },
   { name: "workbench_workspace_create", description: "Create or reuse a Git Workspace only. This does not require an Agent, handoff, Reviewer or parent session." },
+  { name: "workbench_workspace_delegate", description: "Explicitly delegate an already-created Workspace with the supplied handoff. Creating the Workspace and starting an Agent remain separate actions." },
   { name: "workbench_workspace_add_repositories", description: "Add repositories to an existing flat managed Workspace without creating a new Workspace or Agent session." },
   { name: "workbench_workspace_operation_status", description: "Read the durable status of a Git Workspace creation operation by operationId." },
   { name: "workbench_review_preview", description: "Preview review context without starting a Reviewer." },
@@ -156,6 +157,14 @@ const workspaceCreateSchema = {
     baseRefs: { type: "object", additionalProperties: { type: "string" } },
   },
 };
+const workspaceDelegateSchema = {
+  type: "object", required: ["workspaceId", "parentAgentId", "handoff"], additionalProperties: false,
+  properties: {
+    workspaceId: { type: "string", minLength: 1 },
+    parentAgentId: { type: "string", minLength: 1 },
+    handoff: schema.properties.handoff,
+  },
+};
 const workspaceAddRepositoriesSchema = {
   type: "object", required: ["workspaceId", "repositories"], additionalProperties: false,
   properties: {
@@ -279,6 +288,7 @@ function toolInputSchema(name) {
     : name === "workbench_workspace_status" ? workspaceStatusSchema
     : name === "workbench_workspace_operation_status" ? workspaceOperationStatusSchema
     : name === "workbench_workspace_create" ? workspaceCreateSchema
+    : name === "workbench_workspace_delegate" ? workspaceDelegateSchema
     : name === "workbench_workspace_add_repositories" ? workspaceAddRepositoriesSchema
     : name === "workbench_workspace_submit" ? workspaceSubmitSchema
     : name === "workbench_workspace_execute" ? workspaceExecuteSchema
@@ -291,7 +301,7 @@ function toolDescriptor(tool) {
     ...tool,
     inputSchema: toolInputSchema(tool.name),
     annotations: {
-    readOnlyHint: !["workbench_workspace_preview", "workbench_workspace_submit", "workbench_workspace_create", "workbench_workspace_add_repositories", "workbench_session_message", "workbench_session_stop", "workbench_review_read", "workbench_review_result", "workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name),
+      readOnlyHint: !["workbench_workspace_preview", "workbench_workspace_submit", "workbench_workspace_create", "workbench_workspace_delegate", "workbench_workspace_add_repositories", "workbench_session_message", "workbench_session_stop", "workbench_review_read", "workbench_review_result", "workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name),
       destructiveHint: tool.name === "workbench_session_stop",
     },
   };
@@ -332,6 +342,7 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
   const reviewTool = Boolean(tool && reviewToolNames.has(tool.name));
   const extra = tool && extraSchema(tool.name);
   const directWorkspaceAction = tool?.name === "workbench_workspace_create" || tool?.name === "workbench_workspace_add_repositories" || tool?.name === "workbench_workspace_operation_status";
+  const delegateAction = tool?.name === "workbench_workspace_delegate";
   if (tool?.name === "workbench_workspace_status" && typeof args.requestId !== "string") {
     return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: { code: "workspace_status_request_id_required", message: "workbench_workspace_status requires the requestId returned by workspace_submit, preview, or execute; use workbench_workspace_operation_status with operationId for Git creation status." } }) }], isError: true };
   }
@@ -356,6 +367,8 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
             : "workspace.workbench.workspace-operation-status", { ...args, projectConfig: runtime.projectConfig })
         : materialAction
         ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.handoff-materials", { ...args, ...context, action: tool.name.split("_").at(-1) })
+        : delegateAction
+        ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.delegate", { ...args, ...context })
         : extra
         ? client.invokePluginRpc("workspace-workbench-paseo", tool.name.startsWith("workbench_session_") ? "workspace.workbench.session" : "workspace.workbench.coordinator-review", { ...args, ...context, action: tool.name.split("_").at(-1) })
         : reviewerAction

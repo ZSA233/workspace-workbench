@@ -51,6 +51,11 @@ function componentType(value: unknown): string {
   return value === undefined ? "undefined" : value === null ? "null" : typeof value;
 }
 
+function reportNativeSelection(component: string, implementation: string): void {
+  if (Platform.OS === "web") return;
+  reportNativeDiagnostic("native-component-selected", { component, implementation });
+}
+
 export function nativeComponentInventory(): Record<string, string> {
   return {
     hostIcon: componentType(hostIcon),
@@ -73,15 +78,22 @@ export function nativeComponentInventory(): Record<string, string> {
 // undefined native export.
 export function Icon({ name, size = 16, color }: IconProps) {
   if (Platform.OS === "web" && isRenderable(hostIcon)) return renderComponent(hostIcon, null, { name, size, color });
-  const glyph = name === "ChevronDown" || name === "ChevronUp"
-    ? "⌄"
-    : name === "ChevronRight"
-      ? "›"
-      : name === "CircleX"
-        ? "×"
-        : name === "Lock"
-          ? "▣"
-          : "•";
+  reportNativeSelection("Icon", "text-glyph");
+  const glyphs: Record<string, string> = {
+    ArrowLeft: "‹",
+    ChevronDown: "⌄",
+    ChevronRight: "›",
+    ChevronUp: "⌃",
+    ChevronsUpDown: "↕",
+    CircleX: "⊗",
+    Ellipsis: "⋯",
+    FolderTree: "▦",
+    GitBranch: "⑂",
+    Info: "ⓘ",
+    List: "☷",
+    Lock: "▣",
+  };
+  const glyph = glyphs[name] || "·";
   return isRenderable(Text) ? createElement(Text as any, { style: { color, fontSize: size, lineHeight: size } }, glyph) : null;
 }
 
@@ -89,18 +101,21 @@ export function ScrollView(props: ScrollViewProps) {
   // Host controls are web-oriented injections. Android/iOS must use the
   // platform renderer directly; some host implementations install DOM/event
   // effects that are not valid in a native surface.
+  if (Platform.OS !== "web") reportNativeSelection("ScrollView", "react-native");
   return Platform.OS === "web"
     ? renderComponent(hostScrollView, NativeScrollView, props)
     : renderComponent(null, NativeScrollView, props);
 }
 
 export function FlatList<Item>(props: FlatListProps<Item> & { ref?: Ref<NativeFlatList<Item>> }) {
+  if (Platform.OS !== "web") reportNativeSelection("FlatList", "react-native");
   return Platform.OS === "web"
     ? renderComponent(hostFlatList, NativeFlatList, props)
     : renderComponent(null, NativeFlatList, props);
 }
 
 export function TextInput(props: TextInputProps) {
+  if (Platform.OS !== "web") reportNativeSelection("TextInput", "react-native");
   return Platform.OS === "web"
     ? renderComponent(hostTextInput, NativeTextInput, props)
     : renderComponent(null, NativeTextInput, props);
@@ -137,6 +152,7 @@ const NativeModalComponent = Object.assign(NativeModalCompat, { Content: NativeM
 
 export const Modal = Object.assign(function Modal(props: ModalProps) {
   const hostContent = isRenderable((hostModal as any)?.Content) ? (hostModal as any).Content : null;
+  if (Platform.OS !== "web") reportNativeSelection("Modal", "react-native");
   const component = Platform.OS === "web" && isRenderable(hostModal) && hostContent ? hostModal : NativeModalComponent;
   return createElement(component as any, props);
 }, {

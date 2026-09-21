@@ -1,4 +1,7 @@
-export const INITIALIZATION_REVISION = "init-v6-android-safe";
+// Bump this whenever the native entry or its dependency boundary changes.
+// Paseo can keep an Android bundle alive across a plugin reload; a changing
+// revision lets daemon.log prove which bundle actually rendered a surface.
+export const INITIALIZATION_REVISION = "init-v7-native-diff-controls";
 export const CLIENT_GENERATION = `client-${INITIALIZATION_REVISION}`;
 
 export function atInitializationStage<T>(stage: string, load: () => T): T {

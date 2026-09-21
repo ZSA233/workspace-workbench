@@ -168,7 +168,18 @@ async function onRequest(req, res) {
 }
 
 const server = createServer((req, res) => { void onRequest(req, res); });
-server.on("error", error => { diagnostics.record({ event: "gateway_error", phase: "connect", errorCode: error?.code || "server_error", reason: error?.message || String(error) }); process.exitCode = 1; });
+server.on("error", error => {
+  const code = error?.code || "server_error";
+  const reason = error?.message || String(error);
+  diagnostics.record({ event: "gateway_error", phase: "connect", errorCode: code, reason });
+  // A listen failure must not leave the parent waiting for a ready line while
+  // the parent-watch timer keeps this child alive. Emit a machine-readable
+  // stderr line and terminate so McpGatewayManager can observe the failure and
+  // retry with an OS-assigned loopback port when appropriate.
+  try { process.stderr.write(`workbench_gateway_error ${code} ${reason}\n`); } catch {}
+  process.exitCode = 1;
+  process.exit(1);
+});
 
 function close() {
   if (closing) return;

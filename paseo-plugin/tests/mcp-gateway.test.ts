@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -81,6 +82,31 @@ test("concurrent manager starts share one gateway and close only that child", as
   } finally {
     await manager.close();
     assert.equal(manager.status().state, "closed");
+    if (previousHome === undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("an occupied saved port is abandoned and retried without a hanging child", async () => {
+  const blocker = createServer().listen(0, "127.0.0.1");
+  await once(blocker, "listening");
+  const address = blocker.address();
+  assert.ok(address && typeof address === "object");
+  const occupiedPort = address.port;
+  const home = mkdtempSync(join(tmpdir(), "workbench-gateway-port-"));
+  const stateDir = join(home, "workspace-workbench");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, "gateway.json"), JSON.stringify({ port: occupiedPort, key: "occupied-port-key" }));
+  const previousHome = process.env.PASEO_HOME;
+  process.env.PASEO_HOME = home;
+  const manager = new McpGatewayManager(join(process.cwd(), "mcp-gateway.mjs"));
+  try {
+    const config = await manager.configForRequest("/tmp/project.json", "token", "interactive");
+    assert.notEqual(new URL(config.url).port, String(occupiedPort));
+    assert.equal(manager.status().state, "ready");
+  } finally {
+    await manager.close();
+    blocker.close();
     if (previousHome === undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previousHome;
     rmSync(home, { recursive: true, force: true });
   }

@@ -7,7 +7,7 @@ import {
   useRpc,
 } from "@getpaseo/plugin/client";
 import { FlatList, Icon, ScrollView } from "./native-components";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { copy, formatCopyFrom, type WorkbenchCopy } from "../shared/copy";
 import { observerQuery, type ObserverResponse } from "../shared/observer";
@@ -139,7 +139,14 @@ export function FileReviewPanel(props: FilePanelProps) {
   const { mode, setMode } = useReviewModePreference(hostWorkspaceId, narrow);
   const activeSelection = selections.find((item) => selectionKey(item) === activeKey) || selections.at(-1);
   const rpc = useRpc(observerQuery);
-  const observationIssue = useObservationVersions(activeSelection?.projectConfig, activeSelection ? [activeSelection.workspaceId] : [], foreground);
+  // The Android host does not provide the query-client/version subscription
+  // boundary used by the desktop panel. A file review only needs its direct
+  // diff request, so do not start the background versions poll here.
+  const observationIssue = useObservationVersions(
+    activeSelection?.projectConfig,
+    activeSelection ? [activeSelection.workspaceId] : [],
+    foreground && Platform.OS === "web",
+  );
   const backendStatusRpc = useRpc(projectBackendStatus);
   const backendProjectConfig = activeSelection?.projectConfig || "";
   const backendStatusRequest = useCallback(

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Platform } from "react-native";
 import { useRpc } from "@getpaseo/plugin/client";
 
 import { observerSettings, observerSettingsRpc } from "../shared/settings";
@@ -16,23 +15,6 @@ function parseMode(value: unknown): ReviewMode | null {
  * wide panel later.
  */
 export function useReviewModePreference(scopeKey: string, compact: boolean) {
-  if (Platform.OS !== "web") return useNativeReviewModePreference(compact);
-  return useWebReviewModePreference(scopeKey, compact);
-}
-
-/**
- * Native panels intentionally keep this preference in the panel instance.
- * Do not create the settings RPC or its persistence effects on Android: the
- * host can unmount a file surface while the panel is still committing, and a
- * settings request is unrelated to rendering a diff.
- */
-function useNativeReviewModePreference(compact: boolean) {
-  const [savedMode, setSavedMode] = useState<ReviewMode | null>(null);
-  const setMode = useCallback((mode: ReviewMode) => setSavedMode(mode), []);
-  return { mode: effectiveReviewMode(compact, savedMode), setMode };
-}
-
-function useWebReviewModePreference(scopeKey: string, compact: boolean) {
   const read = useRpc(observerSettingsRpc.read);
   const write = useRpc(observerSettingsRpc.write);
   const [savedMode, setSavedMode] = useState<ReviewMode | null>(null);

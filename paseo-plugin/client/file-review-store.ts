@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 export type FileReviewSelection = {
   projectConfig?: string;
@@ -109,26 +109,18 @@ export function subscribeFileReviews(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-/**
- * The native Paseo renderer has a partial React 19 hook surface. In
- * particular, the subscription effect used by useSyncExternalStore can fail
- * while a file panel is being committed. File tabs are a small local store,
- * so a plain state tick is enough and keeps this Android boundary predictable.
- */
-function useFileReviewStoreTick(hostWorkspaceId: string): void {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const unsubscribe = subscribeFileReviews(() => setTick((value) => value + 1));
-    return unsubscribe;
-  }, [hostWorkspaceId]);
-}
-
 export function useFileReviews(hostWorkspaceId: string): FileReviewSelection[] {
-  useFileReviewStoreTick(hostWorkspaceId);
-  return getFileReviews(hostWorkspaceId);
+  return useSyncExternalStore(
+    subscribeFileReviews,
+    () => getFileReviews(hostWorkspaceId),
+    () => emptySelections,
+  );
 }
 
 export function useActiveFileReviewKey(hostWorkspaceId: string): string {
-  useFileReviewStoreTick(hostWorkspaceId);
-  return getActiveFileReviewKey(hostWorkspaceId);
+  return useSyncExternalStore(
+    subscribeFileReviews,
+    () => getActiveFileReviewKey(hostWorkspaceId),
+    () => emptyActiveKey,
+  );
 }

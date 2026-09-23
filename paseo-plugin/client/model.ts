@@ -151,6 +151,12 @@ export type WorkspaceDeletionImpact = {
   };
   blockedReason?: string;
   issues?: Array<{ code: string; message: string; repositoryId?: string }>;
+  gitIdentityWarnings?: Array<{
+    repositoryId: string;
+    code: "worktree_branch_changed" | "worktree_cleanup_skipped" | "worktree_path_outside_workspace";
+    recordedBranch?: string | null;
+    currentBranch?: string | null;
+  }>;
   repositories?: Array<{
     id?: string;
     repoPath?: string;

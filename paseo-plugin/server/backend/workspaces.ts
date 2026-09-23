@@ -47,6 +47,17 @@ function createRequestParams(params: Json): Json {
   const { requestId: _requestId, operationId: _operationId, ...stableParams } = params;
   return stableParams;
 }
+type WorkspaceDeletionTarget = { git: Git; path: string; repositoryId: string; relativePath?: string };
+type WorkspaceDeletionWarning = {
+  repositoryId: string;
+  code: "worktree_branch_changed" | "worktree_cleanup_skipped" | "worktree_path_outside_workspace";
+  recordedBranch?: string | null;
+  currentBranch?: string | null;
+};
+type WorkspaceDeletionPlan = {
+  targets: WorkspaceDeletionTarget[];
+  warnings: WorkspaceDeletionWarning[];
+};
 
 function makeWorkspaceDirectoriesRemovable(root: string): () => void {
   const changed: Array<{ path: string; mode: number; dev: number; ino: number }> = [];
@@ -1268,9 +1279,17 @@ export class Workspaces {
     const extra = this.workspaceExtraEntries(workspace);
     scanIncomplete ||= extra.scanIncomplete;
     const detachedSafetyRefs: Json[] = [];
-    for (const repo of (boundaryValid ? workspace.repositories : []).filter((item: Json) => !item.branch && existsSync(item.worktreePath))) {
+    for (const repo of (boundaryValid ? workspace.repositories : []).filter((item: Json) => existsSync(item.worktreePath))) {
       try {
-        const head = await new Git(repo.worktreePath, this.config.gitTimeout).head() || repo.adoptionHead;
+        const worktreePath = String(repo.worktreePath || "");
+        if (!inside(worktreePath, workspace.treePath, true) || lstatSync(worktreePath).isSymbolicLink()) continue;
+        const target = new Git(worktreePath, this.config.gitTimeout);
+        const source = new Git(String(repo.sourcePath || ""), this.config.gitTimeout);
+        const [root, branch, registered] = await Promise.all([
+          target.root(), target.branch(), source.registered(worktreePath),
+        ]);
+        if (root !== canonical(worktreePath) || branch || !registered || registered.locked) continue;
+        const head = await target.head() || repo.adoptionHead;
         if (head) {
           const ref = this.safetyRefForHead(workspace, repo, head);
           if (!detachedSafetyRefs.some((item) => item.ref === ref))
@@ -1375,30 +1394,55 @@ export class Workspaces {
     this.save(w);
     return { workspaceId: w.id, restored: true, state: w.state };
   }
-  private async deletionTargets(w: Json, permanent = false) {
+  private async deletionTargets(w: Json, permanent = false): Promise<WorkspaceDeletionPlan> {
     this.assertIdle(w.id);
     this.assertDeletionBoundary(w);
-    // Verify every Git boundary before removing any worktree. Permanent deletion
-    // may discard dirty contents only after the caller confirms data loss.
-    const targets: Array<{ git: Git; path: string; repositoryId: string }> = [];
+    // Use Git only when it proves the exact managed path is registered to the
+    // expected source. For permanent deletion, Git metadata drift is a warning:
+    // the confirmed Workspace tree remains the filesystem deletion boundary.
+    const targets: WorkspaceDeletionTarget[] = [];
+    const warnings: WorkspaceDeletionWarning[] = [];
     const blockers: Array<{ code: string; message: string; repositoryId: string }> = [];
     for (const repo of w.repositories) {
-      if (!existsSync(repo.worktreePath)) continue;
-      const target = new Git(repo.worktreePath, this.config.operationTimeout),
-        source = new Git(repo.sourcePath, this.config.operationTimeout);
+      const worktreePath = String(repo.worktreePath || "");
+      const source = new Git(String(repo.sourcePath || ""), this.config.operationTimeout);
+      if (worktreePath && !inside(worktreePath, w.treePath, true)) {
+        if (permanent) warnings.push({ repositoryId: String(repo.id), code: "worktree_path_outside_workspace" });
+        else if (existsSync(worktreePath)) blockers.push({ code: "worktree_identity_changed", message: "worktree path is outside the Workspace tree", repositoryId: String(repo.id) });
+        continue;
+      }
+      if (!existsSync(worktreePath)) {
+        if (permanent) {
+          try {
+            if (await source.registered(worktreePath))
+              warnings.push({ repositoryId: String(repo.id), code: "worktree_cleanup_skipped" });
+          } catch {
+            warnings.push({ repositoryId: String(repo.id), code: "worktree_cleanup_skipped" });
+          }
+        }
+        continue;
+      }
+      const target = new Git(worktreePath, this.config.operationTimeout);
       try {
-        if (lstatSync(repo.worktreePath).isSymbolicLink() || !inside(repo.worktreePath, w.treePath, true))
+        if (lstatSync(worktreePath).isSymbolicLink() || !inside(worktreePath, w.treePath, true))
           throw new WorkbenchError("worktree_identity_changed", "worktree path is outside the Workspace tree");
-        const registered = await source.registered(repo.worktreePath);
-        if (
-          (await target.root()) !== canonical(repo.worktreePath) ||
-          (await target.branch()) !== repo.branch ||
-          !registered || registered.locked
-        )
-          throw new WorkbenchError(
-            registered?.locked ? "worktree_locked" : "worktree_identity_changed",
-            registered?.locked ? "worktree is locked" : "worktree identity changed",
-          );
+        const [root, currentBranch, registered] = await Promise.all([
+          target.root(), target.branch(), source.registered(worktreePath),
+        ]);
+        if (registered?.locked)
+          throw new WorkbenchError("worktree_locked", "worktree is locked");
+        if (root !== canonical(worktreePath) || !registered)
+          throw new WorkbenchError("worktree_identity_changed", "worktree identity or registration changed");
+        if (currentBranch !== repo.branch) {
+          if (!permanent)
+            throw new WorkbenchError("worktree_identity_changed", "worktree branch changed");
+          warnings.push({
+            repositoryId: String(repo.id),
+            code: "worktree_branch_changed",
+            recordedBranch: repo.branch || null,
+            currentBranch,
+          });
+        }
         if (!permanent) {
           if ((await target.status(repo.role === "gitlink-root", true)).length)
             throw new WorkbenchError(
@@ -1417,10 +1461,12 @@ export class Workspaces {
               );
           }
         }
-        targets.push({ git: source, path: repo.worktreePath, repositoryId: String(repo.id) });
+        targets.push({ git: source, path: worktreePath, repositoryId: String(repo.id) });
       } catch (error) {
         const problem = issue(error);
-        blockers.push({ code: problem.code, message: problem.message, repositoryId: String(repo.id) });
+        if (permanent && problem.code !== "worktree_locked")
+          warnings.push({ repositoryId: String(repo.id), code: "worktree_cleanup_skipped" });
+        else blockers.push({ code: problem.code, message: problem.message, repositoryId: String(repo.id) });
       }
     }
     if (blockers.length) {
@@ -1433,7 +1479,7 @@ export class Workspaces {
         throw new WorkbenchError("workspace_dirty", metadataOnly ? "workspace metadata contains user files" : "workspace contains extra files", extra);
       }
     }
-    return targets;
+    return { targets, warnings };
   }
   private safetyRef(workspace: Json, repo: Json) {
     return `refs/workbench/recovered/${workspace.id}/${hash(repo.id).slice(0, 16)}`;
@@ -1452,11 +1498,12 @@ export class Workspaces {
     const saved = this.save(workspace, false);
     workspace.updatedAt = saved.updatedAt;
   }
-  private async preserveDetachedHeads(workspace: Json, journal = true) {
+  private async preserveDetachedHeads(workspace: Json, journal = true, eligibleRepositories?: Set<string>) {
     for (const repo of workspace.repositories) {
-      if (repo.branch || !existsSync(repo.worktreePath)) continue;
+      if ((eligibleRepositories && !eligibleRepositories.has(String(repo.id))) || !existsSync(repo.worktreePath)) continue;
       const target = new Git(repo.worktreePath, this.config.operationTimeout);
       const source = new Git(repo.sourcePath, this.config.operationTimeout);
+      if (await target.branch()) continue;
       const currentHead = await target.head();
       const heads = [...new Set([repo.adoptionHead, currentHead].filter((head): head is string => typeof head === "string" && !!head))];
       for (const head of heads) {
@@ -1472,43 +1519,76 @@ export class Workspaces {
       }
     }
   }
-  private async gitlinkDeletionTargets(workspace: Json, permanent: boolean) {
+  private async gitlinkDeletionTargets(workspace: Json, permanent: boolean): Promise<WorkspaceDeletionPlan> {
     this.assertIdle(workspace.id);
     this.assertDeletionBoundary(workspace);
-    const targets: Array<{ git: Git; path: string; relativePath: string; repositoryId: string }> = [];
+    const targets: WorkspaceDeletionTarget[] = [];
+    const warnings: WorkspaceDeletionWarning[] = [];
+    const blockers: Array<{ code: string; message: string; repositoryId: string }> = [];
     for (const repo of [...workspace.repositories].reverse()) {
-      if (!existsSync(repo.worktreePath)) continue;
-      const target = new Git(repo.worktreePath, this.config.operationTimeout);
-      const source = new Git(repo.sourcePath, this.config.operationTimeout);
-      if (lstatSync(repo.worktreePath).isSymbolicLink() || !inside(repo.worktreePath, workspace.treePath, true))
-        throw new WorkbenchError("worktree_identity_changed", "Gitlink worktree path is outside the Workspace tree");
-      const registered = await source.registered(repo.worktreePath);
-      if (await target.root() !== canonical(repo.worktreePath) || await target.branch() !== repo.branch ||
-        !registered || registered.locked)
-        throw new WorkbenchError(registered?.locked ? "worktree_locked" : "worktree_identity_changed", "Gitlink worktree identity changed");
-      if (!permanent) {
-        if ((await target.status(repo.role === "gitlink-root" ? "all" : false, true)).length)
-          throw new WorkbenchError("workspace_dirty", "Gitlink worktree has user changes");
-        const head = await target.head();
-        if (head !== repo.baseSha) {
-          const retainedBranch = repo.branch
-            ? await source.run(["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`], false)
-            : null;
-          if (!retainedBranch || retainedBranch.code !== 0 || retainedBranch.stdout.trim() !== head)
-            throw new WorkbenchError("workspace_has_commits", "Gitlink worktree contains commits not protected by a retained branch");
-        }
-        if (repo.role === "gitlink-root") {
-          const [committed, indexed] = await Promise.all([
-            commitGitlinks(repo.worktreePath, "HEAD", this.config.operationTimeout),
-            indexGitlinks(repo.worktreePath, this.config.operationTimeout),
-          ]);
-          if (pythonJson(committed) !== pythonJson(indexed))
-            throw new WorkbenchError("workspace_dirty", "Gitlink pointers are staged");
-        }
+      const worktreePath = String(repo.worktreePath || "");
+      const source = new Git(String(repo.sourcePath || ""), this.config.operationTimeout);
+      if (worktreePath && !inside(worktreePath, workspace.treePath, true)) {
+        if (permanent) warnings.push({ repositoryId: String(repo.id), code: "worktree_path_outside_workspace" });
+        else if (existsSync(worktreePath)) blockers.push({ code: "worktree_identity_changed", message: "Gitlink worktree path is outside the Workspace tree", repositoryId: String(repo.id) });
+        continue;
       }
-      targets.push({ git: source, path: repo.worktreePath, relativePath: repo.repoPath, repositoryId: String(repo.id) });
+      if (!existsSync(worktreePath)) {
+        if (permanent) {
+          try {
+            if (await source.registered(worktreePath))
+              warnings.push({ repositoryId: String(repo.id), code: "worktree_cleanup_skipped" });
+          } catch {
+            warnings.push({ repositoryId: String(repo.id), code: "worktree_cleanup_skipped" });
+          }
+        }
+        continue;
+      }
+      const target = new Git(worktreePath, this.config.operationTimeout);
+      try {
+        if (lstatSync(worktreePath).isSymbolicLink() || !inside(worktreePath, workspace.treePath, true))
+          throw new WorkbenchError("worktree_identity_changed", "Gitlink worktree path is outside the Workspace tree");
+        const [root, currentBranch, registered] = await Promise.all([
+          target.root(), target.branch(), source.registered(worktreePath),
+        ]);
+        if (registered?.locked) throw new WorkbenchError("worktree_locked", "Gitlink worktree is locked");
+        if (root !== canonical(worktreePath) || !registered)
+          throw new WorkbenchError("worktree_identity_changed", "Gitlink worktree identity or registration changed");
+        if (currentBranch !== repo.branch) {
+          if (!permanent) throw new WorkbenchError("worktree_identity_changed", "Gitlink worktree branch changed");
+          warnings.push({ repositoryId: String(repo.id), code: "worktree_branch_changed", recordedBranch: repo.branch || null, currentBranch });
+        }
+        if (!permanent) {
+          if ((await target.status(repo.role === "gitlink-root" ? "all" : false, true)).length)
+            throw new WorkbenchError("workspace_dirty", "Gitlink worktree has user changes");
+          const head = await target.head();
+          if (head !== repo.baseSha) {
+            const retainedBranch = repo.branch
+              ? await source.run(["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`], false)
+              : null;
+            if (!retainedBranch || retainedBranch.code !== 0 || retainedBranch.stdout.trim() !== head)
+              throw new WorkbenchError("workspace_has_commits", "Gitlink worktree contains commits not protected by a retained branch");
+          }
+          if (repo.role === "gitlink-root") {
+            const [committed, indexed] = await Promise.all([
+              commitGitlinks(worktreePath, "HEAD", this.config.operationTimeout),
+              indexGitlinks(worktreePath, this.config.operationTimeout),
+            ]);
+            if (pythonJson(committed) !== pythonJson(indexed))
+              throw new WorkbenchError("workspace_dirty", "Gitlink pointers are staged");
+          }
+        }
+        targets.push({ git: source, path: worktreePath, relativePath: String(repo.repoPath || "."), repositoryId: String(repo.id) });
+      } catch (error) {
+        const problem = issue(error);
+        if (permanent && problem.code !== "worktree_locked")
+          warnings.push({ repositoryId: String(repo.id), code: "worktree_cleanup_skipped" });
+        else blockers.push({ code: problem.code, message: problem.message, repositoryId: String(repo.id) });
+      }
     }
-    return targets;
+    if (blockers.length)
+      throw new WorkbenchError(blockers[0].code, blockers[0].message, { issues: blockers });
+    return { targets, warnings };
   }
   private async cleanupGitlink(w: Json, params: Json, permanent: boolean) {
     if (permanent && w.state !== "removed") {
@@ -1517,29 +1597,29 @@ export class Workspaces {
       throw new WorkbenchError("workspace_must_be_removed", "remove workspace before permanent deletion");
     }
     const impact = permanent ? await this.impact(w) : null;
-    let targets: Array<{ git: Git; path: string; relativePath: string; repositoryId: string }>;
+    let plan: WorkspaceDeletionPlan;
     try {
-      targets = await this.gitlinkDeletionTargets(w, permanent);
+      plan = await this.gitlinkDeletionTargets(w, permanent);
     } catch (error) {
       if (permanent && !params.confirm) return { ...(impact || await this.impact(w)), canDelete: false,
         deleted: false, blockedReason: issue(error).code, issues: [issue(error)] };
       throw error;
     }
     if (!params.confirm) return permanent
-      ? { ...(impact || await this.impact(w)), canDelete: true, deleted: false }
-      : { workspaceId: w.id, preview: true, canDelete: true, repositories: targets.length, removed: false };
+      ? { ...(impact || await this.impact(w)), canDelete: true, deleted: false, ...(plan.warnings.length ? { gitIdentityWarnings: plan.warnings } : {}) }
+      : { workspaceId: w.id, preview: true, canDelete: true, repositories: plan.targets.length, removed: false };
 
     if (permanent) {
       const freshImpact = await this.impact(w);
       if (freshImpact.requiresDataLossConfirmation && params.confirmDataLoss !== true)
         throw new WorkbenchError("workspace_data_loss_confirmation_required", "Explicit data-loss confirmation is required", freshImpact.dataLossSummary);
-      targets = await this.gitlinkDeletionTargets(w, true);
+      plan = await this.gitlinkDeletionTargets(w, true);
     }
-    await this.preserveDetachedHeads(w, permanent);
-    for (const target of targets) {
+    await this.preserveDetachedHeads(w, permanent, new Set(plan.targets.map((target) => target.repositoryId)));
+    for (const target of plan.targets) {
       if (permanent) this.journalPermanentDeletion(w, { phase: "remove_worktree", repositoryId: target.repositoryId });
       await target.git.run(["worktree", "remove", ...(permanent && params.confirmDataLoss === true ? ["--force"] : []), target.path]);
-      if (!permanent && target.relativePath !== "." && existsSync(w.treePath))
+      if (!permanent && target.relativePath && target.relativePath !== "." && existsSync(w.treePath))
         mkdirSync(childPath(w.treePath, target.relativePath), { recursive: true });
       if (permanent) {
         const completed = new Set<string>(w.permanentDeletion?.completedRepositories || []);
@@ -1559,7 +1639,12 @@ export class Workspaces {
     }
     else { w.state = "removed"; this.save(w, false); }
     return { workspaceId: w.id, preview: false, ...(permanent
-      ? { deleted: true, branchesPreserved: w.repositories.map((repo: Json) => repo.branch).filter(Boolean), externalReferences: [] }
+      ? {
+          deleted: true,
+          branchesPreserved: [...w.repositories.map((repo: Json) => repo.branch).filter(Boolean), ...plan.warnings.map((warning) => warning.currentBranch).filter(Boolean)],
+          externalReferences: [],
+          ...(plan.warnings.length ? { gitIdentityWarnings: plan.warnings } : {}),
+        }
       : { removed: true }) };
   }
   async cleanup(params: Json, permanent = false) {
@@ -1591,9 +1676,9 @@ export class Workspaces {
         "remove workspace after finishing tasks before permanent deletion",
       );
     }
-    let targets: Array<{ git: Git; path: string; repositoryId: string }>;
+    let plan: WorkspaceDeletionPlan;
     try {
-      targets = await this.deletionTargets(w, permanent);
+      plan = await this.deletionTargets(w, permanent);
     } catch (error) {
       if (permanent && !params.confirm) {
         const problem = issue(error);
@@ -1611,12 +1696,12 @@ export class Workspaces {
     }
     if (!params.confirm)
       return permanent
-        ? { ...impact, canDelete: true, deleted: false }
+        ? { ...impact, canDelete: true, deleted: false, ...(plan.warnings.length ? { gitIdentityWarnings: plan.warnings } : {}) }
         : {
             workspaceId: w.id,
             preview: true,
             removed: false,
-            repositories: targets.length,
+            repositories: plan.targets.length,
             ...(impact.detachedSafetyRefs ? { detachedSafetyRefs: impact.detachedSafetyRefs } : {}),
           };
     if (permanent) {
@@ -1624,10 +1709,10 @@ export class Workspaces {
       if (freshImpact.requiresDataLossConfirmation && params.confirmDataLoss !== true)
         throw new WorkbenchError("workspace_data_loss_confirmation_required", "Explicit data-loss confirmation is required", freshImpact.dataLossSummary);
       // Recheck ownership after the confirmation preview and immediately before Git mutations.
-      targets = await this.deletionTargets(w, true);
+      plan = await this.deletionTargets(w, true);
     }
-    await this.preserveDetachedHeads(w, permanent);
-    for (const target of targets) {
+    await this.preserveDetachedHeads(w, permanent, new Set(plan.targets.map((target) => target.repositoryId)));
+    for (const target of plan.targets) {
       if (permanent) this.journalPermanentDeletion(w, { phase: "remove_worktree", repositoryId: target.repositoryId });
       await target.git.run(["worktree", "remove", ...(permanent && params.confirmDataLoss === true ? ["--force"] : []), target.path]);
       if (!permanent) {
@@ -1664,10 +1749,11 @@ export class Workspaces {
       preview: false,
       ...(permanent
         ? {
-            deleted: true,
-            branchesPreserved: impact.branchesPreserved,
-            externalReferences: [],
-          }
+          deleted: true,
+          branchesPreserved: [...(impact.branchesPreserved || []), ...plan.warnings.map((warning) => warning.currentBranch).filter(Boolean)],
+          externalReferences: [],
+          ...(plan.warnings.length ? { gitIdentityWarnings: plan.warnings } : {}),
+        }
         : { removed: true }),
     };
   }

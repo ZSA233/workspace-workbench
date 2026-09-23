@@ -30,6 +30,36 @@ function deletionBlockMessage(issue: { code: string; message: string; repository
   }
 }
 
+function gitIdentityWarningMessage(warning: NonNullable<WorkspaceDeletionImpact["gitIdentityWarnings"]>[number], copy: ReturnType<typeof useWorkbenchCopy>): string {
+  if (warning.code === "worktree_path_outside_workspace")
+    return formatCopyFrom(copy, "workspaceDeleteIdentityOutside", [warning.repositoryId]);
+  if (warning.code === "worktree_branch_changed")
+    return formatCopyFrom(copy, "workspaceDeleteIdentityBranchChanged", [
+      warning.repositoryId,
+      warning.currentBranch || copy.workspaceDeleteDetachedHead,
+      warning.recordedBranch || copy.workspaceDeleteDetachedHead,
+    ]);
+  return formatCopyFrom(copy, "workspaceDeleteIdentityCleanupSkipped", [warning.repositoryId]);
+}
+
+function GitIdentityWarnings({
+  warnings,
+  theme,
+  styles,
+  copy,
+}: {
+  warnings: NonNullable<WorkspaceDeletionImpact["gitIdentityWarnings"]>;
+  theme: PanelProps["theme"];
+  styles: ReturnType<typeof makeStyles>;
+  copy: ReturnType<typeof useWorkbenchCopy>;
+}) {
+  if (!warnings.length) return null;
+  return <View style={[styles.deletionModalSection, { borderColor: theme.colors.statusWarning }]}>
+    <Text style={[styles.deletionModalSectionTitle, { color: theme.colors.statusWarning }]}>{copy.workspaceDeleteIdentityWarningTitle}</Text>
+    {warnings.map((warning, index) => <Text key={`${warning.repositoryId}-${warning.code}-${index}`} selectable style={styles.deletionModalRowText}>• {gitIdentityWarningMessage(warning, copy)}</Text>)}
+  </View>;
+}
+
 export function WorkspaceDeletionPanel({
   open,
   workspace,
@@ -77,12 +107,14 @@ export function WorkspaceDeletionPanel({
   const blockedIssues = mode === "permanent" && impact?.canDelete === false
     ? impact.issues?.length ? impact.issues : impact.blockedReason ? [{ code: impact.blockedReason, message: "" }] : []
     : [];
+  const gitIdentityWarnings = mode === "permanent" ? impact?.gitIdentityWarnings || [] : [];
   if (confirmingDataLoss && mode === "permanent") {
     const summary = impact?.dataLossSummary;
     return <Modal open onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }} title={copy.workspaceDeleteDataLossTitle}>
       <Modal.Content scrollable={Platform.OS === "web"} style={styles.deletionModalContent} contentContainerStyle={styles.deletionModalBody}>
         <Text style={styles.deletionModalTitle}>{workspaceDisplayName(workspace, copy)}</Text>
         <Text style={styles.deletionModalText}>{copy.workspaceDeleteDataLossDescription}</Text>
+        <GitIdentityWarnings warnings={gitIdentityWarnings} theme={theme} styles={styles} copy={copy} />
         {summary?.repositories.map((repository) => <View key={repository.repositoryId} style={styles.deletionModalSection}>
           <Text style={styles.deletionModalSectionTitle}>{formatCopyFrom(copy, "workspaceDeleteDataLossRepository", [repository.repositoryId, repository.pathCount])}</Text>
           {repository.paths.slice(0, 5).map((path, index) => <Text key={`${path}-${index}`} selectable style={styles.deletionModalRowText}>• {path}</Text>)}
@@ -121,6 +153,7 @@ export function WorkspaceDeletionPanel({
         <View style={styles.deletionModalRow}><Text style={styles.deletionModalBullet}>•</Text><Text style={styles.deletionModalRowText}>{copy.workspaceDeleteBranchPreserved}</Text></View>
         <View style={styles.deletionModalRow}><Text style={styles.deletionModalBullet}>•</Text><Text style={styles.deletionModalRowText}>{repositoryCountLabel(workspace.repositoryCount, copy)}</Text></View>
       </View>
+      <GitIdentityWarnings warnings={gitIdentityWarnings} theme={theme} styles={styles} copy={copy} />
       {impact?.detachedSafetyRefs?.length ? <View style={styles.deletionModalSection}>
         <Text style={styles.deletionModalSectionTitle}>{copy.orphanSafetyRefs}</Text>
         {impact.detachedSafetyRefs.map(item => <Text key={item.ref} selectable style={styles.deletionModalRowText}>{item.repositoryId} · {item.ref} · {item.head.slice(0, 8)}</Text>)}

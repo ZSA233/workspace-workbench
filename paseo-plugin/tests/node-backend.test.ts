@@ -589,6 +589,70 @@ test("activity and path traversal fail closed while branch-backed commits surviv
   }
 });
 
+test("permanent deletion warns on registered branch drift and preserves both branches", async () => {
+  const f = fixture(), service = new Service(f.config);
+  try {
+    const workspace = await service.handle("workspace.create", { name: "branch-drift", repositories: ["one"] });
+    const repo = workspace.repositories[0];
+    const currentBranch = "release/branch-drift";
+    git(repo.sourcePath, ["branch", currentBranch]);
+    git(repo.worktreePath, ["checkout", "-q", currentBranch]);
+    writeFileSync(join(repo.worktreePath, "uncommitted.txt"), "discard only after confirmation\n");
+    await service.handle("workspace.remove", { workspaceId: workspace.id });
+
+    const preview = await service.handle("workspace.delete", { workspaceId: workspace.id, confirm: false });
+    assert.equal(preview.canDelete, true);
+    assert.equal(preview.requiresDataLossConfirmation, true);
+    assert.deepEqual(preview.gitIdentityWarnings, [{
+      repositoryId: repo.id,
+      code: "worktree_branch_changed",
+      recordedBranch: repo.branch,
+      currentBranch,
+    }]);
+    await assert.rejects(service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true }), /Explicit data-loss confirmation is required/);
+    const deleted = await service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true, confirmDataLoss: true });
+    assert.equal(deleted.deleted, true);
+    assert.ok(deleted.branchesPreserved.includes(repo.branch));
+    assert.ok(deleted.branchesPreserved.includes(currentBranch));
+    assert.equal(existsSync(workspace.treePath), false);
+    assert.notEqual(git(repo.sourcePath, ["show-ref", "--verify", "--hash", `refs/heads/${currentBranch}`]), "");
+    assert.notEqual(git(repo.sourcePath, ["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`]), "");
+  } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("permanent deletion falls back to the managed tree when Git identity is unavailable", async () => {
+  const f = fixture(), service = new Service(f.config);
+  try {
+    const workspace = await service.handle("workspace.create", { name: "unregistered-tree", repositories: ["one"] });
+    const repo = workspace.repositories[0];
+    const commit = git(repo.sourcePath, ["rev-parse", `refs/heads/${repo.branch}`]);
+    await service.handle("workspace.remove", { workspaceId: workspace.id });
+    git(repo.sourcePath, ["worktree", "remove", repo.worktreePath]);
+    mkdirSync(repo.worktreePath, { recursive: true });
+    writeFileSync(join(repo.worktreePath, "created-without-worktree-metadata.txt"), "inside Workspace boundary\n");
+
+    const preview = await service.handle("workspace.delete", { workspaceId: workspace.id, confirm: false });
+    assert.equal(preview.canDelete, true);
+    assert.equal(preview.requiresDataLossConfirmation, true);
+    assert.deepEqual(preview.gitIdentityWarnings, [{ repositoryId: repo.id, code: "worktree_cleanup_skipped" }]);
+    await assert.rejects(
+      service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true }),
+      /Explicit data-loss confirmation is required/,
+    );
+    const deleted = await service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true, confirmDataLoss: true });
+    assert.equal(deleted.deleted, true);
+    assert.equal(existsSync(workspace.treePath), false);
+    assert.equal(existsSync(service.workspaces.recordPath(workspace.id)), false);
+    assert.equal(git(repo.sourcePath, ["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`]), commit);
+  } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test("partial permanent deletion retains the record and can be retried", async () => {
   const f = fixture(), service = new Service(f.config), original = Git.prototype.run;
   let failSecondRepository = true;

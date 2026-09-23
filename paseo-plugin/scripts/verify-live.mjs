@@ -290,6 +290,10 @@ try {
   const dirtyDetail = await rpc(configs[0], "workspace.detail", { workspaceId: dirtyCreate.workspaceId });
   const dirtyTree = dirtyDetail.result.workspace.treePath;
   const dirtyRepo = join(dirtyTree, "one");
+  const recordedBranch = dirtyDetail.result.repositories.find(item => item.repositoryId === "one" || item.id === "one").branch;
+  const currentBranch = `release/live-delete-${dirtyCreate.workspaceId}`;
+  git(join(root, "a", "one"), ["branch", currentBranch]);
+  git(dirtyRepo, ["checkout", "-q", currentBranch]);
   writeFileSync(join(dirtyRepo, ".gitignore"), ".cache/\n");
   mkdirSync(join(dirtyRepo, ".cache"));
   writeFileSync(join(dirtyRepo, ".cache", "ignored.bin"), "ignored\n");
@@ -308,9 +312,14 @@ try {
   const externalCache = join(root, "a", "state", "cache", "keep.bin");
   mkdirSync(join(root, "a", "state", "cache"), { recursive: true });
   writeFileSync(externalCache, "external cache\n");
-  const branch = git(dirtyRepo, ["branch", "--show-current"]);
   const head = git(dirtyRepo, ["rev-parse", "HEAD"]);
   await rpc(configs[0], "workspace.remove", { workspaceId: dirtyCreate.workspaceId });
+  const dirtyDeletePreview = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.lifecycle", {
+    projectConfig: configs[0], workspaceId: dirtyCreate.workspaceId, action: "delete", confirm: false,
+  });
+  assert.equal(dirtyDeletePreview.ok, true, JSON.stringify(dirtyDeletePreview));
+  assert.equal(dirtyDeletePreview.result.canDelete, true);
+  assert.equal(dirtyDeletePreview.result.gitIdentityWarnings[0].currentBranch, currentBranch);
   const deniedDirtyDelete = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.lifecycle", {
     projectConfig: configs[0], workspaceId: dirtyCreate.workspaceId, action: "delete", confirm: true,
   });
@@ -323,12 +332,16 @@ try {
   });
   assert.equal(confirmedDirtyDelete.ok, true, JSON.stringify(confirmedDirtyDelete));
   assert.equal(confirmedDirtyDelete.result.deleted, true);
+  assert.equal(confirmedDirtyDelete.result.gitIdentityWarnings[0].code, "worktree_branch_changed");
+  assert.equal(confirmedDirtyDelete.result.gitIdentityWarnings[0].recordedBranch, recordedBranch);
+  assert.equal(confirmedDirtyDelete.result.gitIdentityWarnings[0].currentBranch, currentBranch);
   assert.equal(existsSync(dirtyTree), false);
   assert.equal(existsSync(readOnlyModuleFile), false);
   assert.equal(readFileSync(join(outsideWorkspace, "keep.txt"), "utf8"), "outside\n");
   assert.equal(readFileSync(externalCache, "utf8"), "external cache\n");
-  assert.equal(git(join(root, "a", "one"), ["rev-parse", `refs/heads/${branch}`]), head);
-  report.checks.push("actual lifecycle RPC required confirmDataLoss for dirty, ignored and extra worktree contents; deletion removed read-only module-cache directories and preserved outside data, cache and branch");
+  assert.equal(git(join(root, "a", "one"), ["rev-parse", `refs/heads/${currentBranch}`]), head);
+  assert.equal(git(join(root, "a", "one"), ["show-ref", "--verify", "--hash", `refs/heads/${recordedBranch}`]).length > 0, true);
+  report.checks.push("actual lifecycle RPC required confirmDataLoss for dirty, ignored and extra worktree contents; branch drift was a warning, read-only module-cache directories were removed, and outside data/cache/branches were preserved");
   const created = await rpc(configs[0], "workspace.create", {
     name: "sample",
     repositories: ["one"],

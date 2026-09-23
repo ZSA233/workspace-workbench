@@ -29,6 +29,7 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
     "workbench_workspace_delegate",
     "workbench_workspace_add_repositories",
     "workbench_workspace_operation_status",
+    "workbench_connection_status",
     "workbench_review_preview",
     "workbench_review_execute",
     "workbench_review_status",
@@ -62,10 +63,10 @@ test("review and execution MCP processes expose only their role tools", () => {
   const input = '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n';
   const reviewer = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], { encoding: "utf8", input, env: { ...mcpEnv, WORKBENCH_REVIEW_ONLY: "1" } });
   assert.equal(reviewer.status, 0, reviewer.stderr);
-  assert.deepEqual(JSON.parse(reviewer.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_reviewer_read", "workbench_reviewer_result", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"]);
+  assert.deepEqual(JSON.parse(reviewer.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_reviewer_read", "workbench_reviewer_result", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset", "workbench_connection_status"]);
   const execution = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], { encoding: "utf8", input, env: { ...mcpEnv, WORKBENCH_EXECUTION_REPORT_ONLY: "1" } });
   assert.equal(execution.status, 0, execution.stderr);
-  assert.deepEqual(JSON.parse(execution.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_execution_report", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"]);
+  assert.deepEqual(JSON.parse(execution.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_execution_report", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset", "workbench_connection_status"]);
 });
 
 test("independent execution MCP keeps public tools and completion reporting", () => {

@@ -314,6 +314,18 @@ export async function handleObserver(input: QueryInput, context?: AgentContext):
     };
     const callObserverWithRecovery = async (request: QueryInput): Promise<ObserverResponse> => {
       try {
+        // A write must never be sent to a cold or retiring backend. Establish
+        // ownership first so a connection refusal can be reported as safely
+        // not dispatched instead of an uncertain Git operation.
+        if (mutationMethods.has(request.method)) {
+          const project = currentProject();
+          if (project) {
+            const backend = await startBackend(project.configPath);
+            if (backend.state !== "ready") return { ok: false, error: {
+              code: "backend_unavailable_before_dispatch", message: backend.message || "Backend is not ready; retry with the same request identity",
+            } };
+          }
+        }
         const response = await bridge.call(request);
         if (response.ok) recordBackendSuccess(currentProject()?.configPath);
         if (request.method === "observer.health" && response.ok && response.result && typeof response.result === "object")

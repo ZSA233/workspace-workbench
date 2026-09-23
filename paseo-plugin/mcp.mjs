@@ -3,7 +3,7 @@ import { serveMcp } from "./shared/mcp-dispatcher.mjs";
 import { buildId } from "./shared/build-id.mjs";
 import { createRequire } from "node:module";
 const packageMetadata = createRequire(import.meta.url)("./package.json");
-const build = buildId(["./mcp-router.mjs", "./mcp-dispatcher.mjs", "./mcp-connection.mjs"]);
+const build = buildId(["./mcp-router.mjs", "./mcp-dispatcher.mjs", "./mcp-connection.mjs", "./paseo-endpoint.mjs", "./mcp-readiness.mjs", "./mcp-policy.mjs"]);
 const server = serveMcp(async (message, lifecycle) => {
   const result = await handle(message, lifecycle);
   return message.method === "ping" || message.method === "initialize"

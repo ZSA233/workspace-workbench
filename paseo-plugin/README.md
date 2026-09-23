@@ -106,9 +106,13 @@ handoff 的 `requestId`，不能用 `workspaceId` 单独代替；需要执行 Ag
 `autoInject: false`。Worker 和 Reviewer 也复用同一个网关，只通过会话角色限制工具范围。
 已有会话或手工配置的 stdio MCP 仍可继续使用，但会在诊断中标记为 `legacy-stdio`。
 
-网关按插件进程单例运行，使用本机回环地址和插件状态目录中的 owner 记录。插件 reload 或卸载时
-只关闭自己拥有的网关，不会批量终止其他 Agent 的旧 MCP。新会话重新连接后会拿到新的
-`gatewayGeneration`；旧会话不会被 reload 强行切换。
+网关按插件进程单例运行。每个 Paseo home 首次分配的回环端口及密钥保存在插件状态目录；
+插件 reload 和网关崩溃恢复继续使用同一地址。新一代只等待已验证的旧网关释放端口，
+未知进程占用时报告错误并重试原端口，不会静默改用新端口或终止未知进程。插件只关闭
+自己拥有的网关；已有共享 HTTP Agent 的下一次调用可以连接到新一代网关。
+`/health` 只检查 HTTP 存活，带网关密钥的 `/ready` 还会检查 Paseo 连接和插件 RPC；
+只有后者通过才给新 Agent 注入 MCP 配置。`workbench_connection_status` 可在没有项目上下文时
+查看这三个阶段。历史 stdio 会话仍由宿主自行管理。
 
 出现连接、刷新或 Android 入口异常时，可以调用只读诊断接口
 `workspace.workbench.diagnostics`（或轻量的 `workspace.workbench.mcp.status`），也可以在插件状态目录查看最近的脱敏 JSONL 事件。诊断会显示插件
@@ -132,12 +136,15 @@ Agent 交接、Review、权限和计划/执行模式见[根目录 README](../REA
 
 ## 连接超时排查
 
-MCP 每次工具调用建立独立连接，总预算 55 秒，包含排队；连接最多 8 秒，预留
+MCP 每次工具调用建立独立连接，总预算 55 秒，包含排队；只有短只读查询使用 6 秒预算，
+Workspace 创建和添加仓库使用完整预算。连接最多 8 秒，预留
 1 秒清理，RPC 使用剩余预算。最多 4 个活动调用、16 个排队调用；ping 和取消通知
 独立处理。取消和 stdin 关闭会回收本次连接，清理异常记入诊断而不覆盖执行结果。
 连接阶段失败不会发送业务请求；RPC 超时则不代表
 服务端操作已撤销，必须沿用原 requestId 查询状态，不能创建新身份盲目重试。
 连接清理失败不能覆盖已经收到的成功结果或原始错误。
+创建和提交工具若未传 `requestId`，会从项目与规范化输入生成稳定身份。调用结果不确定时，
+先用返回的身份查询状态，再用同一身份重试；不要改用新身份或手工建立 worktree。
 
 `running` 只表示插件进程存在。排查时分别检查 Paseo RPC、后端
 `observer.health` 的 `activeRequests`/`closing` 和 Paseo daemon 日志。

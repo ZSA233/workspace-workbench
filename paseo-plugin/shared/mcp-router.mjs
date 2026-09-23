@@ -4,6 +4,9 @@ import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import WebSocket from "ws";
 import { withMcpConnection } from "./mcp-connection.mjs";
 import { coordinatorGuidance } from "./handoff-guidance.mjs";
+import { localPaseoEndpoint } from "./paseo-endpoint.mjs";
+import { isMutation, stableRequestId } from "./mcp-policy.mjs";
+import { probePaseo } from "./mcp-readiness.mjs";
 
 const require = createRequire(import.meta.url);
 const packageMetadata = require("../package.json");
@@ -12,6 +15,7 @@ const materialTools = [
   { name: "workbench_handoff_search", description: "Search original documents and public conversation history, returning excerpts with source locations." },
   { name: "workbench_handoff_asset", description: "Fetch an original image or readable text asset from the assigned materials version." },
 ];
+const connectionTool = { name: "workbench_connection_status", description: "Check the local MCP, Paseo and plugin RPC connection without a project or Agent context." };
 const publicTools = [
   ...materialTools,
   ...["status", "message", "history", "wait", "stop"].map(action => ({ name: `workbench_session_${action}`, description: ({ status: "Read the bound worker status and review phase.", message: "Send a supplement to the bound worker; requestId deduplicates delivery. Default steer; use interrupt only when explicitly requested.", history: "Read bounded public worker conversation history.", wait: "Wait at most 30 seconds for worker progress. Do not automatically loop.", stop: "Explicitly cancel the bound worker current turn and check its state." })[action] })),
@@ -26,6 +30,7 @@ const publicTools = [
   { name: "workbench_workspace_delegate", description: "Explicitly delegate an already-created Workspace with the supplied handoff. Creating the Workspace and starting an Agent remain separate actions." },
   { name: "workbench_workspace_add_repositories", description: "Add repositories to an existing flat managed Workspace without creating a new Workspace or Agent session." },
   { name: "workbench_workspace_operation_status", description: "Read the durable status of a Git Workspace creation operation by operationId." },
+  connectionTool,
   { name: "workbench_review_preview", description: "Preview review context without starting a Reviewer." },
   { name: "workbench_review_execute", description: "Start or continue the Workspace Agent Review orchestration." },
   { name: "workbench_review_status", description: "Read the current and historical Agent Review status." },
@@ -49,9 +54,9 @@ function runtimeContext(overrides = {}) {
       env.WORKBENCH_EXECUTION_REPORT_ONLY === "1" ? "execution-report" :
         env.WORKBENCH_EXECUTION_REPORT === "1" ? "worker" : "interactive");
   return {
-    endpoint: overrides.endpoint || env.WORKBENCH_PASEO_ENDPOINT,
-    projectConfig: overrides.projectConfig || env.WORKBENCH_PROJECT_CONFIG,
-    token: overrides.token || env.WORKBENCH_AGENT_TOKEN || env.WORKBENCH_REVIEW_TOKEN,
+    endpoint: overrides.endpoint || localPaseoEndpoint() || env.WORKBENCH_PASEO_ENDPOINT,
+    projectConfig: Object.hasOwn(overrides, "projectConfig") ? overrides.projectConfig : env.WORKBENCH_PROJECT_CONFIG,
+    token: Object.hasOwn(overrides, "token") ? overrides.token : env.WORKBENCH_AGENT_TOKEN || env.WORKBENCH_REVIEW_TOKEN,
     role,
     reviewOnly: role === "reviewer" || env.WORKBENCH_REVIEW_ONLY === "1",
     executionReportOnly: role === "execution-report" || env.WORKBENCH_EXECUTION_REPORT_ONLY === "1",
@@ -66,9 +71,9 @@ function runtimeContext(overrides = {}) {
 
 function toolsFor(runtime) {
   return runtime.reviewOnly
-  ? [...roleTools.filter((tool) => tool.name === "workbench_reviewer_read" || tool.name === "workbench_reviewer_result"), ...materialTools]
+  ? [...roleTools.filter((tool) => tool.name === "workbench_reviewer_read" || tool.name === "workbench_reviewer_result"), ...materialTools, connectionTool]
   : runtime.executionReportOnly
-  ? [...roleTools.filter((tool) => tool.name === "workbench_execution_report"), ...materialTools]
+  ? [...roleTools.filter((tool) => tool.name === "workbench_execution_report"), ...materialTools, connectionTool]
   : runtime.executionReport
   ? independentWorkerTools
   : publicTools;
@@ -280,6 +285,7 @@ function callArguments(message) {
   return direct;
 }
 function toolInputSchema(name) {
+  if (name === "workbench_connection_status") return { type: "object", additionalProperties: false, properties: {} };
   return extraSchema(name) || (name === "workbench_artifact_register" ? artifactRegisterSchema
     : name === "workbench_reviewer_read" ? reviewerReadSchema
     : name === "workbench_reviewer_result" ? reviewerResultSchema
@@ -301,7 +307,7 @@ function toolDescriptor(tool) {
     ...tool,
     inputSchema: toolInputSchema(tool.name),
     annotations: {
-      readOnlyHint: !["workbench_workspace_preview", "workbench_workspace_submit", "workbench_workspace_create", "workbench_workspace_delegate", "workbench_workspace_add_repositories", "workbench_session_message", "workbench_session_stop", "workbench_review_read", "workbench_review_result", "workbench_artifact_register", "workbench_workspace_execute", "workbench_review_execute", "workbench_review_stop", "workbench_review_resume", "workbench_reviewer_result", "workbench_execution_report"].includes(tool.name),
+      readOnlyHint: !isMutation(tool.name),
       destructiveHint: tool.name === "workbench_session_stop",
     },
   };
@@ -335,7 +341,14 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
   if (message.method === "tools/list") return { tools: tools.map(toolDescriptor) };
   if (message.method !== "tools/call") throw new Error("method_not_found");
   const tool = tools.find((value) => message.params?.name === value.name);
-  const args = callArguments(message);
+  let args = callArguments(message);
+  if (tool?.name === "workbench_connection_status") {
+    const status = await probePaseo();
+    return { content: [{ type: "text", text: JSON.stringify(status) }], isError: !status.ok };
+  }
+  if ((tool?.name === "workbench_workspace_create" || tool?.name === "workbench_workspace_submit") && !args.requestId) {
+    args = { ...args, requestId: stableRequestId(tool.name === "workbench_workspace_create" ? "create" : "submit", runtime.projectConfig, args) };
+  }
   const action = tool?.name === "workbench_artifact_register" ? "artifact_register" : tool?.name === "workbench_execution_report" ? "execution_report" : tool ? reviewerActions.get(tool.name) || tool.name.replace("workbench_workspace_", "") : null;
   const reviewerAction = action === "reviewer_read" || action === "reviewer_result";
   const materialAction = Boolean(tool?.name.startsWith("workbench_handoff_"));
@@ -347,7 +360,16 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
     return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: { code: "workspace_status_request_id_required", message: "workbench_workspace_status requires the requestId returned by workspace_submit, preview, or execute; use workbench_workspace_operation_status with operationId for Git creation status." } }) }], isError: true };
   }
   const needsToken = (!directWorkspaceAction || tool?.name === "workbench_workspace_preview") && !runtime.token;
-  if ((!action && !reviewTool && !extra) || !runtime.endpoint || !runtime.projectConfig || needsToken) throw new Error("workbench_context_unavailable");
+  const failure = (code, dispatched = false) => ({ content: [{ type: "text", text: JSON.stringify({ ok: false,
+    error: { code: code.split(":")[0], message: code, retryable: !dispatched && /unavailable|timeout|not_dispatched/.test(code), dispatched,
+      nextAction: dispatched ? "check_status_then_retry_same_identity" : "check_connection_then_retry_same_identity",
+      ...(args.requestId ? { requestId: args.requestId } : {}),
+      ...(tool?.name === "workbench_workspace_create" ? { statusTool: "workbench_workspace_operation_status" }
+        : tool?.name === "workbench_workspace_submit" ? { statusTool: "workbench_workspace_status" } : {}) } }) }], isError: true });
+  if (!action && !reviewTool && !extra) return failure("workbench_tool_unavailable");
+  if (!runtime.endpoint) return failure("workbench_paseo_endpoint_unavailable");
+  if (!runtime.projectConfig) return failure("workbench_project_config_unavailable");
+  if (needsToken) return failure("workbench_agent_token_unavailable");
   const sockets = new Set();
   const client = new DaemonClient({ url: runtime.endpoint, clientId: `workbench-mcp-${randomUUID()}`, clientType: "mcp", reconnect: { enabled: false },
     webSocketFactory: (url, options) => {
@@ -356,9 +378,10 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
       return socket;
     },
   });
-  if (action === "submit" && typeof args.task !== "string") throw new Error("workbench_submit_task_missing");
+  if (action === "submit" && typeof args.task !== "string") return failure("workbench_submit_task_missing");
   const context = callContext(runtime, args);
-  const result = await withMcpConnection(client, () => (
+  let result;
+  try { result = await withMcpConnection(client, () => (
         directWorkspaceAction
         ? client.invokePluginRpc("workspace-workbench-paseo", tool.name === "workbench_workspace_create"
           ? "workspace.workbench.workspace-create"
@@ -390,8 +413,12 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
               if (!controlAction) return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.start", reviewContext);
               return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.agent-review.control", { ...reviewContext, action: controlAction });
             })()
-          : client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.orchestrate", { action, request: action === "submit" && !args.requestId ? { ...args, requestId: randomUUID() } : args, projectConfig: runtime.projectConfig, token: runtime.token })
-  ), { ...lifecycle, forceClose: () => { for (const socket of sockets) socket.terminate(); sockets.clear(); } });
+          : client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.orchestrate", { action, request: args, projectConfig: runtime.projectConfig, token: runtime.token })
+  ), { ...lifecycle, forceClose: () => { for (const socket of sockets) socket.terminate(); sockets.clear(); } }); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return failure(message, Boolean(error?.workbenchDispatched) || message.startsWith("workbench_request_uncertain_retry_same_identity:"));
+  }
   if (materialAction && result?.image) {
     const { image, ...metadata } = result;
     return { content: [{ type: "text", text: JSON.stringify(metadata) }, { type: "image", data: image.data, mimeType: image.mimeType }], isError: false };

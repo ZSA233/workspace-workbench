@@ -76,11 +76,17 @@ for (const project of ["a", "b"]) {
   );
 }
 writeFileSync(registry, JSON.stringify({ configs }));
+const listener = createServer();
+await new Promise((r) => listener.listen(0, "127.0.0.1", r));
+const port = listener.address().port;
+await new Promise((r) => listener.close(r));
 writeFileSync(
   join(home, "config.json"),
   JSON.stringify({
     version: 1,
     pluginsEnabled: true,
+    daemon: { listen: `127.0.0.1:${port}`, relay: { enabled: false }, mcp: { enabled: false, injectIntoAgents: false } },
+    features: { webUi: { enabled: process.env.WORKBENCH_LIVE_UI === "1" } },
     plugins: {
       "workspace-workbench-paseo": {
         source: "directory",
@@ -90,10 +96,6 @@ writeFileSync(
     },
   }),
 );
-const listener = createServer();
-await new Promise((r) => listener.listen(0, "127.0.0.1", r));
-const port = listener.address().port;
-await new Promise((r) => listener.close(r));
 for (const config of configs) {
   const value = JSON.parse(readFileSync(config, "utf8"));
   value.agent = { provider: "paseo", bridge: { script: join(plugin, "mcp.mjs"), endpoint: `127.0.0.1:${port}` } };
@@ -114,16 +116,9 @@ const daemon = spawn(
   cli,
   [
     "daemon",
-    "start",
+    "run",
     "--home",
     home,
-    "--listen",
-    `127.0.0.1:${port}`,
-    "--foreground",
-    "--no-relay",
-    "--no-mcp",
-    "--no-inject-mcp",
-    process.env.WORKBENCH_LIVE_UI === "1" ? "--web-ui" : "--no-web-ui",
   ],
   { env, stdio: ["ignore", "pipe", "pipe"] },
 );
@@ -212,10 +207,32 @@ try {
   assert.equal(pluginStatus.hostTransport.state, "connected");
   assert.ok(pluginStatus.rpcMetrics.methods["workspace.workbench.query:observer.health"].count >= 1);
   assert.ok(pluginStatus.rpcMetrics.memory.rss > 0);
-  const gatewayStatus = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.mcp.status", {});
+  const gatewayStatus = await wait(async () => {
+    const status = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.mcp.status", {});
+    return status.state === "ready" ? status : null;
+  });
   assert.equal(gatewayStatus.transport, "http");
   assert.equal(gatewayStatus.scope, "plugin-generation");
   assert.equal(gatewayStatus.state, "ready");
+  const gatewayState = JSON.parse(readFileSync(join(home, "workspace-workbench", "gateway.json"), "utf8"));
+  const gatewayUrl = `http://127.0.0.1:${gatewayState.port}/mcp`;
+  const mcpHeaders = { "content-type": "application/json", "X-Workbench-Gateway-Key": gatewayState.key,
+    "X-Workbench-Project": configs[0], "X-Workbench-Role": "interactive" };
+  const mcpCall = async (id, name, args) => {
+    const response = await fetch(gatewayUrl, { method: "POST", headers: mcpHeaders,
+      body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }) });
+    const body = await response.json();
+    if (response.status !== 200 || body.error) throw new Error(`MCP HTTP call failed: ${response.status} ${JSON.stringify(body.error)}`);
+    const payload = JSON.parse(body.result.content[0].text);
+    assert.equal(body.result.isError, false, JSON.stringify(payload));
+    return payload;
+  };
+  const mcpBeforeReload = await mcpCall("mcp-before-reload", "workbench_workspace_create", {
+    name: "mcp-before-reload", repositories: ["two"], baseRefs: {},
+  });
+  assert.equal(mcpBeforeReload.ok, true);
+  assert.match(mcpBeforeReload.operationId, /^workbench-create-/);
+  report.checks.push("real MCP HTTP routed a Git Workspace create through the actual Paseo plugin");
   report.checks.push("plugin generation starts one stable HTTP MCP gateway before the first Agent request");
   report.checks.push("plugin status distinguishes host API transport, per-method RPC counts and plugin-process memory");
   assert.notEqual(health[0].result.process.pid, health[1].result.process.pid);
@@ -403,6 +420,22 @@ try {
     ],
     { env, timeout: 120000, stdio: ["ignore", "pipe", "pipe"] },
   );
+  const gatewayAfterReload = await wait(() => {
+    const state = JSON.parse(readFileSync(join(home, "workspace-workbench", "gateway.json"), "utf8"));
+    return state.generation !== gatewayState.generation ? state : null;
+  });
+  const mcpAfterReload = await wait(() => mcpCall("mcp-after-reload", "workbench_workspace_create", {
+    name: "mcp-after-reload", repositories: ["three"], baseRefs: {},
+  }));
+  assert.equal(mcpAfterReload.ok, true);
+  assert.equal(gatewayAfterReload.port, gatewayState.port);
+  assert.equal(gatewayAfterReload.key, gatewayState.key);
+  assert.notEqual(gatewayAfterReload.generation, gatewayState.generation);
+  for (const workspaceId of [mcpBeforeReload.workspaceId, mcpAfterReload.workspaceId]) {
+    await rpc(configs[0], "workspace.remove", { workspaceId });
+    await rpc(configs[0], "workspace.cleanup", { workspaceId, confirm: true });
+  }
+  report.checks.push("the original MCP URL and headers worked after actual plugin reload without recreating an Agent");
   const next = [];
   for (let i = 0; i < configs.length; i++)
     next.push(

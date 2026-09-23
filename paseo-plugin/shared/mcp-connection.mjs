@@ -3,9 +3,9 @@ export async function withMcpConnection(client, invoke, options = {}) {
   const { signal, deadline = Date.now() + 55_000, connectMs = 8_000,
     closeMs = 1_000, forceClose = () => {}, diagnose = () => {} } = options;
   let dispatched = false;
-  const failure = (reason) => new Error(dispatched
+  const failure = (reason) => Object.assign(new Error(dispatched
     ? `workbench_request_uncertain_retry_same_identity:${reason}`
-    : `workbench_not_dispatched:${reason}`);
+    : `workbench_not_dispatched:${reason}`), { workbenchDispatched: dispatched });
   async function bounded(operation, ms, reason, cancellation = signal) {
     let timer, abort;
     try {
@@ -37,6 +37,9 @@ export async function withMcpConnection(client, invoke, options = {}) {
   } catch (error) {
     diagnose({ phase: 'failed', dispatched, code: String(error?.message || '').includes('timeout') ? 'timeout' : 'request_failed' });
     if (dispatched && /Transport not connected|connection.*closed|socket|timed out/i.test(String(error?.message || '')) && !String(error?.message).includes('code=handler_error')) throw failure('transport_lost');
+    if (error && typeof error === 'object') {
+      try { error.workbenchDispatched = dispatched; } catch {}
+    }
     throw error;
   } finally {
     diagnose({ phase: 'closing' });

@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { handle } from "./shared/mcp-router.mjs";
+import { requestBudget } from "./shared/mcp-policy.mjs";
+import { probePaseo } from "./shared/mcp-readiness.mjs";
 import { createDiagnosticSink } from "./server/diagnostics-runtime.mjs";
 import { createRequire } from "node:module";
 
@@ -18,21 +20,11 @@ let running = 0;
 let closing = false;
 const maxConcurrent = 4;
 const maxQueue = 16;
-const budgetMs = 55_000;
-const readTools = new Set([
-  "workbench_session_status", "workbench_session_history", "workbench_session_wait",
-  "workbench_workspace_status", "workbench_workspace_operation_status",
-  "workbench_workspace_create", "workbench_workspace_add_repositories",
-  "workbench_review_preview", "workbench_review_status",
-]);
 function projectHash(path) { return path ? createHash("sha256").update(path).digest("hex").slice(0, 12) : null; }
 function toolName(message) {
   return message?.method === "tools/call" && message?.params && typeof message.params.name === "string"
     ? message.params.name
     : undefined;
-}
-function requestBudget(message) {
-  return message?.method === "tools/call" && readTools.has(toolName(message)) ? 6_000 : budgetMs;
 }
 
 function json(res, status, body, headers = {}) {
@@ -90,13 +82,12 @@ async function run(item) {
   const started = Date.now();
   const controller = new AbortController();
   item.controller = controller;
-  const requestBudgetMs = requestBudget(item.message);
-  const timer = setTimeout(() => controller.abort("deadline"), requestBudgetMs);
+  if (Date.now() >= item.deadline) controller.abort("deadline");
   diagnostics.record({ event: "mcp_request_started", phase: "dispatch", transport: "http", requestId: item.requestId, method: item.message?.method, tool: toolName(item.message), role: item.context.role, projectHash: projectHash(item.context.projectConfig), queueMs: Math.max(0, started - item.enqueuedAt) });
   try {
     const result = await handle(item.message, {
       signal: controller.signal,
-      deadline: Date.now() + requestBudgetMs,
+      deadline: item.deadline,
       diagnose: event => diagnostics.record({ ...event, event: event.code === "cleanup_failed" ? "mcp_cleanup_failed" : "mcp_request_phase", requestId: item.requestId, phase: event.phase }),
     }, item.context);
     if (!item.response.writableEnded && !item.response.destroyed) json(item.response, 200, { jsonrpc: "2.0", id: item.message.id ?? null, result: item.message.method === "ping" || item.message.method === "initialize" ? { ...result, _meta: { workbench: { transport: "http", pluginGeneration, gatewayGeneration: generation, gatewayPid: process.pid, version: packageMetadata.version } } } : result });
@@ -106,7 +97,7 @@ async function run(item) {
     if (!item.response.writableEnded && !item.response.destroyed) json(item.response, /request_too_large/.test(message) ? 413 : 500, rpcError(item.message?.id, -32603, message));
     diagnostics.record({ event: controller.signal.aborted ? "mcp_request_timeout" : "mcp_request_finished", phase: controller.signal.aborted ? "cleanup" : "dispatch", transport: "http", requestId: item.requestId, method: item.message?.method, tool: toolName(item.message), projectHash: projectHash(item.context.projectConfig), queueMs: Math.max(0, started - item.enqueuedAt), durationMs: Date.now() - started, errorCode: controller.signal.aborted ? "request_timeout" : "request_failed", reason: message });
   } finally {
-    clearTimeout(timer);
+    clearTimeout(item.timer);
     active.delete(item);
     running--;
     drain();
@@ -128,6 +119,7 @@ function cancelQueuedOrActive(item, reason) {
   if (item.phase === "queued") {
     const index = queue.indexOf(item);
     if (index >= 0) queue.splice(index, 1);
+    clearTimeout(item.timer);
   }
   diagnostics.record({ event: "mcp_request_canceled", phase: "cleanup", transport: "http", requestId: item.requestId, reason });
   drain();
@@ -136,6 +128,14 @@ function cancelQueuedOrActive(item, reason) {
 async function onRequest(req, res) {
   if (req.url === "/health" && req.method === "GET") {
     json(res, 200, { ok: true, component: "workbench-mcp-gateway", pluginGeneration, generation, pid: process.pid, parentPid, active: running, queued: queue.length });
+    return;
+  }
+  if (req.url === "/ready" && req.method === "GET") {
+    if (!key || req.headers["x-workbench-gateway-key"] !== key) {
+      json(res, 401, { ok: false, stage: "gateway", code: "gateway_key_invalid" }); return;
+    }
+    const result = await probePaseo();
+    json(res, result.ok ? 200 : 503, { ...result, generation, pid: process.pid });
     return;
   }
   if (req.url !== "/mcp" || req.method !== "POST") {
@@ -157,7 +157,15 @@ async function onRequest(req, res) {
     if (!res.destroyed) json(res, 429, rpcError(message.id, -32004, "workbench_busy_not_dispatched"));
     return;
   }
-  const item = { message, response: res, requestId: String(message.id || randomUUID()), context: requestContext(req), controller: null, phase: "queued", canceled: false, enqueuedAt: Date.now() };
+  const enqueuedAt = Date.now();
+  const deadline = enqueuedAt + requestBudget(message);
+  const item = { message, response: res, requestId: String(message.id || randomUUID()), context: requestContext(req), controller: null, phase: "queued", canceled: false, enqueuedAt, deadline, timer: null };
+  item.timer = setTimeout(() => {
+    if (item.phase === "queued" && !item.canceled) {
+      cancelQueuedOrActive(item, "deadline");
+      json(res, 504, rpcError(message.id, -32008, "workbench_not_dispatched:queue_timeout"));
+    } else item.controller?.abort("deadline");
+  }, Math.max(0, deadline - Date.now()));
   const onDisconnect = () => {
     if (!res.writableEnded) cancelQueuedOrActive(item, "client_disconnected");
   };
@@ -172,10 +180,7 @@ server.on("error", error => {
   const code = error?.code || "server_error";
   const reason = error?.message || String(error);
   diagnostics.record({ event: "gateway_error", phase: "connect", errorCode: code, reason });
-  // A listen failure must not leave the parent waiting for a ready line while
-  // the parent-watch timer keeps this child alive. Emit a machine-readable
-  // stderr line and terminate so McpGatewayManager can observe the failure and
-  // retry with an OS-assigned loopback port when appropriate.
+  // Fail the child so its owner can retry the same reserved address.
   try { process.stderr.write(`workbench_gateway_error ${code} ${reason}\n`); } catch {}
   process.exitCode = 1;
   process.exit(1);
@@ -186,7 +191,10 @@ function close() {
   closing = true;
   diagnostics.record({ event: "gateway_shutdown_started", phase: "cleanup" });
   for (const item of active) item.controller?.abort("gateway_shutdown");
-  for (const item of queue.splice(0)) if (!item.response.writableEnded) json(item.response, 503, rpcError(item.message?.id, -32005, "workbench_gateway_closing"));
+  for (const item of queue.splice(0)) {
+    clearTimeout(item.timer);
+    if (!item.response.writableEnded) json(item.response, 503, rpcError(item.message?.id, -32005, "workbench_gateway_closing"));
+  }
   server.close(() => { diagnostics.record({ event: "gateway_shutdown_finished", phase: "cleanup" }); void diagnostics.close().finally(() => process.exit(0)); });
   setTimeout(() => process.exit(0), 2_000).unref();
 }

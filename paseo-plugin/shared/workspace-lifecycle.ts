@@ -10,6 +10,7 @@ export const workspaceLifecycle = defineRpc({
     workspaceId: z.string().trim().min(1),
     action: workspaceLifecycleAction,
     confirm: z.boolean().optional(),
+    confirmDataLoss: z.boolean().optional().describe("Required for permanent deletion when the preview reports requiresDataLossConfirmation; explicitly authorizes discarding all content in the managed Workspace tree."),
   }),
   output: z.object({
     ok: z.boolean(),

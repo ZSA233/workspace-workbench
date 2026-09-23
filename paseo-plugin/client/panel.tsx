@@ -1315,12 +1315,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     }
   }, [lifecycleRpc, listQuery, localizedCopy, projectConfig, toast]);
 
-  const permanentDeleteWorkspace = useCallback(async (): Promise<void> => {
+  const permanentDeleteWorkspace = useCallback(async (confirmDataLoss: boolean): Promise<void> => {
     if (!lifecycleWorkspaceId) return;
     setLifecycleBusyWorkspaceId(lifecycleWorkspaceId);
     setLifecycleError(null);
     try {
-      const result = await lifecycleRpc({ projectConfig, workspaceId: lifecycleWorkspaceId, action: "delete", confirm: true });
+      const result = await lifecycleRpc({ projectConfig, workspaceId: lifecycleWorkspaceId, action: "delete", confirm: true, confirmDataLoss });
       setLifecycleResponse(result);
       if (!result.ok) {
         const message = result.error?.message || localizedCopy.workspaceDeleteFailed;
@@ -1801,7 +1801,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           const target = observedWorkspaces.find((workspace) => workspace.id === lifecycleWorkspaceId);
           if (target) void restoreWorkspace(target);
         }}
-        onConfirmPermanent={() => { void permanentDeleteWorkspace(); }}
+        onConfirmPermanent={(confirmDataLoss) => { void permanentDeleteWorkspace(confirmDataLoss); }}
         onOpenTask={openWorkspaceTask}
         theme={theme}
         styles={styles}

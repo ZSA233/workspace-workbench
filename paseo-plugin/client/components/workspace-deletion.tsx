@@ -1,5 +1,6 @@
 import { Modal } from "../native-components";
 import { Platform, Pressable, Text, View } from "react-native";
+import { useEffect, useState } from "react";
 import { formatCopyFrom } from "../../shared/copy";
 import type { WorkspaceLifecycleResponse } from "../../shared/workspace-lifecycle";
 import type { WorkspaceDeletionImpact, WorkspaceSummary, WorkspaceTask } from "../model";
@@ -53,12 +54,14 @@ export function WorkspaceDeletionPanel({
   onClose: () => void;
   onRemove: () => void;
   onRestore: () => void;
-  onConfirmPermanent: () => void;
+  onConfirmPermanent: (confirmDataLoss: boolean) => void;
   onOpenTask?: (task: WorkspaceTask) => void;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
   const copy = useWorkbenchCopy();
+  const [confirmingDataLoss, setConfirmingDataLoss] = useState(false);
+  useEffect(() => { setConfirmingDataLoss(false); }, [open, workspace?.id, mode]);
   if (!open || !workspace || isMainWorkspace(workspace)) return null;
   const impact = isImpact(response?.result) ? response.result : null;
   const tasks = response ? response.activeTasks : workspace.deletion?.activeTasks || [];
@@ -74,6 +77,28 @@ export function WorkspaceDeletionPanel({
   const blockedIssues = mode === "permanent" && impact?.canDelete === false
     ? impact.issues?.length ? impact.issues : impact.blockedReason ? [{ code: impact.blockedReason, message: "" }] : []
     : [];
+  if (confirmingDataLoss && mode === "permanent") {
+    const summary = impact?.dataLossSummary;
+    return <Modal open onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }} title={copy.workspaceDeleteDataLossTitle}>
+      <Modal.Content scrollable={Platform.OS === "web"} style={styles.deletionModalContent} contentContainerStyle={styles.deletionModalBody}>
+        <Text style={styles.deletionModalTitle}>{workspaceDisplayName(workspace, copy)}</Text>
+        <Text style={styles.deletionModalText}>{copy.workspaceDeleteDataLossDescription}</Text>
+        {summary?.repositories.map((repository) => <View key={repository.repositoryId} style={styles.deletionModalSection}>
+          <Text style={styles.deletionModalSectionTitle}>{formatCopyFrom(copy, "workspaceDeleteDataLossRepository", [repository.repositoryId, repository.pathCount])}</Text>
+          {repository.paths.slice(0, 5).map((path, index) => <Text key={`${path}-${index}`} selectable style={styles.deletionModalRowText}>• {path}</Text>)}
+          {repository.scanUnavailable ? <Text style={styles.deletionModalDanger}>{copy.workspaceDeleteDataLossIncomplete}</Text> : null}
+        </View>)}
+        {summary?.extraPathCount ? <Text style={styles.deletionModalDanger}>{formatCopyFrom(copy, "workspaceDeleteDataLossExtra", [summary.extraPathCount])}</Text> : null}
+        {summary?.extraPaths.slice(0, 5).map((path, index) => <Text key={`${path}-${index}`} selectable style={styles.deletionModalRowText}>• {path}</Text>)}
+        {summary?.scanIncomplete && !summary.repositories.some((repository) => repository.scanUnavailable)
+          ? <Text style={styles.deletionModalDanger}>{copy.workspaceDeleteDataLossIncomplete}</Text> : null}
+        <View style={styles.deletionModalActions}>
+          <Pressable accessibilityRole="button" disabled={busy} onPress={() => setConfirmingDataLoss(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{copy.workspaceDeleteCancel}</Text></Pressable>
+          <Pressable accessibilityRole="button" disabled={busy} onPress={() => { setConfirmingDataLoss(false); onConfirmPermanent(true); }} style={[styles.copyButton, { backgroundColor: theme.colors.statusDanger, borderColor: theme.colors.statusDanger }]}><Text style={styles.copyButtonText}>{copy.workspaceDeleteDataLossConfirm}</Text></Pressable>
+        </View>
+      </Modal.Content>
+    </Modal>;
+  }
   const title = mode === "permanent" ? copy.workspacePermanentDelete : copy.workspaceDeleteTitle;
   return <Modal open onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }} title={title}>
     <Modal.Content scrollable={Platform.OS === "web"} style={styles.deletionModalContent} contentContainerStyle={styles.deletionModalBody}>
@@ -136,7 +161,10 @@ export function WorkspaceDeletionPanel({
         {(removed || pending) && mode === "inspect" ? <Pressable accessibilityRole="button" disabled={busy} onPress={onRestore} style={styles.copyButton}><Text style={styles.copyButtonText}>{copy.workspaceRestore}</Text></Pressable> : null}
         {pendingState && !tasks.length && mode === "inspect" ? <Pressable accessibilityRole="button" disabled={busy} onPress={onRemove} style={styles.copyButton}><Text style={styles.copyButtonText}>{copy.workspaceDelete}</Text></Pressable> : null}
         {!removed && mode === "inspect" && !pendingState ? <Pressable accessibilityRole="button" disabled={busy} onPress={onRemove} style={styles.copyButton}><Text style={styles.copyButtonText}>{copy.workspaceDelete}</Text></Pressable> : null}
-        {removed && mode === "permanent" ? <Pressable accessibilityRole="button" disabled={busy || impact?.canDelete === false} onPress={onConfirmPermanent} style={[styles.copyButton, { backgroundColor: theme.colors.statusDanger, borderColor: theme.colors.statusDanger }]}><Text style={styles.copyButtonText}>{copy.workspaceDeleteConfirm}</Text></Pressable> : null}
+        {removed && mode === "permanent" ? <Pressable accessibilityRole="button" disabled={busy || impact?.canDelete === false} onPress={() => {
+          if (impact?.requiresDataLossConfirmation) setConfirmingDataLoss(true);
+          else onConfirmPermanent(false);
+        }} style={[styles.copyButton, { backgroundColor: theme.colors.statusDanger, borderColor: theme.colors.statusDanger }]}><Text style={styles.copyButtonText}>{impact?.requiresDataLossConfirmation ? copy.workspaceDeleteDataLossContinue : copy.workspaceDeleteConfirm}</Text></Pressable> : null}
       </View>
     </Modal.Content>
   </Modal>;

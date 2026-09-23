@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   realpathSync,
   mkdirSync,
+  existsSync,
   writeFileSync,
   readFileSync,
   rmSync,
@@ -251,19 +252,37 @@ test("native additions recover partial failures, timeouts, and preserve modified
     );
     assert.equal(service.workspaces.get("sample").createdAt, initial.createdAt);
     writeFileSync(join(initial.treePath, "one/README.md"), "user changes\n");
+    writeFileSync(join(initial.treePath, "one/.gitignore"), ".cache/\n");
+    mkdirSync(join(initial.treePath, "one/.cache"), { recursive: true });
+    writeFileSync(join(initial.treePath, "one/.cache/ignored.bin"), "ignored cache\n");
+    writeFileSync(join(initial.treePath, "extra.txt"), "extra workspace content\n");
+    const outside = join(f.root, "outside-target");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "keep.txt"), "outside\n");
+    symlinkSync(outside, join(initial.treePath, "outside-link"));
+    mkdirSync(f.config.cacheRoot, { recursive: true });
+    const externalCache = join(f.config.cacheRoot, "keep.bin");
+    writeFileSync(externalCache, "cache stays\n");
     await service.handle("workspace.remove", { workspaceId: "sample" });
+    const preview = await service.handle("workspace.delete", { workspaceId: "sample", confirm: false });
+    assert.equal(preview.canDelete, true);
+    assert.equal(preview.requiresDataLossConfirmation, true);
+    assert.ok(preview.dataLossSummary.repositories.some((repo: { repositoryId: string; paths: string[] }) =>
+      repo.repositoryId === "one" && repo.paths.some((path) => path.includes(".cache"))));
+    assert.ok(preview.dataLossSummary.extraPaths.includes("extra.txt"));
     await assert.rejects(
       service.handle("workspace.delete", {
         workspaceId: "sample",
         confirm: true,
       }),
-      /user changes/,
+      /Explicit data-loss confirmation is required/,
     );
-    await service.handle("workspace.restore", { workspaceId: "sample" });
-    assert.equal(
-      readFileSync(join(initial.treePath, "one/README.md"), "utf8"),
-      "user changes\n",
-    );
+    assert.equal(readFileSync(join(initial.treePath, "one/README.md"), "utf8"), "user changes\n");
+    const deleted = await service.handle("workspace.delete", { workspaceId: "sample", confirm: true, confirmDataLoss: true });
+    assert.equal(deleted.deleted, true);
+    assert.equal(existsSync(initial.treePath), false);
+    assert.equal(readFileSync(join(outside, "keep.txt"), "utf8"), "outside\n");
+    assert.equal(readFileSync(externalCache, "utf8"), "cache stays\n");
   } finally {
     Git.prototype.run = original;
     await service.close();
@@ -563,6 +582,56 @@ test("activity and path traversal fail closed while branch-backed commits surviv
       assert.equal(git(source, ["rev-parse", `refs/heads/${preservedBranches[repositoryId]}`]), committedHeads[repositoryId]);
       assert.equal(git(source, ["cat-file", "-e", `${committedHeads[repositoryId]}^{commit}`]), "");
     }
+  } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("partial permanent deletion retains the record and can be retried", async () => {
+  const f = fixture(), service = new Service(f.config), original = Git.prototype.run;
+  let failSecondRepository = true;
+  try {
+    const workspace = await service.handle("workspace.create", { name: "partial-delete", repositories: ["one", "two"] });
+    writeFileSync(join(workspace.treePath, "one/README.md"), "dirty\n");
+    await service.handle("workspace.remove", { workspaceId: workspace.id });
+    Git.prototype.run = async function (args, check = true) {
+      if (failSecondRepository && this.path.endsWith("/two") && args[0] === "worktree" && args[1] === "remove")
+        throw new WorkbenchError("injected_delete_failure", "injected second repository failure");
+      return original.call(this, args, check);
+    };
+    await assert.rejects(service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true, confirmDataLoss: true }), /injected second repository failure/);
+    assert.equal(existsSync(service.workspaces.recordPath(workspace.id)), true);
+    assert.equal(existsSync(workspace.repositories.find((repo: { id: string }) => repo.id === "one").worktreePath), false);
+    assert.equal(existsSync(workspace.repositories.find((repo: { id: string }) => repo.id === "two").worktreePath), true);
+    assert.equal(service.workspaces.get(workspace.id).permanentDeletion.status, "in_progress");
+    assert.throws(() => service.workspaces.restore({ workspaceId: workspace.id }), /must be retried before restoring/);
+    failSecondRepository = false;
+    const deleted = await service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true, confirmDataLoss: true });
+    assert.equal(deleted.deleted, true);
+    assert.equal(existsSync(service.workspaces.recordPath(workspace.id)), false);
+    assert.equal(existsSync(workspace.treePath), false);
+  } finally {
+    Git.prototype.run = original;
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("permanent deletion never removes a configured cache root inside the managed tree", async () => {
+  const f = fixture(), service = new Service(f.config);
+  try {
+    const workspace = await service.handle("workspace.create", { name: "cache-boundary", repositories: ["one"] });
+    const cacheRoot = join(workspace.treePath, "one", ".cache");
+    mkdirSync(cacheRoot, { recursive: true });
+    writeFileSync(join(cacheRoot, "keep.bin"), "cache\n");
+    service.workspaces.config.cacheRoot = cacheRoot;
+    await service.handle("workspace.remove", { workspaceId: workspace.id });
+    const preview = await service.handle("workspace.delete", { workspaceId: workspace.id, confirm: false });
+    assert.equal(preview.canDelete, false);
+    assert.equal(preview.blockedReason, "workspace_cache_overlap");
+    assert.equal(readFileSync(join(cacheRoot, "keep.bin"), "utf8"), "cache\n");
+    assert.equal(existsSync(workspace.treePath), true);
   } finally {
     await service.close();
     rmSync(f.root, { recursive: true, force: true });

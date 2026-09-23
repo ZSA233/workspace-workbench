@@ -14,6 +14,7 @@ import {
   rmSync,
   existsSync,
   unlinkSync,
+  symlinkSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
@@ -281,6 +282,45 @@ try {
   await rpc(configs[0], "workspace.remove", { workspaceId: directCreate.workspaceId });
   await rpc(configs[0], "workspace.cleanup", { workspaceId: directCreate.workspaceId, confirm: true });
   report.checks.push("direct Workspace create/status RPC completed without Agent context or handoff");
+  const dirtyCreate = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.workspace-create", {
+    projectConfig: configs[0], requestId: "data-loss-confirmation-live", name: "data-loss-confirmation-live", repositories: ["one"], baseRefs: {},
+  });
+  assert.equal(dirtyCreate.ok, true, JSON.stringify(dirtyCreate));
+  const dirtyDetail = await rpc(configs[0], "workspace.detail", { workspaceId: dirtyCreate.workspaceId });
+  const dirtyTree = dirtyDetail.result.workspace.treePath;
+  const dirtyRepo = join(dirtyTree, "one");
+  writeFileSync(join(dirtyRepo, ".gitignore"), ".cache/\n");
+  mkdirSync(join(dirtyRepo, ".cache"));
+  writeFileSync(join(dirtyRepo, ".cache", "ignored.bin"), "ignored\n");
+  writeFileSync(join(dirtyRepo, "untracked.txt"), "discard only after confirmation\n");
+  writeFileSync(join(dirtyTree, "extra.txt"), "workspace-level extra\n");
+  const outsideWorkspace = join(root, "outside-workspace-target");
+  mkdirSync(outsideWorkspace);
+  writeFileSync(join(outsideWorkspace, "keep.txt"), "outside\n");
+  symlinkSync(outsideWorkspace, join(dirtyTree, "outside-link"));
+  const externalCache = join(root, "a", "state", "cache", "keep.bin");
+  mkdirSync(join(root, "a", "state", "cache"), { recursive: true });
+  writeFileSync(externalCache, "external cache\n");
+  const branch = git(dirtyRepo, ["branch", "--show-current"]);
+  const head = git(dirtyRepo, ["rev-parse", "HEAD"]);
+  await rpc(configs[0], "workspace.remove", { workspaceId: dirtyCreate.workspaceId });
+  const deniedDirtyDelete = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.lifecycle", {
+    projectConfig: configs[0], workspaceId: dirtyCreate.workspaceId, action: "delete", confirm: true,
+  });
+  assert.equal(deniedDirtyDelete.ok, false);
+  assert.equal(deniedDirtyDelete.error.code, "workspace_data_loss_confirmation_required");
+  assert.equal(deniedDirtyDelete.result.requiresDataLossConfirmation, true);
+  assert.equal(existsSync(dirtyTree), true);
+  const confirmedDirtyDelete = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.lifecycle", {
+    projectConfig: configs[0], workspaceId: dirtyCreate.workspaceId, action: "delete", confirm: true, confirmDataLoss: true,
+  });
+  assert.equal(confirmedDirtyDelete.ok, true, JSON.stringify(confirmedDirtyDelete));
+  assert.equal(confirmedDirtyDelete.result.deleted, true);
+  assert.equal(existsSync(dirtyTree), false);
+  assert.equal(readFileSync(join(outsideWorkspace, "keep.txt"), "utf8"), "outside\n");
+  assert.equal(readFileSync(externalCache, "utf8"), "external cache\n");
+  assert.equal(git(join(root, "a", "one"), ["rev-parse", `refs/heads/${branch}`]), head);
+  report.checks.push("actual lifecycle RPC required confirmDataLoss for dirty, ignored and extra worktree contents; deletion preserved outside data, cache and branch");
   const created = await rpc(configs[0], "workspace.create", {
     name: "sample",
     repositories: ["one"],

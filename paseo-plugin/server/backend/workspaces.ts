@@ -7,8 +7,9 @@ import {
   readdirSync,
   unlinkSync,
   rmdirSync,
+  rmSync,
 } from "node:fs";
-import { join, resolve, basename, dirname, relative } from "node:path";
+import { join, resolve, basename, dirname, relative, isAbsolute } from "node:path";
 import { discover, type Config, type Repository, repositoryPath } from "./config.ts";
 import { Git } from "./git.ts";
 import { childPath, indexGitlinks, commitGitlinks, linkedCandidates, type Gitlink } from "./gitlinks.ts";
@@ -1132,43 +1133,153 @@ export class Workspaces {
       existingRepositories,
     };
   }
+  private assertDeletionBoundary(workspace: Json) {
+    const treePath = String(workspace.treePath || "");
+    if (!treePath || !inside(treePath, this.config.treesRoot) ||
+      (existsSync(treePath) && lstatSync(treePath).isSymbolicLink()))
+      throw new WorkbenchError("workspace_path_invalid", "Workspace path is outside its managed tree");
+
+    const protectedPaths = [this.config.cacheRoot, join(this.config.stateRoot, "toolchains")];
+    for (const protectedPath of protectedPaths) {
+      if (inside(protectedPath, treePath, true) || inside(treePath, protectedPath, true))
+        throw new WorkbenchError("workspace_cache_overlap", "A protected cache path overlaps the Workspace tree");
+    }
+    if (inside(this.recordPath(workspace.id), treePath, true))
+      throw new WorkbenchError("workspace_path_invalid", "Workspace record overlaps its managed tree");
+  }
+
+  private workspaceExtraEntries(workspace: Json): { count: number; paths: string[]; scanIncomplete: boolean } {
+    const treePath = String(workspace.treePath || "");
+    if (!existsSync(treePath)) return { count: 0, paths: [], scanIncomplete: false };
+    try {
+      const rootStat = lstatSync(treePath);
+      if (!rootStat.isDirectory() || rootStat.isSymbolicLink())
+        return { count: 0, paths: [], scanIncomplete: true };
+    } catch { return { count: 0, paths: [], scanIncomplete: true }; }
+
+    // A Gitlink root is itself a repository; Git status covers its top-level files.
+    if (workspace.repositories.some((repo: Json) => resolve(repo.worktreePath) === resolve(treePath)))
+      return { count: 0, paths: [], scanIncomplete: false };
+
+    const allowed = new Map<string, Set<string>>();
+    const allow = (parent: string, name: string) => {
+      const names = allowed.get(parent) || new Set<string>();
+      names.add(name);
+      allowed.set(parent, names);
+    };
+    for (const repo of workspace.repositories) {
+      const relativePath = relative(resolve(treePath), resolve(String(repo.worktreePath || "")));
+      if (!relativePath || relativePath === ".") continue;
+      if (relativePath === ".." || relativePath.startsWith("../") || relativePath.startsWith("..\\") || isAbsolute(relativePath))
+        continue;
+      const parts = relativePath.split(/[\\/]/).filter(Boolean);
+      let parent = treePath;
+      for (const part of parts) {
+        allow(parent, part);
+        parent = join(parent, part);
+      }
+    }
+    if (workspace.layout !== "gitlink") {
+      allow(treePath, ".workspace");
+      allow(join(treePath, ".workspace"), "manifest.json");
+    }
+
+    const paths: string[] = [];
+    let count = 0;
+    let scanIncomplete = false;
+    for (const [directory, names] of allowed) {
+      if (!existsSync(directory)) continue;
+      try {
+        const stat = lstatSync(directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) {
+          count++;
+          if (paths.length < 20) paths.push(relative(treePath, directory) || ".");
+          continue;
+        }
+        for (const name of readdirSync(directory)) {
+          if (names.has(name)) continue;
+          count++;
+          if (paths.length < 20) paths.push(relative(treePath, join(directory, name)));
+        }
+      } catch { scanIncomplete = true; }
+    }
+    return { count, paths, scanIncomplete };
+  }
+
   async impact(workspace: Json) {
     const repositories: Json[] = [],
       externalReferences: Json[] = [];
+    let scanIncomplete = false;
+    let boundaryValid = true;
+    try { this.assertDeletionBoundary(workspace); }
+    catch { boundaryValid = false; scanIncomplete = true; }
     for (const repo of workspace.repositories) {
       const exists = existsSync(repo.worktreePath);
       let dirtyPaths: string[] = [],
+        dirtyPathCount = 0,
         unavailable = false;
       try {
-        if (exists)
-          dirtyPaths = (
-            await new Git(repo.worktreePath, this.config.gitTimeout).status(repo.role === "gitlink-root")
-          ).map(([, path]) => path);
+        if (exists) {
+          if (!boundaryValid || !inside(repo.worktreePath, workspace.treePath, true)) throw new Error("worktree path outside Workspace tree");
+          const statuses = await new Git(repo.worktreePath, this.config.gitTimeout).status(repo.role === "gitlink-root", true);
+          dirtyPathCount = statuses.length;
+          dirtyPaths = statuses.slice(0, 20).map(([, path]) => path.split("\0").join(" → "));
+        }
       } catch {
         unavailable = true;
+        scanIncomplete = true;
       }
       repositories.push({
         ...repo,
         worktreeExists: exists,
-        dirty: !!dirtyPaths.length || unavailable,
+        dirty: dirtyPathCount > 0 || unavailable,
         dirtyPaths,
+        dirtyPathCount,
       });
     }
+    const extra = this.workspaceExtraEntries(workspace);
+    scanIncomplete ||= extra.scanIncomplete;
+    const detachedSafetyRefs: Json[] = [];
+    for (const repo of (boundaryValid ? workspace.repositories : []).filter((item: Json) => !item.branch && existsSync(item.worktreePath))) {
+      try {
+        const head = await new Git(repo.worktreePath, this.config.gitTimeout).head() || repo.adoptionHead;
+        if (head) {
+          const ref = this.safetyRefForHead(workspace, repo, head);
+          if (!detachedSafetyRefs.some((item) => item.ref === ref))
+            detachedSafetyRefs.push({ repositoryId: repo.id, ref, head });
+        }
+        if (repo.adoptionHead && repo.adoptionHead !== head) {
+          const ref = this.safetyRefForHead(workspace, repo, repo.adoptionHead);
+          if (!detachedSafetyRefs.some((item) => item.ref === ref))
+            detachedSafetyRefs.push({ repositoryId: repo.id, ref, head: repo.adoptionHead });
+        }
+      } catch { scanIncomplete = true; }
+    }
+    const dirtyRepositories = repositories.filter((repo) => repo.dirty).map((repo) => ({
+      repositoryId: String(repo.id),
+      pathCount: Number(repo.dirtyPathCount || 0),
+      paths: repo.dirtyPaths,
+      scanUnavailable: !repo.worktreeExists ? false : Number(repo.dirtyPathCount || 0) === 0 && Boolean(repo.dirty),
+    }));
+    const requiresDataLossConfirmation = dirtyRepositories.length > 0 || extra.count > 0 || scanIncomplete;
     return {
       workspaceId: workspace.id,
       treePath: workspace.treePath,
       repositories,
       repositoryCount: repositories.length,
       dirtyRepositoryCount: repositories.filter((repo) => repo.dirty).length,
-      branchesPreserved: workspace.repositories
-        .map((repo: Json) => repo.branch)
-        .filter(Boolean),
-      ...(workspace.origin === "adopted" ? { detachedSafetyRefs: workspace.repositories
-        .filter((repo: Json) => !repo.branch)
-        .map((repo: Json) => ({ repositoryId: repo.id, ref: this.safetyRef(workspace, repo), head: repo.adoptionHead })) } : {}),
+      branchesPreserved: workspace.repositories.map((repo: Json) => repo.branch).filter(Boolean),
+      ...(detachedSafetyRefs.length ? { detachedSafetyRefs } : {}),
       dirtyRepositories: repositories.filter((repo) => repo.dirty).length,
+      requiresDataLossConfirmation,
+      dataLossSummary: {
+        repositories: dirtyRepositories,
+        extraPathCount: extra.count,
+        extraPaths: extra.paths,
+        scanIncomplete,
+      },
       irreversible: true,
-      preserves: ["commits", "local branches", "external references"],
+      preserves: ["commits", "local branches", "external references", "Workbench caches"],
       loses: ["workspace record", "managed worktree files"],
       externalReferences,
       recordPath: this.recordPath(workspace.id),
@@ -1216,6 +1327,8 @@ export class Workspaces {
   }
   restore(params: Json) {
     const w = this.get(String(params.workspaceId || ""));
+    if (w.permanentDeletion?.status === "in_progress")
+      throw new WorkbenchError("workspace_delete_in_progress", "A previous permanent deletion must be retried before restoring this Workspace");
     if (
       !w.managed ||
       !["active", "removed", "deletion_pending"].includes(w.state)
@@ -1234,48 +1347,49 @@ export class Workspaces {
     this.save(w);
     return { workspaceId: w.id, restored: true, state: w.state };
   }
-  private async deletionTargets(w: Json) {
+  private async deletionTargets(w: Json, permanent = false) {
     this.assertIdle(w.id);
-    // Check all targets before removing any. Preserve user changes and commits
-    // that are not already reachable from a branch retained by permanent deletion.
-    const targets: Array<{ git: Git; path: string }> = [];
+    this.assertDeletionBoundary(w);
+    // Verify every Git boundary before removing any worktree. Permanent deletion
+    // may discard dirty contents only after the caller confirms data loss.
+    const targets: Array<{ git: Git; path: string; repositoryId: string }> = [];
     const blockers: Array<{ code: string; message: string; repositoryId: string }> = [];
     for (const repo of w.repositories) {
       if (!existsSync(repo.worktreePath)) continue;
       const target = new Git(repo.worktreePath, this.config.operationTimeout),
         source = new Git(repo.sourcePath, this.config.operationTimeout);
       try {
+        if (lstatSync(repo.worktreePath).isSymbolicLink() || !inside(repo.worktreePath, w.treePath, true))
+          throw new WorkbenchError("worktree_identity_changed", "worktree path is outside the Workspace tree");
+        const registered = await source.registered(repo.worktreePath);
         if (
           (await target.root()) !== canonical(repo.worktreePath) ||
           (await target.branch()) !== repo.branch ||
-          !(await source.registered(repo.worktreePath))
+          !registered || registered.locked
         )
           throw new WorkbenchError(
-            "worktree_identity_changed",
-            "worktree identity changed; preserved",
+            registered?.locked ? "worktree_locked" : "worktree_identity_changed",
+            registered?.locked ? "worktree is locked" : "worktree identity changed",
           );
-        if ((await target.status()).length)
-          throw new WorkbenchError(
-            "workspace_dirty",
-            "worktree has user changes; preserved",
-          );
-        const head = await target.head();
-        if (head !== (w.origin === "adopted" ? repo.adoptionHead : repo.baseSha)) {
-          const retainedBranch = repo.branch
-            ? await source.run(["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`], false)
-            : null;
-          if (!retainedBranch || retainedBranch.code !== 0 || retainedBranch.stdout.trim() !== head)
+        if (!permanent) {
+          if ((await target.status(repo.role === "gitlink-root", true)).length)
             throw new WorkbenchError(
-              "workspace_has_commits",
-              "worktree contains commits not protected by a retained branch; preserved",
+              "workspace_dirty",
+              "worktree has user changes",
             );
+          const head = await target.head();
+          if (head !== (w.origin === "adopted" ? repo.adoptionHead : repo.baseSha)) {
+            const retainedBranch = repo.branch
+              ? await source.run(["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`], false)
+              : null;
+            if (!retainedBranch || retainedBranch.code !== 0 || retainedBranch.stdout.trim() !== head)
+              throw new WorkbenchError(
+                "workspace_has_commits",
+                "worktree contains commits not protected by a retained branch",
+              );
+          }
         }
-        if (w.origin === "adopted" && !repo.branch) {
-          const ref = this.safetyRef(w, repo), existing = await source.run(["show-ref", "--verify", ref], false);
-          if (!existing.code && existing.stdout.trim().split(/\s+/)[0] !== repo.adoptionHead)
-            throw new WorkbenchError("safety_ref_conflict", "Detached HEAD safety ref changed; preserved");
-        }
-        targets.push({ git: source, path: repo.worktreePath });
+        targets.push({ git: source, path: repo.worktreePath, repositoryId: String(repo.id) });
       } catch (error) {
         const problem = issue(error);
         blockers.push({ code: problem.code, message: problem.message, repositoryId: String(repo.id) });
@@ -1284,51 +1398,89 @@ export class Workspaces {
     if (blockers.length) {
       throw new WorkbenchError(blockers[0].code, blockers[0].message, { issues: blockers });
     }
-    // Refuse unknown files in the workspace container, including cached runtime
-    // artifacts. Nothing recursively deletes an uninspected directory.
-    const allowed = new Map<string, Set<string>>();
-    for (const repo of w.repositories) {
-      const parts = relative(w.treePath, repo.worktreePath).split(/[\\/]/);
-      let parent = w.treePath;
-      for (const part of parts) {
-        const names = allowed.get(parent) || new Set<string>();
-        names.add(part); allowed.set(parent, names);
-        parent = join(parent, part);
+    if (!permanent) {
+      const extra = this.workspaceExtraEntries(w);
+      if (extra.count || extra.scanIncomplete) {
+        const metadataOnly = extra.paths.length > 0 && extra.paths.every((path) => path.startsWith(".workspace/"));
+        throw new WorkbenchError("workspace_dirty", metadataOnly ? "workspace metadata contains user files" : "workspace contains extra files", extra);
       }
     }
-    allowed.get(w.treePath)?.add(".workspace");
-    for (const [directory, names] of allowed) {
-      if (!existsSync(directory)) continue;
-      if (lstatSync(directory).isSymbolicLink() || !lstatSync(directory).isDirectory() ||
-        readdirSync(directory).some(name => !names.has(name)))
-        throw new WorkbenchError("workspace_dirty", "workspace contains extra files; preserved");
-    }
-    const metadata = join(w.treePath, ".workspace");
-    if (
-      existsSync(metadata) &&
-      (lstatSync(metadata).isSymbolicLink() || !lstatSync(metadata).isDirectory() ||
-      readdirSync(metadata).some((name) => name !== "manifest.json"))
-    )
-      throw new WorkbenchError(
-        "workspace_dirty",
-        "workspace metadata contains user files; preserved",
-      );
     return targets;
   }
   private safetyRef(workspace: Json, repo: Json) {
     return `refs/workbench/recovered/${workspace.id}/${hash(repo.id).slice(0, 16)}`;
   }
-  private async preserveDetachedHeads(workspace: Json) {
-    if (workspace.origin !== "adopted") return;
+  private safetyRefForHead(workspace: Json, repo: Json, head: string) {
+    return `${this.safetyRef(workspace, repo)}-${head}`;
+  }
+  private journalPermanentDeletion(workspace: Json, fields: Json) {
+    workspace.permanentDeletion = {
+      ...(workspace.permanentDeletion || {}),
+      ...fields,
+      startedAt: workspace.permanentDeletion?.startedAt || now(),
+      updatedAt: now(),
+      status: "in_progress",
+    };
+    const saved = this.save(workspace, false);
+    workspace.updatedAt = saved.updatedAt;
+  }
+  private async preserveDetachedHeads(workspace: Json, journal = true) {
     for (const repo of workspace.repositories) {
       if (repo.branch || !existsSync(repo.worktreePath)) continue;
-      const git = new Git(repo.sourcePath, this.config.operationTimeout), ref = this.safetyRef(workspace, repo);
-      const current = await git.run(["show-ref", "--verify", ref], false);
-      if (!current.code) {
-        if (current.stdout.trim().split(/\s+/)[0] !== repo.adoptionHead)
-          throw new WorkbenchError("safety_ref_conflict", "Detached HEAD safety ref changed; preserved");
-      } else await git.run(["update-ref", ref, repo.adoptionHead, "0000000000000000000000000000000000000000"]);
+      const target = new Git(repo.worktreePath, this.config.operationTimeout);
+      const source = new Git(repo.sourcePath, this.config.operationTimeout);
+      const currentHead = await target.head();
+      const heads = [...new Set([repo.adoptionHead, currentHead].filter((head): head is string => typeof head === "string" && !!head))];
+      for (const head of heads) {
+        const ref = this.safetyRefForHead(workspace, repo, head);
+        const current = await source.run(["show-ref", "--verify", "--hash", ref], false);
+        if (!current.code) {
+          if (current.stdout.trim() !== head)
+            throw new WorkbenchError("safety_ref_conflict", "Detached HEAD recovery reference changed");
+          continue;
+        }
+        if (journal) this.journalPermanentDeletion(workspace, { phase: "preserve_detached_head", repositoryId: repo.id, ref, head });
+        await source.run(["update-ref", ref, head, "0000000000000000000000000000000000000000"]);
+      }
     }
+  }
+  private async gitlinkDeletionTargets(workspace: Json, permanent: boolean) {
+    this.assertIdle(workspace.id);
+    this.assertDeletionBoundary(workspace);
+    const targets: Array<{ git: Git; path: string; relativePath: string; repositoryId: string }> = [];
+    for (const repo of [...workspace.repositories].reverse()) {
+      if (!existsSync(repo.worktreePath)) continue;
+      const target = new Git(repo.worktreePath, this.config.operationTimeout);
+      const source = new Git(repo.sourcePath, this.config.operationTimeout);
+      if (lstatSync(repo.worktreePath).isSymbolicLink() || !inside(repo.worktreePath, workspace.treePath, true))
+        throw new WorkbenchError("worktree_identity_changed", "Gitlink worktree path is outside the Workspace tree");
+      const registered = await source.registered(repo.worktreePath);
+      if (await target.root() !== canonical(repo.worktreePath) || await target.branch() !== repo.branch ||
+        !registered || registered.locked)
+        throw new WorkbenchError(registered?.locked ? "worktree_locked" : "worktree_identity_changed", "Gitlink worktree identity changed");
+      if (!permanent) {
+        if ((await target.status(repo.role === "gitlink-root" ? "all" : false, true)).length)
+          throw new WorkbenchError("workspace_dirty", "Gitlink worktree has user changes");
+        const head = await target.head();
+        if (head !== repo.baseSha) {
+          const retainedBranch = repo.branch
+            ? await source.run(["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`], false)
+            : null;
+          if (!retainedBranch || retainedBranch.code !== 0 || retainedBranch.stdout.trim() !== head)
+            throw new WorkbenchError("workspace_has_commits", "Gitlink worktree contains commits not protected by a retained branch");
+        }
+        if (repo.role === "gitlink-root") {
+          const [committed, indexed] = await Promise.all([
+            commitGitlinks(repo.worktreePath, "HEAD", this.config.operationTimeout),
+            indexGitlinks(repo.worktreePath, this.config.operationTimeout),
+          ]);
+          if (pythonJson(committed) !== pythonJson(indexed))
+            throw new WorkbenchError("workspace_dirty", "Gitlink pointers are staged");
+        }
+      }
+      targets.push({ git: source, path: repo.worktreePath, relativePath: repo.repoPath, repositoryId: String(repo.id) });
+    }
+    return targets;
   }
   private async cleanupGitlink(w: Json, params: Json, permanent: boolean) {
     if (permanent && w.state !== "removed") {
@@ -1336,49 +1488,43 @@ export class Workspaces {
         blockedReason: w.state === "deletion_pending" ? "workspace_task_active" : "workspace_must_be_removed" };
       throw new WorkbenchError("workspace_must_be_removed", "remove workspace before permanent deletion");
     }
-    const targets: Array<{ git: Git; path: string; relativePath: string }> = [];
+    const impact = permanent ? await this.impact(w) : null;
+    let targets: Array<{ git: Git; path: string; relativePath: string; repositoryId: string }>;
     try {
-      this.assertIdle(w.id);
-      for (const repo of [...w.repositories].reverse()) {
-        if (!existsSync(repo.worktreePath)) continue;
-        const target = new Git(repo.worktreePath, this.config.operationTimeout);
-        const source = new Git(repo.sourcePath, this.config.operationTimeout);
-        if (await target.root() !== canonical(repo.worktreePath) || await target.branch() !== repo.branch ||
-          !(await source.registered(repo.worktreePath)))
-          throw new WorkbenchError("worktree_identity_changed", "Gitlink worktree identity changed; preserved");
-        const head = await target.head();
-        if (head !== repo.baseSha) {
-          const retainedBranch = repo.branch
-            ? await source.run(["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`], false)
-            : null;
-          if (!retainedBranch || retainedBranch.code !== 0 || retainedBranch.stdout.trim() !== head)
-            throw new WorkbenchError("workspace_has_commits", "Gitlink worktree contains commits not protected by a retained branch; preserved");
-        }
-        if ((await target.status(repo.role === "gitlink-root" ? "all" : false)).length)
-          throw new WorkbenchError("workspace_dirty", "Gitlink worktree has user changes; preserved");
-        if (repo.role === "gitlink-root") {
-          const [committed, indexed] = await Promise.all([
-            commitGitlinks(repo.worktreePath, "HEAD", this.config.operationTimeout),
-            indexGitlinks(repo.worktreePath, this.config.operationTimeout),
-          ]);
-          if (pythonJson(committed) !== pythonJson(indexed))
-            throw new WorkbenchError("workspace_dirty", "Gitlink pointers are staged; preserved");
-        }
-        targets.push({ git: source, path: repo.worktreePath, relativePath: repo.repoPath });
-      }
+      targets = await this.gitlinkDeletionTargets(w, permanent);
     } catch (error) {
-      if (permanent && !params.confirm) return { ...(await this.impact(w)), canDelete: false,
+      if (permanent && !params.confirm) return { ...(impact || await this.impact(w)), canDelete: false,
         deleted: false, blockedReason: issue(error).code, issues: [issue(error)] };
       throw error;
     }
-    if (!params.confirm) return { workspaceId: w.id, preview: true, canDelete: true,
-      repositories: targets.length, ...(permanent ? { deleted: false } : { removed: false }) };
-    for (const target of targets) {
-      await target.git.run(["worktree", "remove", target.path]);
-      if (target.relativePath !== "." && existsSync(w.treePath))
-        mkdirSync(childPath(w.treePath, target.relativePath), { recursive: true });
+    if (!params.confirm) return permanent
+      ? { ...(impact || await this.impact(w)), canDelete: true, deleted: false }
+      : { workspaceId: w.id, preview: true, canDelete: true, repositories: targets.length, removed: false };
+
+    if (permanent) {
+      const freshImpact = await this.impact(w);
+      if (freshImpact.requiresDataLossConfirmation && params.confirmDataLoss !== true)
+        throw new WorkbenchError("workspace_data_loss_confirmation_required", "Explicit data-loss confirmation is required", freshImpact.dataLossSummary);
+      targets = await this.gitlinkDeletionTargets(w, true);
     }
-    if (permanent) unlinkSync(this.recordPath(w.id));
+    await this.preserveDetachedHeads(w, permanent);
+    for (const target of targets) {
+      if (permanent) this.journalPermanentDeletion(w, { phase: "remove_worktree", repositoryId: target.repositoryId });
+      await target.git.run(["worktree", "remove", ...(permanent && params.confirmDataLoss === true ? ["--force"] : []), target.path]);
+      if (!permanent && target.relativePath !== "." && existsSync(w.treePath))
+        mkdirSync(childPath(w.treePath, target.relativePath), { recursive: true });
+      if (permanent) {
+        const completed = new Set<string>(w.permanentDeletion?.completedRepositories || []);
+        completed.add(target.repositoryId);
+        this.journalPermanentDeletion(w, { phase: "remove_worktree", completedRepositories: [...completed], repositoryId: null });
+      }
+    }
+    if (permanent) {
+      this.assertDeletionBoundary(w);
+      this.journalPermanentDeletion(w, { phase: "remove_tree", repositoryId: null });
+      if (existsSync(w.treePath)) rmSync(w.treePath, { recursive: true, force: false, maxRetries: 3, retryDelay: 100 });
+      unlinkSync(this.recordPath(w.id));
+    }
     else { w.state = "removed"; this.save(w, false); }
     return { workspaceId: w.id, preview: false, ...(permanent
       ? { deleted: true, branchesPreserved: w.repositories.map((repo: Json) => repo.branch).filter(Boolean), externalReferences: [] }
@@ -1413,9 +1559,9 @@ export class Workspaces {
         "remove workspace after finishing tasks before permanent deletion",
       );
     }
-    let targets: Array<{ git: Git; path: string }>;
+    let targets: Array<{ git: Git; path: string; repositoryId: string }>;
     try {
-      targets = await this.deletionTargets(w);
+      targets = await this.deletionTargets(w, permanent);
     } catch (error) {
       if (permanent && !params.confirm) {
         const problem = issue(error);
@@ -1441,23 +1587,39 @@ export class Workspaces {
             repositories: targets.length,
             ...(impact.detachedSafetyRefs ? { detachedSafetyRefs: impact.detachedSafetyRefs } : {}),
           };
-    const metadata = join(w.treePath, ".workspace");
-    await this.preserveDetachedHeads(w);
-    for (const target of targets)
-      {
-        await target.git.run(["worktree", "remove", target.path]);
+    if (permanent) {
+      const freshImpact = await this.impact(w);
+      if (freshImpact.requiresDataLossConfirmation && params.confirmDataLoss !== true)
+        throw new WorkbenchError("workspace_data_loss_confirmation_required", "Explicit data-loss confirmation is required", freshImpact.dataLossSummary);
+      // Recheck ownership after the confirmation preview and immediately before Git mutations.
+      targets = await this.deletionTargets(w, true);
+    }
+    await this.preserveDetachedHeads(w, permanent);
+    for (const target of targets) {
+      if (permanent) this.journalPermanentDeletion(w, { phase: "remove_worktree", repositoryId: target.repositoryId });
+      await target.git.run(["worktree", "remove", ...(permanent && params.confirmDataLoss === true ? ["--force"] : []), target.path]);
+      if (!permanent) {
         let parent = dirname(target.path);
         while (inside(parent, w.treePath)) {
           try { rmdirSync(parent); } catch { break; }
           parent = dirname(parent);
         }
+      } else {
+        const completed = new Set<string>(w.permanentDeletion?.completedRepositories || []);
+        completed.add(target.repositoryId);
+        this.journalPermanentDeletion(w, { phase: "remove_worktree", completedRepositories: [...completed], repositoryId: null });
       }
-    if (existsSync(join(metadata, "manifest.json")))
-      unlinkSync(join(metadata, "manifest.json"));
-    if (existsSync(metadata)) rmdirSync(metadata);
-    if (existsSync(w.treePath)) rmdirSync(w.treePath);
-    if (permanent) unlinkSync(this.recordPath(w.id));
-    else {
+    }
+    if (permanent) {
+      this.assertDeletionBoundary(w);
+      this.journalPermanentDeletion(w, { phase: "remove_tree", repositoryId: null });
+      if (existsSync(w.treePath)) rmSync(w.treePath, { recursive: true, force: false, maxRetries: 3, retryDelay: 100 });
+      unlinkSync(this.recordPath(w.id));
+    } else {
+      const metadata = join(w.treePath, ".workspace");
+      if (existsSync(join(metadata, "manifest.json"))) unlinkSync(join(metadata, "manifest.json"));
+      if (existsSync(metadata)) rmdirSync(metadata);
+      if (existsSync(w.treePath)) rmdirSync(w.treePath);
       w.state = "removed";
       this.save(w, false);
     }

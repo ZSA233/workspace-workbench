@@ -168,6 +168,28 @@ test("Gitlink cleanup preserves child edits and branch collisions do not create 
   } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test("permanent Gitlink deletion requires explicit confirmation before discarding dirty content", async () => {
+  const f = fixture();
+  try {
+    const candidates = await f.service.handle("linked.workspaces.list");
+    await f.service.handle("linked.workspaces.save", { revision: candidates.revision, repositories: [f.outer] });
+    const live = f.service.workspaces.list().find(row => row.kind === "linked-live");
+    assert.ok(live);
+    const created = await f.service.handle("workspace.create", { sourceWorkspaceId: live.id, name: "dirty-delete", branchName: "feature/dirty-delete" });
+    writeFileSync(join(created.treePath, "halh", "README"), "discard after confirmation\n");
+    await f.service.handle("workspace.remove", { workspaceId: created.id });
+    const preview = await f.service.handle("workspace.delete", { workspaceId: created.id, confirm: false });
+    assert.equal(preview.canDelete, true);
+    assert.equal(preview.requiresDataLossConfirmation, true);
+    await assert.rejects(f.service.handle("workspace.delete", { workspaceId: created.id, confirm: true }), /Explicit data-loss confirmation is required/);
+    assert.equal(existsSync(created.treePath), true);
+    const deleted = await f.service.handle("workspace.delete", { workspaceId: created.id, confirm: true, confirmDataLoss: true });
+    assert.equal(deleted.deleted, true);
+    assert.equal(existsSync(created.treePath), false);
+    assert.equal(git(join(f.outer, "halh"), "show-ref", "--verify", "refs/heads/feature/dirty-delete").length > 0, true);
+  } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("outer pointers distinguish child edits, checkout drift, staged updates and committed pins", async () => {
   const f = fixture();
   try {

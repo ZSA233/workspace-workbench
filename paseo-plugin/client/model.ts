@@ -142,6 +142,13 @@ export type WorkspaceDeletionImpact = {
   preview: boolean;
   irreversible: boolean;
   canDelete?: boolean;
+  requiresDataLossConfirmation?: boolean;
+  dataLossSummary?: {
+    repositories: Array<{ repositoryId: string; pathCount: number; paths: string[]; scanUnavailable?: boolean }>;
+    extraPathCount: number;
+    extraPaths: string[];
+    scanIncomplete: boolean;
+  };
   blockedReason?: string;
   issues?: Array<{ code: string; message: string; repositoryId?: string }>;
   repositories?: Array<{
@@ -152,6 +159,7 @@ export type WorkspaceDeletionImpact = {
     worktreeExists?: boolean;
     dirty?: boolean;
     dirtyPaths?: string[];
+    dirtyPathCount?: number;
     branchPreserved?: boolean;
   }>;
   dirtyRepositories?: number;

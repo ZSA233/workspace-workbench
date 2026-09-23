@@ -219,13 +219,14 @@ export class Git {
       throw new WorkbenchError("commit_missing", "commit is unavailable");
     return r.stdout.trim();
   }
-  async status(ignoreSubmoduleContent: boolean | "all" = false): Promise<Array<[string, string]>> {
+  async status(ignoreSubmoduleContent: boolean | "all" = false, includeIgnored = false): Promise<Array<[string, string]>> {
     const values = (
         await this.run([
           "status",
           "--porcelain=v1",
           "-z",
           "--untracked-files=all",
+          ...(includeIgnored ? ["--ignored=matching"] : []),
           ...(ignoreSubmoduleContent ? [`--ignore-submodules=${ignoreSubmoduleContent === "all" ? "all" : "dirty"}`] : []),
         ])
       ).stdout.split("\0"),

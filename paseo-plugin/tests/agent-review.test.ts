@@ -890,14 +890,26 @@ test("an explicitly unavailable Reviewer model is reported without silently fall
 });
 
 test("blocked or failed filesystem deletion preserves all runtime history", async () => {
-  for (const blockedPreview of [true, false]) {
-    let cleared = false, deleted = false;
-    const result = await executePermanentWorkspaceDelete({ action: "delete", workspaceId: "fixture", confirm: true }, [], { agentBinding: true, reviewSessionCount: 2, activeReviewSessionId: null }, {
-      preview: async () => ({ ok: true, result: { canDelete: !blockedPreview, blockedReason: "workspace_dirty" } }),
-      deleteWorkspace: async () => { deleted = true; return { ok: false, error: { code: "workspace_dirty", message: "user changed worktree after preview" } }; },
+  const cases = [
+    { impact: { canDelete: false, blockedReason: "workspace_task_active" }, confirmDataLoss: false, expectedDelete: false, expectedCode: "workspace_task_active" },
+    { impact: { canDelete: true, requiresDataLossConfirmation: true }, confirmDataLoss: false, expectedDelete: false, expectedCode: "workspace_data_loss_confirmation_required" },
+    { impact: { canDelete: true, requiresDataLossConfirmation: true }, confirmDataLoss: true, expectedDelete: true, expectedCode: "workspace_delete_failed" },
+  ];
+  for (const scenario of cases) {
+    let cleared = false, deleted = false, passedConfirmation = false;
+    const result = await executePermanentWorkspaceDelete({ action: "delete", workspaceId: "fixture", confirm: true, confirmDataLoss: scenario.confirmDataLoss }, [], { agentBinding: true, reviewSessionCount: 2, activeReviewSessionId: null }, {
+      preview: async () => ({ ok: true, result: scenario.impact }),
+      deleteWorkspace: async (confirmDataLoss) => {
+        deleted = true; passedConfirmation = confirmDataLoss;
+        return { ok: false, error: { code: "workspace_delete_failed", message: "filesystem removal failed" } };
+      },
       clearRuntime: () => { cleared = true; throw new Error("must not clear history"); },
     });
-    assert.equal(result.ok, false); assert.equal(cleared, false); assert.equal(deleted, !blockedPreview);
-    if (blockedPreview) assert.equal((result.result as { canDelete?: boolean }).canDelete, false);
+    assert.equal(result.ok, false);
+    assert.equal(cleared, false);
+    assert.equal(deleted, scenario.expectedDelete);
+    assert.equal(passedConfirmation, scenario.confirmDataLoss);
+    assert.equal(result.error?.code, scenario.expectedCode);
+    assert.equal((result.result as { canDelete?: boolean })?.canDelete, scenario.impact.canDelete);
   }
 });

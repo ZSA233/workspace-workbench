@@ -83,7 +83,7 @@ function success(input: WorkspaceLifecycleInput, result: unknown, activeTasks: A
 type PermanentDeleteOperations = {
   preview: () => Promise<ObserverResponse>;
   clearRuntime: () => WorkspaceRuntimeCleanup;
-  deleteWorkspace: () => Promise<ObserverResponse>;
+  deleteWorkspace: (confirmDataLoss: boolean) => Promise<ObserverResponse>;
 };
 
 export async function executePermanentWorkspaceDelete(
@@ -97,16 +97,23 @@ export async function executePermanentWorkspaceDelete(
     return failed(input, preview.error || { code: "workspace_delete_failed", message: "Workspace could not be permanently deleted" }, activeTasks);
   }
 
-  const impact = preview.result as { canDelete?: boolean; blockedReason?: string } | undefined;
+  const impact = preview.result as { canDelete?: boolean; blockedReason?: string; requiresDataLossConfirmation?: boolean } | undefined;
   if (impact?.canDelete === false) return {
     ...failed(input, { code: impact.blockedReason || "workspace_delete_blocked", message: "Workspace deletion is blocked; files and history are preserved" }, activeTasks),
+    result: preview.result,
+  };
+  if (impact?.requiresDataLossConfirmation && input.confirmDataLoss !== true) return {
+    ...failed(input, { code: "workspace_data_loss_confirmation_required", message: "Confirm removal of uncommitted or untracked Workspace contents before retrying" }, activeTasks),
     result: preview.result,
   };
 
   // Recheck/delete first: a dirty worktree or failed Git operation must not
   // erase its Agent binding and review history before the failure is known.
-  const response = await operations.deleteWorkspace();
-  if (!response.ok) return failed(input, response.error || { code: "workspace_delete_failed", message: "Workspace could not be permanently deleted" }, activeTasks);
+  const response = await operations.deleteWorkspace(input.confirmDataLoss === true);
+  if (!response.ok) return {
+    ...failed(input, response.error || { code: "workspace_delete_failed", message: "Workspace could not be permanently deleted" }, activeTasks),
+    ...(preview.result ? { result: preview.result } : {}),
+  };
   let runtimeCleanup: WorkspaceRuntimeCleanup;
   try { runtimeCleanup = operations.clearRuntime(); }
   catch (error) {
@@ -167,7 +174,7 @@ export async function handleWorkspaceLifecycle(input: WorkspaceLifecycleInput, c
     return executePermanentWorkspaceDelete(input, active.tasks, runtimeState, {
       preview: () => queryObserver({ method: "workspace.delete", params: { workspaceId: input.workspaceId, confirm: false } }),
       clearRuntime: () => clearWorkspaceRuntimeState(input.workspaceId),
-      deleteWorkspace: () => queryObserver({ method: "workspace.delete", params: { workspaceId: input.workspaceId, confirm: true } }),
+      deleteWorkspace: (confirmDataLoss) => queryObserver({ method: "workspace.delete", params: { workspaceId: input.workspaceId, confirm: true, confirmDataLoss } }),
     });
   } catch (error) {
     return failed(input, { code: "workspace_runtime_state_unavailable", message: error instanceof Error ? error.message : "Workspace runtime state is unavailable" }, active.tasks);

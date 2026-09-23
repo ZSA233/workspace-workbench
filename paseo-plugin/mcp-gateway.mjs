@@ -76,13 +76,23 @@ async function run(item) {
     drain();
     return;
   }
+  if (Date.now() >= item.deadline) {
+    item.canceled = true;
+    clearTimeout(item.timer);
+    if (!item.response.writableEnded && !item.response.destroyed)
+      json(item.response, 504, rpcError(item.message.id, -32008, "workbench_not_dispatched:queue_timeout"));
+    diagnostics.record({ event: "mcp_request_timeout", phase: "dispatch", transport: "http", requestId: item.requestId,
+      method: item.message?.method, tool: toolName(item.message), projectHash: projectHash(item.context.projectConfig),
+      queueMs: Math.max(0, Date.now() - item.enqueuedAt), errorCode: "queue_timeout", dispatched: false });
+    drain();
+    return;
+  }
   item.phase = "running";
   running++;
   active.add(item);
   const started = Date.now();
   const controller = new AbortController();
   item.controller = controller;
-  if (Date.now() >= item.deadline) controller.abort("deadline");
   diagnostics.record({ event: "mcp_request_started", phase: "dispatch", transport: "http", requestId: item.requestId, method: item.message?.method, tool: toolName(item.message), role: item.context.role, projectHash: projectHash(item.context.projectConfig), queueMs: Math.max(0, started - item.enqueuedAt) });
   try {
     const result = await handle(item.message, {

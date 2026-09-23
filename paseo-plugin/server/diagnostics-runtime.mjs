@@ -55,7 +55,7 @@ export function createDiagnosticSink({ root, component, pid = process.pid, gener
   void mkdir(root, { recursive: true }).then(() => pruneComponentFiles(root, component, file));
   let closed = false;
   let dropped = 0;
-  let draining = false;
+  let draining = null;
   const pending = [];
   const write = async event => {
     try {
@@ -67,15 +67,15 @@ export function createDiagnosticSink({ root, component, pid = process.pid, gener
     }
   };
   const important = event => /failed|timeout|cancel|reject|shutdown|exit|parent_missing|cleanup/i.test(String(event.event || "")) || Boolean(event.errorCode);
-  const drain = async () => {
-    if (draining) return;
-    draining = true;
-    try {
+  const drain = () => {
+    if (draining) return draining;
+    draining = (async () => {
       while (pending.length) await write(pending.shift());
-    } finally {
-      draining = false;
+    })().finally(() => {
+      draining = null;
       if (pending.length && !closed) void drain();
-    }
+    });
+    return draining;
   };
   const record = (event, extra = {}) => {
     if (closed) return;
@@ -101,10 +101,13 @@ export function createDiagnosticSink({ root, component, pid = process.pid, gener
   return {
     file,
     record,
-    status: () => ({ file, dropped, queued: pending.length, draining }),
+    status: () => ({ file, dropped, queued: pending.length, draining: Boolean(draining) }),
     async close() {
       closed = true;
-      while (pending.length) await write(pending.shift());
+      while (pending.length || draining) {
+        if (draining) await draining;
+        else await drain();
+      }
     },
   };
 }

@@ -142,6 +142,8 @@ export type WorkspaceDeletionImpact = {
   preview: boolean;
   irreversible: boolean;
   canDelete?: boolean;
+  blockedReason?: string;
+  issues?: Array<{ code: string; message: string; repositoryId?: string }>;
   repositories?: Array<{
     id?: string;
     repoPath?: string;

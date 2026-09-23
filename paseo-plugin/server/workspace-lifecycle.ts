@@ -98,7 +98,10 @@ export async function executePermanentWorkspaceDelete(
   }
 
   const impact = preview.result as { canDelete?: boolean; blockedReason?: string } | undefined;
-  if (impact?.canDelete === false) return failed(input, { code: impact.blockedReason || "workspace_delete_blocked", message: "Workspace deletion is blocked; files and history are preserved" }, activeTasks);
+  if (impact?.canDelete === false) return {
+    ...failed(input, { code: impact.blockedReason || "workspace_delete_blocked", message: "Workspace deletion is blocked; files and history are preserved" }, activeTasks),
+    result: preview.result,
+  };
 
   // Recheck/delete first: a dirty worktree or failed Git operation must not
   // erase its Agent binding and review history before the failure is known.

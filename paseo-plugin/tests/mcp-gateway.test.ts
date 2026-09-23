@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { createServer as createNetServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -193,17 +193,31 @@ test("a crashed gateway and a plugin replacement keep the same URL and key", asy
   }
 });
 
-test("a new plugin generation waits for its verified predecessor on the reserved port", async () => {
+test("a new plugin generation waits for the verified predecessor on the reserved port", async () => {
   const home = mkdtempSync(join(tmpdir(), "workbench-gateway-handoff-"));
   const previousHome = process.env.PASEO_HOME;
   process.env.PASEO_HOME = home;
   const entry = join(process.cwd(), "mcp-gateway.mjs");
-  const oldManager = new McpGatewayManager(entry, undefined, ready);
-  const newManager = new McpGatewayManager(entry, undefined, ready);
+  const oldManager = new McpGatewayManager(entry, "old-generation", ready);
+  const newManager = new McpGatewayManager(entry, "new-generation", ready);
   try {
     const oldConfig = await oldManager.configForRequest("/tmp/project.json", "old", "interactive");
     const next = newManager.configForRequest("/tmp/project.json", "new", "interactive");
-    await new Promise(resolve => setTimeout(resolve, 300));
+    const diagnosticsFile = newManager.status().diagnostics.file;
+    const until = Date.now() + 5_000;
+    let predecessorVerified = false;
+    while (!predecessorVerified && Date.now() < until) {
+      try {
+        predecessorVerified = readFileSync(diagnosticsFile, "utf8").split("\n").some(line => {
+          try {
+            const event = JSON.parse(line);
+            return event.pluginGeneration === "new-generation" && event.event === "gateway_start_failed";
+          } catch { return false; }
+        });
+      } catch {}
+      if (!predecessorVerified) await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    assert.equal(predecessorVerified, true, "new generation must observe the occupied port before predecessor shutdown");
     await oldManager.close();
     const newConfig = await next;
     assert.equal(newConfig.url, oldConfig.url);

@@ -16,6 +16,19 @@ function taskLabel(task: WorkspaceTask, fallback: string): string {
   return [task.label || fallback, task.status].filter(Boolean).join(" · ");
 }
 
+function deletionBlockMessage(issue: { code: string; message: string; repositoryId?: string }, copy: ReturnType<typeof useWorkbenchCopy>): string {
+  const repository = issue.repositoryId || copy.workspaceDeleteBlockedWorkspace;
+  switch (issue.code) {
+    case "workspace_has_commits": return formatCopyFrom(copy, "workspaceDeleteBlockedCommits", [repository]);
+    case "workspace_dirty": return formatCopyFrom(copy, "workspaceDeleteBlockedDirty", [repository]);
+    case "worktree_identity_changed": return formatCopyFrom(copy, "workspaceDeleteBlockedIdentity", [repository]);
+    case "safety_ref_conflict": return formatCopyFrom(copy, "workspaceDeleteBlockedSafetyRef", [repository]);
+    case "workspace_must_be_removed": return copy.workspaceDeleteBlockedMustRemove;
+    case "workspace_task_active": return copy.workspaceDeleteBlockedActiveTask;
+    default: return formatCopyFrom(copy, "workspaceDeleteBlockedGeneric", [repository, issue.message || issue.code]);
+  }
+}
+
 export function WorkspaceDeletionPanel({
   open,
   workspace,
@@ -58,6 +71,9 @@ export function WorkspaceDeletionPanel({
   const branches = impact?.branchesPreserved?.length ? impact.branchesPreserved : [];
   const runtimeState = impact?.runtimeState;
   const runtimeRecordCount = (runtimeState?.agentBinding ? 1 : 0) + (runtimeState?.reviewSessionCount || 0);
+  const blockedIssues = mode === "permanent" && impact?.canDelete === false
+    ? impact.issues?.length ? impact.issues : impact.blockedReason ? [{ code: impact.blockedReason, message: "" }] : []
+    : [];
   const title = mode === "permanent" ? copy.workspacePermanentDelete : copy.workspaceDeleteTitle;
   return <Modal open onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }} title={title}>
     <Modal.Content scrollable={Platform.OS === "web"} style={styles.deletionModalContent} contentContainerStyle={styles.deletionModalBody}>
@@ -105,7 +121,14 @@ export function WorkspaceDeletionPanel({
         {branches.length ? <Text style={styles.deletionModalRowText}>{copy.workspaceDeleteBranchPreserved} · {branches.slice(0, 3).join(", ")}</Text> : null}
       </View> : null}
 
-      {error ? <Text style={styles.deletionModalDanger}>{error}</Text> : null}
+      {blockedIssues.length ? <View style={[styles.deletionModalSection, { borderColor: theme.colors.statusDanger }]}>
+        <Text style={[styles.deletionModalSectionTitle, { color: theme.colors.statusDanger }]}>{copy.workspaceDeleteBlockedTitle}</Text>
+        {blockedIssues.map((issue, index) => <View key={`${issue.repositoryId || "workspace"}-${issue.code}-${index}`} style={styles.deletionModalRow}>
+          <Text style={[styles.deletionModalBullet, { color: theme.colors.statusDanger }]}>•</Text>
+          <Text style={styles.deletionModalRowText}>{deletionBlockMessage(issue, copy)}</Text>
+        </View>)}
+      </View> : null}
+      {error && !blockedIssues.length ? <Text style={styles.deletionModalDanger}>{error}</Text> : null}
       {!response && !busy ? <Text style={styles.deletionModalText}>{copy.workspaceDeleteUnavailable}</Text> : null}
       {busy ? <Text style={styles.deletionModalText}>{copy.text_fcabadb2a7}</Text> : null}
       <View style={styles.deletionModalActions}>
@@ -113,7 +136,7 @@ export function WorkspaceDeletionPanel({
         {(removed || pending) && mode === "inspect" ? <Pressable accessibilityRole="button" disabled={busy} onPress={onRestore} style={styles.copyButton}><Text style={styles.copyButtonText}>{copy.workspaceRestore}</Text></Pressable> : null}
         {pendingState && !tasks.length && mode === "inspect" ? <Pressable accessibilityRole="button" disabled={busy} onPress={onRemove} style={styles.copyButton}><Text style={styles.copyButtonText}>{copy.workspaceDelete}</Text></Pressable> : null}
         {!removed && mode === "inspect" && !pendingState ? <Pressable accessibilityRole="button" disabled={busy} onPress={onRemove} style={styles.copyButton}><Text style={styles.copyButtonText}>{copy.workspaceDelete}</Text></Pressable> : null}
-        {removed && mode === "permanent" ? <Pressable accessibilityRole="button" disabled={busy} onPress={onConfirmPermanent} style={[styles.copyButton, { backgroundColor: theme.colors.statusDanger, borderColor: theme.colors.statusDanger }]}><Text style={styles.copyButtonText}>{copy.workspaceDeleteConfirm}</Text></Pressable> : null}
+        {removed && mode === "permanent" ? <Pressable accessibilityRole="button" disabled={busy || impact?.canDelete === false} onPress={onConfirmPermanent} style={[styles.copyButton, { backgroundColor: theme.colors.statusDanger, borderColor: theme.colors.statusDanger }]}><Text style={styles.copyButtonText}>{copy.workspaceDeleteConfirm}</Text></Pressable> : null}
       </View>
     </Modal.Content>
   </Modal>;

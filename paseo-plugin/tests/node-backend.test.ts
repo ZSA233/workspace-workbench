@@ -542,10 +542,17 @@ test("activity, path traversal and changed commits fail closed", async () => {
         path: "../secret",
       }),
     );
-    writeFileSync(join(w.treePath, "one/README.md"), "committed\n");
-    git(join(w.treePath, "one"), ["add", "."]);
-    git(join(w.treePath, "one"), ["commit", "-qm", "user commit"]);
+    await service.handle("workspace.addRepositories", { workspaceId: "sample", repositories: ["two"] });
+    for (const repositoryId of ["one", "two"]) {
+      writeFileSync(join(w.treePath, repositoryId, "README.md"), "committed\n");
+      git(join(w.treePath, repositoryId), ["add", "."]);
+      git(join(w.treePath, repositoryId), ["commit", "-qm", "user commit"]);
+    }
     await service.handle("workspace.remove", { workspaceId: "sample" });
+    const preview = await service.handle("workspace.delete", { workspaceId: "sample", confirm: false });
+    assert.equal(preview.canDelete, false);
+    assert.equal(preview.blockedReason, "workspace_has_commits");
+    assert.deepEqual(preview.issues.map((item: { repositoryId: string }) => item.repositoryId), ["one", "two"]);
     await assert.rejects(
       service.handle("workspace.delete", {
         workspaceId: "sample",

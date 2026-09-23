@@ -898,5 +898,6 @@ test("blocked or failed filesystem deletion preserves all runtime history", asyn
       clearRuntime: () => { cleared = true; throw new Error("must not clear history"); },
     });
     assert.equal(result.ok, false); assert.equal(cleared, false); assert.equal(deleted, !blockedPreview);
+    if (blockedPreview) assert.equal((result.result as { canDelete?: boolean }).canDelete, false);
   }
 });

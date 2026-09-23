@@ -1239,35 +1239,44 @@ export class Workspaces {
     // Check all targets before removing any. Never force-remove user changes,
     // unregistered paths, or commits made after the recorded base.
     const targets: Array<{ git: Git; path: string }> = [];
+    const blockers: Array<{ code: string; message: string; repositoryId: string }> = [];
     for (const repo of w.repositories) {
       if (!existsSync(repo.worktreePath)) continue;
       const target = new Git(repo.worktreePath, this.config.operationTimeout),
         source = new Git(repo.sourcePath, this.config.operationTimeout);
-      if (
-        (await target.root()) !== canonical(repo.worktreePath) ||
-        (await target.branch()) !== repo.branch ||
-        !(await source.registered(repo.worktreePath))
-      )
-        throw new WorkbenchError(
-          "worktree_identity_changed",
-          "worktree identity changed; preserved",
-        );
-      if ((await target.status()).length)
-        throw new WorkbenchError(
-          "workspace_dirty",
-          "worktree has user changes; preserved",
-        );
-      if ((await target.head()) !== (w.origin === "adopted" ? repo.adoptionHead : repo.baseSha))
-        throw new WorkbenchError(
-          "workspace_has_commits",
-          "worktree contains commits; preserved",
-        );
-      if (w.origin === "adopted" && !repo.branch) {
-        const ref = this.safetyRef(w, repo), existing = await source.run(["show-ref", "--verify", ref], false);
-        if (!existing.code && existing.stdout.trim().split(/\s+/)[0] !== repo.adoptionHead)
-          throw new WorkbenchError("safety_ref_conflict", "Detached HEAD safety ref changed; preserved");
+      try {
+        if (
+          (await target.root()) !== canonical(repo.worktreePath) ||
+          (await target.branch()) !== repo.branch ||
+          !(await source.registered(repo.worktreePath))
+        )
+          throw new WorkbenchError(
+            "worktree_identity_changed",
+            "worktree identity changed; preserved",
+          );
+        if ((await target.status()).length)
+          throw new WorkbenchError(
+            "workspace_dirty",
+            "worktree has user changes; preserved",
+          );
+        if ((await target.head()) !== (w.origin === "adopted" ? repo.adoptionHead : repo.baseSha))
+          throw new WorkbenchError(
+            "workspace_has_commits",
+            "worktree contains commits; preserved",
+          );
+        if (w.origin === "adopted" && !repo.branch) {
+          const ref = this.safetyRef(w, repo), existing = await source.run(["show-ref", "--verify", ref], false);
+          if (!existing.code && existing.stdout.trim().split(/\s+/)[0] !== repo.adoptionHead)
+            throw new WorkbenchError("safety_ref_conflict", "Detached HEAD safety ref changed; preserved");
+        }
+        targets.push({ git: source, path: repo.worktreePath });
+      } catch (error) {
+        const problem = issue(error);
+        blockers.push({ code: problem.code, message: problem.message, repositoryId: String(repo.id) });
       }
-      targets.push({ git: source, path: repo.worktreePath });
+    }
+    if (blockers.length) {
+      throw new WorkbenchError(blockers[0].code, blockers[0].message, { issues: blockers });
     }
     // Refuse unknown files in the workspace container, including cached runtime
     // artifacts. Nothing recursively deletes an uninspected directory.
@@ -1396,14 +1405,18 @@ export class Workspaces {
     try {
       targets = await this.deletionTargets(w);
     } catch (error) {
-      if (permanent && !params.confirm)
+      if (permanent && !params.confirm) {
+        const problem = issue(error);
+        const details = problem.details && typeof problem.details === "object" ? problem.details as Record<string, unknown> : {};
+        const issues = Array.isArray(details.issues) ? details.issues : [problem];
         return {
           ...impact,
           canDelete: false,
           deleted: false,
-          blockedReason: issue(error).code,
-          issues: [issue(error)],
+          blockedReason: problem.code,
+          issues,
         };
+      }
       throw error;
     }
     if (!params.confirm)

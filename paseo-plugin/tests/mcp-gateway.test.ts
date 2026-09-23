@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { createServer as createNetServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,24 @@ import { once } from "node:events";
 import test from "node:test";
 import { McpGatewayManager } from "../server/mcp-gateway.ts";
 const ready = async () => ({ ok: true, stage: "ready" });
+
+function postWithoutPooling(url: string, key: string, message: unknown): Promise<{ status: number; body: any }> {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(url, { method: "POST", agent: false, headers: {
+      "content-type": "application/json", "x-workbench-gateway-key": key,
+    } }, response => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { body += chunk; });
+      response.once("end", () => {
+        try { resolve({ status: response.statusCode || 0, body: JSON.parse(body) }); }
+        catch (error) { reject(error); }
+      });
+    });
+    request.once("error", reject);
+    request.end(JSON.stringify(message));
+  });
+}
 
 async function startGateway(home?: string) {
   const root = mkdtempSync(join(tmpdir(), "workbench-gateway-"));
@@ -78,10 +96,8 @@ test("HTTP queue time counts toward the short read deadline", async () => {
   writeFileSync(join(home, "paseo.pid"), JSON.stringify({ listen: `127.0.0.1:${address.port}` }));
   const gateway = await startGateway(home);
   try {
-    const calls = Array.from({ length: 20 }, (_, id) => fetch(`${gateway.base}/mcp`, {
-      method: "POST", headers: { "content-type": "application/json", "x-workbench-gateway-key": gateway.key },
-      body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "workbench_connection_status", arguments: {} } }),
-    }).then(async response => ({ status: response.status, body: await response.json() })));
+    const calls = Array.from({ length: 20 }, (_, id) => postWithoutPooling(`${gateway.base}/mcp`, gateway.key,
+      { jsonrpc: "2.0", id, method: "tools/call", params: { name: "workbench_connection_status", arguments: {} } }));
     const results = await Promise.all(calls);
     assert.ok(results.some(result => result.status === 504 && /queue_timeout/.test(result.body.error?.message)),
       "queued reads must expire before dispatch when their receipt deadline passes");

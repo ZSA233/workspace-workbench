@@ -1236,8 +1236,8 @@ export class Workspaces {
   }
   private async deletionTargets(w: Json) {
     this.assertIdle(w.id);
-    // Check all targets before removing any. Never force-remove user changes,
-    // unregistered paths, or commits made after the recorded base.
+    // Check all targets before removing any. Preserve user changes and commits
+    // that are not already reachable from a branch retained by permanent deletion.
     const targets: Array<{ git: Git; path: string }> = [];
     const blockers: Array<{ code: string; message: string; repositoryId: string }> = [];
     for (const repo of w.repositories) {
@@ -1259,11 +1259,17 @@ export class Workspaces {
             "workspace_dirty",
             "worktree has user changes; preserved",
           );
-        if ((await target.head()) !== (w.origin === "adopted" ? repo.adoptionHead : repo.baseSha))
-          throw new WorkbenchError(
-            "workspace_has_commits",
-            "worktree contains commits; preserved",
-          );
+        const head = await target.head();
+        if (head !== (w.origin === "adopted" ? repo.adoptionHead : repo.baseSha)) {
+          const retainedBranch = repo.branch
+            ? await source.run(["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`], false)
+            : null;
+          if (!retainedBranch || retainedBranch.code !== 0 || retainedBranch.stdout.trim() !== head)
+            throw new WorkbenchError(
+              "workspace_has_commits",
+              "worktree contains commits not protected by a retained branch; preserved",
+            );
+        }
         if (w.origin === "adopted" && !repo.branch) {
           const ref = this.safetyRef(w, repo), existing = await source.run(["show-ref", "--verify", ref], false);
           if (!existing.code && existing.stdout.trim().split(/\s+/)[0] !== repo.adoptionHead)
@@ -1340,8 +1346,14 @@ export class Workspaces {
         if (await target.root() !== canonical(repo.worktreePath) || await target.branch() !== repo.branch ||
           !(await source.registered(repo.worktreePath)))
           throw new WorkbenchError("worktree_identity_changed", "Gitlink worktree identity changed; preserved");
-        if (await target.head() !== repo.baseSha)
-          throw new WorkbenchError("workspace_has_commits", "Gitlink worktree contains commits; preserved");
+        const head = await target.head();
+        if (head !== repo.baseSha) {
+          const retainedBranch = repo.branch
+            ? await source.run(["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`], false)
+            : null;
+          if (!retainedBranch || retainedBranch.code !== 0 || retainedBranch.stdout.trim() !== head)
+            throw new WorkbenchError("workspace_has_commits", "Gitlink worktree contains commits not protected by a retained branch; preserved");
+        }
         if ((await target.status(repo.role === "gitlink-root" ? "all" : false)).length)
           throw new WorkbenchError("workspace_dirty", "Gitlink worktree has user changes; preserved");
         if (repo.role === "gitlink-root") {

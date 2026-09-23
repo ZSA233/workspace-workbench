@@ -509,7 +509,7 @@ test("repository graph and changes keep ready state during stale branch refresh"
   }
 });
 
-test("activity, path traversal and changed commits fail closed", async () => {
+test("activity and path traversal fail closed while branch-backed commits survive permanent deletion", async () => {
   const f = fixture(),
     service = new Service(f.config);
   try {
@@ -543,23 +543,26 @@ test("activity, path traversal and changed commits fail closed", async () => {
       }),
     );
     await service.handle("workspace.addRepositories", { workspaceId: "sample", repositories: ["two"] });
+    const committedHeads: Record<string, string> = {};
+    const preservedBranches: Record<string, string> = {};
     for (const repositoryId of ["one", "two"]) {
       writeFileSync(join(w.treePath, repositoryId, "README.md"), "committed\n");
       git(join(w.treePath, repositoryId), ["add", "."]);
       git(join(w.treePath, repositoryId), ["commit", "-qm", "user commit"]);
+      committedHeads[repositoryId] = git(join(w.treePath, repositoryId), ["rev-parse", "HEAD"]);
+      preservedBranches[repositoryId] = git(join(w.treePath, repositoryId), ["branch", "--show-current"]);
     }
     await service.handle("workspace.remove", { workspaceId: "sample" });
     const preview = await service.handle("workspace.delete", { workspaceId: "sample", confirm: false });
-    assert.equal(preview.canDelete, false);
-    assert.equal(preview.blockedReason, "workspace_has_commits");
-    assert.deepEqual(preview.issues.map((item: { repositoryId: string }) => item.repositoryId), ["one", "two"]);
-    await assert.rejects(
-      service.handle("workspace.delete", {
-        workspaceId: "sample",
-        confirm: true,
-      }),
-      /contains commits/,
-    );
+    assert.equal(preview.canDelete, true);
+    assert.deepEqual(preview.branchesPreserved, Object.values(preservedBranches));
+    const deleted = await service.handle("workspace.delete", { workspaceId: "sample", confirm: true });
+    assert.equal(deleted.deleted, true);
+    for (const repositoryId of ["one", "two"]) {
+      const source = join(f.root, repositoryId);
+      assert.equal(git(source, ["rev-parse", `refs/heads/${preservedBranches[repositoryId]}`]), committedHeads[repositoryId]);
+      assert.equal(git(source, ["cat-file", "-e", `${committedHeads[repositoryId]}^{commit}`]), "");
+    }
   } finally {
     await service.close();
     rmSync(f.root, { recursive: true, force: true });

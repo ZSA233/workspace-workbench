@@ -74,12 +74,15 @@ test("selected Gitlink root appears as one live workspace and creates matching n
     assert.equal(git(created.treePath, "branch", "--show-current"), "feature/example");
     assert.equal(git(childPath, "branch", "--show-current"), "feature/example");
     assert.equal(git(childPath, "rev-parse", "HEAD"), f.pinned);
+    writeFileSync(join(childPath, "README"), "committed workspace work\n");
+    git(childPath, "commit", "-qam", "workspace commit");
+    const childHead = git(childPath, "rev-parse", "HEAD");
     assert.equal(f.service.workspaces.identify(childPath).workspaceId, created.id);
     assert.equal((await f.service.handle("workspace.create", request)).id, created.id);
     await assert.rejects(f.service.handle("workspace.addRepositories", { workspaceId: created.id, repositories: ["halh"] }), /flat additions are unavailable/);
 
     const detail = await f.service.handle("workspace.detail", { workspaceId: created.id });
-    assert.equal(detail.gitlinks[0].checkoutSha, f.pinned);
+    assert.equal(detail.gitlinks[0].checkoutSha, childHead);
     assert.equal(detail.repositories.length, 2);
     assert.equal(detail.repositories.find((row: { repoPath: string }) => row.repoPath === "halh").branch, "feature/example");
     await f.service.handle("workspace.remove", { workspaceId: created.id });
@@ -87,6 +90,8 @@ test("selected Gitlink root appears as one live workspace and creates matching n
     assert.equal(preview.repositories, 2);
     await f.service.handle("workspace.cleanup", { workspaceId: created.id, confirm: true });
     assert.equal(existsSync(created.treePath), false);
+    assert.equal(git(join(f.outer, "halh"), "rev-parse", "refs/heads/feature/example"), childHead);
+    git(join(f.outer, "halh"), "cat-file", "-e", `${childHead}^{commit}`);
     const permanent = await f.service.handle("workspace.delete", { workspaceId: created.id, confirm: true });
     assert.equal(permanent.deleted, true);
     assert.deepEqual(permanent.branchesPreserved, ["feature/example", "feature/example"]);

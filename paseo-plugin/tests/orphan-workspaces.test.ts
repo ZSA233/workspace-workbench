@@ -82,9 +82,9 @@ test("preview changes, branch collisions, edits, and commits block unsafe adopti
     await f.service.handle("workspace.remove", { workspaceId: "lost" });
     await assert.rejects(f.service.handle("workspace.cleanup", { workspaceId: "lost", confirm: true }), /user changes/);
     git(join(f.tree, "beta"), "restore", "README");
-    writeFileSync(join(f.tree, "alpha", "README"), "commit\n");
-    git(join(f.tree, "alpha"), "commit", "-qam", "later");
-    await assert.rejects(f.service.handle("workspace.cleanup", { workspaceId: "lost", confirm: true }), /contains commits/);
+    writeFileSync(join(f.tree, "beta", "README"), "commit\n");
+    git(join(f.tree, "beta"), "commit", "-qam", "later");
+    await assert.rejects(f.service.handle("workspace.cleanup", { workspaceId: "lost", confirm: true }), /not protected by a retained branch/);
     assert.equal(existsSync(f.tree), true);
   } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
 });

@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   realpathSync,
   mkdirSync,
+  chmodSync,
   writeFileSync,
   readFileSync,
   rmSync,
@@ -294,6 +295,12 @@ try {
   writeFileSync(join(dirtyRepo, ".cache", "ignored.bin"), "ignored\n");
   writeFileSync(join(dirtyRepo, "untracked.txt"), "discard only after confirmation\n");
   writeFileSync(join(dirtyTree, "extra.txt"), "workspace-level extra\n");
+  const readOnlyModuleDir = join(dirtyTree, "build/halh-go-mod-cache/go1.26.8/cloud.google.com/go/compute/metadata@v0.9.0");
+  mkdirSync(readOnlyModuleDir, { recursive: true });
+  const readOnlyModuleFile = join(readOnlyModuleDir, "CHANGES.md");
+  writeFileSync(readOnlyModuleFile, "read-only module cache entry\n");
+  chmodSync(readOnlyModuleFile, 0o444);
+  chmodSync(readOnlyModuleDir, 0o555);
   const outsideWorkspace = join(root, "outside-workspace-target");
   mkdirSync(outsideWorkspace);
   writeFileSync(join(outsideWorkspace, "keep.txt"), "outside\n");
@@ -317,10 +324,11 @@ try {
   assert.equal(confirmedDirtyDelete.ok, true, JSON.stringify(confirmedDirtyDelete));
   assert.equal(confirmedDirtyDelete.result.deleted, true);
   assert.equal(existsSync(dirtyTree), false);
+  assert.equal(existsSync(readOnlyModuleFile), false);
   assert.equal(readFileSync(join(outsideWorkspace, "keep.txt"), "utf8"), "outside\n");
   assert.equal(readFileSync(externalCache, "utf8"), "external cache\n");
   assert.equal(git(join(root, "a", "one"), ["rev-parse", `refs/heads/${branch}`]), head);
-  report.checks.push("actual lifecycle RPC required confirmDataLoss for dirty, ignored and extra worktree contents; deletion preserved outside data, cache and branch");
+  report.checks.push("actual lifecycle RPC required confirmDataLoss for dirty, ignored and extra worktree contents; deletion removed read-only module-cache directories and preserved outside data, cache and branch");
   const created = await rpc(configs[0], "workspace.create", {
     name: "sample",
     repositories: ["one"],

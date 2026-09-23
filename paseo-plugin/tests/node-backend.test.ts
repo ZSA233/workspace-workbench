@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   realpathSync,
   mkdirSync,
+  chmodSync,
   existsSync,
   writeFileSync,
   readFileSync,
@@ -633,6 +634,34 @@ test("permanent deletion never removes a configured cache root inside the manage
     assert.equal(readFileSync(join(cacheRoot, "keep.bin"), "utf8"), "cache\n");
     assert.equal(existsSync(workspace.treePath), true);
   } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("permanent deletion removes read-only nested module-cache directories inside the managed tree", async () => {
+  const f = fixture(), service = new Service(f.config);
+  let readOnlyModuleDir = "";
+  try {
+    const workspace = await service.handle("workspace.create", { name: "readonly-module-cache", repositories: ["one"] });
+    readOnlyModuleDir = join(workspace.treePath, "build/halh-go-mod-cache/go1.26.8/cloud.google.com/go/compute/metadata@v0.9.0");
+    mkdirSync(readOnlyModuleDir, { recursive: true });
+    const changes = join(readOnlyModuleDir, "CHANGES.md");
+    writeFileSync(changes, "read-only module cache entry\n");
+    chmodSync(changes, 0o444);
+    chmodSync(readOnlyModuleDir, 0o555);
+    await service.handle("workspace.remove", { workspaceId: workspace.id });
+    const preview = await service.handle("workspace.delete", { workspaceId: workspace.id, confirm: false });
+    assert.equal(preview.canDelete, true);
+    assert.equal(preview.requiresDataLossConfirmation, true);
+    await assert.rejects(service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true }), /Explicit data-loss confirmation is required/);
+    assert.equal(existsSync(changes), true);
+    const deleted = await service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true, confirmDataLoss: true });
+    assert.equal(deleted.deleted, true);
+    assert.equal(existsSync(workspace.treePath), false);
+    assert.equal(existsSync(changes), false);
+  } finally {
+    try { if (readOnlyModuleDir && existsSync(readOnlyModuleDir)) chmodSync(readOnlyModuleDir, 0o755); } catch { /* Preserve the original failure. */ }
     await service.close();
     rmSync(f.root, { recursive: true, force: true });
   }

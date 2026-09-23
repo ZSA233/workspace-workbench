@@ -1,6 +1,7 @@
 import {
   existsSync,
   lstatSync,
+  chmodSync,
   readFileSync,
   writeFileSync,
   mkdirSync,
@@ -45,6 +46,33 @@ function pythonJson(value: any): string {
 function createRequestParams(params: Json): Json {
   const { requestId: _requestId, operationId: _operationId, ...stableParams } = params;
   return stableParams;
+}
+
+function makeWorkspaceDirectoriesRemovable(root: string): () => void {
+  const changed: Array<{ path: string; mode: number; dev: number; ino: number }> = [];
+  const restore = () => {
+    for (const item of [...changed].reverse()) {
+      try {
+        const current = lstatSync(item.path);
+        if (current.isDirectory() && !current.isSymbolicLink() && current.dev === item.dev && current.ino === item.ino)
+          chmodSync(item.path, item.mode);
+      } catch { /* A partially removed tree may no longer contain this directory. */ }
+    }
+  };
+  const visit = (path: string) => {
+    const stat = lstatSync(path);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+    const mode = stat.mode & 0o7777;
+    const removableMode = mode | 0o700;
+    if (mode !== removableMode) {
+      chmodSync(path, removableMode);
+      changed.push({ path, mode, dev: stat.dev, ino: stat.ino });
+    }
+    for (const entry of readdirSync(path)) visit(join(path, entry));
+  };
+  try { visit(root); }
+  catch (error) { restore(); throw error; }
+  return restore;
 }
 type OrphanScanSnapshot = {
   state: "ready" | "scanning" | "stale" | "failed";
@@ -1522,7 +1550,11 @@ export class Workspaces {
     if (permanent) {
       this.assertDeletionBoundary(w);
       this.journalPermanentDeletion(w, { phase: "remove_tree", repositoryId: null });
-      if (existsSync(w.treePath)) rmSync(w.treePath, { recursive: true, force: false, maxRetries: 3, retryDelay: 100 });
+      if (existsSync(w.treePath)) {
+        const restorePermissions = makeWorkspaceDirectoriesRemovable(w.treePath);
+        try { rmSync(w.treePath, { recursive: true, force: false, maxRetries: 3, retryDelay: 100 }); }
+        catch (error) { restorePermissions(); throw error; }
+      }
       unlinkSync(this.recordPath(w.id));
     }
     else { w.state = "removed"; this.save(w, false); }
@@ -1613,7 +1645,11 @@ export class Workspaces {
     if (permanent) {
       this.assertDeletionBoundary(w);
       this.journalPermanentDeletion(w, { phase: "remove_tree", repositoryId: null });
-      if (existsSync(w.treePath)) rmSync(w.treePath, { recursive: true, force: false, maxRetries: 3, retryDelay: 100 });
+      if (existsSync(w.treePath)) {
+        const restorePermissions = makeWorkspaceDirectoriesRemovable(w.treePath);
+        try { rmSync(w.treePath, { recursive: true, force: false, maxRetries: 3, retryDelay: 100 }); }
+        catch (error) { restorePermissions(); throw error; }
+      }
       unlinkSync(this.recordPath(w.id));
     } else {
       const metadata = join(w.treePath, ".workspace");

@@ -208,6 +208,9 @@ export type WorkspaceSummary = {
   createdAt?: string | null;
   lastUsedAt?: string | null;
   updatedAt?: string | null;
+  workspaceBranchLabel?: string | null;
+  currentRef?: string | null;
+  currentRefState?: "uniform" | "mixed" | "unknown" | string;
   latestCommitAt?: string | null;
   latestCommitObservedAt?: string | null;
   latestCommitState?: "ready" | "pending" | "partial" | "unknown";
@@ -256,6 +259,9 @@ export type RepositorySummary = {
   repoPath: string;
   status: string;
   branch: string;
+  registeredBranch?: string | null;
+  refState?: "attached" | "detached" | "missing" | "unknown" | string;
+  refCandidates?: string[];
   head?: string;
   headShort: string;
   baseRef: string;

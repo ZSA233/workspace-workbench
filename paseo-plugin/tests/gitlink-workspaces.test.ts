@@ -84,7 +84,10 @@ test("selected Gitlink root appears as one live workspace and creates matching n
     const detail = await f.service.handle("workspace.detail", { workspaceId: created.id });
     assert.equal(detail.gitlinks[0].checkoutSha, childHead);
     assert.equal(detail.repositories.length, 2);
-    assert.equal(detail.repositories.find((row: { repoPath: string }) => row.repoPath === "halh").branch, "feature/example");
+    const observedChild = detail.repositories.find((row: { repoPath: string }) => row.repoPath === "halh");
+    assert.equal(observedChild.branch, "feature/example");
+    assert.equal(observedChild.registeredBranch, "feature/example");
+    assert.equal(observedChild.refState, "attached");
     await f.service.handle("workspace.remove", { workspaceId: created.id });
     const preview = await f.service.handle("workspace.cleanup", { workspaceId: created.id });
     assert.equal(preview.repositories, 2);

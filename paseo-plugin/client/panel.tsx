@@ -796,6 +796,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const displayDetail = listReady && detail?.workspace.id === selectedWorkspaceId
     ? detail
     : null;
+  const selectorWorkspace = selectedWorkspace && displayDetail
+    ? { ...selectedWorkspace, ...displayDetail.workspace }
+    : selectedWorkspace;
   const saveMainRepositories = useCallback(async () => {
     if (!mainRepositories || savingMainRepositories) return;
     setSavingMainRepositories(true);
@@ -899,8 +902,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           : "branch",
     );
     setGraphView({ historyMode: isMainWorkspace(selectedWorkspace) ? "full" : "branch", maxCommits: 50 });
-    setRepositoryDetailsOpen(false);
   }, [repositoryIdentity, selectedRepoPath, selectedRepository, selectedWorkspace]);
+
+  useEffect(() => {
+    setRepositoryDetailsOpen(false);
+  }, [selectedWorkspaceId]);
 
   const reviewQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "review", reviewIds, targetOverrides],
@@ -1482,7 +1488,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       // Unsupported hosts use the same correct immediate layout update.
     }
   }, [reduceMotion]);
-  const onToggleRepositoryDetails = useCallback(() => setRepositoryDetailsOpen((current) => !current), []);
+  const onToggleRepositoryDetails = useCallback(() => {
+    animateSectionLayout();
+    setRepositoryDetailsOpen((current) => !current);
+  }, [animateSectionLayout]);
   const onCommit = useCallback((sha: string) => {
     setSelectedCommit(sha);
     setSelectedFile("");
@@ -1524,10 +1533,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     );
   }, [agentId, changesScope, hostWorkspaceId, projectConfig, selectedCommit, selectedRepository, selectedWorkspace]);
   const onRepo = useCallback((repoPath: string) => {
+    animateSectionLayout();
+    const changingRepository = selectedRepoPath !== repoPath;
     setSelectedRepoPath(repoPath);
     setSelectedFile("");
-    setRepositoryDetailsOpen(false);
-  }, []);
+    setRepositoryDetailsOpen(changingRepository ? true : (current) => !current);
+  }, [animateSectionLayout, selectedRepoPath]);
   const onSectionToggle = useCallback((id: "repositories" | "graph" | "changes", collapsed: boolean) => {
     animateSectionLayout();
     preferences.updateSection(id, { collapsed });
@@ -1699,7 +1710,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         historyWorkspaces={historyWorkspaces}
         visibleWorkspaces={visibleWorkspaces}
         orphanCandidates={listResult?.orphanCandidates}
-        selectedWorkspace={selectedWorkspace}
+        selectedWorkspace={selectorWorkspace}
         selectedWorkspaceId={selectedWorkspaceId}
         filter={workspaceFilter}
         open={selectorOpen}

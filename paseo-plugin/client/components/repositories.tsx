@@ -20,7 +20,7 @@ type RepositorySummary,
 type WorkspaceSummary
 } from "../model";
 import { selectedChangeSummary } from "../repository-metrics";
-import { ChangeCounts,InlineRefresh,SectionDisclosureButton,SectionViewport,fileCountLabel,issueDetail,issueLabel,makeStyles,repositoryBranchLabel,statusColor,visibleIssues } from "./ui";
+import { ChangeCounts,InlineRefresh,SectionDisclosureButton,SectionViewport,issueDetail,issueLabel,makeStyles,repositoryBranchLabel,visibleIssues } from "./ui";
 import { useWorkbenchCopy } from "../i18n";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
@@ -224,7 +224,9 @@ export const WorkspaceView = memo(function WorkspaceView({
                   key={repository.repoPath}
                   repository={repository}
                   selected={selectedRepository?.repoPath === repository.repoPath}
-                  changeSummary={selectedRepository?.repoPath === repository.repoPath ? changeSummary : null}
+                  changeSummary={selectedRepository?.repoPath === repository.repoPath
+                    ? changeSummary
+                    : changeScope === "working" ? repository.workingChanges : repository.changes}
                   onPress={() => onRepo(repository.repoPath)}
                   theme={theme}
                   styles={styles}
@@ -385,29 +387,19 @@ export function RepositoryRow({
   styles: ReturnType<typeof makeStyles>;
 }) {
   const copy = useWorkbenchCopy();
+  const hasIssue = repository.issues.concat(repository.changeIssues).some((issue) => !isTransientIssueCode(issue.code));
   const hasTransientIssue = repository.issues.concat(repository.changeIssues).some((issue) => isTransientIssueCode(issue.code));
-  const stale = Boolean(repository.observationStale || hasTransientIssue);
-  const status = stale ? "stale" : repository.status || (repository.dirty ? "dirty" : "clean");
-  const statusTone = statusColor(status, theme);
-  const workingFiles = Math.max((repository.workingChanges?.files ?? repository.dirtyPaths?.length ?? 0), repository.dirtyPaths?.length || 0);
-  const metaStatus = stale
-    ? copy.text_f9f75e6112
-    : repository.dirty && workingFiles
-    ? `${status} · ${fileCountLabel(workingFiles, copy)}`
-    : status;
+  const warning = hasIssue || repository.observationStale || hasTransientIssue;
   return (
     <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={[styles.repositoryRow, selected && styles.repositoryRowActive]}>
-      <View style={[styles.repositoryDot, { backgroundColor: statusTone }]} />
+      {warning ? <Text accessibilityLabel={copy.text_f9f75e6112} style={styles.repositoryIssueMark}>!</Text> : null}
       <View style={styles.repositoryCopy}>
         <Text numberOfLines={1} style={styles.repositoryLine}>{repository.name} · {repositoryBranchLabel(repository, copy)}</Text>
-        <Text numberOfLines={1} style={styles.repositoryMeta}>{metaStatus} {copy.text_97def2ca9e}{repository.headShort || "—"}</Text>
       </View>
       <View style={styles.repositoryMetrics}>
         {changeSummary && (changeSummary.additions || changeSummary.deletions)
           ? <ChangeCounts additions={changeSummary.additions} deletions={changeSummary.deletions} styles={styles} />
-          : changeSummary
-            ? <Text style={styles.repositoryDelta}>{fileCountLabel(changeSummary.files, copy)}</Text>
-            : null}
+          : null}
       </View>
     </Pressable>
   );

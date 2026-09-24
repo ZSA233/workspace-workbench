@@ -60,6 +60,9 @@ try {
   await page.getByText('Repositories',{exact:true}).waitFor();
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor();
   assert.equal(await page.getByText('Not loaded',{exact:true}).count(),0);
+  await page.getByText('one · main',{exact:true}).click();
+  await page.getByText(/current ref:/i).waitFor();
+  report.checks.push('clicking a repository row opened the compact reference details drawer');
   await screenshot('01-clean-workbench.png');
   report.checks.push('real plugin panel loaded from the isolated host; clean repository rows had no misleading Not loaded label');
   await page.getByText('Main workspace',{exact:true}).first().click();

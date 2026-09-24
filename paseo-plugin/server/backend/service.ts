@@ -29,7 +29,7 @@ export class Service {
   observation: Observation;
   startedAt = Date.now();
   version: string;
-  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts"]);
+  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts"]);
   constructor(config: Config, version = "0.1.3") {
     this.config = config;
     this.version = version;

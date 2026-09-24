@@ -199,6 +199,19 @@ export class Git {
       )) || null
     );
   }
+  async refsAtHead(head: string): Promise<string[]> {
+    if (!head) return [];
+    const result = await this.run([
+      "for-each-ref",
+      "--format=%(refname:short)",
+      "--points-at",
+      head,
+      "refs/heads",
+      "refs/remotes",
+    ], false);
+    if (result.code !== 0) return [];
+    return [...new Set(result.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean))];
+  }
   async upstream(): Promise<[string | null, string | null]> {
     const name = await this.run(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],

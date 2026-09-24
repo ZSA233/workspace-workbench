@@ -7,6 +7,7 @@ import { Runtime } from "./runtime.ts";
 import { ObservationCache } from "./cache.ts";
 import { WorkspaceActivityIndex } from "./workspace-activity.ts";
 import { gitlinkDetails } from "./gitlinks.ts";
+import { workspaceBranchLabel, workspaceCurrentRefSummary } from "./workspace-refs.ts";
 import {
   hash,
   issue,
@@ -112,6 +113,9 @@ export class Observation {
     const blockers = observed
       .flatMap((repo) => repo.issues || [])
       .filter((e) => !["git_timeout", "observation_timeout"].includes(e.code));
+    const currentRef = roster
+      ? { currentRef: null, currentRefState: "unknown" as const }
+      : workspaceCurrentRefSummary(observed);
     return {
       id: workspace.id,
       displayName: workspace.displayName || workspace.id,
@@ -123,6 +127,8 @@ export class Observation {
       ...(workspace.deletion ? { deletion: workspace.deletion } : {}),
       sourceRoot: workspace.sourceRoot,
       treePath: workspace.treePath,
+      workspaceBranchLabel: workspaceBranchLabel(workspace),
+      ...currentRef,
       repositoryCount: roster ? workspace.repositories.length : observed.length,
       dirty: roster ? null : dirty > 0,
       dirtyRepositoryCount: roster ? null : dirty,
@@ -148,7 +154,7 @@ export class Observation {
   }
   async repository(repo: Json, deadline?: number, signal?: AbortSignal): Promise<Json> {
     const path = repo.worktreePath || repo.sourcePath;
-    return this.cache.read(`summary:${path}`, this.scheduler.token(path),
+    return this.cache.read(`summary:v2:${path}`, this.scheduler.token(path),
       () => this.repositorySnapshot(repo, deadline, signal), true, true, { repoPath: path });
   }
   private async repositorySnapshot(repo: Json, deadline?: number, signal?: AbortSignal): Promise<Json> {
@@ -156,6 +162,9 @@ export class Observation {
       git = this.git(repo, deadline, signal);
     const result: Json = {
       ...repo,
+      registeredBranch: typeof repo.branch === "string" ? repo.branch : null,
+      refState: "unknown",
+      refCandidates: [],
       status: "clean",
       branch: "",
       head: null,
@@ -181,6 +190,7 @@ export class Observation {
     };
     if (!result.worktreeExists) {
       result.status = "missing";
+      result.refState = "missing";
       result.issues = [
         {
           code: "worktree_missing",
@@ -194,6 +204,7 @@ export class Observation {
       await this.withinDeadline(
         (async () => {
           if (!(await git.valid()) || await git.root() !== git.path) {
+            result.refState = "unknown";
             result.status = "invalid";
             result.issues = [
               { code: "repository_invalid", message: "path is not a Git checkout" },
@@ -202,6 +213,7 @@ export class Observation {
           }
           const head = await git.head(),
             branch = await git.branch(),
+            refCandidates = !branch && head ? await git.refsAtHead(head) : [],
             [upstream, upstreamSha] = await git.upstream(),
             status = await git.status(repo.role === "gitlink-root");
           const baseSha = repo.baseSha || upstreamSha,
@@ -210,6 +222,8 @@ export class Observation {
             head,
             headShort: head?.slice(0, 8) || null,
             branch: branch || "",
+            refState: branch ? "attached" : "detached",
+            refCandidates,
             upstream,
             upstreamSha,
             baseRef,
@@ -316,7 +330,7 @@ export class Observation {
     if (params.force) this.scheduler.force(workspace.id);
     const validationToken = this.scheduler.workspaceToken(workspace.id);
     return this.cache.read(
-      `detail:${workspace.id}:${stable(params)}`,
+      `detail:v2:${workspace.id}:${stable(params)}`,
       await this.workspaceFingerprint(workspace),
       async () => {
         const start = Date.now(),

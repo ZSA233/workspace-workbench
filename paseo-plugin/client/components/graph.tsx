@@ -23,7 +23,7 @@ type SectionLayoutPreference
 } from "../model";
 import { observerAccent } from "../theme";
 import { useWorkbenchCopy, useWorkbenchLocale } from "../i18n";
-import { ChangeCounts,InlineRefresh,MiniTag,ScopeButton,SectionDisclosureButton,SectionViewport,makeStyles } from "./ui";
+import { ChangeCounts,InlineRefresh,MiniTag,ScopeButton,SectionDisclosureButton,SectionViewport,fileCountLabel,makeStyles,repositoryCurrentRefDetail,repositoryRefMismatch } from "./ui";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -306,10 +306,16 @@ export function CommitGraph({
               <CommitDetailCard compact row={selectedRow} locale={locale} theme={theme} styles={styles} />
             ) : (
               <View style={styles.repositoryDisclosure}>
-                <Text selectable style={styles.repositoryDisclosureBranch}>{repository.branch || copy.branchDetached}</Text>
+                <Text selectable style={styles.repositoryDisclosureBranch}>{copy.repositoryCurrentRef}: {repositoryCurrentRefDetail(repository, copy)}</Text>
+                <Text selectable style={styles.repositoryDisclosureMeta}>{copy.repositoryHead}: {repository.head || repository.headShort || "—"}</Text>
+                {repositoryRefMismatch(repository) ? <Text selectable style={styles.repositoryDisclosureMeta}>{copy.repositoryRegisteredBranch}: {repository.registeredBranch || "—"}</Text> : null}
                 <Text selectable style={styles.repositoryDisclosureMeta}>
-                  {copy.text_1405df66cb}{repository.baseRef || "—"} · {repository.baseSha || repository.baseShaShort || "—"} {copy.text_97def2ca9e}{repository.head || repository.headShort || "—"}
+                  {copy.text_1405df66cb}{repository.baseRef || "—"} · {repository.baseSha || repository.baseShaShort || "—"}
                 </Text>
+                {(repository.workingChanges || repository.changes) ? <Text selectable style={styles.repositoryDisclosureMeta}>
+                  {copy.repositoryChanges}: +{repository.workingChanges?.additions ?? repository.changes?.additions ?? 0} / −{repository.workingChanges?.deletions ?? repository.changes?.deletions ?? 0} · {(repository.workingChanges?.files ?? repository.changes?.files ?? 0)}
+                </Text> : null}
+                {repository.dirtyPaths.length ? <Text selectable style={styles.repositoryDisclosureMeta}>{fileCountLabel(repository.dirtyPaths.length, copy)}</Text> : null}
               </View>
             )}
           </ScrollView>

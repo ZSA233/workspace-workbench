@@ -137,7 +137,7 @@ export function workspaceDisplayName(workspace: WorkspaceSummary | undefined, st
 
 export function workspaceSignals(workspace: WorkspaceSummary, strings: WorkbenchCopy = copy): string[] {
   const signals: string[] = [];
-  if ((workspace.dirtyRepositoryCount || 0) > 0) signals.push(`${workspace.dirtyRepositoryCount} ${strings.workspaceStatusDirty}`);
+  if ((workspace.dirtyRepositoryCount || 0) > 0) signals.push(strings.workspaceStatusDirty);
   if (workspace.unpushed) signals.push(strings.workspaceStatusUnpushed);
   if (workspace.blockerCount > 0) signals.push(strings.workspaceStatusNeedsReview);
   if (workspace.toolchain?.status && workspace.toolchain.status !== "ready" && workspace.toolchain.status !== "not_applicable") {
@@ -148,7 +148,10 @@ export function workspaceSignals(workspace: WorkspaceSummary, strings: Workbench
 
 export function workspaceMeta(workspace: WorkspaceSummary, strings: WorkbenchCopy = copy): string {
   const parts: string[] = [];
-  if (isMainWorkspace(workspace)) return workspaceSignals(workspace, strings).join(" · ");
+  const branchLabel = workspace.workspaceBranchLabel
+    ? `${strings.workspaceBranchLabel} ${compactRefLabel(workspace.workspaceBranchLabel)}`
+    : "";
+  if (isMainWorkspace(workspace)) return [branchLabel, ...workspaceSignals(workspace, strings)].filter(Boolean).join(" · ");
   if (workspace.state && workspace.state !== "active") {
     parts.push(workspace.state === "removed"
       ? strings.workspaceStateRemoved
@@ -159,20 +162,56 @@ export function workspaceMeta(workspace: WorkspaceSummary, strings: WorkbenchCop
           : workspace.state);
   }
   if (workspace.repositoryCount > 1) parts.push(formatCopyFrom(strings, "repoCountLabel", [workspace.repositoryCount]));
+  if (branchLabel) parts.push(branchLabel);
+  if (workspace.currentRefState === "uniform" && workspace.currentRef) parts.push(compactRefLabel(workspace.currentRef));
   parts.push(...workspaceSignals(workspace, strings));
   const claim = workspaceClaim(workspace);
   if (claim) parts.push(claim);
   return parts.join(" · ");
 }
 
-export function repositoryBranchLabel(repository: Pick<RepositorySummary, "branch" | "status" | "issues">, strings: WorkbenchCopy = copy): string {
+export function compactRefLabel(value: string): string {
+  const branch = value.trim();
+  if (!branch) return "";
+  const parts = branch.split("/").filter(Boolean);
+  if (parts.length <= 3) return branch;
+  return `${parts.slice(0, 2).join("/")}/…/${parts.at(-1)}`;
+}
+
+export function repositoryBranchLabel(
+  repository: Pick<RepositorySummary, "branch" | "status" | "issues" | "refState" | "refCandidates" | "headShort">,
+  strings: WorkbenchCopy = copy,
+): string {
   if (repository.status === "missing" || repository.issues.some((issue) => issue.code === "worktree_missing")) {
     return strings.branchMissing;
   }
-  const branch = repository.branch;
-  const parts = branch.split("/").filter(Boolean);
-  if (parts.length <= 3) return branch || strings.branchDetached;
-  return `${parts.slice(0, 2).join("/")}/…/${parts.at(-1)}`;
+  if (repository.branch) return compactRefLabel(repository.branch);
+  if (repository.refState === "detached") {
+    const candidates = repository.refCandidates || [];
+    if (candidates.length === 1) return `${strings.branchDetached} · ${compactRefLabel(candidates[0])}`;
+    return `${strings.branchDetached} · ${repository.headShort || "—"}`;
+  }
+  return strings.branchDetached;
+}
+
+export function repositoryCurrentRefDetail(
+  repository: Pick<RepositorySummary, "branch" | "status" | "refState" | "refCandidates" | "headShort">,
+  strings: WorkbenchCopy = copy,
+): string {
+  if (repository.status === "missing" || repository.refState === "missing") return strings.branchMissing;
+  if (repository.branch) return repository.branch;
+  const candidates = repository.refCandidates || [];
+  if (repository.refState === "detached" && candidates.length) {
+    return `${strings.branchDetached} · ${candidates.join(", ")}`;
+  }
+  return `${strings.branchDetached} · ${repository.headShort || "—"}`;
+}
+
+export function repositoryRefMismatch(
+  repository: Pick<RepositorySummary, "branch" | "registeredBranch" | "refState">,
+): boolean {
+  if (!repository.registeredBranch) return false;
+  return repository.refState === "detached" || repository.branch !== repository.registeredBranch;
 }
 
 export function repositoryCountLabel(count: number, strings: WorkbenchCopy = copy): string {
@@ -539,13 +578,14 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     sectionTitle: { color: theme.colors.foreground, flex: 1, fontSize: 14, fontWeight: "500", minWidth: 0 },
     sectionCount: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 11 },
     repositoryList: { marginTop: 4 },
-    repositoryRow: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", gap: 7, minHeight: 46, paddingHorizontal: 4, paddingVertical: 7 },
+    repositoryRow: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", gap: 7, minHeight: 34, paddingHorizontal: 4, paddingVertical: 5 },
     repositoryRowActive: { backgroundColor: theme.colors.surface2 },
     repositoryDot: { borderRadius: 4, height: 7, width: 7 },
     repositoryCopy: { flex: 1, minWidth: 0 },
-    repositoryLine: { color: theme.colors.foreground, fontFamily: "monospace", fontSize: 13 },
+    repositoryLine: { color: theme.colors.foreground, fontFamily: "monospace", fontSize: 12 },
     repositoryMeta: { color: theme.colors.foregroundMuted, fontSize: 11, marginTop: 3 },
     repositoryMetrics: { alignItems: "flex-end", minWidth: 94 },
+    repositoryIssueMark: { color: theme.colors.statusWarning, fontFamily: "monospace", fontSize: 12, fontWeight: "700", width: 10 },
     repositoryDelta: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 11, textAlign: "right" },
     changeCounts: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 11, textAlign: "right" },
     changePrefix: { color: theme.colors.statusWarning },
@@ -593,11 +633,11 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     graphDotBase: { borderWidth: 1 },
     graphCommitDetail: { backgroundColor: theme.colors.surface2, borderColor: theme.colors.border, borderRadius: 6, borderWidth: 1, gap: 2, marginBottom: 6, padding: 8 },
     graphCommitDetailCompact: { marginBottom: 0 },
-    graphDetailsPanel: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.border, borderRadius: 6, borderWidth: 1, marginTop: 6, maxHeight: 176, overflow: "hidden" },
+    graphDetailsPanel: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.border, borderRadius: 6, borderWidth: 1, marginTop: 6, maxHeight: 220, overflow: "hidden" },
     graphDetailsHeader: { alignItems: "center", backgroundColor: theme.colors.surface2, borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", gap: 6, justifyContent: "space-between", minHeight: 28, paddingHorizontal: 8, paddingVertical: 4 },
     graphDetailsHeaderTitle: { color: theme.colors.foreground, flex: 1, fontSize: 10, fontWeight: "700", minWidth: 0 },
     graphDetailsHeaderMeta: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 9, flexShrink: 0 },
-    graphDetailsScroll: { flexShrink: 1, maxHeight: 146, minHeight: 0 },
+    graphDetailsScroll: { flexShrink: 1, maxHeight: 190, minHeight: 0 },
     graphDetailsContent: { padding: 6 },
     graphCommitDetailTitleRow: { alignItems: "flex-start", flexDirection: "row", gap: 6 },
     graphCommitDetailTitle: { color: theme.colors.foreground, flex: 1, fontSize: 12, fontWeight: "600", lineHeight: 16 },

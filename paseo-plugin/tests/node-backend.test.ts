@@ -18,8 +18,9 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { loadConfig } from "../server/backend/config.ts";
 import { Service } from "../server/backend/service.ts";
-import { Git } from "../server/backend/git.ts";
+import { Git, gitDiagnostics } from "../server/backend/git.ts";
 import { ObservationCache } from "../server/backend/cache.ts";
+import { WorkspaceActivityIndex } from "../server/backend/workspace-activity.ts";
 import { type Json, WorkbenchError } from "../server/backend/storage.ts";
 import { observationTimingFromWire, readBudgetMs, resolveObservationTiming } from "../shared/observation-timing.ts";
 
@@ -95,6 +96,70 @@ test("older timing payloads receive bounded read defaults", () => {
   const parsed = observationTimingFromWire(wire);
   assert.equal(parsed.foregroundGitTimeoutMs, 4_500);
   assert.equal(parsed.readBudgetsMs.list, 3_000);
+});
+
+test("workspace activity scans HEAD metadata only on request, caches it, aggregates repositories, and persists", async () => {
+  const f = fixture();
+  let service = new Service(f.config);
+  try {
+    const beforeCommands = gitDiagnostics().commands;
+    const initial = await service.handle("workspace.list", { includeRemoved: true });
+    assert.equal(gitDiagnostics().commands, beforeCommands, "workspace.list must not start Git activity scans");
+    assert.ok(initial.workspaces.every((workspace: Json) => workspace.latestCommitAt === null));
+    const workspaceIds = initial.workspaces.map((workspace: Json) => workspace.id);
+    const started = await service.handle("workspace.activity", { action: "start", scanId: "scan-first", workspaceIds });
+    assert.equal(started.state, "running");
+    let status = started;
+    for (let attempt = 0; attempt < 300 && status.state === "running"; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      status = await service.handle("workspace.activity", { action: "status", scanId: "scan-first" });
+    }
+    assert.equal(status.state, "complete");
+    assert.equal(status.total, 3);
+    const expected = ["one", "two", "three"]
+      .map((name) => git(join(f.root, name), ["show", "-s", "--format=%cI", "HEAD"]))
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+    const after = await service.handle("workspace.list", { includeRemoved: true });
+    assert.equal(after.workspaces.find((workspace: Json) => workspace.id === "main").latestCommitAt, expected);
+    assert.equal(after.workspaces.find((workspace: Json) => workspace.id === "main").latestCommitState, "ready");
+
+    const afterFirstScan = gitDiagnostics().commands;
+    const cached = await service.handle("workspace.activity", { action: "start", scanId: "scan-cached", workspaceIds });
+    assert.equal(cached.state, "complete");
+    assert.equal(cached.total, 0);
+    assert.equal(gitDiagnostics().commands, afterFirstScan, "fresh activity cache must avoid Git commands");
+    await service.close();
+    service = new Service(f.config);
+    const restored = await service.handle("workspace.list", { includeRemoved: true });
+    assert.equal(restored.workspaces.find((workspace: Json) => workspace.id === "main").latestCommitAt, expected);
+  } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("cancelling a workspace activity scan stops its queued repository lookups", async () => {
+  const f = fixture();
+  const activity = new WorkspaceActivityIndex(f.config);
+  try {
+    activity.cancel("close-before-start");
+    assert.equal(activity.start("close-before-start", [{ id: "workspace", repositories: [{ worktreePath: join(f.root, "one") }] }]).state, "cancelled");
+    const paths = Array.from({ length: 40 }, (_, index) => {
+      const path = join(f.root, `activity-alias-${index}`);
+      symlinkSync(join(f.root, "one"), path, "dir");
+      return path;
+    });
+    const beforeCommands = gitDiagnostics().commands;
+    const started = activity.start("cancel-scan", [{ id: "workspace", repositories: paths.map((worktreePath) => ({ worktreePath })) }]);
+    assert.equal(started.state, "running");
+    assert.equal(activity.cancel("cancel-scan").state, "cancelled");
+    await activity.close();
+    assert.equal(activity.status("cancel-scan").state, "cancelled");
+    assert.ok(gitDiagnostics().commands - beforeCommands <= 1, "cancelling should not drain the remaining repository queue");
+  } finally {
+    await activity.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
 });
 
 test("project config rejects an observation budget below the derived minimum", () => {

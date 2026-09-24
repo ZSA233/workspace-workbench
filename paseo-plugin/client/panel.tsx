@@ -39,8 +39,9 @@ import {
 defaultTreeMode,
 formatObservedTime,
 matchesWorkspaceFilter,
-resolveWorkspaceSelection,
-sortWorkspaces,
+  resolveWorkspaceSelection,
+  sortWorkspaces,
+  sortWorkspacesByLatestCommit,
 type ChangeScope,
 type ChangesResult,
 type DetailResult,
@@ -353,6 +354,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const rawRpc = useRpc(observerQuery);
   reportNativeDiagnostic("project-panel-observer-rpc-ready");
   const rpc = (input: Parameters<typeof rawRpc>[0]) => rawRpc({ ...input, projectConfig });
+  const rpcRef = useRef(rpc);
+  rpcRef.current = rpc;
   let getStorage;
   try {
     getStorage = useRpc(projectStorageQuery);
@@ -423,6 +426,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const selectedWorkspaceId = preferences.selectedWorkspaceId;
   const [selectionResolved, setSelectionResolved] = useState(false);
   const [selectorOpen, setSelectorOpen] = useState(false);
+  const [activityScanId, setActivityScanId] = useState("");
+  const activityScanIdRef = useRef("");
+  const [activityScanProgress, setActivityScanProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [sortByLatestCommit, setSortByLatestCommit] = useState(false);
   const [selectedRepoPath, setSelectedRepoPath] = useState("");
   const [tab, setTab] = useState<"workspace" | "review">("workspace");
   const [reviewTab, setReviewTab] = useState<"set" | "agent">("set");
@@ -528,10 +535,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     && listState.initialFailure
     && (!isRecoverableObserverFailure(listQuery.data, listQuery.error)
       || (listState.failureAgeMs ?? RECOVERABLE_FAILURE_GRACE_MS) >= RECOVERABLE_FAILURE_GRACE_MS);
-  const observedWorkspaces = useMemo(
-    () => (listReady ? sortWorkspaces(listResult?.workspaces || []) : []),
-    [listReady, listResult?.workspaces],
-  );
+  const observedWorkspaces = useMemo(() => {
+    const rows = listReady ? listResult?.workspaces || [] : [];
+    return sortByLatestCommit ? sortWorkspacesByLatestCommit(rows) : sortWorkspaces(rows);
+  }, [listReady, listResult?.workspaces, sortByLatestCommit]);
   const allWorkspaces = useMemo(
     () => observedWorkspaces.filter((workspace) => workspace.state !== "removed"),
     [observedWorkspaces],
@@ -565,6 +572,87 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     () => workspacePool.filter((workspace) => matchesWorkspaceFilter(workspace, workspaceFilter)),
     [workspacePool, workspaceFilter],
   );
+  const cancelWorkspaceActivityScan = useCallback((closeSelector = true) => {
+    const scanId = activityScanIdRef.current;
+    activityScanIdRef.current = "";
+    if (closeSelector) setSelectorOpen(false);
+    setActivityScanId("");
+    setActivityScanProgress(null);
+    if (scanId) void rpcRef.current({ method: "workspace.activity", params: { action: "cancel", scanId } });
+  }, []);
+  const openWorkspaceSelector = useCallback(() => {
+    if (selectorOpen) {
+      cancelWorkspaceActivityScan();
+      return;
+    }
+    setSelectorOpen(true);
+    setSortByLatestCommit(false);
+    const scanId = `selector-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    activityScanIdRef.current = scanId;
+    void rpcRef.current({
+      method: "workspace.activity",
+      params: { action: "start", scanId, workspaceIds: observedWorkspaces.map((workspace) => workspace.id) },
+    }).then((response) => {
+      if (activityScanIdRef.current !== scanId) return;
+      if (!response.ok) {
+        activityScanIdRef.current = "";
+        setActivityScanId("");
+        setActivityScanProgress(null);
+        void listQuery.refetch().finally(() => setSortByLatestCommit(true));
+        return;
+      }
+      const status = response.result as { state?: string; completed?: number; total?: number } | undefined;
+      setActivityScanProgress({ completed: status?.completed || 0, total: status?.total || 0 });
+      if (status?.state === "running") {
+        setActivityScanId(scanId);
+      } else {
+        activityScanIdRef.current = "";
+        setActivityScanId("");
+        setActivityScanProgress(null);
+        void listQuery.refetch().finally(() => setSortByLatestCommit(true));
+      }
+    }).catch(() => {
+      if (activityScanIdRef.current !== scanId) return;
+      activityScanIdRef.current = "";
+      void rpcRef.current({ method: "workspace.activity", params: { action: "cancel", scanId } });
+      setActivityScanId("");
+      setActivityScanProgress(null);
+      setSortByLatestCommit(true);
+    });
+  }, [cancelWorkspaceActivityScan, listQuery.refetch, observedWorkspaces, selectorOpen]);
+  useEffect(() => {
+    if (!selectorOpen || !foreground || !activityScanId) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      const response = await rpcRef.current({ method: "workspace.activity", params: { action: "status", scanId: activityScanId } }).catch(() => null);
+      if (stopped || activityScanIdRef.current !== activityScanId) return;
+      const status = response?.ok ? response.result as { state?: string; completed?: number; total?: number } | undefined : undefined;
+      if (!status) {
+        timer = setTimeout(poll, 1_000);
+        return;
+      }
+      setActivityScanProgress({ completed: status.completed || 0, total: status.total || 0 });
+      if (status.state === "running") {
+        timer = setTimeout(poll, 750);
+        return;
+      }
+      activityScanIdRef.current = "";
+      setActivityScanId("");
+      setActivityScanProgress(null);
+      void listQuery.refetch().finally(() => setSortByLatestCommit(true));
+    };
+    void poll();
+    return () => { stopped = true; if (timer) clearTimeout(timer); };
+  }, [activityScanId, foreground, listQuery.refetch, selectorOpen]);
+  useEffect(() => {
+    if (foreground || !activityScanIdRef.current) return;
+    cancelWorkspaceActivityScan();
+  }, [cancelWorkspaceActivityScan, foreground]);
+  useEffect(() => () => {
+    const scanId = activityScanIdRef.current;
+    if (scanId) void rpcRef.current({ method: "workspace.activity", params: { action: "cancel", scanId } });
+  }, []);
   const workspaceDirectory = paseoWorkspace?.directory || "";
   // The active selection is independent from the selector's filter. Changing
   // from “all” to “dirty” must not make a clean selected workspace disappear
@@ -1481,9 +1569,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       }}
     >
       {observationIssue ? <Text accessibilityRole="alert" style={styles.layoutMenuHint}>{localizedCopy.observationDegraded}: {observationIssue}</Text> : null}
-      {selectedWorkspace?.managed && selectedWorkspace.layout !== "gitlink" && !selectedWorkspaceBlocksTasks && listResult?.capabilities?.create ? <Pressable accessibilityRole="button" onPress={() => setAddRepositoriesOpen(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>添加仓库</Text></Pressable> : null}
-      {selectedWorkspaceId === "main" ? <Pressable accessibilityRole="button" onPress={() => { setMainRepositoryFilter(""); setMainRepositoriesOpen(true); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainSelectRepositories}</Text></Pressable> : null}
-      <Pressable accessibilityRole="button" onPress={() => { setLinkedWorkspaceFilter(""); setLinkedWorkspacesOpen(true); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.linkedSelectWorkspaces}</Text></Pressable>
       {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await listQuery.refetch(); await detailQuery.refetch(); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
       {mainRepositoriesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingMainRepositories) setMainRepositoriesOpen(false); }} title={localizedCopy.mainRepositoryTitle}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
@@ -1605,7 +1690,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         </Modal.Content>
       </Modal> : null}
       <WorkspaceSelector
-        onOpenLayoutMenu={openLayoutMenu}
+        onOpenLayoutMenu={() => { if (selectorOpen) cancelWorkspaceActivityScan(); openLayoutMenu(); }}
         statusControl={<IconButton label={observationLabel} icon={observationIcon}
           busy={observationRefreshing}
           color={observationColor}
@@ -1618,17 +1703,18 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         selectedWorkspaceId={selectedWorkspaceId}
         filter={workspaceFilter}
         open={selectorOpen}
+        latestCommitProgress={activityScanProgress}
         loading={!listResult && listQuery.isFetching}
         refreshing={manualRefreshing}
         failure={listFailure}
-        onOpen={() => setSelectorOpen((current) => !current)}
+        onOpen={openWorkspaceSelector}
         onFilter={setWorkspaceFilter}
-        onSelect={(id) => { selectWorkspace(id); setSelectorOpen(false); }}
-        onOpenOrphan={(id) => { setOrphanId(id); setSelectorOpen(false); }}
-        onRemoveWorkspace={listResult?.capabilities?.remove ? (workspace) => { void removeWorkspace(workspace); } : undefined}
-        onRestoreWorkspace={listResult?.capabilities?.restore ? (workspace) => { void restoreWorkspace(workspace); } : undefined}
-        onPermanentDeleteWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { inspectWorkspaceLifecycle(workspace, "permanent"); } : undefined}
-        onInspectWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { inspectWorkspaceLifecycle(workspace); } : undefined}
+        onSelect={(id) => { cancelWorkspaceActivityScan(); selectWorkspace(id); }}
+        onOpenOrphan={(id) => { cancelWorkspaceActivityScan(); setOrphanId(id); }}
+        onRemoveWorkspace={listResult?.capabilities?.remove ? (workspace) => { cancelWorkspaceActivityScan(); void removeWorkspace(workspace); } : undefined}
+        onRestoreWorkspace={listResult?.capabilities?.restore ? (workspace) => { cancelWorkspaceActivityScan(); void restoreWorkspace(workspace); } : undefined}
+        onPermanentDeleteWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { cancelWorkspaceActivityScan(); inspectWorkspaceLifecycle(workspace, "permanent"); } : undefined}
+        onInspectWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { cancelWorkspaceActivityScan(); inspectWorkspaceLifecycle(workspace); } : undefined}
         lifecycleBusyWorkspaceId={lifecycleBusyWorkspaceId}
         theme={theme}
         styles={styles}
@@ -1809,6 +1895,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       <LayoutMenu
         onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}
         onCreate={listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setCreateOpen(true); } : undefined}
+        selectedWorkspace={selectedWorkspace}
+        onAddRepositories={selectedWorkspace?.managed && selectedWorkspace.layout !== "gitlink" && !selectedWorkspaceBlocksTasks && listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setAddRepositoriesOpen(true); } : undefined}
+        onSelectMainRepositories={selectedWorkspaceId === "main" ? () => { setLayoutMenuOpen(false); setMainRepositoryFilter(""); setMainRepositoriesOpen(true); } : undefined}
+        onSelectLinkedWorkspaces={() => { setLayoutMenuOpen(false); setLinkedWorkspaceFilter(""); setLinkedWorkspacesOpen(true); }}
         onOpenStorage={openStorageMenu}
         onOpenRuntimeSettings={openRuntimeSettings}
         onOpenReviewSettings={openReviewSettings}

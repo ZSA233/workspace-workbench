@@ -208,6 +208,9 @@ export type WorkspaceSummary = {
   createdAt?: string | null;
   lastUsedAt?: string | null;
   updatedAt?: string | null;
+  latestCommitAt?: string | null;
+  latestCommitObservedAt?: string | null;
+  latestCommitState?: "ready" | "pending" | "partial" | "unknown";
   observedAt?: string | null;
   deletion?: WorkspaceDeletion | null;
   repositoryCount: number;
@@ -563,6 +566,24 @@ export function sortWorkspaces(workspaces: WorkspaceSummary[]): WorkspaceSummary
     }
     return left.id.localeCompare(right.id);
   });
+}
+
+export function sortWorkspacesByLatestCommit(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
+  return [...workspaces].sort((left, right) => {
+    const leftTime = timestampValue(left.latestCommitAt);
+    const rightTime = timestampValue(right.latestCommitAt);
+    if (leftTime === null && rightTime !== null) return 1;
+    if (leftTime !== null && rightTime === null) return -1;
+    if (leftTime !== null && rightTime !== null && leftTime !== rightTime) return rightTime - leftTime;
+    return 0;
+  });
+}
+
+export function matchesWorkspaceSearch(workspace: WorkspaceSummary, query: string): boolean {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return true;
+  return [workspace.displayName, workspace.description, workspace.id]
+    .some((value) => typeof value === "string" && value.toLocaleLowerCase().includes(needle));
 }
 
 export function matchesWorkspaceFilter(
@@ -1117,5 +1138,21 @@ export function formatRelativeTime(value: string | null | undefined, strings: Wo
   if (delta < 3_600_000) return formatCopyFrom(strings, "text_607909447d", [Math.floor(delta / 60_000)]);
   if (delta < 86_400_000) return formatCopyFrom(strings, "text_87a6439b2e", [Math.floor(delta / 3_600_000)]);
   return formatCopyFrom(strings, "text_9094e27946", [Math.floor(delta / 86_400_000)]);
+}
+
+export function formatCompactRelativeAge(value: string | null | undefined, strings: WorkbenchCopy = copy): string {
+  if (!value) return strings.text_6478dde454;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return strings.text_6478dde454;
+  const delta = Math.max(0, Date.now() - time),
+    minutes = Math.floor(delta / 60_000),
+    hours = Math.floor(delta / 3_600_000),
+    days = Math.floor(delta / 86_400_000);
+  if (delta < 60_000) return strings.workspaceAgeNow;
+  if (delta < 3_600_000) return formatCopyFrom(strings, "workspaceAgeMinutes", [minutes]);
+  if (delta < 86_400_000) return formatCopyFrom(strings, "workspaceAgeHours", [hours]);
+  if (days < 30) return formatCopyFrom(strings, "workspaceAgeDays", [days]);
+  if (days < 365) return formatCopyFrom(strings, "workspaceAgeMonths", [Math.floor(days / 30)]);
+  return formatCopyFrom(strings, "workspaceAgeYears", [Math.floor(days / 365)]);
 }
 import { copy, formatCopyFrom, type WorkbenchCopy } from "../shared/copy.ts";

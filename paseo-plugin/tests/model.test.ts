@@ -9,13 +9,16 @@ import {
   defaultTreeMode,
   diffDisplayRowMetrics,
   formatDiffReferences,
+  formatCompactRelativeAge,
   layoutGraph,
   languageForPath,
   matchesWorkspaceFilter,
+  matchesWorkspaceSearch,
   parseUnifiedPatch,
   pairDiffLines,
   resolveWorkspaceSelection,
   sortWorkspaces,
+  sortWorkspacesByLatestCommit,
   type FileChange,
   type CommitNode as GraphNode,
   type WorkspaceSummary as Workspace,
@@ -57,6 +60,33 @@ test("workspace sorting and filters preserve the main workspace and activity ord
   assert.equal(matchesWorkspaceFilter(workspace("dirty", { dirty: true }), "attention"), true);
   assert.equal(matchesWorkspaceFilter(workspace("pending", { state: "deletion_pending" }), "attention"), true);
   assert.equal(matchesWorkspaceFilter(workspace("gone", { state: "removed" }), "all"), false);
+});
+
+test("workspace commit sorting is newest first, preserves ties, and puts unknown commits last", () => {
+  const rows = [
+    workspace("older", { latestCommitAt: "2026-09-01T00:00:00Z" }),
+    workspace("main", { kind: "live", managed: false, latestCommitAt: "2026-08-01T00:00:00Z" }),
+    workspace("tie-a", { latestCommitAt: "2026-09-20T00:00:00Z" }),
+    workspace("tie-b", { latestCommitAt: "2026-09-20T00:00:00Z" }),
+    workspace("unknown"),
+  ];
+  assert.deepEqual(sortWorkspacesByLatestCommit(rows).map((item) => item.id), ["tie-a", "tie-b", "older", "main", "unknown"]);
+});
+
+test("workspace search matches name, description, and id without changing category filters", () => {
+  const row = workspace("codex-2026-09", { displayName: "Merchant USD", description: "Settlement review" });
+  assert.equal(matchesWorkspaceSearch(row, "merchant"), true);
+  assert.equal(matchesWorkspaceSearch(row, "SETTLEMENT"), true);
+  assert.equal(matchesWorkspaceSearch(row, "2026-09"), true);
+  assert.equal(matchesWorkspaceSearch(row, "other"), false);
+  assert.equal(matchesWorkspaceFilter({ ...row, dirty: true }, "dirty"), true);
+});
+
+test("compact workspace age uses short localized units", () => {
+  const recent = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+  const old = new Date(Date.now() - 70 * 86_400_000).toISOString();
+  assert.equal(formatCompactRelativeAge(recent), "3小时");
+  assert.equal(formatCompactRelativeAge(old), "2个月");
 });
 
 test("saved workspace selection wins over auto detection and falls back safely", () => {

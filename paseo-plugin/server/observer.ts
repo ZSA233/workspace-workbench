@@ -37,7 +37,7 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
-const versionedMethods = new Set<string>(["observer.versions", "workspace.detail", "workspace.operation.status", "repository.graph", "repository.changes", "repository.diff"]);
+const versionedMethods = new Set<string>(["observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.graph", "repository.changes", "repository.diff"]);
 const mutationMethods = new Set<string>([
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
   "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete",
@@ -47,7 +47,7 @@ const BRIDGE_CACHE_ENTRIES = 128;
 const BRIDGE_CACHE_BYTES = 8 * 1024 * 1024;
 const BRIDGE_IN_FLIGHT = 16;
 const READ_METHODS = new Set<string>([
-  "observer.versions", "workspace.list", "workspace.detail", "workspace.identify",
+  "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify",
   "workspace.operation.status",
   "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff",
   "review-set.compare", "review-set.brief",
@@ -60,7 +60,7 @@ const READ_METHODS = new Set<string>([
 // is reported by the backend; this generation identifies the observer bridge
 // process itself.
 const SERVER_BUILD_ID = "observer-bridge-v2";
-const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
+const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(method?: string): number {
   const project = currentProject();

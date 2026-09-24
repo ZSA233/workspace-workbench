@@ -29,7 +29,7 @@ export class Service {
   observation: Observation;
   startedAt = Date.now();
   version: string;
-  build = buildId(["../server/backend/service.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts"]);
+  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts"]);
   constructor(config: Config, version = "0.1.3") {
     this.config = config;
     this.version = version;
@@ -95,6 +95,8 @@ export class Service {
         return this.health();
       case "workspace.list":
         return this.observation.list(params, signal);
+      case "workspace.activity":
+        return this.observation.activityRequest(params);
       case "workspace.orphan.preview":
         return this.workspaces.orphanPreview(String(params.workspaceId || ""), signal);
       case "workspace.detail":
@@ -260,6 +262,7 @@ export class Service {
   }
   async close() {
     await this.workspaces.mutations.drain();
+    await this.observation.close();
     await this.observation.scheduler.close();
     await this.cache.close();
   }

@@ -2,15 +2,17 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { FlatList, Icon } from "../native-components";
-import { useEffect, type ReactNode } from "react";
+import { FlatList, Icon, ScrollView, TextInput } from "../native-components";
+import { useEffect, useState, type ReactNode } from "react";
 import { BackHandler,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { formatCopyFrom } from "../../shared/copy";
 
 import {
 countWorkspaceFilter,
+formatCompactRelativeAge,
+matchesWorkspaceSearch,
+type WorkspaceSummary,
 type WorkspaceFilter,
-type WorkspaceSummary
 } from "../model";
 import { observerAccent } from "../theme";
 import { useWorkbenchCopy } from "../i18n";
@@ -78,6 +80,10 @@ export function LayoutMenu({
   onOpenStorage,
   onOpenRuntimeSettings,
   onOpenReviewSettings,
+  selectedWorkspace,
+  onAddRepositories,
+  onSelectMainRepositories,
+  onSelectLinkedWorkspaces,
   theme,
   styles,
 }: {
@@ -91,11 +97,31 @@ export function LayoutMenu({
   onOpenStorage?: () => void;
   onOpenRuntimeSettings?: () => void;
   onOpenReviewSettings?: () => void;
+  selectedWorkspace?: WorkspaceSummary;
+  onAddRepositories?: () => void;
+  onSelectMainRepositories?: () => void;
+  onSelectLinkedWorkspaces?: () => void;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
   const localizedCopy = useWorkbenchCopy();
-  return <AnchoredMenu open={open} onClose={onClose} theme={theme}>
+  const timestamp = (value: string | null | undefined) => {
+    if (!value) return localizedCopy.text_6478dde454;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : localizedCopy.text_6478dde454;
+  };
+  return <AnchoredMenu open={open} onClose={onClose} theme={theme} width={selectedWorkspace ? 285 : 190}>
+    <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
+    {selectedWorkspace ? <View style={{ paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8 }}>
+      <Text numberOfLines={1} style={[styles.layoutMenuItemText, { fontWeight: "700" }]}>{workspaceDisplayName(selectedWorkspace, localizedCopy)}</Text>
+      <Text style={styles.layoutMenuHint}>{localizedCopy.workspaceCreatedAt}: {timestamp(selectedWorkspace.createdAt)}</Text>
+      <Text style={styles.layoutMenuHint}>{localizedCopy.workspaceRecordUpdatedAt}: {timestamp(selectedWorkspace.updatedAt)}</Text>
+      <Text style={styles.layoutMenuHint}>{localizedCopy.workspaceLatestCommitAt}: {selectedWorkspace.latestCommitAt ? timestamp(selectedWorkspace.latestCommitAt) : localizedCopy.workspaceCommitUnavailable}</Text>
+      {selectedWorkspace.latestCommitObservedAt ? <Text style={styles.layoutMenuHint}>{localizedCopy.workspaceCommitObservedAt}: {timestamp(selectedWorkspace.latestCommitObservedAt)}</Text> : null}
+    </View> : null}
+    {onAddRepositories ? <LayoutMenuItem label={localizedCopy.addRepositoriesMenu} onPress={onAddRepositories} styles={styles} /> : null}
+    {onSelectMainRepositories ? <LayoutMenuItem label={localizedCopy.mainSelectRepositories} onPress={onSelectMainRepositories} styles={styles} /> : null}
+    {onSelectLinkedWorkspaces ? <LayoutMenuItem label={localizedCopy.linkedSelectWorkspaces} onPress={onSelectLinkedWorkspaces} styles={styles} /> : null}
     {onCreate ? <LayoutMenuItem label={localizedCopy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
     {onSwitchProject ? <LayoutMenuItem label={localizedCopy.switchProject} onPress={onSwitchProject} styles={styles} /> : null}
     {onOpenStorage ? <LayoutMenuItem label={localizedCopy.storageMenu} onPress={onOpenStorage} styles={styles} /> : null}
@@ -104,6 +130,7 @@ export function LayoutMenu({
     <LayoutMenuItem label={localizedCopy.text_5f6a1bf190} onPress={onCollapseAll} styles={styles} />
     <LayoutMenuItem label={localizedCopy.text_66c98ab6d8} onPress={onExpandAll} styles={styles} />
     <LayoutMenuItem label={localizedCopy.text_e003f209ca} onPress={onReset} styles={styles} />
+    </ScrollView>
   </AnchoredMenu>;
 }
 
@@ -153,6 +180,7 @@ export function WorkspaceSelector({
   onInspectWorkspace,
   lifecycleBusyWorkspaceId,
   onOpenLayoutMenu,
+  latestCommitProgress,
   statusControl,
   theme,
   styles,
@@ -178,11 +206,15 @@ export function WorkspaceSelector({
   onInspectWorkspace?: (workspace: WorkspaceSummary) => void;
   lifecycleBusyWorkspaceId?: string;
   onOpenLayoutMenu?: () => void;
+  latestCommitProgress?: { completed: number; total: number } | null;
   statusControl?: ReactNode;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
   const localizedCopy = useWorkbenchCopy();
+  const [search, setSearch] = useState("");
+  useEffect(() => { if (!open) setSearch(""); }, [open]);
+  const searchedWorkspaces = visibleWorkspaces.filter((workspace) => matchesWorkspaceSearch(workspace, search));
   const attention = countWorkspaceFilter(workspaces, "attention");
   const filters: { id: WorkspaceFilter; label: string; count: number }[] = [
     { id: "all", label: localizedCopy.text_778fc8f994, count: workspaces.length },
@@ -191,6 +223,7 @@ export function WorkspaceSelector({
     { id: "unpushed", label: localizedCopy.text_05162ec10a, count: workspaces.filter((workspace) => workspace.unpushed).length },
     { id: "history", label: localizedCopy.text_be78b20585, count: historyWorkspaces.length },
   ];
+  const workspaceTotal = filter === "history" ? historyWorkspaces.length : workspaces.length;
   return (
     <View style={styles.selector}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -230,12 +263,25 @@ export function WorkspaceSelector({
               </Pressable>
             ))}
           </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 7 }}>
+            <TextInput
+              accessibilityLabel={localizedCopy.workspaceSearchPlaceholder}
+              onChangeText={setSearch}
+              placeholder={localizedCopy.workspaceSearchPlaceholder}
+              placeholderTextColor={theme.colors.foregroundMuted}
+              returnKeyType="search"
+              style={[styles.targetInput, { flex: 1, fontSize: 11, minHeight: 30, paddingVertical: 4 }]}
+              value={search}
+            />
+            {search ? <Pressable accessibilityLabel={localizedCopy.workspaceSearchClear} accessibilityRole="button" onPress={() => setSearch("")} style={{ paddingHorizontal: 7, paddingVertical: 5 }}><Text style={styles.workspaceOptionActionText}>×</Text></Pressable> : null}
+          </View>
+          {latestCommitProgress && latestCommitProgress.total > latestCommitProgress.completed ? <Text style={[styles.selectorListLabel, { marginTop: 5 }]}>{formatCopyFrom(localizedCopy, "workspaceActivityProgress", [latestCommitProgress.completed, latestCommitProgress.total])}</Text> : null}
           <View style={styles.selectorListHeader}>
             <Text style={styles.selectorListLabel}>{localizedCopy.text_205b4561ed}</Text>
-            <Text style={styles.selectorListCount}>{visibleWorkspaces.length}{localizedCopy.text_42099b4af0}{workspaces.length}</Text>
+            <Text style={styles.selectorListCount}>{search ? `${searchedWorkspaces.length}${localizedCopy.text_42099b4af0}${visibleWorkspaces.length}` : `${visibleWorkspaces.length}${localizedCopy.text_42099b4af0}${workspaceTotal}`}</Text>
           </View>
           <FlatList
-            data={visibleWorkspaces}
+            data={searchedWorkspaces}
             getItemLayout={(_, index) => ({ length: WORKSPACE_OPTION_HEIGHT, offset: WORKSPACE_OPTION_HEIGHT * index, index })}
             keyExtractor={(workspace) => workspace.id}
             initialNumToRender={12}
@@ -260,7 +306,7 @@ export function WorkspaceSelector({
             showsVerticalScrollIndicator={visibleWorkspaces.length > 7}
             style={styles.workspaceOptionList}
             windowSize={7}
-            ListEmptyComponent={!loading ? <Text style={styles.emptyText}>{localizedCopy.text_daa32fe25c}</Text> : null}
+            ListEmptyComponent={!loading ? <Text style={styles.emptyText}>{search ? localizedCopy.workspaceSearchEmpty : localizedCopy.text_daa32fe25c}</Text> : null}
           />
           {filter === "all" && orphanCandidates?.length ? <View style={{ maxHeight: 170 }}>
             <Text style={styles.selectorListLabel}>{localizedCopy.orphanHeading} · {orphanCandidates.length}</Text>
@@ -323,6 +369,11 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
     : workspace.observationStale || workspace.dirty === null
     ? theme.colors.foregroundMuted
     : theme.colors.statusSuccess;
+  const workspaceDates = [
+    workspace.createdAt ? formatCopyFrom(localizedCopy, "workspaceCreatedShort", [formatCompactRelativeAge(workspace.createdAt, localizedCopy)]) : null,
+    workspace.latestCommitAt ? formatCopyFrom(localizedCopy, "workspaceCommitShort", [formatCompactRelativeAge(workspace.latestCommitAt, localizedCopy)]) : null,
+  ].filter(Boolean);
+  const meta = [repositoryCountLabel(workspace.repositoryCount, localizedCopy), ...workspaceDates].join(" · ");
   return (
     <View style={[styles.workspaceOption, selected && styles.workspaceOptionActive]}>
       <Pressable
@@ -334,7 +385,7 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
         <View style={[styles.workspaceStatusDot, { backgroundColor: statusTone }]} />
         <View style={styles.workspaceOptionCopy}>
           <Text numberOfLines={1} style={styles.workspaceOptionTitle}>{workspaceDisplayName(workspace, localizedCopy)}</Text>
-          <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{repositoryCountLabel(workspace.repositoryCount, localizedCopy)}</Text>
+          <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{meta}</Text>
         </View>
         {status && status !== "active" ? <Text numberOfLines={1} style={[styles.workspaceOptionState, { color: statusTone }]}>{status}</Text> : null}
       </Pressable>

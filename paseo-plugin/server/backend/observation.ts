@@ -5,6 +5,7 @@ import { Git, type GitFile } from "./git.ts";
 import { Workspaces } from "./workspaces.ts";
 import { Runtime } from "./runtime.ts";
 import { ObservationCache } from "./cache.ts";
+import { WorkspaceActivityIndex } from "./workspace-activity.ts";
 import { gitlinkDetails } from "./gitlinks.ts";
 import {
   hash,
@@ -41,6 +42,7 @@ export class Observation {
   runtime: Runtime | null;
   cache: ObservationCache;
   scheduler: ObservationScheduler;
+  activity: WorkspaceActivityIndex;
   constructor(
     workspaces: Workspaces,
     runtime: Runtime | null,
@@ -51,6 +53,7 @@ export class Observation {
     this.runtime = runtime;
     this.cache = cache;
     this.scheduler = scheduler;
+    this.activity = new WorkspaceActivityIndex(workspaces.config);
   }
   git(repo: Json, deadline?: number, signal?: AbortSignal) {
     return new Git(
@@ -137,6 +140,7 @@ export class Observation {
       issues,
       createdAt: workspace.createdAt || null,
       updatedAt: workspace.updatedAt || null,
+      ...this.activity.summary(workspace),
       observedAt: roster ? null : now(),
       observationStale: roster,
       ...(this.runtime ? { toolchain: this.runtime.summary(workspace) } : {}),
@@ -282,6 +286,22 @@ export class Observation {
         deferred: true,
       },
     };
+  }
+  activityRequest(params: Json): Json {
+    const action = String(params.action || "status"),
+      scanId = String(params.scanId || "");
+    if (action === "status") return this.activity.status(scanId);
+    if (action === "cancel") return this.activity.cancel(scanId);
+    if (action !== "start") throw new WorkbenchError("activity_action_invalid", "workspace activity action must be start, status, or cancel");
+    const requested = Array.isArray(params.workspaceIds)
+      ? [...new Set(params.workspaceIds.slice(0, 500).filter((value: unknown): value is string => typeof value === "string" && value.length <= 256))]
+      : [];
+    const requestedIds = new Set(requested),
+      workspaces = this.workspaces.list().filter((workspace) => requestedIds.has(workspace.id));
+    return this.activity.start(scanId, workspaces);
+  }
+  async close(): Promise<void> {
+    await this.activity.close();
   }
   async fingerprint(repo: Json) {
     return this.scheduler.token(repo.worktreePath || repo.sourcePath);

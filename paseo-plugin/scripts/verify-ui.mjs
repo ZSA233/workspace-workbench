@@ -85,6 +85,21 @@ try {
   await page.getByText('legacy',{exact:true}).first().click();
   await page.getByText('Main workspace',{exact:true}).last().click();
   report.checks.push('real UI discovered an orphan worktree, previewed it, adopted it with one optional branch, and switched to the managed workspace');
+  await page.getByText('Main workspace',{exact:true}).first().click();
+  const workspaceSearch = page.getByPlaceholder('Search workspaces…');
+  await workspaceSearch.waitFor();
+  await workspaceSearch.fill('legacy');
+  await page.getByText('legacy',{exact:true}).first().waitFor();
+  await workspaceSearch.fill('no-workspace-match-verify');
+  await page.getByText('No matching workspaces',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Clear search'}).click();
+  await page.getByText(/Commit (?:now|\d)/).first().waitFor({timeout:15_000});
+  await page.getByRole('button',{name:'Open Workbench layout menu'}).click();
+  await page.getByText('Created:',{exact:false}).waitFor();
+  await page.getByText('Record updated:',{exact:false}).waitFor();
+  await page.getByText('Latest commit:',{exact:false}).waitFor();
+  await page.keyboard.press('Escape');
+  report.checks.push('workspace dropdown search filtered names; open-triggered Git metadata populated compact commit ages and exact timestamps appeared in the menu');
   const file = join(ui.project,'one','ui-proof.txt');
   let started = Date.now();
   writeFileSync(file,'line one\nline two\n');
@@ -143,6 +158,7 @@ try {
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor({timeout:10_000});
   await screenshot('07-empty-after-cleanup.png');
   report.checks.push('file deletion restored the clean/empty state');
+  await page.getByRole('button',{name:'Open Workbench layout menu'}).click();
   await page.getByText(/^(选择仓库|Select repositories)$/).click();
   await page.getByText(/^(主工作区仓库范围|Main workspace repository scope)$/).waitFor();
   const secretCandidate = page.getByText(/go-secrets · (已发现|discovered)/);
@@ -153,6 +169,7 @@ try {
   await page.getByText(/^(保存范围|Save scope)$/).click();
   await page.getByText(/^(主工作区仓库范围|Main workspace repository scope)$/).waitFor({state:'detached'});
   report.checks.push('main workspace repository picker showed go-secrets unchecked and selected a different unregistered repository without changing the managed catalog');
+  await page.getByRole('button',{name:'Open Workbench layout menu'}).click();
   await page.getByText('Select Gitlink workspaces',{exact:true}).click();
   await page.getByText('Gitlink workspace scope',{exact:true}).waitFor();
   await page.getByText(/outer · 1 Gitlinks/).click();

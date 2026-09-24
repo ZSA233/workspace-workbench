@@ -6,6 +6,7 @@ export const observerMethods = [
   "observer.versions",
   "observer.reload",
   "workspace.list",
+  "workspace.activity",
   "workspace.detail",
   "workspace.identify",
   "workspace.runtime",

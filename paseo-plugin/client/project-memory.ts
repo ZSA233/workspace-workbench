@@ -7,12 +7,23 @@ export function chooseProject<T extends { configPath: string }>(projects: T[], c
   // keep the caller in setup instead of silently showing a project remembered
   // from another directory.
   if (hasContext) return contextual;
-  // A host workspace is known but its directory did not resolve to a project.
-  // A manual choice is valid; an old remembered project is not.
-  if (requireContext) return projects.find((project) => project.configPath === chosen);
+  // A host workspace can be known before Paseo provides its directory. Keep a
+  // manual choice and the host's remembered project usable in that window;
+  // waiting for a second picker here made agent/workspace surfaces ask for a
+  // project on every open. The explicit context above still wins whenever a
+  // directory is available.
+  if (requireContext) {
+    return projects.find((project) => project.configPath === chosen)
+      || projects.find((project) => project.configPath === saved)
+      || [...projects].sort((a, b) => a.configPath.localeCompare(b.configPath))[0];
+  }
   return projects.find((project) => project.configPath === chosen)
     || projects.find((project) => project.configPath === saved)
-    || (projects.length === 1 ? projects[0] : undefined);
+    // A global/sidebar surface has no directory to identify a project. Pick a
+    // stable default and expose the three-dot project switcher for an
+    // explicit change; this removes the startup chooser after a fresh install
+    // while keeping the choice deterministic when no memory exists yet.
+    || [...projects].sort((a, b) => a.configPath.localeCompare(b.configPath))[0];
 }
 
 export function useProjectMemory(hostId: string) {

@@ -195,7 +195,12 @@ export class ObservationCache {
     work: () => Promise<Json>,
     scope?: CachePublication,
   ): void {
-    if (this.probes.has(entry) || entry.fingerprintProbed || entry.fingerprint === "pending" || this.background.size >= 32) return;
+    // A function fingerprint is intentionally rechecked on later reads. The
+    // first probe makes a persisted entry usable across process generations;
+    // subsequent probes let scheduler revisions invalidate an already visible
+    // snapshot without making the request wait for Git. `probes` still keeps
+    // concurrent reads to one probe per entry.
+    if (this.probes.has(entry) || entry.fingerprint === "pending" || this.background.size >= 32) return;
     this.probes.add(entry);
     entry.fingerprintProbed = true;
     const probe = Promise.resolve()

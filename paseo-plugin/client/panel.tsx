@@ -243,7 +243,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     setSetupProject(null);
     setChosen("");
   }, [directory]);
-  if (hostContextPending || (!directory && !memory.ready)) {
+  if (hostContextPending || (!directory && !memory.ready) || projects.isPending) {
     reportNativeDiagnostic("observer-first-branch", { branch: "memory-loading" });
     return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoading}</Text>;
   }
@@ -263,7 +263,15 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     reportNativeDiagnostic("observer-first-branch", { branch: "project-picker" });
     return <View style={{ padding: 12, gap: 8 }}>
     <Text style={{ color: props.theme.colors.foreground }}>{projects.isPending ? localizedCopy.projectLoading : projects.isError ? localizedCopy.projectLoadFailed : !projects.data?.length ? localizedCopy.noRegisteredProjects : localizedCopy.selectProject}</Text>
-    {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => { setChosen(p.configPath); setSetupProject(null); setPickingProject(false); }}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
+    {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => {
+      setChosen(p.configPath);
+      setSetupProject(null);
+      setPickingProject(false);
+      // Persist an explicit choice immediately. Waiting for the selected
+      // project's first full observation meant closing the panel during a
+      // cold start lost the choice and reopened the picker next time.
+      memory.remember(p.configPath);
+    }}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
     </View>;
   }
   reportNativeDiagnostic("observer-first-branch", { branch: "project-panel", project: active.configPath });

@@ -509,6 +509,33 @@ test("slow fingerprints do not block cached data and changed fingerprints refres
   }
 });
 
+test("persisted workspace detail is shown before a new scheduler registers every repository", async () => {
+  const f = fixture();
+  let service = new Service(f.config);
+  const originalRun = Git.prototype.run;
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  try {
+    const first = await service.handle("workspace.detail", { workspaceId: "main" });
+    assert.equal(first.observation.state, "ready");
+    await service.close();
+
+    service = new Service(f.config);
+    Git.prototype.run = async function (args, check = true) {
+      await wait(300);
+      return originalRun.call(this, args, check);
+    };
+    const started = Date.now();
+    const cached = await service.handle("workspace.detail", { workspaceId: "main" });
+    assert.ok(Date.now() - started < 200, "a persisted detail must not wait for watcher/Git registration");
+    assert.equal(cached.observation.state, "ready");
+    assert.equal(cached.repositories.length, first.repositories.length);
+  } finally {
+    Git.prototype.run = originalRun;
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test("cache evicts stale data for durable refresh failures", async () => {
   const f = fixture({ limits: { cacheTtlSeconds: 0.5 } });
   const cache = new ObservationCache(f.config);

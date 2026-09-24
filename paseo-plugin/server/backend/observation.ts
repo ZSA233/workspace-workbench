@@ -324,15 +324,33 @@ export class Observation {
     return stable(workspace) + workspace.repositories.map((repo: Json) => this.scheduler.token(repo.worktreePath || repo.sourcePath)).join(":");
   }
   async detail(params: Json, signal?: AbortSignal) {
-    const workspace = await this.workspaces.refreshLinked(this.workspaces.get(String(params.workspaceId || "")), signal);
-    await Promise.all(workspace.repositories.map((repo: Json) => this.scheduler.register(workspace.id,
-      repo.worktreePath || repo.sourcePath, () => this.repository(repo, Date.now() + this.workspaces.config.observationTimeout))));
-    if (params.force) this.scheduler.force(workspace.id);
-    const validationToken = this.scheduler.workspaceToken(workspace.id);
+    const workspaceId = String(params.workspaceId || "");
+    const baseWorkspace = this.workspaces.get(workspaceId);
+    // Do not make a cached detail wait for Gitlink refreshes, watcher setup, or
+    // a new scheduler generation. The cache accepts an async fingerprint and
+    // probes it after returning the last useful snapshot; a cold request still
+    // waits for registration inside the producer below.
+    const workspacePromise = this.workspaces.refreshLinked(baseWorkspace, signal);
+    const registeredWorkspace = workspacePromise.then(async (workspace) => {
+      await Promise.all(workspace.repositories.map((repo: Json) => this.scheduler.register(workspace.id,
+        repo.worktreePath || repo.sourcePath, () => this.repository(repo, Date.now() + this.workspaces.config.observationTimeout))));
+      return workspace;
+    });
+    if (params.force) this.scheduler.force(workspaceId);
+    const currentToken = this.scheduler.workspaceToken(workspaceId);
+    // Once a normal workspace has been registered, its scheduler token is a
+    // cheap synchronous invalidation key. Reserve the asynchronous probe for
+    // a cold process (where it is what makes persisted cache useful) and for
+    // Gitlink workspaces whose repository list is refreshed from Git.
+    const fingerprint = currentToken && baseWorkspace.kind !== "linked-live"
+      ? stable(baseWorkspace) + currentToken
+      : () => registeredWorkspace.then((workspace) => this.workspaceFingerprint(workspace));
     return this.cache.read(
-      `detail:v2:${workspace.id}:${stable(params)}`,
-      await this.workspaceFingerprint(workspace),
+      `detail:v2:${workspaceId}:${stable(params)}`,
+      fingerprint,
       async () => {
+        const workspace = await registeredWorkspace;
+        const validationToken = this.scheduler.workspaceToken(workspace.id);
         const start = Date.now(),
           deadline = start + Math.min(this.workspaces.config.observationTimeout, Number(params.observationBudgetMs) || this.workspaces.config.observationTimeout),
           repositories: Json[] = [];
@@ -384,7 +402,7 @@ export class Observation {
             durationMs: Date.now() - start,
           },
         };
-      }, true, false, { workspaceId: workspace.id },
+      }, true, false, { workspaceId },
     );
   }
   async repositoryQuery(method: string, params: Json, signal?: AbortSignal) {

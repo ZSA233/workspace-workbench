@@ -60,7 +60,7 @@ try {
   await page.getByText('Repositories',{exact:true}).waitFor();
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor();
   assert.equal(await page.getByText('Not loaded',{exact:true}).count(),0);
-  await page.getByText('one · main',{exact:true}).click();
+  await page.getByText('one',{exact:true}).first().click();
   await page.getByText(/current ref:/i).waitFor();
   report.checks.push('clicking a repository row opened the compact reference details drawer');
   await screenshot('01-clean-workbench.png');
@@ -81,7 +81,7 @@ try {
   assert.equal(adopted.result.repositories.filter(repo=>repo.branch).length,1);
   assert.ok(adopted.result.repositories.some(repo=>repo.repoPath==='extra'));
   await page.getByText('Repositories',{exact:true}).waitFor({timeout:20000});
-  await page.getByText('extra · recovered/legacy/extra',{exact:true}).waitFor({timeout:20000});
+  await page.getByText('recovered/legacy/extra',{exact:true}).waitFor({timeout:20000});
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor({timeout:20000});
   await page.getByText(/Reached the start of history/).first().waitFor({timeout:20000});
   await screenshot('01-orphan-adopted.png');

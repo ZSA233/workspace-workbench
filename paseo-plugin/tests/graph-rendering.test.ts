@@ -102,8 +102,9 @@ test("repository rows stay flat until selection opens the animated details drawe
   const rows = readFileSync(new URL("../client/components/repositories.tsx", import.meta.url), "utf8");
   const panel = readFileSync(new URL("../client/panel.tsx", import.meta.url), "utf8");
   const graph = readFileSync(new URL("../client/components/graph.tsx", import.meta.url), "utf8");
-  assert.ok(rows.includes("repositoryIssueMark"));
-  assert.ok(!rows.includes("{metaStatus} {copy.text_97def2ca9e}"));
+  assert.ok(rows.includes("repositoryDot"));
+  assert.ok(rows.includes("repositoryMeta"));
+  assert.ok(rows.includes("repositoryBranch"));
   assert.ok(panel.includes("const changingRepository = selectedRepoPath !== repoPath;"));
   assert.ok(panel.includes("setRepositoryDetailsOpen(changingRepository ? true : (current) => !current);"));
   assert.ok(panel.includes("animateSectionLayout();\n    setRepositoryDetailsOpen"));

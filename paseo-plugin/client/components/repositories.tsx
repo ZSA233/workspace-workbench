@@ -396,7 +396,7 @@ export function RepositoryRow({
       <View style={[styles.repositoryDot, { backgroundColor: statusTone }]} />
       <View style={styles.repositoryCopy}>
         <View style={styles.repositoryLineRow}>
-          <Text numberOfLines={1} style={styles.repositoryLine}>{repository.name}</Text>
+          <Text numberOfLines={1} style={styles.repositoryName}>{repository.name}</Text>
           <Text numberOfLines={1} style={styles.repositoryBranch}>{repositoryBranchLabel(repository, copy)}</Text>
         </View>
       </View>

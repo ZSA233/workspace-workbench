@@ -201,7 +201,6 @@ export function FileReviewPanel(props: FilePanelProps) {
 
   return (
     <View style={styles.screen} accessibilityLabel={copy.changesTitle} onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
-      {observationIssue ? <Text>{copy.observationDegraded}: {observationIssue}</Text> : null}
       <View style={styles.header}>
         <View style={styles.headerCopy}>
           <Text numberOfLines={1} style={styles.title}>{copy.text_01970ba582}</Text>

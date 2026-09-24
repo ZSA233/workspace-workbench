@@ -250,9 +250,7 @@ export function queryFailureForDisplay(
   if (response && !response.ok) {
     const code = response.error?.code || "";
     if (isTransientIssueCode(code)) {
-      const failureAgeMs = typeof snapshot.failureAgeMs === "number" ? snapshot.failureAgeMs : null;
-      if (snapshot.response || failureAgeMs === null || failureAgeMs < 10_000) return null;
-      return response.error?.message || strings.text_f496a15d9d;
+      return null;
     }
     return response.error?.message || issueDisplayLabel(code, strings);
   }
@@ -261,11 +259,8 @@ export function queryFailureForDisplay(
     if (typeof observation?.cacheState === "string") return null;
   }
   if (snapshot.response) return null;
-  if (error) {
-    const failureAgeMs = typeof snapshot.failureAgeMs === "number" ? snapshot.failureAgeMs : null;
-    return failureAgeMs !== null && failureAgeMs < 10_000 ? null : strings.text_b30f770e31;
-  }
-  return snapshot.failed ? strings.text_b71f1b83e5 : null;
+  if (error || snapshot.failed) return null;
+  return null;
 }
 
 export function LayoutMenuItem({
@@ -583,8 +578,9 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     repositoryDot: { borderRadius: 4, height: 7, width: 7 },
     repositoryCopy: { flex: 1, minWidth: 0 },
     repositoryLineRow: { alignItems: "center", flexDirection: "row", gap: 8, minWidth: 0 },
+    repositoryName: { color: theme.colors.foreground, flexShrink: 0, fontFamily: "monospace", fontSize: 12 },
     repositoryLine: { color: theme.colors.foreground, flexShrink: 1, fontFamily: "monospace", fontSize: 12 },
-    repositoryBranch: { color: theme.colors.foregroundMuted, flexShrink: 1, fontFamily: "monospace", fontSize: 11 },
+    repositoryBranch: { color: theme.colors.foregroundMuted, flex: 1, flexShrink: 1, fontFamily: "monospace", fontSize: 11, minWidth: 0 },
     repositoryMeta: { color: theme.colors.foregroundMuted, fontSize: 10, marginTop: 1 },
     repositoryMetrics: { alignItems: "flex-end", minWidth: 94 },
     repositoryIssueMark: { color: theme.colors.statusWarning, fontFamily: "monospace", fontSize: 12, fontWeight: "700", width: 10 },

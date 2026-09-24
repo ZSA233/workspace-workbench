@@ -1579,7 +1579,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         if (Math.abs(width - panelWidth) > 1) setPanelWidth(width);
       }}
     >
-      {observationIssue ? <Text accessibilityRole="alert" style={styles.layoutMenuHint}>{localizedCopy.observationDegraded}: {observationIssue}</Text> : null}
       {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await listQuery.refetch(); await detailQuery.refetch(); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
       {mainRepositoriesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingMainRepositories) setMainRepositoriesOpen(false); }} title={localizedCopy.mainRepositoryTitle}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
@@ -1777,12 +1776,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               <Text style={styles.warningTitle}>{localizedCopy.setupBackendTitle}</Text>
               <Text style={styles.warningText}>{backendQuery.data.message || (backendQuery.data.state === "starting" ? localizedCopy.setupBackendStarting : localizedCopy.setupBackendFailed)}</Text>
               <Pressable accessibilityRole="button" disabled={backendQuery.isFetching} onPress={() => { void backendQuery.refetch(); }} style={{ marginTop: 7 }}><Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "600" }}>{backendQuery.isFetching ? localizedCopy.setupBackendStarting : localizedCopy.setupRetry}</Text></Pressable>
-            </View>
-          ) : null}
-          {observerError ? (
-            <View style={styles.warningCard}>
-              <Text style={styles.warningTitle}>{localizedCopy.text_ddb6624fda}</Text>
-              <Text style={styles.warningText}>{observerError}</Text>
             </View>
           ) : null}
           {tab === "workspace" ? (

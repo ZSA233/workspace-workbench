@@ -391,12 +391,6 @@ export function RepositoryRow({
   const stale = Boolean(repository.observationStale || hasTransientIssue);
   const status = stale ? "stale" : repository.status || (repository.dirty ? "dirty" : "clean");
   const statusTone = statusColor(status, theme);
-  const workingFiles = Math.max((repository.workingChanges?.files ?? repository.dirtyPaths?.length ?? 0), repository.dirtyPaths?.length || 0);
-  const metaStatus = stale
-    ? copy.text_f9f75e6112
-    : repository.dirty && workingFiles
-      ? `${status} · ${fileCountLabel(workingFiles, copy)}`
-      : status;
   return (
     <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={[styles.repositoryRow, selected && styles.repositoryRowActive]}>
       <View style={[styles.repositoryDot, { backgroundColor: statusTone }]} />
@@ -405,7 +399,6 @@ export function RepositoryRow({
           <Text numberOfLines={1} style={styles.repositoryLine}>{repository.name}</Text>
           <Text numberOfLines={1} style={styles.repositoryBranch}>{repositoryBranchLabel(repository, copy)}</Text>
         </View>
-        <Text numberOfLines={1} style={styles.repositoryMeta}>{metaStatus} {copy.text_97def2ca9e}{repository.headShort || "—"}</Text>
       </View>
       <View style={styles.repositoryMetrics}>
         {changeSummary && (changeSummary.additions || changeSummary.deletions)

@@ -578,7 +578,7 @@ export function makeStyles(theme: PanelProps["theme"], compact: boolean) {
     sectionTitle: { color: theme.colors.foreground, flex: 1, fontSize: 14, fontWeight: "500", minWidth: 0 },
     sectionCount: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 11 },
     repositoryList: { marginTop: 4 },
-    repositoryRow: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", gap: 6, minHeight: 40, paddingHorizontal: 4, paddingVertical: 4 },
+    repositoryRow: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", gap: 6, minHeight: 34, paddingHorizontal: 4, paddingVertical: 5 },
     repositoryRowActive: { backgroundColor: theme.colors.surface2 },
     repositoryDot: { borderRadius: 4, height: 7, width: 7 },
     repositoryCopy: { flex: 1, minWidth: 0 },

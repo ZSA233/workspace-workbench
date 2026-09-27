@@ -1,6 +1,12 @@
 import { join } from "node:path";
 import { type Config } from "./config.ts";
-import { atomicJson, issue, optionalJson, WorkbenchError, type Json } from "./storage.ts";
+import { atomicJson, issue, optionalJson, stable, WorkbenchError, type Json } from "./storage.ts";
+
+/** Transport budget and refresh intent cannot change the identity of content. */
+export function observationCacheIdentity(params: Json): string {
+  const { observationBudgetMs: _budget, force: _force, ...content } = params;
+  return stable(content);
+}
 
 type Entry = {
   value: Json;
@@ -57,9 +63,13 @@ export class ObservationCache {
       this.entries.delete(key);
     }
   }
-  private metadata(entry: Entry, refreshing = false): Json {
+  private metadata(entry: Entry, refreshing = false, failureCode?: string): Json {
     const sourceObservation = entry.value.observation || {};
     const observation = { ...sourceObservation };
+    if (failureCode && !['partial', 'unavailable'].includes(failureCode)) {
+      observation.state = 'partial';
+      observation.issues = [...(observation.issues || []), { code: failureCode }];
+    }
     const observationState = observation.state || "ready";
     const ageMs = Math.max(0, Date.now() - entry.time);
     const observedAt = observation.observedAt;
@@ -224,12 +234,15 @@ export class ObservationCache {
     const entry = this.entries.get(key);
     const fingerprintMatches =
       typeof fingerprint !== "string" || entry?.fingerprint === fingerprint;
-    if (entry && fingerprintMatches && (versioned || Date.now() - entry.time <= this.config.cacheTtl)) {
+    const healthy = !this.failures.has(key) && (!entry?.value.observation?.state || entry.value.observation.state === 'ready');
+    // Partial entries retain the TTL cooldown, but cannot become immortal just
+    // because the source token is unchanged (including persisted snapshots).
+    if (entry && fingerprintMatches && (versioned && healthy || Date.now() - entry.time <= this.config.cacheTtl)) {
       this.entries.delete(key);
       this.entries.set(key, entry);
       if (typeof fingerprint !== "string")
         this.startFingerprintProbe(key, entry, fingerprint, work, scope);
-      return this.metadata(entry);
+      return this.metadata(entry, false, this.failures.get(key));
     }
     if (entry && !waitFresh) {
       try { void this.produce(key, fingerprint, work, scope).catch(() => {}); }
@@ -238,7 +251,7 @@ export class ObservationCache {
         return { ...retained, observation: { ...retained.observation, cacheState: "degraded", refreshing: false,
           issues: [{ code: issue(error).code }] } };
       }
-      return this.metadata(entry, true);
+      return this.metadata(entry, true, this.failures.get(key));
     }
     return this.produce(key, fingerprint, work, scope);
   }

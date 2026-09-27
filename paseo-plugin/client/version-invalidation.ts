@@ -33,7 +33,9 @@ export function shouldRefreshVersionedQuery(projectConfig: string, delta: Return
   if (key.includes('execution-binding') || key.includes('agent-context')) return delta.session;
   if (key.includes('agent-review') || key.includes('agent-review-history')) return delta.review;
   if (key.includes('workspace-list')) return delta.roster || delta.fallback;
-  const observation = (data?.result as { observation?: { validationKey?: string } } | undefined)?.observation;
+  const observation = (data?.result as { observation?: { validationKey?: string; immutableIdentity?: string; validationDependencies?: Record<string, string> } } | undefined)?.observation;
+  if (data?.ok && observation?.immutableIdentity) return false;
+  if (observation?.validationDependencies) return Object.keys(observation.validationDependencies).some(key => delta.tokens.has(key));
   const validationKey = observation?.validationKey;
   const repository = validationKey?.split('#')[0];
   if (validationKey && delta.tokens.has(validationKey)) return true;

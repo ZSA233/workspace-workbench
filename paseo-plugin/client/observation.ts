@@ -1,13 +1,13 @@
-import { useEffect, useRef } from "react";
+import { OBSERVATION_POLICY } from '../shared/observation-policy.ts';
+import { useRef } from "react";
 
 import type { ObserverResponse } from "../shared/observer.ts";
 import { DEFAULT_OBSERVATION_TIMING } from "../shared/observation-timing.ts";
 import { responseObservationState } from "./model.ts";
-import { reportNativeDiagnostic } from "./native-diagnostics.ts";
 
 const STALE_FAILURE_LIMIT = DEFAULT_OBSERVATION_TIMING.staleFailureLimit;
 const STALE_AFTER_MS = DEFAULT_OBSERVATION_TIMING.staleWindowsMs.detail;
-export const RECOVERABLE_FAILURE_GRACE_MS = 10_000;
+export const RECOVERABLE_FAILURE_GRACE_MS = OBSERVATION_POLICY.warningMs;
 
 export type ObservationStatus = "loading" | "fresh" | "refreshing" | "degraded" | "expired" | "unavailable";
 export type ObservationResponseClass = "ready" | "refreshing" | "degraded" | "unavailable";
@@ -51,14 +51,6 @@ type SnapshotOptions = {
   staleAfterMs?: number;
 };
 
-type ObservationExpiryInput = {
-  response: ObserverResponse | undefined;
-  lastSuccessfulAt: string | null;
-  cacheAgeMs: number | null;
-  staleAfterMs: number;
-  now?: number;
-};
-
 export type ObserverSnapshot = {
   response: ObserverResponse | undefined;
   stale: boolean;
@@ -66,6 +58,7 @@ export type ObserverSnapshot = {
   failed: boolean;
   initialFailure: boolean;
   lastObservedAt: string | null;
+  lastValidatedAt: string | null;
   failureCount: number;
   /** Milliseconds since the current failure streak began, or null when healthy. */
   failureAgeMs: number | null;
@@ -129,8 +122,8 @@ function observationMetadata(response: ObserverResponse | undefined): Observatio
 export function classifyObservationResponse(response: ObserverResponse | undefined): ObservationResponseClass | null {
   if (!response) return null;
   const metadata = observationMetadata(response);
-  if (metadata.refreshing) return "refreshing";
   const state = responseObservationState(response);
+  if (metadata.refreshing && state === "ready") return "refreshing";
   return state === "ready" ? "ready" : state === "partial" ? "degraded" : "unavailable";
 }
 
@@ -155,32 +148,9 @@ export function observationStatusFor(
     : "fresh";
 }
 
-/**
- * A cache age is only a warning when no successful validation has arrived in
- * the area's validation window. Deferred roster data is deliberately allowed
- * to remain visible without a time-only warning on older hosts that do not
- * expose the versions subscription yet.
- */
-export function observationTimeExpired({
-  response,
-  lastSuccessfulAt,
-  cacheAgeMs,
-  staleAfterMs,
-  now = Date.now(),
-}: ObservationExpiryInput): boolean {
-  if (!response) return false;
-  const result = response.result && typeof response.result === "object"
-    ? response.result as { observation?: { deferred?: unknown; validationKey?: unknown; validatedAt?: unknown } }
-    : undefined;
-  const observation = result?.observation;
-  const validationKey = typeof observation?.validationKey === "string" && observation.validationKey ? observation.validationKey : "";
-  const validatedAt = typeof observation?.validatedAt === "string" ? Date.parse(observation.validatedAt) : NaN;
-  const validationWindow = Math.max(30_000, staleAfterMs);
-  if (Number.isFinite(validatedAt) && now - validatedAt < validationWindow) return false;
-  if (observation?.deferred === true && !validationKey) return false;
-  const observedAt = lastSuccessfulAt ? Date.parse(lastSuccessfulAt) : NaN;
-  const observedAge = Number.isFinite(observedAt) ? Math.max(0, now - observedAt) : 0;
-  return observedAge >= staleAfterMs || cacheAgeMs !== null && cacheAgeMs >= staleAfterMs;
+/** Age alone does not prove a failed observation. */
+export function persistentObservationFailure(count: number, failureAgeMs: number | null, windowMs: number): boolean {
+  return count >= STALE_FAILURE_LIMIT && (failureAgeMs ?? 0) >= windowMs;
 }
 
 function observedAt(response: ObserverResponse): string {
@@ -286,10 +256,6 @@ export function useLastSuccessfulResponse(
 
   const displayResponse = entry.response || (response?.ok ? response : undefined);
   const failed = entry.failureCount > 0 || Boolean(options.error);
-  const lastSuccessTimestamp = entry.lastSuccessfulAt ? Date.parse(entry.lastSuccessfulAt) : NaN;
-  const failureAge = Number.isFinite(lastSuccessTimestamp)
-    ? Math.max(0, Date.now() - lastSuccessTimestamp)
-    : 0;
   const failureAgeMs = entry.firstFailureAt === null
     ? null
     : Math.max(0, Date.now() - entry.firstFailureAt);
@@ -298,18 +264,15 @@ export function useLastSuccessfulResponse(
   const cacheAgeMs = Number.isFinite(cacheTimestamp)
     ? Math.max(0, Date.now() - cacheTimestamp)
     : entry.cacheAgeMs;
-  const expired = Boolean(
-    displayResponse &&
-      (entry.failureCount >= STALE_FAILURE_LIMIT ||
-        observationTimeExpired({
-          response: displayResponse,
-          lastSuccessfulAt: entry.lastSuccessfulAt,
-          cacheAgeMs,
-          staleAfterMs,
-        })),
-  );
-  const stale = Boolean(displayResponse && (failed || expired));
-  const status = observationStatusFor(displayResponse, failed, expired, failureAgeMs);
+  const persistentFailure = persistentObservationFailure(entry.failureCount, failureAgeMs, staleAfterMs);
+  const durableFailure = ["path_invalid", "worktree_missing", "repository_missing", "commit_missing", "base_missing", "workspace_not_found"].includes(entry.lastErrorCode || "");
+  const expired = Boolean(displayResponse && persistentFailure);
+  const stale = Boolean(displayResponse && (persistentFailure || durableFailure));
+  const status = durableFailure
+    ? displayResponse ? "degraded" : "unavailable"
+    : !persistentFailure && (failed || displayResponse && responseObservationState(displayResponse) !== "ready")
+      ? displayResponse ? "refreshing" : "loading"
+      : observationStatusFor(displayResponse, failed && persistentFailure, expired, failureAgeMs);
 
   return {
     response: displayResponse,
@@ -318,6 +281,7 @@ export function useLastSuccessfulResponse(
     failed,
     initialFailure: !entry.response && failed,
     lastObservedAt: entry.lastObservedAt,
+    lastValidatedAt: (displayResponse?.result as { observation?: { validatedAt?: string } } | undefined)?.observation?.validatedAt || null,
     failureCount: entry.failureCount,
     failureAgeMs,
     lastSuccessfulAt: entry.lastSuccessfulAt,
@@ -326,58 +290,4 @@ export function useLastSuccessfulResponse(
     lastErrorCode: entry.lastErrorCode,
     cacheAgeMs,
   };
-}
-
-/**
- * A stale-while-revalidate response is useful immediately, but a single
- * transport read can race the backend refresh.  Re-read at bounded intervals
- * and let the fresh response stop the cycle naturally; never schedule an
- * unbounded retry loop.
- */
-export function useBoundedCacheRefresh(
-  key: string,
-  response: ObserverResponse | undefined,
-  refetch: () => Promise<unknown>,
-  delaysMs: readonly number[] = DEFAULT_OBSERVATION_TIMING.followUpDelaysMs,
-  enabled = true,
-): void {
-  const attempted = useRef(new Set<string>());
-  const refetchRef = useRef(refetch);
-  refetchRef.current = refetch;
-  const metadata = observationMetadata(response);
-  const refreshing = metadata.refreshing;
-  const cacheUpdatedAt = metadata.cacheUpdatedAt;
-  useEffect(() => {
-    reportNativeDiagnostic("hook-effect-start", { hook: "bounded-cache-refresh" });
-    if (!enabled || !refreshing) return;
-    const token = `${key}:${cacheUpdatedAt || "unknown"}`;
-    if (attempted.current.has(token)) return;
-    attempted.current.add(token);
-    if (attempted.current.size > 64)
-      attempted.current.delete(attempted.current.values().next().value!);
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let resolveWait: (() => void) | undefined;
-    void (async () => {
-      for (const delay of delaysMs) {
-        await new Promise<void>((resolve) => {
-          resolveWait = resolve;
-          timer = setTimeout(() => { timer = undefined; resolveWait = undefined; resolve(); }, Math.max(0, delay));
-        });
-        if (cancelled) return;
-        const result = await refetchRef.current().catch(() => undefined);
-        if (cancelled) return;
-        const nextResponse = result && typeof result === "object" && "data" in result
-          ? (result as { data?: ObserverResponse }).data
-          : undefined;
-        if (classifyObservationResponse(nextResponse) === "ready") return;
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      resolveWait?.();
-      attempted.current.delete(token);
-    };
-  }, [cacheUpdatedAt, delaysMs, enabled, key, refreshing]);
 }

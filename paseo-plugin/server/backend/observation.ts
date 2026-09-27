@@ -4,7 +4,7 @@ import { join, isAbsolute } from "node:path";
 import { Git, type GitFile } from "./git.ts";
 import { Workspaces } from "./workspaces.ts";
 import { Runtime } from "./runtime.ts";
-import { ObservationCache } from "./cache.ts";
+import { ObservationCache, observationCacheIdentity } from "./cache.ts";
 import { WorkspaceActivityIndex } from "./workspace-activity.ts";
 import { gitlinkDetails } from "./gitlinks.ts";
 import { workspaceBranchLabel, workspaceCurrentRefSummary } from "./workspace-refs.ts";
@@ -348,7 +348,7 @@ export class Observation {
       ? stable(baseWorkspace) + currentToken
       : () => registeredWorkspace.then((workspace) => this.workspaceFingerprint(workspace));
     return this.cache.read(
-      `detail:v2:${workspaceId}:${stable(params)}`,
+      `detail:v2:${workspaceId}:${observationCacheIdentity(params)}`,
       fingerprint,
       async () => {
         const workspace = await registeredWorkspace;
@@ -426,17 +426,19 @@ export class Observation {
       () => this.repository(repo, Date.now() + this.workspaces.config.observationTimeout));
     if (params.force) this.scheduler.force(workspace.id);
     const git = this.git(repo);
-    const validationScope = method === "repository.graph" || params.scope === "branch" || params.scope === "commit" ? "refs" : "working";
+    const immutableIdentity = params.scope === "commit" && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(String(params.commitSha || ""))
+      ? `${git.path}:${params.commitSha}:${method}:${params.path || ""}` : undefined;
+    const validationScope = params.scope === "branch" || params.scope === "commit" ? "refs" : "working";
     const validationToken = this.scheduler.token(git.path, validationScope);
     let marker = "";
-    if (params.path)
+    if (params.path && !immutableIdentity)
       try {
         const st = lstatSync(join(git.path, params.path));
         marker = `${st.mtimeMs}:${st.size}`;
       } catch {}
     return this.cache.read(
-      `${method}:${workspace.id}:${stable(params)}`,
-      this.scheduler.token(git.path, method === "repository.graph" || params.scope === "branch" || params.scope === "commit" ? "refs" : "working") + stable(repo) + marker,
+      `${method}:${workspace.id}:${observationCacheIdentity(params)}`,
+      (immutableIdentity || this.scheduler.token(git.path, validationScope)) + stable(repo) + marker,
       async () => {
         const deadline = Date.now() + Math.min(this.workspaces.config.observationTimeout, Number(params.observationBudgetMs) || this.workspaces.config.observationTimeout);
         return this.withinDeadline(
@@ -445,13 +447,14 @@ export class Observation {
               [, upstream] = await git.upstream(),
               baseSha = repo.baseSha || upstream,
               scope = params.scope || "branch",
-              head = await git.head();
+              head = immutableIdentity ? String(params.commitSha) : await git.head();
             const common = {
               schemaVersion: protocol,
               workspaceId: workspace.id,
               repoPath: repo.repoPath,
               head,
-              observation: { state: "ready", observedAt: now(), validationKey: `${git.path}#${validationScope}`, validationToken },
+              observation: { state: "ready", observedAt: now(), validationKey: `${git.path}#${validationScope}`, validationToken,
+                ...(immutableIdentity ? { immutableIdentity } : { validationDependencies: { [`${git.path}#${validationScope}`]: validationToken } }) },
             };
             if (method === "repository.graph") {
               const historyMode =
@@ -477,7 +480,7 @@ export class Observation {
               return {
                 ...common,
                 scope,
-                baseSha,
+                baseSha: immutableIdentity ? (await git.text(["rev-parse", "--verify", `${params.commitSha}^`]).catch(() => "")) : baseSha,
                 files,
                 summary: count(files),
                 issues: [],

@@ -41,6 +41,7 @@ export function queryDiagnosticDetails(
     snapshotFailureCount: String(snapshot.failureCount),
     snapshotFailureAgeMs: String(snapshot.failureAgeMs ?? ""),
     snapshotRefreshing: String(snapshot.refreshing),
+    lastValidatedAt: snapshot.lastValidatedAt || "",
   };
 }
 
@@ -60,5 +61,6 @@ export function observationAreaDetail(area: ObservationArea, strings: WorkbenchC
       ? "refreshing"
       : area.snapshot.status;
   const timestamp = area.snapshot.lastObservedAt ? ` · ${formatObservedTime(area.snapshot.lastObservedAt, strings)}` : "";
-  return `${area.label}: ${observationStatusLabel(status, strings)}${timestamp}`;
+  const validated = area.snapshot.lastValidatedAt ? ` · ${strings.observationValidated}: ${formatObservedTime(area.snapshot.lastValidatedAt, strings)}` : "";
+  return `${area.label}: ${observationStatusLabel(status, strings)}${timestamp}${validated}${area.snapshot.lastErrorCode ? ` · ${area.snapshot.lastErrorCode}` : ""}`;
 }

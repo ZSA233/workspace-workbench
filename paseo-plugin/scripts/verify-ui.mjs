@@ -34,13 +34,20 @@ try {
   page.on('pageerror', e => report.pageErrors.push(e.message));
   let measuringRpc = false;
   const rpcMethods = new Map();
+  const rpcOperations = new Map();
+  const observationTrace = []; report.observationTrace = observationTrace;
   page.on('websocket', socket => socket.on('framesent', frame => {
-    if (!measuringRpc || typeof frame.payload !== 'string') return;
+    if (typeof frame.payload !== 'string') return;
     try {
       const value = JSON.parse(frame.payload);
       const message = value.type === 'session' ? value.message : value;
       if (message?.type !== 'plugin.rpc.invoke.request' || message.pluginId !== 'workspace-workbench-paseo') return;
+      for (const operation of ['observer.versions', 'repository.graph', 'repository.changes', 'repository.diff'])
+        if (JSON.stringify(message).includes(`"${operation}"`)) { observationTrace.push({ at: Date.now(), operation }); if (observationTrace.length > 200) observationTrace.shift(); }
+      if (!measuringRpc) return;
       rpcMethods.set(message.method, (rpcMethods.get(message.method) || 0) + 1);
+      for (const operation of ['observer.versions', 'repository.graph', 'repository.changes', 'repository.diff'])
+        if (JSON.stringify(message).includes(`"${operation}"`)) rpcOperations.set(operation, (rpcOperations.get(operation) || 0) + 1);
     } catch {}
   }));
   const screenshot = async name => { await page.screenshot({ path: join(output,name), fullPage: true }); report.screenshots.push(name); };
@@ -102,11 +109,32 @@ try {
   await page.getByText('Latest commit:',{exact:false}).waitFor();
   await page.keyboard.press('Escape');
   report.checks.push('workspace dropdown search filtered names; open-triggered Git metadata populated compact commit ages and exact timestamps appeared in the menu');
+  // Warm both repository caches before measuring repeated selection.
+  await page.getByText('two',{exact:true}).first().click();
+  await page.getByText('No file changes in this scope.',{exact:true}).waitFor();
+  await sleep(1500);
+  await page.getByText('one',{exact:true}).first().click();
+  await sleep(1500);
+  const switchBefore = await health();
+  rpcOperations.clear(); measuringRpc = true;
+  for (let n = 0; n < 5; n++) {
+    await page.getByText('two',{exact:true}).first().click();
+    await page.getByText('No file changes in this scope.',{exact:true}).waitFor();
+    await page.getByText('one',{exact:true}).first().click();
+    await page.getByText('No file changes in this scope.',{exact:true}).waitFor();
+  }
+  await sleep(500); measuringRpc = false;
+  const switchAfter = await health();
+  report.repositorySwitching = { operations: Object.fromEntries(rpcOperations), gitCommands: switchAfter.git.commands - switchBefore.git.commands };
+  assert.equal(rpcOperations.get('repository.graph') || 0, 0);
+  assert.equal(rpcOperations.get('repository.changes') || 0, 0);
+  assert.equal(report.repositorySwitching.gitCommands, 0);
+  report.checks.push('ten warm repository switches reused visible cached data with zero graph/changes RPC and zero Git commands');
   const file = join(ui.project,'one','ui-proof.txt');
   let started = Date.now();
   writeFileSync(file,'line one\nline two\n');
-  await page.getByText('ui-proof.txt',{exact:true}).first().waitFor({timeout:7000});
-  await page.getByText('+2',{exact:true}).first().waitFor({timeout:7000});
+  await page.getByText('ui-proof.txt',{exact:true}).first().waitFor({timeout:22000});
+  await page.getByText('+2',{exact:true}).first().waitFor({timeout:22000});
   assert.equal(await page.getByText('Not loaded',{exact:true}).count(),0);
   report.initialUpdateMs = Date.now()-started;
   await screenshot('02-automatic-refresh.png');
@@ -115,27 +143,29 @@ try {
   await page.getByText('line one',{exact:true}).waitFor();
   for (let n=0;n<10;n++) {
     const text=`automatic edit ${n}`;started=Date.now();appendFileSync(file,text+'\n');
-    await page.getByText(text,{exact:true}).waitFor({timeout:7000});
+    await page.getByText(text,{exact:true}).waitFor({timeout:22000});
     report.latenciesMs.push(Date.now()-started);
   }
   report.p95Ms=[...report.latenciesMs].sort((a,b)=>a-b)[Math.ceil(report.latenciesMs.length*.95)-1];
-  assert.ok(report.p95Ms<=3000,`UI p95 exceeded 3 seconds: ${report.p95Ms}`);
+  assert.ok(report.p95Ms<=20000,`UI p95 exceeded the 15s validation cycle plus 5s read budget: ${report.p95Ms}`);
   await page.evaluate(() => window.dispatchEvent(new Event('blur')));
   appendFileSync(file,'while unfocused\n');
   await sleep(2500);
   assert.equal(await page.getByText('while unfocused',{exact:true}).count(),0);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await page.getByText('while unfocused',{exact:true}).waitFor({timeout:7000});
+  await page.getByText('while unfocused',{exact:true}).waitFor({timeout:22000});
   await screenshot('03-live-file-diff.png');
   report.checks.push('file click opened the real diff; ten disk edits appeared without manual refresh; blur paused updates and focus resumed them');
   let before;
   for(let n=0;n<30;n++){ before=await health(); if(!before.git.running&&!before.git.queued)break;await sleep(100); }
-  measuringRpc = true;
-  await sleep(16_000);
+  rpcMethods.clear(); rpcOperations.clear(); measuringRpc = true;
+  await sleep(60_000);
   measuringRpc = false;
-  const after=await health();report.idle={seconds:16,gitCommands:after.git.commands-before.git.commands,rpcCalls:[...rpcMethods.values()].reduce((a,b)=>a+b,0),rpcMethods:Object.fromEntries(rpcMethods)};assert.equal(report.idle.gitCommands,0);
-  assert.ok(report.idle.rpcCalls<=32,`idle Workbench RPC rate exceeded 2/s: ${report.idle.rpcCalls}/16s`);
-  report.checks.push('visible UI generated zero additional Git commands during 16 idle seconds');
+  const after=await health();report.idle={seconds:60,gitCommands:after.git.commands-before.git.commands,rpcCalls:[...rpcMethods.values()].reduce((a,b)=>a+b,0),rpcMethods:Object.fromEntries(rpcMethods)};assert.equal(report.idle.gitCommands,0);
+  report.idle.operations = Object.fromEntries(rpcOperations);
+  assert.ok((rpcOperations.get('observer.versions') || 0) <= 5, 'idle version polling exceeded four per minute plus boundary');
+  assert.equal(rpcOperations.get('repository.diff') || 0, 0);
+  report.checks.push('visible UI generated zero additional Git commands during 60 idle seconds with at most five lightweight checks');
   await exec(process.env.PASEO_CLI || 'paseo',['plugin','reload','workspace-workbench-paseo','--host',new URL(ui.url).host,'--json'],{timeout:60_000});
   // Full plugin reload reconstructs the client bundle. File-tab selections are
   // currently memory-only, so explicitly reopen through the real navigation.
@@ -156,10 +186,27 @@ try {
   report.recovery={elapsedMs:Date.now()-started,beforePid:prior.process.pid,afterPid:recovered.process.pid,buildId:recovered.buildId};
   await screenshot('06-backend-recovered.png');
   report.checks.push('owned test backend crashed; existing page retained content and recovered automatically');
-  unlinkSync(file);await panel();
-  await page.getByText('No file changes in this scope.',{exact:true}).waitFor({timeout:10_000});
+  await panel();
+  const secondFile = join(ui.project, 'one', 'second-ui-proof.txt');
+  writeFileSync(secondFile, 'second file content\n');
+  await page.getByText('second-ui-proof.txt', { exact: true }).first().waitFor({ timeout: 22000 });
+  await page.getByText('second-ui-proof.txt', { exact: true }).first().click();
+  await page.getByText('second file content', { exact: true }).waitFor();
+  appendFileSync(secondFile, 'second file changed\n');
+  await page.getByRole('tab', { name: /^A\s*ui-proof\.txt$/ }).click();
+  await page.getByText('after backend recovery', { exact: true }).waitFor({ timeout: 2000 });
+  await page.getByRole('tab', { name: /second-ui-proof.txt/ }).click();
+  await page.getByText('second file changed', { exact: true }).waitFor({ timeout: 22000 });
+  report.checks.push('multiple file tabs remained interactive during background changes; the previous Diff appeared immediately from cache');
+  unlinkSync(secondFile); unlinkSync(file);await panel();
+  await page.getByText('No file changes in this scope.',{exact:true}).waitFor({timeout:22000});
   await screenshot('07-empty-after-cleanup.png');
   report.checks.push('file deletion restored the clean/empty state');
+  appendFileSync(join(ui.project, 'one', 'README'), 'external commit content\n');
+  await exec('git', ['-C', join(ui.project, 'one'), 'add', 'README']);
+  await exec('git', ['-C', join(ui.project, 'one'), 'commit', '-qm', 'external refresh proof']);
+  await page.getByText(/external refresh proof/).first().waitFor({ timeout: 22000 });
+  report.checks.push('an external Git commit updated the active graph without manual refresh');
   await page.getByRole('button',{name:'Open Workbench layout menu'}).click();
   await page.getByText(/^(选择仓库|Select repositories)$/).click();
   await page.getByText(/^(主工作区仓库范围|Main workspace repository scope)$/).waitFor();
@@ -211,6 +258,11 @@ try {
   report.ok=true;
 } catch(error) {
   report.ok=false;report.error=error.message;
+  if (ui) {
+    report.backendAtFailure = (await backendRequest(join(ui.project,'s.sock'), 'observer.health').catch(() => null))?.result;
+    const list = (await backendRequest(join(ui.project,'s.sock'), 'workspace.list').catch(() => null))?.result;
+    report.versionsAtFailure = (await backendRequest(join(ui.project,'s.sock'), 'observer.versions', { workspaceIds: list?.workspaces?.map(w => w.id) || [] }).catch(() => null))?.result;
+  }
   if(browser) for(const context of browser.contexts()) for(const page of context.pages()) {
     await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});
     writeFileSync(join(output,'failure-dom.txt'),await page.locator('body').innerText().catch(()=>''));

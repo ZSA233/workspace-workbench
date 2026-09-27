@@ -6,7 +6,7 @@ import { ObservationCache } from "./cache.ts";
 import { Runtime } from "./runtime.ts";
 import { Observation, protocol } from "./observation.ts";
 import { runtimeIdentity } from "./identity.ts";
-import { compare } from "./review.ts";
+import { compareObserved } from "./review.ts";
 import { issue, stable, WorkbenchError, type Json } from "./storage.ts";
 export const managementMethods = new Set([
   "observer.reload",
@@ -29,7 +29,7 @@ export class Service {
   observation: Observation;
   startedAt = Date.now();
   version: string;
-  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts"]);
+  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts"]);
   constructor(config: Config, version = "0.1.3") {
     this.config = config;
     this.version = version;
@@ -183,7 +183,7 @@ export class Service {
         return this.observation.repositoryQuery(method, params, signal);
       case "review-set.compare":
       case "review-set.brief":
-        return compare(this.workspaces, params, method === "review-set.brief", signal);
+        return compareObserved(this.observation, params, method === "review-set.brief", signal);
       default:
         throw new WorkbenchError(
           method.startsWith("agent.")

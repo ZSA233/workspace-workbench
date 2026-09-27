@@ -1,3 +1,4 @@
+import { observationQueryOptions } from '../shared/observation-policy.ts';
 import { useObservationVersions } from "./use-observation-versions";
 import { useForegroundActivity } from "./foreground-activity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -41,7 +42,7 @@ import {
   useActiveFileReviewKey,
   useFileReviews,
 } from "./file-review-store";
-import { boundedRefresh, useBoundedCacheRefresh, useLastSuccessfulResponse } from "./observation";
+import { useLastSuccessfulResponse } from "./observation";
 import { IconButton } from "./components/icon-button";
 import { useReviewModePreference } from "./review-preferences";
 import type { ReviewMode } from "./review-mode";
@@ -101,12 +102,11 @@ export function FileReviewPanel(props: FilePanelProps) {
   const { mode, setMode } = useReviewModePreference(hostWorkspaceId, narrow);
   const activeSelection = selections.find((item) => selectionKey(item) === activeKey) || selections.at(-1);
   const rpc = useRpc(observerQuery);
-  // Android does not provide the query-client/version subscription boundary
-  // used by the desktop panel. A file review only needs its direct diff read.
+  // Native shares activation/retry decisions but keeps version polling disabled.
   const observationIssue = useObservationVersions(
     activeSelection?.projectConfig,
     activeSelection ? [activeSelection.workspaceId] : [],
-    foreground && Platform.OS === "web",
+    foreground,
   );
   const backendStatusRpc = useRpc(projectBackendStatus);
   const backendStatusQuery = useQuery({
@@ -121,11 +121,6 @@ export function FileReviewPanel(props: FilePanelProps) {
     () => observationTimingFromWire(backendStatusQuery.data?.timing),
     [backendStatusQuery.data?.timing],
   );
-  const seenBackendInstanceId = useRef<string | null>(null);
-  useEffect(() => {
-    reportNativeDiagnostic("hook-effect-start", { hook: "file-review-backend-instance" });
-    seenBackendInstanceId.current = null;
-  }, [activeSelection?.projectConfig]);
 
   useEffect(() => {
     reportNativeDiagnostic("hook-effect-start", { hook: "file-review-selection-sync" });
@@ -164,33 +159,13 @@ export function FileReviewPanel(props: FilePanelProps) {
     }),
     enabled: Boolean(activeSelection),
     refetchInterval: false,
-    refetchOnWindowFocus: false,
-    retry: false,
-    staleTime: observationTiming.clientQueryStaleTimeMs,
+    ...observationQueryOptions,
   });
   const diffState = useLastSuccessfulResponse(
     `file-review:${hostWorkspaceId}:${activeSelection ? selectionKey(activeSelection) : ""}`,
     diffQuery.data,
     { error: diffQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository },
   );
-  useBoundedCacheRefresh(
-    `file-review:${hostWorkspaceId}:${activeSelection ? selectionKey(activeSelection) : ""}`,
-    diffQuery.data,
-    diffQuery.refetch,
-    observationTiming.followUpDelaysMs,
-    foreground,
-  );
-  useEffect(() => {
-    const instanceId = backendStatusQuery.data?.instanceId;
-    if (!instanceId) return;
-    if (seenBackendInstanceId.current === null) {
-      seenBackendInstanceId.current = instanceId;
-      return;
-    }
-    if (seenBackendInstanceId.current === instanceId) return;
-    seenBackendInstanceId.current = instanceId;
-    void boundedRefresh(diffQuery.refetch(), observationTiming.clientRefreshTimeoutMs);
-  }, [backendStatusQuery.data?.instanceId, diffQuery.refetch, observationTiming.clientRefreshTimeoutMs]);
   const durableFailure = diffQuery.data && !diffQuery.data.ok && ["file_not_changed", "path_invalid", "worktree_missing", "commit_missing", "base_missing"].includes(diffQuery.data.error?.code || "");
   const diff = durableFailure ? null : resultOf<DiffResult>(diffState.response);
   const error = responseErrorLabel(diffQuery.data, diffQuery.error, Boolean(diff), copy);

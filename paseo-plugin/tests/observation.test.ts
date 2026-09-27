@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyObservationResponse, observationStatusFor, observationTimeExpired } from "../client/observation.ts";
+import { classifyObservationResponse, observationStatusFor, persistentObservationFailure } from "../client/observation.ts";
 
 test("background cache refresh is distinct from a degraded observation", () => {
   const refreshing = {
@@ -25,47 +25,13 @@ test("transport failures remain unavailable while successful responses stay read
   assert.equal(classifyObservationResponse({ ok: true, result: { observation: { state: "ready" } } }), "ready");
   assert.equal(classifyObservationResponse(undefined), null);
   assert.equal(observationStatusFor(undefined, true, false, 1_000), "loading");
-  assert.equal(observationStatusFor(undefined, true, false, 10_000), "unavailable");
+  assert.equal(observationStatusFor(undefined, true, false, 90_000), "unavailable");
 });
 
-test("roster cache age does not expire without validation support", () => {
-  const now = Date.parse("2026-09-25T00:10:00Z");
-  const roster = {
-    ok: true,
-    result: { observation: { state: "ready", deferred: true } },
-  };
-  assert.equal(observationTimeExpired({
-    response: roster,
-    lastSuccessfulAt: "2026-09-25T00:00:00Z",
-    cacheAgeMs: 600_000,
-    staleAfterMs: 90_000,
-    now,
-  }), false);
-});
-
-test("validated snapshots stay fresh through backend cache TTL and expire after validation stops", () => {
-  const now = Date.parse("2026-09-25T00:10:00Z");
-  const response = {
-    ok: true,
-    result: { observation: {
-      state: "ready",
-      validationKey: "roster",
-      validationToken: "4",
-      validatedAt: "2026-09-25T00:09:30Z",
-    } },
-  };
-  assert.equal(observationTimeExpired({
-    response,
-    lastSuccessfulAt: "2026-09-25T00:00:00Z",
-    cacheAgeMs: 600_000,
-    staleAfterMs: 90_000,
-    now,
-  }), false);
-  assert.equal(observationTimeExpired({
-    response: { ...response, result: { observation: { ...response.result.observation, validatedAt: "2026-09-24T23:00:00Z" } } },
-    lastSuccessfulAt: "2026-09-25T00:00:00Z",
-    cacheAgeMs: null,
-    staleAfterMs: 90_000,
-    now,
-  }), true);
+test("warnings require three failures and a full validation window", () => {
+  assert.equal(persistentObservationFailure(0, 600_000, 90_000), false);
+  assert.equal(persistentObservationFailure(1, 600_000, 90_000), false);
+  assert.equal(persistentObservationFailure(3, 10_000, 90_000), false);
+  assert.equal(persistentObservationFailure(3, 90_000, 90_000), true);
+  assert.equal(persistentObservationFailure(0, null, 90_000), false);
 });

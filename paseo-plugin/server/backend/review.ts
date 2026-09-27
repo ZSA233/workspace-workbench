@@ -1,7 +1,8 @@
+import { observationCacheIdentity } from './cache.ts';
 import { Workspaces } from "./workspaces.ts";
 import { Git } from "./git.ts";
-import { count, protocol } from "./observation.ts";
-import { issue, now, WorkbenchError, type Json } from "./storage.ts";
+import { count, protocol, type Observation } from "./observation.ts";
+import { issue, now, stable, WorkbenchError, type Json } from "./storage.ts";
 export async function compare(
   workspaces: Workspaces,
   params: Json,
@@ -162,4 +163,20 @@ export async function compare(
     };
   }
   return result;
+}
+
+/** Reviews use the same source-version contract as repository observations. */
+export async function compareObserved(observation: Observation, params: Json, includeBrief = false, signal?: AbortSignal) {
+  if (!Array.isArray(params.workspaceIds) || !params.workspaceIds.length)
+    return compare(observation.workspaces, params, includeBrief, signal);
+  const workspaces = [...new Set(params.workspaceIds.map(String))].map(id => observation.workspaces.get(id));
+  for (const workspace of workspaces) for (const repo of workspace.repositories)
+    await observation.scheduler.register(workspace.id, repo.worktreePath || repo.sourcePath,
+      () => observation.repository(repo, Date.now() + observation.workspaces.config.observationTimeout));
+  const dependencies = Object.fromEntries(workspaces.map(workspace => [`workspace:${workspace.id}`, observation.scheduler.workspaceToken(workspace.id)]));
+  const method = includeBrief ? 'review-set.brief' : 'review-set.compare';
+  return observation.cache.read(`${method}:${observationCacheIdentity(params)}`, stable(dependencies) + stable(workspaces), async () => {
+    const result = await compare(observation.workspaces, params, includeBrief, signal);
+    return { ...result, observation: { ...result.observation, validationDependencies: dependencies } };
+  }, true);
 }

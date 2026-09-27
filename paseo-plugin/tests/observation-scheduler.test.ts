@@ -119,3 +119,45 @@ test('watcher failure reports degraded state then recovers without blocking snap
   try {await scheduler.register('w',f.repo);assert.ok(scheduler.health().issues.includes('watcher_unavailable'));await until(()=>!scheduler.health().issues.length,7000);assert.ok(attempts>1);}
   finally{await scheduler.close();rmSync(f.root,{recursive:true,force:true});}
 });
+
+test('fixed commit observations reuse content across worktree edits while dynamic observations change', async () => {
+  const f = fixture(), service = new Service(loadConfig(f.config));
+  const original = Git.prototype.run; let commands = 0;
+  Git.prototype.run = async function(...args) { commands++; return original.apply(this, args); };
+  try {
+    const workspaceId = (await service.handle('workspace.list', {})).workspaces[0].id;
+    const commitSha = git(f.repo, ['rev-parse', 'HEAD']);
+    const input = { workspaceId, repoPath: 'repo', scope: 'commit', commitSha, path: 'file' };
+    const fixed = await service.handle('repository.diff', input);
+    assert.ok(fixed.observation.immutableIdentity);
+    assert.equal(fixed.head, commitSha);
+    const graph = await service.handle('repository.graph', { workspaceId, repoPath: 'repo', historyMode: 'full' });
+    assert.ok(graph.observation.validationDependencies[`${f.repo}#working`]);
+    const beforeToken = service.observation.scheduler.token(f.repo);
+    writeFileSync(join(f.repo, 'file'), 'working edit\n');
+    await until(() => service.observation.scheduler.token(f.repo) !== beforeToken);
+    await delay(300); // let the owned event-driven summary refresh finish
+    const before = commands;
+    const reused = await service.handle('repository.diff', { ...input, observationBudgetMs: 4871 });
+    assert.equal(commands, before);
+    assert.equal(reused.patch, fixed.patch);
+    assert.equal(reused.observation.immutableIdentity, fixed.observation.immutableIdentity);
+    const dynamic = await service.handle('repository.diff', { ...input, scope: 'working', commitSha: undefined });
+    assert.match(dynamic.patch, /working edit/);
+    assert.equal(dynamic.observation.immutableIdentity, undefined);
+  } finally { Git.prototype.run = original; await service.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('different request deadlines share dynamic observation cache entries', async () => {
+  const f = fixture(), service = new Service(loadConfig(f.config));
+  const original = Git.prototype.run; let commands = 0;
+  Git.prototype.run = async function(...args) { commands++; return original.apply(this, args); };
+  try {
+    const workspaceId = (await service.handle('workspace.list', {})).workspaces[0].id;
+    const params = { workspaceId, repoPath: 'repo', scope: 'working' };
+    await service.handle('repository.changes', { ...params, observationBudgetMs: 5000 });
+    const before = commands;
+    for (const observationBudgetMs of [4999, 4872, 3000]) await service.handle('repository.changes', { ...params, observationBudgetMs });
+    assert.equal(commands, before);
+  } finally { Git.prototype.run = original; await service.close(); rmSync(f.root, { recursive: true, force: true }); }
+});

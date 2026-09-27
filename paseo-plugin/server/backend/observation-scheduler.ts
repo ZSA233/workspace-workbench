@@ -1,3 +1,4 @@
+import { OBSERVATION_POLICY } from '../../shared/observation-policy.ts';
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants, existsSync } from 'node:fs';
 import { resolve, join, relative } from 'node:path';
@@ -32,7 +33,7 @@ export class ObservationScheduler {
   private timer: ReturnType<typeof setInterval>;
   private options: Required<SchedulerOptions>;
   constructor(options: SchedulerOptions = {}) {
-    this.options = { subscribe: watcher.subscribe, leaseMs: 30_000, reconcileMs: 300_000,
+    this.options = { subscribe: watcher.subscribe, leaseMs: OBSERVATION_POLICY.leaseMs, reconcileMs: 300_000,
       degradedMs: 30_000, debounceMs: 300, maxWaitMs: 1_000, subscribeMs: 5_000, retentionMs: 300_000, ...options };
     this.timer = setInterval(() => this.tick(), 1_000); this.timer.unref();
   }

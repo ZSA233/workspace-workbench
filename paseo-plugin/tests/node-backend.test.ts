@@ -451,7 +451,8 @@ test("cache preserves stale data across transient refresh failures", async () =>
       throw new WorkbenchError("git_timeout", "injected refresh timeout");
     });
     assert.equal(afterFailure.value, "last-good");
-    assert.equal(afterFailure.observation.state, "ready");
+    assert.equal(afterFailure.observation.state, "partial");
+    assert.ok(afterFailure.observation.issues.some((issue: Json) => issue.code === "git_timeout"));
     await new Promise((r) => setTimeout(r, 30));
 
     await cache.read("failed-refresh", "three", async () => ({
@@ -1156,4 +1157,23 @@ test("repository additions honor configured default base when the request omits 
     await service.close();
     rmSync(f.root, { recursive: true, force: true });
   }
+});
+
+test('partial versioned observations can recover without a new filesystem event', async () => {
+  const f = fixture({ limits: { cacheTtlSeconds: 0.5 } }), cache = new ObservationCache(f.config);
+  try {
+    await cache.read('partial-recovery', 'same-token', async () => ({ value: 'old', observation: { state: 'partial', issues: [{ code: 'git_timeout' }] } }), true);
+    await new Promise(resolve => setTimeout(resolve, 550));
+    let produced!: () => void;
+    const ready = new Promise<void>(resolve => { produced = resolve; });
+    const retained = await cache.read('partial-recovery', 'same-token', async () => {
+      produced(); return { value: 'recovered', observation: { state: 'ready' } };
+    }, true);
+    assert.equal(retained.value, 'old');
+    await ready;
+    await new Promise(resolve => setImmediate(resolve));
+    const recovered = await cache.read('partial-recovery', 'same-token', async () => { throw Error('unexpected reread'); }, true);
+    assert.equal(recovered.value, 'recovered');
+    assert.equal(recovered.observation.state, 'ready');
+  } finally { await cache.close(); rmSync(f.root, { recursive: true, force: true }); }
 });

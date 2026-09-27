@@ -1,0 +1,58 @@
+name: Verify plugin
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      release_tag:
+        type: string
+        default: ''
+permissions:
+  contents: read
+jobs:
+  verify:
+    name: Paseo plugin
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: paseo-plugin/package-lock.json
+      - name: Verify version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then node scripts/version.mjs --check --tag "$RELEASE_TAG"; else node scripts/version.mjs --check; fi
+      - run: npm ci
+        working-directory: paseo-plugin
+      - name: Typecheck and test
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p verification
+          npm --prefix paseo-plugin run typecheck 2>&1 | tee verification/typecheck.log
+          npm --prefix paseo-plugin test 2>&1 | tee verification/tests.log
+      - name: Check package and archive
+        run: |
+          cd paseo-plugin
+          npm pack --dry-run --json > ../verification/package.json
+          cd ..
+          node scripts/package_plugin.mjs --output-dir dist
+          tar -tzf dist/workspace-workbench-paseo-*.tar.gz >/dev/null
+          cd dist
+          sha256sum ./*.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: verification-logs
+          path: verification
+      - uses: actions/upload-artifact@v7
+        with:
+          name: verified-plugin
+          path: dist/

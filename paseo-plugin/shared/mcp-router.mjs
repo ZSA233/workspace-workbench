@@ -4,7 +4,7 @@ import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import WebSocket from "ws";
 import { withMcpConnection } from "./mcp-connection.mjs";
 import { coordinatorGuidance } from "./handoff-guidance.mjs";
-import { localPaseoEndpoint } from "./paseo-endpoint.mjs";
+import { localPaseoEndpoint } from "../server/paseo-endpoint.mjs";
 import { isMutation, stableRequestId } from "./mcp-policy.mjs";
 import { probePaseo } from "./mcp-readiness.mjs";
 
@@ -343,7 +343,7 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
   const tool = tools.find((value) => message.params?.name === value.name);
   let args = callArguments(message);
   if (tool?.name === "workbench_connection_status") {
-    const status = await probePaseo();
+    const status = await probePaseo(lifecycle);
     return { content: [{ type: "text", text: JSON.stringify(status) }], isError: !status.ok };
   }
   if ((tool?.name === "workbench_workspace_create" || tool?.name === "workbench_workspace_submit") && !args.requestId) {
@@ -360,8 +360,8 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
     return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: { code: "workspace_status_request_id_required", message: "workbench_workspace_status requires the requestId returned by workspace_submit, preview, or execute; use workbench_workspace_operation_status with operationId for Git creation status." } }) }], isError: true };
   }
   const needsToken = (!directWorkspaceAction || tool?.name === "workbench_workspace_preview") && !runtime.token;
-  const failure = (code, dispatched = false) => ({ content: [{ type: "text", text: JSON.stringify({ ok: false,
-    error: { code: code.split(":")[0], message: code, retryable: !dispatched && /unavailable|timeout|not_dispatched/.test(code), dispatched,
+  const failure = (code, dispatched = false, stage = "context") => ({ content: [{ type: "text", text: JSON.stringify({ ok: false,
+    error: { code: code.split(":")[0], message: code, retryable: !dispatched && /unavailable|timeout|not_dispatched/.test(code), dispatched, stage,
       nextAction: dispatched ? "check_status_then_retry_same_identity" : "check_connection_then_retry_same_identity",
       ...(args.requestId ? { requestId: args.requestId } : {}),
       ...(tool?.name === "workbench_workspace_create" ? { statusTool: "workbench_workspace_operation_status" }
@@ -417,7 +417,7 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
   ), { ...lifecycle, forceClose: () => { for (const socket of sockets) socket.terminate(); sockets.clear(); } }); }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return failure(message, Boolean(error?.workbenchDispatched) || message.startsWith("workbench_request_uncertain_retry_same_identity:"));
+    return failure(message, Boolean(error?.workbenchDispatched) || message.startsWith("workbench_request_uncertain_retry_same_identity:"), error?.stage || "rpc");
   }
   if (materialAction && result?.image) {
     const { image, ...metadata } = result;

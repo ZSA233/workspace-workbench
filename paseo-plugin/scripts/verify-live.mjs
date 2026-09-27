@@ -87,7 +87,7 @@ writeFileSync(
   JSON.stringify({
     version: 1,
     pluginsEnabled: true,
-    daemon: { listen: `127.0.0.1:${port}`, relay: { enabled: false }, mcp: { enabled: false, injectIntoAgents: false } },
+    daemon: { listen: `0.0.0.0:${port}`, relay: { enabled: false }, mcp: { enabled: false, injectIntoAgents: false } },
     features: { webUi: { enabled: process.env.WORKBENCH_LIVE_UI === "1" } },
     plugins: {
       "workspace-workbench-paseo": {

@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
-const { localPaseoEndpoint } = require("../shared/paseo-endpoint.mjs") as { localPaseoEndpoint: () => string };
+const { localPaseoEndpoint } = require("../server/paseo-endpoint.mjs") as { localPaseoEndpoint: () => string };
 
 test("local Paseo endpoint accepts local and wildcard daemon listeners", () => {
   const home = mkdtempSync(join(tmpdir(), "workbench-paseo-endpoint-"));
@@ -25,4 +25,14 @@ test("local Paseo endpoint accepts local and wildcard daemon listeners", () => {
     if (previous === undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previous;
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('endpoint normalization covers Unix and IPv6 wildcard listeners and rejects invalid ports', async () => {
+  const { normalizePaseoEndpoint } = await import('../shared/paseo-endpoint.mjs');
+  for (const [input, expected] of [
+    ['unix:///tmp/paseo.sock', 'ws+unix:///tmp/paseo.sock:/ws'],
+    ['[::]:6767', 'ws://localhost:6767/ws'],
+    ['localhost:6767', 'ws://localhost:6767/ws'],
+    ['0.0.0.0:0', ''], ['127.0.0.1:65536', ''], ['remote.example:6767', ''],
+  ]) assert.equal(normalizePaseoEndpoint(input), expected);
 });

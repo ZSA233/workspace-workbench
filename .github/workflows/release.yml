@@ -24,37 +24,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
+    with:
+      ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      release_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   release:
+    needs: verify
     name: Build release artifacts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           fetch-depth: 0
-      - name: Verify release version and tag
-        run: node scripts/version.mjs --check --tag "$RELEASE_TAG"
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - uses: actions/download-artifact@v8
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: paseo-plugin/package-lock.json
-      - name: Install plugin dependencies
-        run: npm ci
-        working-directory: paseo-plugin
-      - name: Verify plugin
-        run: |
-          npm run typecheck
-          npm test
-        working-directory: paseo-plugin
-      - name: Package Paseo plugin
-        run: node scripts/package_plugin.mjs --output-dir dist
-      - name: Create checksums
-        run: sha256sum dist/* > dist/SHA256SUMS
+          name: verified-plugin
+          path: dist
+      - name: Verify artifact checksums
+        run: cd dist && sha256sum -c SHA256SUMS
       - name: Promote released commit to stable
         if: github.event_name == 'push' || inputs.promote_stable == true
         shell: bash

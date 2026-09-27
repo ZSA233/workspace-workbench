@@ -17,7 +17,11 @@ export class RpcMetrics {
     this.peak = Math.max(this.peak, this.active);
     const started = Date.now();
     let failed = false;
-    try { return await operation(); }
+    try {
+      const result = await operation();
+      failed = Boolean(result && typeof result === "object" && "ok" in result && result.ok === false);
+      return result;
+    }
     catch (error) { failed = true; throw error; }
     finally {
       this.active--;

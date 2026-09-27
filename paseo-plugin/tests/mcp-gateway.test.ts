@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
-import { createServer as createNetServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -13,7 +12,7 @@ const ready = async () => ({ ok: true, stage: "ready" });
 function postWithoutPooling(url: string, key: string, message: unknown): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const request = httpRequest(url, { method: "POST", agent: false, headers: {
-      "content-type": "application/json", "x-workbench-gateway-key": key,
+      "content-type": "application/json", "x-workbench-gateway-key": key, "x-workbench-project": "/tmp/queue-test.json",
     } }, response => {
       let body = "";
       response.setEncoding("utf8");
@@ -28,18 +27,18 @@ function postWithoutPooling(url: string, key: string, message: unknown): Promise
   });
 }
 
-async function startGateway(home?: string) {
+async function startGateway(home?: string, heldRpc = false) {
   const root = mkdtempSync(join(tmpdir(), "workbench-gateway-"));
   const key = "test-gateway-key";
-  const child = spawn(process.execPath, ["mcp-gateway.mjs"], {
+  const child = spawn(process.execPath, [...(heldRpc ? ["--import", "./tests/fixtures/held-paseo-rpc.mjs"] : []), "mcp-gateway.mjs"], {
     cwd: process.cwd(),
     env: { ...process.env, ...(home ? { PASEO_HOME: home } : {}), WORKBENCH_GATEWAY_PARENT_PID: String(process.pid), WORKBENCH_GATEWAY_PORT: "0", WORKBENCH_GATEWAY_KEY: key, WORKBENCH_GATEWAY_GENERATION: "test-generation", WORKBENCH_DIAGNOSTICS_ROOT: root },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let buffer = "";
   const ready = new Promise<{ port: number }>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("gateway test start timeout")), 5_000);
-    child.stdout.on("data", chunk => {
+    child.stdout?.on("data", chunk => {
       buffer += String(chunk);
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
@@ -88,24 +87,30 @@ test("the gateway rejects an invalid key without creating a request", async () =
 
 test("HTTP queue time counts toward the short read deadline", async () => {
   const home = mkdtempSync(join(tmpdir(), "workbench-gateway-queue-"));
-  const sockets = new Set<Socket>();
-  const stalledPaseo = createNetServer(socket => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
-  await new Promise<void>(resolve => stalledPaseo.listen(0, "127.0.0.1", resolve));
-  const address = stalledPaseo.address();
-  assert.ok(address && typeof address === "object");
-  writeFileSync(join(home, "paseo.pid"), JSON.stringify({ listen: `127.0.0.1:${address.port}` }));
-  const gateway = await startGateway(home);
+  writeFileSync(join(home, "paseo.pid"), JSON.stringify({ listen: "127.0.0.1:1" }));
+  const gateway = await startGateway(home, true);
+  let held = 0;
+  gateway.child.on('message', (message: any) => { if (message.event === 'rpc-held') held++; });
   try {
-    const calls = Array.from({ length: 20 }, (_, id) => postWithoutPooling(`${gateway.base}/mcp`, gateway.key,
-      { jsonrpc: "2.0", id, method: "tools/call", params: { name: "workbench_connection_status", arguments: {} } }));
-    const results = await Promise.all(calls);
-    assert.ok(results.some(result => result.status === 504 && /queue_timeout/.test(result.body.error?.message)),
-      "queued reads must expire before dispatch when their receipt deadline passes");
+    // Hold RPC completion explicitly; elapsed SDK handshake timing cannot
+    // accidentally free a slot before the queued short read expires.
+    const blockers = Array.from({ length: 4 }, (_, id) => postWithoutPooling(`${gateway.base}/mcp`, gateway.key,
+      { jsonrpc: "2.0", id, method: "tools/call", params: { name: "workbench_workspace_create", arguments: { name: "blocked" } } }));
+    const until = Date.now() + 5_000;
+    while (held < 4 && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(held, 4);
+    const ping = await postWithoutPooling(`${gateway.base}/mcp`, gateway.key, { jsonrpc: "2.0", id: "ping", method: "ping" });
+    assert.equal(ping.status, 200);
+    const result = await postWithoutPooling(`${gateway.base}/mcp`, gateway.key,
+      { jsonrpc: "2.0", id: "queued", method: "tools/call", params: { name: "workbench_connection_status", arguments: {} } });
+    assert.equal(result.status, 504);
+    assert.match(result.body.error.message, /not_dispatched:queue_timeout/);
+    gateway.child.send("release-rpc");
+    await Promise.all(blockers);
+
   } finally {
     gateway.child.kill("SIGTERM");
     await once(gateway.child, "exit");
-    for (const socket of sockets) socket.destroy();
-    await new Promise<void>(resolve => stalledPaseo.close(() => resolve()));
     rmSync(gateway.root, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }
@@ -248,5 +253,29 @@ test("a new plugin generation waits for the verified predecessor on the reserved
     await oldManager.close();
     if (previousHome === undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previousHome;
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('concurrent readiness checks share a probe and backend recovery retains the gateway process', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'gateway-probe-'));
+  const previous = process.env.PASEO_HOME;
+  process.env.PASEO_HOME = home;
+  let probes = 0, active = 0, peak = 0;
+  const manager = new McpGatewayManager(join(process.cwd(), 'mcp-gateway.mjs'), undefined, async () => {
+    active++; peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 10)); active--;
+    return ++probes < 3 ? {ok:false,stage:'endpoint',code:'unavailable'} : {ok:true,stage:'ready'};
+  });
+  try {
+    const config = await manager.configForRequest('/tmp/project.json', 't', 'interactive', undefined, {waitForReady:false});
+    const pid = manager.status().pid;
+    const results = await Promise.all(Array.from({length:20}, () => manager.ensure()));
+    assert.equal(peak, 1); assert.equal(probes, 3);
+    assert.equal(manager.status().pid, pid);
+    assert.ok(results.every(result => result.url === config.url));
+  } finally {
+    await manager.close();
+    if(previous === undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previous;
+    rmSync(home,{recursive:true,force:true});
   }
 });

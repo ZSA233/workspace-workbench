@@ -1,3 +1,4 @@
+import { createRequestScheduler } from './shared/request-scheduler.mjs';
 import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { handle } from "./shared/mcp-router.mjs";
@@ -14,12 +15,10 @@ const generation = process.env.WORKBENCH_GATEWAY_GENERATION || `gateway:${proces
 const pluginGeneration = process.env.WORKBENCH_PLUGIN_GENERATION || "unknown";
 const diagnosticsRoot = process.env.WORKBENCH_DIAGNOSTICS_ROOT || "/tmp/workbench-diagnostics";
 const diagnostics = createDiagnosticSink({ root: diagnosticsRoot, component: "gateway", generation });
-const active = new Set();
-const queue = [];
-let running = 0;
+const scheduler = createRequestScheduler();
+let readinessFlight = null;
+const readinessAbort = new AbortController();
 let closing = false;
-const maxConcurrent = 4;
-const maxQueue = 16;
 function projectHash(path) { return path ? createHash("sha256").update(path).digest("hex").slice(0, 12) : null; }
 function toolName(message) {
   return message?.method === "tools/call" && message?.params && typeof message.params.name === "string"
@@ -62,7 +61,6 @@ function requestContext(req) {
   const role = String(req.headers["x-workbench-role"] || "interactive");
   const workspaceId = String(req.headers["x-workbench-workspace"] || "");
   return {
-    endpoint: process.env.WORKBENCH_PASEO_ENDPOINT,
     projectConfig,
     token,
     role,
@@ -70,81 +68,17 @@ function requestContext(req) {
   };
 }
 
-async function run(item) {
-  if (item.canceled) {
-    item.controller = null;
-    drain();
-    return;
-  }
-  if (Date.now() >= item.deadline) {
-    item.canceled = true;
-    clearTimeout(item.timer);
-    if (!item.response.writableEnded && !item.response.destroyed)
-      json(item.response, 504, rpcError(item.message.id, -32008, "workbench_not_dispatched:queue_timeout"));
-    diagnostics.record({ event: "mcp_request_timeout", phase: "dispatch", transport: "http", requestId: item.requestId,
-      method: item.message?.method, tool: toolName(item.message), projectHash: projectHash(item.context.projectConfig),
-      queueMs: Math.max(0, Date.now() - item.enqueuedAt), errorCode: "queue_timeout", dispatched: false });
-    drain();
-    return;
-  }
-  item.phase = "running";
-  running++;
-  active.add(item);
-  const started = Date.now();
-  const controller = new AbortController();
-  item.controller = controller;
-  diagnostics.record({ event: "mcp_request_started", phase: "dispatch", transport: "http", requestId: item.requestId, method: item.message?.method, tool: toolName(item.message), role: item.context.role, projectHash: projectHash(item.context.projectConfig), queueMs: Math.max(0, started - item.enqueuedAt) });
-  try {
-    const result = await handle(item.message, {
-      signal: controller.signal,
-      deadline: item.deadline,
-      diagnose: event => diagnostics.record({ ...event, event: event.code === "cleanup_failed" ? "mcp_cleanup_failed" : "mcp_request_phase", requestId: item.requestId, phase: event.phase }),
-    }, item.context);
-    if (!item.response.writableEnded && !item.response.destroyed) json(item.response, 200, { jsonrpc: "2.0", id: item.message.id ?? null, result: item.message.method === "ping" || item.message.method === "initialize" ? { ...result, _meta: { workbench: { transport: "http", pluginGeneration, gatewayGeneration: generation, gatewayPid: process.pid, version: packageMetadata.version } } } : result });
-    diagnostics.record({ event: "mcp_request_finished", phase: "cleanup", transport: "http", requestId: item.requestId, method: item.message?.method, tool: toolName(item.message), projectHash: projectHash(item.context.projectConfig), queueMs: Math.max(0, started - item.enqueuedAt), durationMs: Date.now() - started });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!item.response.writableEnded && !item.response.destroyed) json(item.response, /request_too_large/.test(message) ? 413 : 500, rpcError(item.message?.id, -32603, message));
-    diagnostics.record({ event: controller.signal.aborted ? "mcp_request_timeout" : "mcp_request_finished", phase: controller.signal.aborted ? "cleanup" : "dispatch", transport: "http", requestId: item.requestId, method: item.message?.method, tool: toolName(item.message), projectHash: projectHash(item.context.projectConfig), queueMs: Math.max(0, started - item.enqueuedAt), durationMs: Date.now() - started, errorCode: controller.signal.aborted ? "request_timeout" : "request_failed", reason: message });
-  } finally {
-    clearTimeout(item.timer);
-    active.delete(item);
-    running--;
-    drain();
-  }
-}
-
-function drain() {
-  while (!closing && running < maxConcurrent && queue.length) {
-    const item = queue.shift();
-    if (item.canceled) continue;
-    void run(item);
-  }
-}
-
-function cancelQueuedOrActive(item, reason) {
-  if (!item || item.canceled) return;
-  item.canceled = true;
-  item.controller?.abort(reason);
-  if (item.phase === "queued") {
-    const index = queue.indexOf(item);
-    if (index >= 0) queue.splice(index, 1);
-    clearTimeout(item.timer);
-  }
-  diagnostics.record({ event: "mcp_request_canceled", phase: "cleanup", transport: "http", requestId: item.requestId, reason });
-  drain();
-}
-
 async function onRequest(req, res) {
   if (req.url === "/health" && req.method === "GET") {
-    json(res, 200, { ok: true, component: "workbench-mcp-gateway", pluginGeneration, generation, pid: process.pid, parentPid, active: running, queued: queue.length });
+    json(res, 200, { ok: true, component: "workbench-mcp-gateway", pluginGeneration, generation, pid: process.pid, parentPid, ...scheduler.health() });
     return;
   }
   if (req.url === "/ready" && req.method === "GET") {
     if (!key || req.headers["x-workbench-gateway-key"] !== key) {
       json(res, 401, { ok: false, stage: "gateway", code: "gateway_key_invalid" }); return;
     }
-    const result = await probePaseo();
+    if (!readinessFlight) readinessFlight = probePaseo({ signal: readinessAbort.signal }).finally(() => { readinessFlight = null; });
+    const result = await readinessFlight;
     json(res, result.ok ? 200 : 503, { ...result, generation, pid: process.pid });
     return;
   }
@@ -162,27 +96,29 @@ async function onRequest(req, res) {
   catch (error) { if (!res.destroyed) json(res, 400, rpcError(null, -32700, error instanceof Error ? error.message : "invalid_json")); return; }
   if (!message || typeof message !== "object" || Array.isArray(message)) { if (!res.destroyed) json(res, 400, rpcError(null, -32600, "invalid_jsonrpc_request")); return; }
   if (message.id === undefined) { if (!res.destroyed) json(res, 202, undefined); return; }
-  if (closing || running >= maxConcurrent && queue.length >= maxQueue) {
-    diagnostics.record({ event: "mcp_request_rejected", phase: "dispatch", transport: "http", requestId: String(message.id || randomUUID()), method: message.method, tool: toolName(message), errorCode: closing ? "gateway_closing" : "queue_full" });
-    if (!res.destroyed) json(res, 429, rpcError(message.id, -32004, "workbench_busy_not_dispatched"));
-    return;
-  }
-  const enqueuedAt = Date.now();
-  const deadline = enqueuedAt + requestBudget(message);
-  const item = { message, response: res, requestId: String(message.id || randomUUID()), context: requestContext(req), controller: null, phase: "queued", canceled: false, enqueuedAt, deadline, timer: null };
-  item.timer = setTimeout(() => {
-    if (item.phase === "queued" && !item.canceled) {
-      cancelQueuedOrActive(item, "deadline");
-      json(res, 504, rpcError(message.id, -32008, "workbench_not_dispatched:queue_timeout"));
-    } else item.controller?.abort("deadline");
-  }, Math.max(0, deadline - Date.now()));
-  const onDisconnect = () => {
-    if (!res.writableEnded) cancelQueuedOrActive(item, "client_disconnected");
-  };
-  req.once("aborted", onDisconnect);
-  res.once("close", onDisconnect);
-  queue.push(item);
-  drain();
+  if (res.destroyed) return;
+  const id = randomUUID();
+  const context = requestContext(req);
+  const receivedAt = Date.now();
+  scheduler.submit({ id, deadline: receivedAt + requestBudget(message),
+    control: ['ping', 'initialize', 'tools/list'].includes(message.method),
+    run: lifecycle => handle(message, lifecycle, context),
+    diagnose: event => diagnostics.record({ ...event, event: 'mcp_request_phase', requestId: id, method: message.method, tool: toolName(message) }),
+    respond: (error, result) => {
+      let toolError;
+      if (result?.isError) {
+        try { toolError = JSON.parse(result.content?.find(item => item.type === 'text')?.text || '{}').error; } catch {}
+      }
+      const reason = error?.message || toolError?.code || '';
+      if (error) json(res, /queue_timeout/.test(reason) ? 504 : /busy/.test(reason) ? 429 : 500, rpcError(message.id, /queue_timeout/.test(reason) ? -32008 : /busy/.test(reason) ? -32004 : -32603, reason));
+      else json(res, 200, { jsonrpc: '2.0', id: message.id, result: ['ping', 'initialize'].includes(message.method)
+        ? { ...result, _meta: { workbench: { transport: 'http', pluginGeneration, gatewayGeneration: generation, gatewayPid: process.pid, version: packageMetadata.version } } } : result });
+      diagnostics.record({ event: error || result?.isError ? 'mcp_request_failed' : 'mcp_request_finished', requestId: id, projectHash: projectHash(context.projectConfig), method: message.method,
+        tool: toolName(message), durationMs: Date.now() - receivedAt, reason, queueMs: error?.queueMs, dispatched: error?.workbenchDispatched ?? toolError?.dispatched, phase: error?.stage ?? toolError?.stage });
+    },
+  });
+  res.once('close', () => { if (!res.writableEnded) scheduler.cancel(id, 'client_disconnected'); });
+
 }
 
 const server = createServer((req, res) => { void onRequest(req, res); });
@@ -200,11 +136,8 @@ function close() {
   if (closing) return;
   closing = true;
   diagnostics.record({ event: "gateway_shutdown_started", phase: "cleanup" });
-  for (const item of active) item.controller?.abort("gateway_shutdown");
-  for (const item of queue.splice(0)) {
-    clearTimeout(item.timer);
-    if (!item.response.writableEnded) json(item.response, 503, rpcError(item.message?.id, -32005, "workbench_gateway_closing"));
-  }
+  readinessAbort.abort();
+  scheduler.close();
   server.close(() => { diagnostics.record({ event: "gateway_shutdown_finished", phase: "cleanup" }); void diagnostics.close().finally(() => process.exit(0)); });
   setTimeout(() => process.exit(0), 2_000).unref();
 }

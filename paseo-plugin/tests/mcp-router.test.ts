@@ -265,3 +265,22 @@ test("workspace status with requestId keeps the handoff status route", async () 
     DaemonClient.prototype.invokePluginRpc = originalInvoke;
   }
 });
+
+test('connection status inherits cancellation instead of starting a fresh readiness timeout', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'workbench-status-cancel-'));
+  const previous = process.env.PASEO_HOME;
+  const original = DaemonClient.prototype.connect;
+  process.env.PASEO_HOME = home;
+  writeFileSync(join(home, 'paseo.pid'), JSON.stringify({listen:'0.0.0.0:6767'}));
+  let connects = 0;
+  DaemonClient.prototype.connect = async function () { connects++; };
+  const controller = new AbortController(); controller.abort();
+  try {
+    const response = await handle({method:'tools/call',params:{name:'workbench_connection_status',arguments:{}}}, {signal:controller.signal,deadline:Date.now()+6000});
+    assert.equal(response.isError,true); assert.equal(connects,0);
+  } finally {
+    DaemonClient.prototype.connect = original;
+    if(previous===undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previous;
+    rmSync(home,{recursive:true,force:true});
+  }
+});

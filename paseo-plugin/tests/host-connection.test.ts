@@ -81,3 +81,30 @@ test("timed-out host connection keeps one SDK recovery instead of accumulating w
     assert.equal(connects, 1);
   } finally { await connection.close(); }
 });
+
+test('endpoint replacement drains the old operation and sends new work to the new connection', async () => {
+  let endpoint = 'first';
+  const disposed: string[] = [];
+  const connection = new HostConnection(() => endpoint, address => {
+    let connected = false;
+    return { endpoint: address, api: { address } as unknown as PaseoApi, client: {
+      connect: async () => { connected = true; }, close: async () => { disposed.push(address); },
+      getConnectionState: () => ({ status: connected ? 'connected' : 'disconnected' }),
+    } } as any;
+  });
+  let release!: () => void, entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const old = connection.run(async api => { entered(); await held; return (api as any).address; });
+  await started; endpoint = 'second';
+  assert.equal(await connection.run(api => (api as any).address), 'second');
+  assert.deepEqual(disposed, []);
+  release(); assert.equal(await old, 'first'); assert.deepEqual(disposed, ['first']);
+  await connection.close(); assert.deepEqual(disposed, ['first', 'second']);
+});
+
+test('RPC diagnostics count structured failures', async () => {
+  const metrics = new RpcMetrics();
+  await metrics.track('read', () => ({ok:false,error:{code:'observer_timeout'}}));
+  assert.equal(metrics.snapshot().methods.read.failures, 1);
+});

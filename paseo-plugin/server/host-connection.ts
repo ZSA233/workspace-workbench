@@ -1,7 +1,5 @@
+import { localPaseoEndpoint } from "./paseo-endpoint.mjs";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import { createPaseoApi } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -12,12 +10,9 @@ type Managed = { client: Client; api: PaseoApi; endpoint: string };
 type Factory = (endpoint: string) => Managed;
 
 function localEndpoint(): string {
-  const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
-  const record = JSON.parse(readFileSync(join(home, "paseo.pid"), "utf8")) as { listen?: string; sockPath?: string };
-  const target = String(record.listen || record.sockPath || "").replace(/^unix:\/\//, "");
-  if (target.startsWith("/")) return `ws+unix://${target}:/ws`;
-  if (/^(127\.0\.0\.1|localhost):\d+$/.test(target)) return `ws://${target}/ws`;
-  throw new Error("paseo_local_endpoint_required");
+  const endpoint = localPaseoEndpoint();
+  if (!endpoint) throw new Error('paseo_local_endpoint_required');
+  return endpoint;
 }
 
 function createManaged(endpoint: string): Managed {
@@ -46,6 +41,8 @@ export class HostConnection {
   private sdkConnecting: Promise<void> | null = null;
   private closed = false;
   private active = 0;
+  private leases = new Map<PaseoApi, number>();
+  private retired = new Set<Managed>();
   private failures = 0;
   private cleanupFailures = 0;
   private reconnects = 0;
@@ -60,15 +57,14 @@ export class HostConnection {
 
   async api(): Promise<PaseoApi> {
     if (this.closed) throw new Error("host_transport_closed");
-    if (this.connecting) return this.connecting;
-    if (this.managed?.client.getConnectionState().status === "connected") return this.managed.api;
     const endpoint = this.endpoint();
-    if (this.managed && this.managed.endpoint !== endpoint && this.active === 0) {
+    if (this.managed && this.managed.endpoint !== endpoint) {
       const old = this.managed;
-      this.managed = null;
-      this.sdkConnecting = null;
-      void this.dispose(old);
+      this.managed = null; this.sdkConnecting = null; this.connecting = null;
+      if (this.leases.get(old.api)) this.retired.add(old);
+      else void this.dispose(old);
     }
+    if (this.connecting) return this.connecting;
     const managed = this.managed || (this.managed = this.factory(endpoint));
     if (managed.client.getConnectionState().status === "connected") return managed.api;
     if (this.sdkConnecting) throw new Error("host_transport_unavailable");
@@ -107,24 +103,31 @@ export class HostConnection {
   }
 
   async run<T>(operation: (api: PaseoApi) => Promise<T> | T, readOnly = false): Promise<T> {
-    const api = await this.api();
-    this.active++;
-    try {
+    const attempt = async () => {
+      const api = await this.api();
+      if (this.closed || api !== this.managed?.api) throw new Error('host_transport_unavailable');
+      this.active++; this.leases.set(api, (this.leases.get(api) || 0) + 1);
       try {
         const result = await operation(api);
         this.lastSuccessfulAt = new Date().toISOString();
         return result;
-      } catch (error) {
-        if (!transportFailure(error)) throw error;
-        this.failures++;
-        this.lastFailure = error instanceof Error ? error.message : String(error);
-        if (!readOnly) throw new Error("workbench_request_uncertain_retry_same_identity:host_transport_lost");
-        const recovered = await this.api();
-        const result = await operation(recovered);
-        this.lastSuccessfulAt = new Date().toISOString();
-        return result;
+      } finally {
+        this.active--;
+        const count = (this.leases.get(api) || 1) - 1;
+        if (count) this.leases.set(api, count);
+        else {
+          this.leases.delete(api);
+          for (const old of this.retired) if (old.api === api) { this.retired.delete(old); await this.dispose(old); }
+        }
       }
-    } finally { this.active--; }
+    };
+    try { return await attempt(); }
+    catch (error) {
+      if (!transportFailure(error)) throw error;
+      this.failures++; this.lastFailure = error instanceof Error ? error.message : String(error);
+      if (!readOnly) throw new Error('workbench_request_uncertain_retry_same_identity:host_transport_lost');
+      return attempt();
+    }
   }
 
   status() {
@@ -157,6 +160,8 @@ export class HostConnection {
     this.managed = null;
     this.sdkConnecting = null;
     if (managed) await this.dispose(managed);
+    await Promise.all([...this.retired].map(old => this.dispose(old)));
+    this.retired.clear();
   }
 
   private async dispose(managed: Managed): Promise<void> {

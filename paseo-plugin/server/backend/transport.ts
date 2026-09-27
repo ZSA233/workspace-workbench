@@ -1,3 +1,4 @@
+import { remainingMs } from "../../shared/request-deadline.mjs";
 import { acquireProjectLease } from "./lease.ts";
 import { createServer, createConnection, type Socket } from "node:net";
 import {
@@ -59,6 +60,11 @@ export async function response(service: Service, raw: string, signal?: AbortSign
       (typeof request.params !== "object" || Array.isArray(request.params))
     )
       throw new WorkbenchError("request_invalid", "params must be an object");
+    if (cancellableMethods.has(String(request.method)) && Number.isFinite(request.deadline)) {
+      const remaining = remainingMs(request.deadline);
+      if (!remaining) throw new WorkbenchError('observation_timeout', 'request deadline expired before backend dispatch');
+      request.params = { ...(request.params || {}), observationBudgetMs: Math.min(remaining, Number(request.params?.observationBudgetMs) || remaining) };
+    }
     return {
       id,
       ok: true,
@@ -270,12 +276,15 @@ export async function serveSocket(
         let parsedMethod = "";
         try { parsedMethod = String((JSON.parse(line) as { method?: unknown }).method || ""); } catch {}
         const controller = new AbortController();
+        const deadlineTimer = cancellableMethods.has(parsedMethod) && Number.isFinite(request.deadline)
+          ? setTimeout(() => controller.abort(), remainingMs(request.deadline)) : undefined;
         let task: Promise<unknown>;
         task = response(service, line, controller.signal)
           .then((value) => {
             if (!socket.destroyed) socket.write(JSON.stringify(value) + "\n");
           })
           .finally(() => {
+            clearTimeout(deadlineTimer);
             pending--;
             tasks.delete(task);
             pendingTasks.delete(task);

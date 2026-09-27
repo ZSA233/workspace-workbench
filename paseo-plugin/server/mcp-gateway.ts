@@ -61,11 +61,14 @@ function persistState(value: GatewayState): void {
 
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const childRunning = (child: ChildProcess) => child.exitCode === null && child.signalCode === null;
-async function fetchBounded(url: string, headers: Record<string, string>, timeoutMs: number): Promise<Response> {
+async function fetchBounded(url: string, headers: Record<string, string>, timeoutMs: number, signal?: AbortSignal): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, {once:true});
+  if (signal?.aborted) controller.abort();
   try { return await fetch(url, { headers, signal: controller.signal }); }
-  finally { clearTimeout(timer); }
+  finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
 async function acquireStateLock(): Promise<() => void> {
   mkdirSync(stateDir(), { recursive: true, mode: 0o700 });
@@ -108,6 +111,9 @@ export class McpGatewayManager {
   private readiness: { stage: string; code?: string } = { stage: "starting" };
   private restartTimer: NodeJS.Timeout | null = null;
   private consecutiveFailures = 0;
+  private readyFlight: Promise<McpGatewayConfig> | null = null;
+  private probeAbort = new AbortController();
+  private probeFailures = 0;
   private transportFlight: Promise<McpGatewayConfig> | null = null;
   private readonly readinessProbe: (port: number, key: string) => Promise<{ ok: boolean; stage: string; code?: string }>;
 
@@ -118,7 +124,7 @@ export class McpGatewayManager {
     this.diagnostics = createDiagnosticSink({ root: diagnosticsRoot(), component: "plugin", generation });
     this.readinessProbe = readinessProbe || (async (port, key) => {
       try {
-        const response = await fetchBounded(`http://127.0.0.1:${port}/ready`, { "X-Workbench-Gateway-Key": key }, 3_500);
+        const response = await fetchBounded(`http://127.0.0.1:${port}/ready`, { "X-Workbench-Gateway-Key": key }, 3_500, this.probeAbort.signal);
         return await response.json() as { ok: boolean; stage: string; code?: string };
       } catch { return { ok: false, stage: "gateway", code: "gateway_unavailable" }; }
     });
@@ -135,9 +141,11 @@ export class McpGatewayManager {
   }
 
   private async waitReady(port: number, key: string): Promise<void> {
+    const entry = this.entry;
     const until = Date.now() + 8_000;
     while (!this.closed && Date.now() < until) {
       const result = await this.readinessProbe(port, key);
+      if (this.closed || entry !== this.entry) throw new Error("gateway_generation_changed");
       this.readiness = { stage: result.stage, ...(result.code ? { code: result.code } : {}) };
       if (result.ok) return;
       await pause(150);
@@ -163,14 +171,25 @@ export class McpGatewayManager {
    * Paseo outage cannot cancel an otherwise unrelated Agent creation.
    */
   async ensure(): Promise<McpGatewayConfig> {
+    if (this.closed) throw new Error('plugin_unloaded');
+    if (this.readyFlight) return this.readyFlight;
+    this.readyFlight = this.ensureReady().finally(() => { this.readyFlight = null; });
+    return this.readyFlight;
+  }
+
+  private async ensureReady(): Promise<McpGatewayConfig> {
     const config = await this.ensureTransport();
     try {
       await this.waitReady(Number(new URL(config.url).port), config.headers["X-Workbench-Gateway-Key"]);
       this.consecutiveFailures = 0;
+      if (this.probeFailures) this.diagnostics.record({ event: "gateway_backend_recovered", phase: "connect", failures: this.probeFailures });
+      this.probeFailures = 0;
       this.lastSuccessAt = new Date().toISOString();
       this.diagnostics.record({ event: "gateway_ready", phase: "connect", transport: "http", gatewayPid: this.entry?.child.pid, port: Number(new URL(config.url).port), generation: this.entry?.generation });
       return config;
     } catch (error) {
+      this.probeFailures++;
+      if (this.probeFailures === 1) this.diagnostics.record({ event: "gateway_backend_unavailable", phase: "connect", errorCode: this.readiness.code });
       this.scheduleRestart();
       throw error;
     }
@@ -243,8 +262,10 @@ export class McpGatewayManager {
     const entry: ChildEntry = { child, port, key, generation, startedAt: new Date().toISOString(), stderr: "" };
     this.entry = entry;
     child.once("exit", () => {
-      if (this.entry === entry) this.entry = null;
-      this.readiness = { stage: "gateway", code: "gateway_exited" };
+      if (this.entry === entry) {
+        this.entry = null;
+        this.readiness = { stage: "gateway", code: "gateway_exited" };
+      }
       this.restarts++;
       this.diagnostics.record({ event: "gateway_exit", phase: "cleanup", transport: "http", gatewayPid: child.pid, reason: `exit:${child.exitCode ?? "signal"}` });
       if (!this.closed) this.scheduleRestart();
@@ -299,6 +320,7 @@ export class McpGatewayManager {
     const running = Boolean(entry && childRunning(entry.child));
     return {
       state: this.closed ? "closed" : running && this.readiness.stage === "ready" ? "ready" : running || this.transportFlight ? "starting" : "idle",
+      pluginGeneration: this.pluginGeneration,
       transport: "http",
       scope: "plugin-generation",
       legacyStdio: "external-session-owned",
@@ -311,7 +333,7 @@ export class McpGatewayManager {
       restartCount: this.restarts,
       cleanupFailures: this.cleanupFailures,
       lastSuccessAt: this.lastSuccessAt,
-      readiness: this.readiness,
+      readiness: { ...this.readiness, failures: this.probeFailures },
       diagnostics: this.diagnostics.status(),
     };
   }
@@ -319,6 +341,7 @@ export class McpGatewayManager {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.probeAbort.abort();
     if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
     const starting = this.transportFlight;
     this.diagnostics.record({ event: "gateway_shutdown_started", phase: "cleanup", transport: "http", gatewayPid: this.entry?.child.pid });
@@ -342,6 +365,7 @@ export class McpGatewayManager {
     // to settle after the owned child has been asked to exit, so no late
     // startup continuation can publish a live endpoint after shutdown.
     if (starting) await starting.catch(() => {});
+    await this.readyFlight?.catch(() => {});
     this.entry = null;
     this.activeLeases.clear();
     const state = readState();
@@ -374,4 +398,4 @@ export async function mcpGatewayConfig(projectConfig: string, token: string, rol
   };
   return activeGateway.configForRequest(projectConfig, token, role, workspaceId, options);
 }
-export function mcpGatewayStatus(): ReturnType<McpGatewayManager["status"]> { return activeGateway?.status() || { state: "uninitialized", transport: "http", scope: "plugin-generation", legacyStdio: "external-session-owned", pid: null, parentPid: process.pid, port: null, generation: null, startedAt: null, activeLeases: 0, restartCount: 0, cleanupFailures: 0, lastSuccessAt: null, readiness: { stage: "uninitialized" }, diagnostics: { file: "", dropped: 0 } }; }
+export function mcpGatewayStatus(): ReturnType<McpGatewayManager["status"]> { return activeGateway?.status() || { state: "uninitialized", pluginGeneration: "uninitialized", transport: "http", scope: "plugin-generation", legacyStdio: "external-session-owned", pid: null, parentPid: process.pid, port: null, generation: null, startedAt: null, activeLeases: 0, restartCount: 0, cleanupFailures: 0, lastSuccessAt: null, readiness: { stage: "uninitialized", failures: 0 }, diagnostics: { file: "", dropped: 0 } }; }

@@ -1,40 +1,12 @@
 name: CI
-
 on:
   push:
+    tags-ignore: ['v*']
   pull_request:
-
 permissions:
   contents: read
-
 jobs:
   paseo:
-    name: Paseo plugin
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-      - name: Verify version metadata
-        run: node scripts/version.mjs --check
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: paseo-plugin/package-lock.json
-      - name: Install plugin dependencies
-        run: npm ci
-        working-directory: paseo-plugin
-      - name: Typecheck plugin
-        run: npm run typecheck
-        working-directory: paseo-plugin
-      - name: Test plugin
-        run: npm test
-        working-directory: paseo-plugin
-      - name: Check plugin package contents
-        run: npm pack --dry-run --json
-        working-directory: paseo-plugin
-      - name: Build release-shaped plugin archive
-        run: |
-          node scripts/package_plugin.mjs --output-dir "$RUNNER_TEMP/plugin-package"
-          tar -tzf "$RUNNER_TEMP/plugin-package"/workspace-workbench-paseo-*.tar.gz >/dev/null
+    uses: ./.github/workflows/verify.yml
+    with:
+      ref: ${{ github.sha }}

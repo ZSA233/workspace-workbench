@@ -1,3 +1,5 @@
+import { localPaseoEndpoint } from "./paseo-endpoint.mjs";
+import { normalizePaseoEndpoint } from "../shared/paseo-endpoint.mjs";
 import { findExistingReviewer, reviewerTurnIsActive, inspectCoordinatorTurn, availableCodexModels } from "./review-host.ts";
 import { withReviewTransitionLock } from "./review-state-transitions.ts";
 import { sessionKey, indexKey, sessionIndex, readSession, persistSession, storedReviewSessions, activeReviewSessions, forgetReviewWorkspace, onReviewChanged } from "./agent-review-store.ts";
@@ -766,16 +768,7 @@ function bridgeEndpoint(configPath: string): { endpoint: string; script: string 
   const script = (bridge as Record<string, unknown>).script;
   const configured = (bridge as Record<string, unknown>).endpoint;
   if (typeof script !== "string" || !script.trim() || typeof configured !== "string" || !configured.trim()) throw new Error("reviewer_bridge_unavailable");
-  let target = configured;
-  if (configured === "auto") {
-    const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
-    try {
-      const record = JSON.parse(readFileSync(join(home, "paseo.pid"), "utf8")) as { listen?: string; sockPath?: string };
-      target = record.listen || record.sockPath || "";
-    } catch { throw new Error("reviewer_bridge_endpoint_unavailable"); }
-  }
-  target = target.replace(/^unix:\/\//, "");
-  const endpoint = target.startsWith("/") ? `ws+unix://${target}:/ws` : /^(127\.0\.0\.1|localhost):\d+$/.test(target) ? `ws://${target}/ws` : "";
+  const endpoint = configured === 'auto' ? localPaseoEndpoint() : normalizePaseoEndpoint(configured);
   if (!endpoint) throw new Error("reviewer_bridge_endpoint_unavailable");
   return { endpoint, script: resolve(dirname(configPath), script) };
 }

@@ -1,3 +1,4 @@
+import { boundedDeadline } from "../shared/request-deadline.mjs";
 import { sessionRevision } from "./session-observation.ts";
 import { reviewRevision } from "./agent-review-store.ts";
 import { withWorkspaceScope } from "./workspace-scope.ts";
@@ -32,6 +33,7 @@ type QueryInput = {
 
 type SocketRequest = {
   id: string;
+  deadline?: number;
   method: QueryInput["method"];
   params: Record<string, unknown>;
 };
@@ -153,6 +155,13 @@ export class ObserverBridge {
   private completedRequests = 0;
   private failedRequests = 0;
   private timeoutRequests = 0;
+  private failures: Array<{ requestId: string; method: string; code: string; stage: string; at: string; durationMs: number }> = [];
+
+  private recordFailure(request: SocketRequest, code: string, startedAt: number, stage: string) {
+    this.failures.push({ requestId: request.id, method: request.method, code, stage,
+      at: new Date().toISOString(), durationMs: Date.now() - startedAt });
+    if (this.failures.length > 32) this.failures.shift();
+  }
 
   private trimCache() {
     for (const [key, value] of this.cache) if (value.expiresAt <= Date.now()) this.cache.delete(key);
@@ -172,6 +181,8 @@ export class ObserverBridge {
       completedRequests: this.completedRequests,
       failedRequests: this.failedRequests,
       timeoutRequests: this.timeoutRequests,
+      generation: `${SERVER_BUILD_ID}:${process.pid}`,
+      recentFailures: [...this.failures],
       methods: [...this.methodStats.entries()].sort((a, b) => b[1].requests - a[1].requests).slice(0, 32).map(([method, stats]) => ({ method, ...stats })),
     };
   }
@@ -253,11 +264,18 @@ export class ObserverBridge {
     if (active) return active;
     if (this.inFlight.size >= BRIDGE_IN_FLIGHT && !["observer.health", "observer.versions"].includes(input.method))
       return { ok: false, error: { code: "observer_busy", message: "observer request limit reached; retry" } };
-    const request: SocketRequest = { id: String(++this.sequence), method: input.method, params };
-    const pending = this.request(request, configuredBridgeTimeoutMs(input.method))
+    const request: SocketRequest = { id: `${process.pid}:${++this.sequence}`, method: input.method, params };
+    const timeout = configuredBridgeTimeoutMs(input.method);
+    if (READ_METHODS.has(input.method)) request.deadline = boundedDeadline(undefined, timeout - OBSERVATION_TIMING_DEFAULTS.cleanupReserveMs);
+    const pending = this.request(request, timeout)
       .then((response) => {
         this.completedRequests++;
         stats.completed++;
+        if (!response.ok) {
+          stats.failures++; this.failedRequests++;
+          this.recordFailure(request, response.error?.code || 'backend_failed', startedAt,
+            response.error?.code === 'git_timeout' ? 'git' : 'backend');
+        }
         stats.maxMs = Math.max(stats.maxMs, Date.now() - startedAt);
         if (response.ok && mutationMethods.has(input.method)) {
           for (const cachedKey of this.cache.keys()) if (cachedKey.startsWith(projectPrefix)) this.cache.delete(cachedKey);
@@ -275,6 +293,7 @@ export class ObserverBridge {
       })
       .catch(error => {
         this.failedRequests++;
+        this.recordFailure(request, error instanceof BridgeError ? error.code : "observer_failed", startedAt, "bridge");
         stats.failures++;
         stats.maxMs = Math.max(stats.maxMs, Date.now() - startedAt);
         if (error instanceof BridgeError && error.code === "observer_timeout") this.timeoutRequests++;

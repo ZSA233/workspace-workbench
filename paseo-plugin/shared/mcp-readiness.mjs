@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import WebSocket from "ws";
 import { withMcpConnection } from "./mcp-connection.mjs";
-import { localPaseoEndpoint } from "./paseo-endpoint.mjs";
+import { localPaseoEndpoint } from "../server/paseo-endpoint.mjs";
 
-export async function probePaseo() {
+export async function probePaseo(lifecycle = {}) {
   const endpoint = localPaseoEndpoint();
   if (!endpoint) return { ok: false, stage: "endpoint", code: "workbench_paseo_endpoint_unavailable" };
   const sockets = new Set();
@@ -21,7 +21,7 @@ export async function probePaseo() {
     const result = await withMcpConnection(client, async () => {
       stage = "plugin_rpc";
       return client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.mcp.status", {});
-    }, { deadline: Date.now() + 3_000, connectMs: 1_500, closeMs: 250,
+    }, { ...lifecycle, deadline: Math.min(lifecycle.deadline ?? Infinity, Date.now() + 3_000), connectMs: 1_500, closeMs: 250,
       forceClose: () => { for (const socket of sockets) socket.terminate(); sockets.clear(); } });
     return result?.ok === true ? { ok: true, stage: "ready" }
       : { ok: false, stage: "plugin_rpc", code: "workbench_plugin_rpc_unavailable" };

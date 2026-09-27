@@ -10,7 +10,7 @@ import { checkMetadata, readVersion } from "./version.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const entries = [
   "client", "server", "shared", "backend", "scripts", "index.client.tsx", "index.server.ts",
-  "mcp.mjs", "paseo-plugin.json", "tsconfig.json", "README.md", "package.json", "package-lock.json",
+  "mcp.mjs", "mcp-gateway.mjs", "paseo-plugin.json", "tsconfig.json", "README.md", "package.json", "package-lock.json",
 ];
 
 export async function buildArchive(base = root, outputDir = join(base, "dist")) {
@@ -20,6 +20,10 @@ export async function buildArchive(base = root, outputDir = join(base, "dist")) 
   const version = await readVersion(base);
   const archive = join(resolve(outputDir), `workspace-workbench-paseo-${version}.tar.gz`);
   execFileSync("tar", ["-czf", archive, "-C", join(base, "paseo-plugin"), ...entries], { stdio: "inherit" });
+  const contents = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).split("\n");
+  for (const required of ["mcp.mjs", "mcp-gateway.mjs", "shared/request-scheduler.mjs", "server/paseo-endpoint.mjs", "package.json"]) {
+    if (!contents.includes(required)) throw new Error(`release archive missing runtime entry: ${required}`);
+  }
   return archive;
 }
 

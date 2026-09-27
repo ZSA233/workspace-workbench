@@ -105,8 +105,11 @@ test("workspace activity scans HEAD metadata only on request, caches it, aggrega
     const beforeCommands = gitDiagnostics().commands;
     const initial = await service.handle("workspace.list", { includeRemoved: true });
     assert.equal(gitDiagnostics().commands, beforeCommands, "workspace.list must not start Git activity scans");
+    assert.equal(initial.observation.validationKey, "roster");
+    assert.equal(initial.observation.validationToken, String(service.observation.scheduler.rosterRevision));
     assert.ok(initial.workspaces.every((workspace: Json) => workspace.latestCommitAt === null));
     const workspaceIds = initial.workspaces.map((workspace: Json) => workspace.id);
+    assert.equal(service.observation.scheduler.versions(workspaceIds).tokens.roster, String(service.observation.scheduler.rosterRevision));
     const started = await service.handle("workspace.activity", { action: "start", scanId: "scan-first", workspaceIds });
     assert.equal(started.state, "running");
     let status = started;

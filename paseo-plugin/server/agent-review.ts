@@ -891,7 +891,7 @@ async function ensureReviewer(session: ReviewSession, runtime: Runtime, context:
   const previousAuth = readReviewState<ReviewAuth>(authKey(session.id));
   const recoveringCreation = session.pendingOperation?.kind === "create_reviewer";
   const token = recoveringCreation && previousAuth?.reviewerAgentId === "pending" ? previousAuth.token : randomUUID();
-  const gateway = await mcpGatewayConfig(project.configPath, token, "reviewer", session.workspaceId);
+  const gateway = await mcpGatewayConfig(project.configPath, token, "reviewer", session.workspaceId, { waitForReady: false });
   if (recovered) {
     if (!runtimeAgentCwdMatches(runtime, recovered.cwd) || recovered.runtimeInfo?.provider !== "codex" || recovered.runtimeInfo?.model !== model.model) throw new Error("reviewer_identity_changed");
     if (!previousAuth || (previousAuth.reviewerAgentId !== recovered.id && previousAuth.reviewerAgentId !== "pending")) throw new Error("reviewer_auth_unrecoverable");

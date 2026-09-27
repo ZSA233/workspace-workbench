@@ -22,9 +22,16 @@ test('a repository edit refreshes its active detail and changes without refreshi
 });
 
 test('roster mutation refreshes the list without invalidating unchanged repository snapshots', () => {
-  const before = { instanceId: 'same', revision: 4, rosterRevision: 1, tokens: { 'workspace:a': 'a:1' } };
-  const delta = versionDelta(before, { ...before, revision: 5, rosterRevision: 2 });
+  const before = { instanceId: 'same', revision: 4, rosterRevision: 1, tokens: { roster: '1', 'workspace:a': 'a:1' } };
+  const delta = versionDelta(before, { ...before, revision: 5, rosterRevision: 2, tokens: { roster: '2', 'workspace:a': 'a:1' } });
   const query = (kind: string) => shouldRefreshVersionedQuery('project', delta, ['workspace-workbench', 'project', kind, 'a'], undefined, true);
   assert.equal(query('workspace-list'), true);
   assert.equal(query('workspace-detail'), false);
+});
+
+test('an unchanged roster validates its list snapshot without a roster refetch', () => {
+  const before = { instanceId: 'same', revision: 4, rosterRevision: 1, tokens: { roster: '1' } };
+  const delta = versionDelta(before, { ...before, revision: 5, tokens: { roster: '1' } });
+  assert.equal(delta.roster, false);
+  assert.equal(shouldRefreshVersionedQuery('project', delta, ['workspace-workbench', 'project', 'workspace-list'], undefined, true), false);
 });

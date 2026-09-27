@@ -298,6 +298,8 @@ export class Observation {
         observedAt: now(),
         durationMs: 0,
         deferred: true,
+        validationKey: "roster",
+        validationToken: String(this.scheduler.rosterRevision),
       },
     };
   }

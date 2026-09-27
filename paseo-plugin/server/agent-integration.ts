@@ -13,11 +13,17 @@ import { allAgentBindings, getAgentBinding, putAgentBinding, type AgentBinding }
 import { getMcpGateway, mcpGatewayConfig } from "./mcp-gateway.ts";
 
 function bridgeConfig(configPath: string): { enabled: true } | null {
-  const config = JSON.parse(readFileSync(configPath, "utf8"));
-  const bridge = config.agent?.bridge;
-  if (config.agent?.provider !== "paseo" || !bridge || typeof bridge !== "object" || Array.isArray(bridge)) return null;
-  if ((bridge as Record<string, unknown>).autoInject === false) return null;
-  return { enabled: true };
+  try {
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    const bridge = config.agent?.bridge;
+    if (config.agent?.provider !== "paseo" || !bridge || typeof bridge !== "object" || Array.isArray(bridge)) return null;
+    if ((bridge as Record<string, unknown>).autoInject === false) return null;
+    return { enabled: true };
+  } catch {
+    // A stale or temporarily unreadable project config must not make the
+    // host reject an otherwise valid Agent creation request.
+    return null;
+  }
 }
 
 export function registerAgentIntegration(server: PluginServerContext, currentApi?: () => Promise<import("@getpaseo/client").PaseoApi>): () => void {
@@ -29,33 +35,68 @@ export function registerAgentIntegration(server: PluginServerContext, currentApi
     const bridge = bridgeConfig(project.configPath);
     if (!bridge) return request;
     const token = randomUUID();
-    const gateway = await mcpGatewayConfig(project.configPath, token, "interactive");
+    let gateway;
+    try {
+      // The HTTP endpoint is stable before Paseo's endpoint/RPC is ready.
+      // Do not turn a transient MCP outage into a host-level Agent creation
+      // failure; tool calls will report the connection state and recover once
+      // the local Paseo daemon is available again.
+      gateway = await mcpGatewayConfig(project.configPath, token, "interactive", undefined, { waitForReady: false });
+    } catch (error) {
+      // A port/process failure is still isolated to Workbench MCP. Agent
+      // creation itself belongs to the host and must remain possible.
+      console.warn("workbench_agent_mcp_deferred", error instanceof Error ? error.message : String(error));
+      return request;
+    }
     const environment = { WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath };
-    withProject({ projectConfig: project.configPath }, () => writeState(`context:${token}`, { agentId: "", cwd: request.config.cwd }));
+    try {
+      withProject({ projectConfig: project.configPath }, () => writeState(`context:${token}`, { agentId: "", cwd: request.config.cwd }));
+    } catch (error) {
+      // Workbench state is auxiliary to the host lifecycle. If its local
+      // store is briefly unavailable, let the Agent start without the
+      // optional Workbench bridge rather than creating a half-bound session.
+      console.warn("workbench_agent_context_deferred", error instanceof Error ? error.message : String(error));
+      try { getMcpGateway().revokeToken(token); } catch {}
+      return request;
+    }
     // Paseo also copies systemPrompt into mode overrides; keep tool guidance in MCP.
     return { ...request, env: { ...request.env, ...environment }, config: { ...request.config,
       mcpServers: { ...request.config.mcpServers, "workspace-workbench": gateway },
     } };
   }), server.before("agent.session_open", ({ request }) => {
-    if (request.env.WORKBENCH_WORKER_WORKSPACE || request.env.WORKBENCH_REVIEW_ONLY) return request;
+    if (request.env?.WORKBENCH_WORKER_WORKSPACE || request.env?.WORKBENCH_REVIEW_ONLY) return request;
     if (request.purpose !== "interactive") return request;
     let project;
     try { project = resolveProject({ directory: request.cwd }); } catch { return request; }
     const bridge = bridgeConfig(project.configPath);
     if (!bridge) return request;
-    return withProject({ projectConfig: project.configPath }, () => {
-      const token = request.env.WORKBENCH_AGENT_TOKEN;
-      // Bind the exact create-time token, never match concurrent creations by cwd.
-      if (!token) return request;
-      const pending = readState<AgentIdentity>(`context:${token}`);
-      const currentSession = readState<{ token: string }>(`session:${request.agentId}`);
-      if (!pending || pending.revoked && currentSession?.token !== token || pending.cwd !== request.cwd || pending.agentId && pending.agentId !== request.agentId) throw new Error("agent_context_changed");
-      const prior = readState<{ token: string }>(`session:${request.agentId}`);
-      if (prior && prior.token !== token) writeState(`context:${prior.token}`, { agentId: request.agentId, cwd: request.cwd, revoked: true });
-      writeState(`context:${token}`, { agentId: request.agentId, cwd: request.cwd });
-      writeState(`session:${request.agentId}`, { token });
-      return { ...request, env: { ...request.env, WORKBENCH_AGENT_ID: request.agentId, WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath } };
-    });
+    try {
+      return withProject({ projectConfig: project.configPath }, () => {
+        const token = request.env?.WORKBENCH_AGENT_TOKEN;
+        // Bind the exact create-time token, never match concurrent creations by cwd.
+        if (!token) return request;
+        const pending = readState<AgentIdentity>(`context:${token}`);
+        const currentSession = readState<{ token: string }>(`session:${request.agentId}`);
+        // A lost or mismatched Workbench record disables the optional bridge
+        // for this session. It must not prevent the host from opening it.
+        if (!pending || pending.revoked && currentSession?.token !== token || pending.cwd !== request.cwd || pending.agentId && pending.agentId !== request.agentId) {
+          try { getMcpGateway().revokeToken(token); } catch {}
+          console.warn("workbench_agent_context_unavailable", "agent_context_changed");
+          return request;
+        }
+        const prior = readState<{ token: string }>(`session:${request.agentId}`);
+        if (prior && prior.token !== token) writeState(`context:${prior.token}`, { agentId: request.agentId, cwd: request.cwd, revoked: true });
+        writeState(`context:${token}`, { agentId: request.agentId, cwd: request.cwd });
+        writeState(`session:${request.agentId}`, { token });
+        return { ...request, env: { ...(request.env || {}), WORKBENCH_AGENT_ID: request.agentId, WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath } };
+      });
+    } catch (error) {
+      // Storage/identity bookkeeping is best effort at the host lifecycle
+      // boundary. The MCP bridge will fail closed until a later session event
+      // can bind it again.
+      console.warn("workbench_agent_context_deferred", error instanceof Error ? error.message : String(error));
+      return request;
+    }
   })];
   server.handle(orchestrationRpc, (input, context) => withProject(input, async () => {
     api = context.paseo;

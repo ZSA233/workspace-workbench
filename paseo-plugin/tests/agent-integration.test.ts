@@ -8,6 +8,7 @@ import { registerAgentIntegration } from "../server/agent-integration.ts";
 import { withProject } from "../server/projects.ts";
 import { readState, writeState } from "../server/orchestration-state.ts";
 import { getAgentBinding, putAgentBinding } from "../server/agent-store.ts";
+import { McpGatewayManager, setMcpGateway } from "../server/mcp-gateway.ts";
 
 test("MCP binds exact identity; workers do not recurse; notifications steer and retry durably", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "workbench-injection-")));
@@ -66,7 +67,8 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
     withProject({ projectConfig: config }, () => writeState(`context:${currentToken}`, { agentId: "parent", cwd: root, revoked: true }));
     hooks.get("agent.session_open")!({ request: open });
     assert.equal(withProject({ projectConfig: config }, () => readState<{ revoked: boolean }>(`context:${currentToken}`))?.revoked, undefined);
-    assert.throws(() => hooks.get("agent.session_open")!({ request: { ...open, agentId: "another" } }), /context_changed/);
+    const mismatched = hooks.get("agent.session_open")!({ request: { ...open, agentId: "another" } });
+    assert.deepEqual(mismatched, { ...open, agentId: "another" });
     const worker = { ...request, env: { WORKBENCH_WORKER_WORKSPACE: "sample" } };
     assert.deepEqual(await hooks.get("agent.create")!({ request: worker }), worker);
     withProject({ projectConfig: config }, () => putAgentBinding({ workspaceId: "fixture", agentId: "fixture-worker", relationship: "child", parentAgentId: "fixture-parent", paseoWorkspaceId: "paseo-fixture", cwd: root, provider: "codex/fixture", createdAt: "now", updatedAt: "now" }));
@@ -90,5 +92,37 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
     cleanup();
     if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = previous;
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Agent creation is not blocked when Paseo becomes temporarily unavailable", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "workbench-injection-deferred-")));
+  const config = join(root, "project.json");
+  writeFileSync(config, JSON.stringify({ sourceRoot: root, workspaceRoot: root, stateRoot: root, agent: { provider: "paseo", bridge: { script: "mcp.mjs", endpoint: "127.0.0.1:6767", autoInject: true } } }));
+  const previousHome = process.env.PASEO_HOME;
+  const home = mkdtempSync(join(tmpdir(), "workbench-injection-home-"));
+  process.env.PASEO_HOME = home;
+  const manager = new McpGatewayManager(join(process.cwd(), "mcp-gateway.mjs"), undefined,
+    async () => ({ ok: false, stage: "endpoint", code: "workbench_paseo_endpoint_unavailable" }));
+  setMcpGateway(manager);
+  const previous = process.env.WORKSPACE_WORKBENCH_CONFIG;
+  process.env.WORKSPACE_WORKBENCH_CONFIG = config;
+  const hooks = new Map<string, (input: unknown) => unknown>();
+  const server = { before: (name: string, handler: (input: unknown) => unknown) => { hooks.set(name, handler); return () => {}; }, on: () => () => {}, handle: () => {} } as unknown as PluginServerContext;
+  const cleanup = registerAgentIntegration(server);
+  try {
+    const request: PluginBeforeRequests["agent.create"] = { config: { provider: "codex", cwd: root, modeId: "auto", toolPolicy: { preapproved: [] } } };
+    const started = Date.now();
+    const injected = await hooks.get("agent.create")!({ request }) as typeof request;
+    assert.ok(Date.now() - started < 2_000, "Agent creation must not wait for Paseo readiness");
+    assert.equal(injected.config.mcpServers?.["workspace-workbench"]?.type, "http");
+  } finally {
+    cleanup();
+    await manager.close();
+    setMcpGateway(null);
+    if (previousHome === undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previousHome;
+    if (previous === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = previous;
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 });

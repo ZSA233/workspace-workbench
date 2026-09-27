@@ -428,7 +428,7 @@ async function delegateAgent(
     const reportToken = randomUUID();
     const restrictedWorker = relationship === "child";
     const workerMcpServer = restrictedWorker ? "workspace-workbench-report" : "workspace-workbench";
-    const gateway = project ? await mcpGatewayConfig(project.configPath, reportToken, restrictedWorker ? "execution-report" : "worker", input.workspaceId) : null;
+    const gateway = project ? await mcpGatewayConfig(project.configPath, reportToken, restrictedWorker ? "execution-report" : "worker", input.workspaceId, { waitForReady: false }) : null;
     const workerEnv: Record<string, string> = {
       ...runtimeEnvironment(runtime),
       WORKBENCH_WORKER_WORKSPACE: input.workspaceId,

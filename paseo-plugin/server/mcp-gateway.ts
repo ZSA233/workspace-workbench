@@ -12,6 +12,15 @@ export type McpGatewayConfig = {
   headers: Record<string, string>;
   alwaysLoad: true;
 };
+export type McpGatewayConfigOptions = {
+  /**
+   * Wait for the Paseo endpoint and plugin RPC before returning the config.
+   * Agent creation uses false: the HTTP endpoint is stable and can expose
+   * tools while Paseo is still recovering. Tool calls keep their own
+   * connection error semantics.
+   */
+  waitForReady?: boolean;
+};
 type GatewayState = { port?: number; key?: string; pid?: number; parentPid?: number; generation?: string };
 type ChildEntry = { child: ChildProcess; port: number; key: string; generation: string; startedAt: string; stderr: string };
 const MAX_LEASES = 256;
@@ -89,7 +98,6 @@ async function acquireStateLock(): Promise<() => void> {
 export class McpGatewayManager {
   private readonly entryPath: string;
   private entry: ChildEntry | null = null;
-  private flight: Promise<McpGatewayConfig> | null = null;
   private closed = false;
   private readonly diagnostics: DiagnosticSink;
   private readonly pluginGeneration: string;
@@ -100,6 +108,7 @@ export class McpGatewayManager {
   private readiness: { stage: string; code?: string } = { stage: "starting" };
   private restartTimer: NodeJS.Timeout | null = null;
   private consecutiveFailures = 0;
+  private transportFlight: Promise<McpGatewayConfig> | null = null;
   private readonly readinessProbe: (port: number, key: string) => Promise<{ ok: boolean; stage: string; code?: string }>;
 
   constructor(entryPath: string, generation = `plugin:${process.pid}:${randomUUID()}`,
@@ -136,20 +145,39 @@ export class McpGatewayManager {
     throw new Error(this.closed ? "plugin_unloaded" : `gateway_not_ready:${this.readiness.code || this.readiness.stage}`);
   }
 
-  async ensure(): Promise<McpGatewayConfig> {
+  /** Start (or reuse) the owned HTTP endpoint without requiring Paseo. */
+  private async ensureTransport(): Promise<McpGatewayConfig> {
     if (this.closed) throw new Error("plugin_unloaded");
-    if (this.flight) return this.flight;
+    if (this.transportFlight) return this.transportFlight;
     if (this.entry && this.entry.port > 0 && childRunning(this.entry.child)) {
       this.diagnostics.record({ event: "gateway_reused", phase: "connect", transport: "http", gatewayPid: this.entry.child.pid, port: this.entry.port, generation: this.entry.generation });
       return this.configFor(this.entry.port, this.entry.key);
     }
-    this.flight = this.start().catch(error => { this.scheduleRestart(); throw error; }).finally(() => { this.flight = null; });
-    return this.flight;
+    this.transportFlight = this.start().catch(error => { this.scheduleRestart(); throw error; }).finally(() => { this.transportFlight = null; });
+    return this.transportFlight;
   }
 
-  async configForRequest(projectConfig: string, token: string, role: McpGatewayRole, workspaceId?: string): Promise<McpGatewayConfig> {
-    const config = await this.ensure();
-    await this.waitReady(Number(new URL(config.url).port), config.headers["X-Workbench-Gateway-Key"]);
+  /**
+   * Ensure the gateway is usable for a request. Strict callers retain the
+   * end-to-end readiness check; Agent creation can opt out so a transient
+   * Paseo outage cannot cancel an otherwise unrelated Agent creation.
+   */
+  async ensure(): Promise<McpGatewayConfig> {
+    const config = await this.ensureTransport();
+    try {
+      await this.waitReady(Number(new URL(config.url).port), config.headers["X-Workbench-Gateway-Key"]);
+      this.consecutiveFailures = 0;
+      this.lastSuccessAt = new Date().toISOString();
+      this.diagnostics.record({ event: "gateway_ready", phase: "connect", transport: "http", gatewayPid: this.entry?.child.pid, port: Number(new URL(config.url).port), generation: this.entry?.generation });
+      return config;
+    } catch (error) {
+      this.scheduleRestart();
+      throw error;
+    }
+  }
+
+  async configForRequest(projectConfig: string, token: string, role: McpGatewayRole, workspaceId?: string, options: McpGatewayConfigOptions = {}): Promise<McpGatewayConfig> {
+    const config = options.waitForReady === false ? await this.ensureTransport() : await this.ensure();
     if (token) {
       this.activeLeases.delete(token);
       while (this.activeLeases.size >= MAX_LEASES) {
@@ -246,12 +274,10 @@ export class McpGatewayManager {
       if (readyPort === null) throw new Error("gateway_ready_missing");
       if (this.closed) throw new Error("plugin_unloaded");
       entry.port = readyPort;
-      await this.waitReady(readyPort, key);
       if (this.closed || !childRunning(child)) throw new Error("gateway_exited_during_readiness");
       persistState({ port: readyPort, key, pid: child.pid || undefined, parentPid: process.pid, generation });
-      this.consecutiveFailures = 0;
-      this.lastSuccessAt = new Date().toISOString();
-      this.diagnostics.record({ event: "gateway_ready", phase: "connect", transport: "http", gatewayPid: child.pid, port: readyPort, generation });
+      this.readiness = { stage: "gateway", code: "gateway_listening" };
+      this.diagnostics.record({ event: "gateway_listening", phase: "connect", transport: "http", gatewayPid: child.pid, port: readyPort, generation });
       return this.configFor(readyPort, key);
     } catch (error) {
       this.entry = null;
@@ -270,8 +296,9 @@ export class McpGatewayManager {
   status() {
     for (const [token, lease] of this.activeLeases) if (Date.now() - lease.lastSeen > LEASE_TTL_MS) this.activeLeases.delete(token);
     const entry = this.entry;
+    const running = Boolean(entry && childRunning(entry.child));
     return {
-      state: this.closed ? "closed" : entry && childRunning(entry.child) && this.readiness.stage === "ready" ? "ready" : this.flight ? "starting" : "idle",
+      state: this.closed ? "closed" : running && this.readiness.stage === "ready" ? "ready" : running || this.transportFlight ? "starting" : "idle",
       transport: "http",
       scope: "plugin-generation",
       legacyStdio: "external-session-owned",
@@ -293,7 +320,7 @@ export class McpGatewayManager {
     if (this.closed) return;
     this.closed = true;
     if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
-    const starting = this.flight;
+    const starting = this.transportFlight;
     this.diagnostics.record({ event: "gateway_shutdown_started", phase: "cleanup", transport: "http", gatewayPid: this.entry?.child.pid });
     const entry = this.entry;
     if (entry && childRunning(entry.child)) {
@@ -336,7 +363,7 @@ export function getMcpGateway(): McpGatewayManager {
   if (!activeGateway) throw new Error("mcp_gateway_uninitialized");
   return activeGateway;
 }
-export async function mcpGatewayConfig(projectConfig: string, token: string, role: McpGatewayRole, workspaceId?: string): Promise<McpGatewayConfig> {
+export async function mcpGatewayConfig(projectConfig: string, token: string, role: McpGatewayRole, workspaceId?: string, options: McpGatewayConfigOptions = {}): Promise<McpGatewayConfig> {
   // Pure unit tests exercise Agent configuration without booting a Paseo
   // plugin process. Production always installs the manager in index.server.
   if (!activeGateway) return {
@@ -345,6 +372,6 @@ export async function mcpGatewayConfig(projectConfig: string, token: string, rol
     headers: { Authorization: `Bearer ${token}`, "X-Workbench-Gateway-Key": "test", "X-Workbench-Project": projectConfig, "X-Workbench-Role": role, ...(workspaceId ? { "X-Workbench-Workspace": workspaceId } : {}) },
     alwaysLoad: true,
   };
-  return activeGateway.configForRequest(projectConfig, token, role, workspaceId);
+  return activeGateway.configForRequest(projectConfig, token, role, workspaceId, options);
 }
 export function mcpGatewayStatus(): ReturnType<McpGatewayManager["status"]> { return activeGateway?.status() || { state: "uninitialized", transport: "http", scope: "plugin-generation", legacyStdio: "external-session-owned", pid: null, parentPid: process.pid, port: null, generation: null, startedAt: null, activeLeases: 0, restartCount: 0, cleanupFailures: 0, lastSuccessAt: null, readiness: { stage: "uninitialized" }, diagnostics: { file: "", dropped: 0 } }; }

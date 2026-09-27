@@ -51,6 +51,14 @@ type SnapshotOptions = {
   staleAfterMs?: number;
 };
 
+type ObservationExpiryInput = {
+  response: ObserverResponse | undefined;
+  lastSuccessfulAt: string | null;
+  cacheAgeMs: number | null;
+  staleAfterMs: number;
+  now?: number;
+};
+
 export type ObserverSnapshot = {
   response: ObserverResponse | undefined;
   stale: boolean;
@@ -145,6 +153,34 @@ export function observationStatusFor(
   return failed || responseObservationState(response) !== "ready"
     ? "degraded"
     : "fresh";
+}
+
+/**
+ * A cache age is only a warning when no successful validation has arrived in
+ * the area's validation window. Deferred roster data is deliberately allowed
+ * to remain visible without a time-only warning on older hosts that do not
+ * expose the versions subscription yet.
+ */
+export function observationTimeExpired({
+  response,
+  lastSuccessfulAt,
+  cacheAgeMs,
+  staleAfterMs,
+  now = Date.now(),
+}: ObservationExpiryInput): boolean {
+  if (!response) return false;
+  const result = response.result && typeof response.result === "object"
+    ? response.result as { observation?: { deferred?: unknown; validationKey?: unknown; validatedAt?: unknown } }
+    : undefined;
+  const observation = result?.observation;
+  const validationKey = typeof observation?.validationKey === "string" && observation.validationKey ? observation.validationKey : "";
+  const validatedAt = typeof observation?.validatedAt === "string" ? Date.parse(observation.validatedAt) : NaN;
+  const validationWindow = Math.max(30_000, staleAfterMs);
+  if (Number.isFinite(validatedAt) && now - validatedAt < validationWindow) return false;
+  if (observation?.deferred === true && !validationKey) return false;
+  const observedAt = lastSuccessfulAt ? Date.parse(lastSuccessfulAt) : NaN;
+  const observedAge = Number.isFinite(observedAt) ? Math.max(0, now - observedAt) : 0;
+  return observedAge >= staleAfterMs || cacheAgeMs !== null && cacheAgeMs >= staleAfterMs;
 }
 
 function observedAt(response: ObserverResponse): string {
@@ -262,13 +298,15 @@ export function useLastSuccessfulResponse(
   const cacheAgeMs = Number.isFinite(cacheTimestamp)
     ? Math.max(0, Date.now() - cacheTimestamp)
     : entry.cacheAgeMs;
-  const validation = (displayResponse?.result as { observation?: { validatedAt?: string } } | undefined)?.observation?.validatedAt;
-  const recentlyValidated = !!validation && Date.now() - Date.parse(validation) < 30_000;
   const expired = Boolean(
     displayResponse &&
       (entry.failureCount >= STALE_FAILURE_LIMIT ||
-        (!recentlyValidated && (failureAge >= staleAfterMs ||
-        (cacheAgeMs !== null && cacheAgeMs >= staleAfterMs)))),
+        observationTimeExpired({
+          response: displayResponse,
+          lastSuccessfulAt: entry.lastSuccessfulAt,
+          cacheAgeMs,
+          staleAfterMs,
+        })),
   );
   const stale = Boolean(displayResponse && (failed || expired));
   const status = observationStatusFor(displayResponse, failed, expired, failureAgeMs);

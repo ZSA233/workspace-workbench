@@ -1155,7 +1155,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     area.snapshot.initialFailure && (area.snapshot.failureAgeMs ?? RECOVERABLE_FAILURE_GRACE_MS) < RECOVERABLE_FAILURE_GRACE_MS,
   );
   const observationRefreshing = manualRefreshing || observationRecovering || observationAreas.some((area) => area.fetching || area.snapshot.refreshing);
-  const observationDegraded = observationAreas.some((area) => area.snapshot.status === "degraded");
+  const observationDegraded = Boolean(observationIssue) || observationAreas.some((area) => area.snapshot.status === "degraded");
   reportNativeDiagnostic("project-panel-observation-state", {
     foreground: String(foreground),
     listReady: String(listReady),
@@ -1861,6 +1861,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       <AnchoredMenu open={statusMenuOpen} onClose={() => setStatusMenuOpen(false)} theme={theme}>
         <Text style={styles.layoutMenuHint}>{observationLabel}</Text>
         <Text style={styles.layoutMenuHint}>{localizedCopy.text_a6625c543c}{formatObservedTime(lastSuccessfulAt, localizedCopy)}</Text>
+        {observationIssue ? <Text style={styles.warningText}>{localizedCopy.observationUnavailable}: {observationIssue}</Text> : null}
         {observationAreas.filter((area) => area.fetching || (area.snapshot.status !== "fresh" && area.snapshot.status !== "loading")).map((area) => <Text key={area.label} style={area.snapshot.status === "expired" ? styles.warningText : styles.layoutMenuHint}>{observationAreaDetail(area, localizedCopy)}</Text>)}
         <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.refreshNow} disabled={manualRefreshing} onPress={() => { void (selectedWorkspaceId ? rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, force: true } }).catch(() => undefined).then(() => refreshAll()) : refreshAll()); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.refreshNow}</Text></Pressable>
       </AnchoredMenu>

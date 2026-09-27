@@ -60,7 +60,7 @@ export class ObservationScheduler {
       if (this.workspaces.has(id)) this.workspaceDemand.set(id, Date.now());
       for (const path of this.workspaces.get(id) || []) this.touch(this.repos.get(path)!);
     }
-    const tokens: Record<string, string> = {};
+    const tokens: Record<string, string> = { roster: String(this.rosterRevision) };
     for (const id of workspaceIds) {
       tokens[`workspace:${id}`] = this.workspaceToken(id);
       for (const path of this.workspaces.get(id) || []) for (const scope of ['working', 'refs'] as const) tokens[`${path}#${scope}`] = this.token(path, scope);

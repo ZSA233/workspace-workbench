@@ -132,6 +132,27 @@ test("concurrent manager starts share one gateway and close only that child", as
   }
 });
 
+test("Agent configuration can use the stable HTTP endpoint while Paseo is unavailable", async () => {
+  const home = mkdtempSync(join(tmpdir(), "workbench-gateway-deferred-"));
+  const previousHome = process.env.PASEO_HOME;
+  process.env.PASEO_HOME = home;
+  // The isolated home deliberately has no paseo.pid, which is the same
+  // endpoint-unavailable condition reported by the real readiness probe.
+  const manager = new McpGatewayManager(join(process.cwd(), "mcp-gateway.mjs"));
+  try {
+    const started = Date.now();
+    const config = await manager.configForRequest("/tmp/project.json", "token", "interactive", undefined, { waitForReady: false });
+    assert.ok(Date.now() - started < 2_000, "Agent creation must not wait for Paseo readiness");
+    assert.match(config.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+    assert.equal(manager.status().state, "starting");
+    assert.equal(manager.status().activeLeases, 1);
+  } finally {
+    await manager.close();
+    if (previousHome === undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("an unknown occupant does not silently change the saved gateway port", async () => {
   const blocker = createServer((_request, response) => { response.writeHead(200, { "content-type": "application/json" }); response.end('{"component":"unrelated"}'); }).listen(0, "127.0.0.1");
   await once(blocker, "listening");

@@ -1,9 +1,10 @@
+import { changeRowOffsets, changeListWindow } from "../change-list-window.ts";
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { Icon } from "../native-components";
-import { useEffect,useState } from "react";
+import { useEffect,useMemo,useState } from "react";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { formatCopyFrom } from "../../shared/copy";
 import { IconButton } from "./icon-button";
@@ -81,14 +82,17 @@ export function ChangedTree({
 }) {
   const copy = useWorkbenchCopy();
   const files = changes?.files || [];
-  const fileKey = files.map((file) => `${file.path}:${file.status}:${file.additions}:${file.deletions}`).join("|");
+  const [scrollTop, setScrollTop] = useState(0);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(defaultExpandedPaths(files, selectedFile));
   useEffect(() => {
     setExpandedPaths((current) => new Set([...current, ...ancestorPaths(selectedFile)]));
   }, [selectedFile]);
-  const rows = mode === "tree"
+  const rows = useMemo(() => mode === "tree"
     ? buildTreeRows(files, expandedPaths, selectedFile)
-    : files.slice().sort((a, b) => a.path.localeCompare(b.path)).map((file) => ({ kind: "file" as const, file, depth: 0 }));
+    : files.slice().sort((a, b) => a.path.localeCompare(b.path)).map((file) => ({ kind: "file" as const, file, depth: 0 })), [files, expandedPaths, selectedFile, mode]);
+  const offsets = useMemo(() => changeRowOffsets(rows), [rows]);
+  const windowed = Platform.OS === 'web' && rows.length > 200;
+  const window = changeListWindow(offsets, scrollTop, availableHeight, windowed);
 
   function toggleDirectory(path: string): void {
     setExpandedPaths((current) => {
@@ -126,6 +130,8 @@ export function ChangedTree({
       {!sectionLayout.collapsed ? (
         <SectionViewport
           id="changes"
+          windowed={windowed}
+          onScroll={event => setScrollTop(event.nativeEvent.contentOffset.y)}
           layout={sectionLayout}
           availableHeight={availableHeight}
           resizable={false}
@@ -133,8 +139,10 @@ export function ChangedTree({
           theme={theme}
           styles={styles}
         >
+          <View style={Platform.OS === "web" ? { overflowAnchor: "none" } as unknown as ViewStyle : undefined}>
           {error ? <Text style={styles.warningText}>{error}</Text> : null}
-          {rows.map((row) => row.kind === "directory" ? (
+          {window.before ? <View style={{ height: window.before }} /> : null}
+          {rows.slice(window.start, window.end).map((row) => row.kind === "directory" ? (
             <DirectoryRow
               key={row.path}
               row={row}
@@ -145,7 +153,7 @@ export function ChangedTree({
             />
           ) : (
             <FileChangeRow
-              key={`${row.file.path}-${row.file.status}`}
+              key={row.file.path}
               file={row.file}
               depth={row.depth}
               selected={selectedFile === row.file.path}
@@ -154,8 +162,10 @@ export function ChangedTree({
               styles={styles}
             />
           ))}
+          {window.after ? <View style={{ height: window.after }} /> : null}
           {!loading && !files.length && !stale ? <Text style={styles.emptyText}>{copy.text_5ee36e41d4}</Text> : null}
           {visibleIssues(changes?.issues || []).map((issue) => <Text key={`${issue.code}-${issue.path || ""}`} style={styles.warningText}>{issueLabel(issue, copy)}</Text>)}
+          </View>
         </SectionViewport>
       ) : null}
     </View>
@@ -183,7 +193,7 @@ export function DirectoryRow({
       <Text numberOfLines={1} style={styles.folderText}>{row.label}</Text>
       <View style={styles.directoryStats}>
         <Text style={styles.directoryFileCount}>{row.fileCount} ·</Text>
-        <ChangeCounts additions={row.additions} deletions={row.deletions} styles={styles} />
+        <ChangeCounts additions={row.complete === false ? null : row.additions} deletions={row.complete === false ? null : row.deletions} styles={styles} />
       </View>
     </Pressable>
   );

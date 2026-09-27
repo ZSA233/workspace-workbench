@@ -9,7 +9,7 @@ export function handleClientDiagnostic(input: z.output<typeof clientDiagnostic.i
   const event = { ...input, at: new Date().toISOString() };
   retained.push(event);
   while (retained.length > MAX_RETAINED) retained.shift();
-  console.error("workbench_client_diagnostic", JSON.stringify(event));
+  if (!input.phase.startsWith("file-read-") && !input.phase.startsWith("repository-refresh-")) console.error("workbench_client_diagnostic", JSON.stringify(event));
   return { ok: true, retained: retained.length };
 }
 

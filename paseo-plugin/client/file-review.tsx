@@ -1,8 +1,12 @@
+import { clientDiagnostic } from "../shared/client-diagnostics.ts";
+import { DiffReadClient, type DiffRpc } from "./diff-read-client.ts";
+import { DIFF_READ_PROTOCOL, DIFF_READ_BUILD } from "../shared/diff-read.ts";
+import { observationMeta } from "./observation-coordinator.ts";
 import { observationQueryOptions } from '../shared/observation-policy.ts';
-import { useObservationVersions } from "./use-observation-versions";
-import { useForegroundActivity } from "./foreground-activity";
+import { useObservationVersions, observationRefreshDiagnostics } from "./use-observation-versions";
+import { usePanelForeground } from "./foreground-activity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type PluginAgentPanelProps,
   type PluginWorkspacePanelProps,
@@ -90,7 +94,8 @@ function scopeLabel(scope: FileReviewSelection["scope"], strings: WorkbenchCopy 
 
 export function FileReviewPanel(props: FilePanelProps) {
   reportNativeDiagnostic("file-review-render", { entry: "FileReviewPanel" });
-  const foreground = useForegroundActivity();
+  const activity = usePanelForeground();
+  const foreground = activity.foreground;
   const copy = useWorkbenchCopy();
   const hostWorkspaceId = props.workspaceId;
   const selections = useFileReviews(hostWorkspaceId);
@@ -102,6 +107,8 @@ export function FileReviewPanel(props: FilePanelProps) {
   const { mode, setMode } = useReviewModePreference(hostWorkspaceId, narrow);
   const activeSelection = selections.find((item) => selectionKey(item) === activeKey) || selections.at(-1);
   const rpc = useRpc(observerQuery);
+  const sendDiagnostic = useRpc(clientDiagnostic);
+  const queryClient = useQueryClient();
   // Native shares activation/retry decisions but keeps version polling disabled.
   const observationIssue = useObservationVersions(
     activeSelection?.projectConfig,
@@ -133,6 +140,17 @@ export function FileReviewPanel(props: FilePanelProps) {
     }
   }, [activeKey, activeSelection, hostWorkspaceId]);
 
+  const reader = useRef(new DiffReadClient()).current;
+  const readKey = activeSelection ? selectionKey(activeSelection) : '';
+  const readRpcRef = useRef<DiffRpc>(async () => ({ ok: false }));
+  const diffRpc: DiffRpc = (method, params) => rpc({ method, params, projectConfig: activeSelection?.projectConfig });
+  readRpcRef.current = diffRpc;
+  const capable = backendStatusQuery.data?.readCapabilities?.protocol === DIFF_READ_PROTOCOL;
+  useEffect(() => {
+    if (!readKey || !foreground) return;
+    const call = readRpcRef.current;
+    return () => reader.release(readKey, call);
+  }, [readKey, foreground, reader]);
   const diffQuery = useQuery({
     queryKey: [
       "workspace-workbench",
@@ -145,19 +163,12 @@ export function FileReviewPanel(props: FilePanelProps) {
       activeSelection?.scope,
       activeSelection?.commitSha,
     ],
-    queryFn: () =>
-      rpc({
-        method: "repository.diff",
-        projectConfig: activeSelection?.projectConfig,
-        params: {
-          workspaceId: activeSelection?.workspaceId,
-          repoPath: activeSelection?.repoPath,
-          path: activeSelection?.path,
-          scope: activeSelection?.scope,
-          commitSha: activeSelection?.commitSha || undefined,
-        },
-    }),
-    enabled: Boolean(activeSelection),
+    queryFn: () => reader.read(readKey, {
+      workspaceId: activeSelection?.workspaceId, repoPath: activeSelection?.repoPath,
+      path: activeSelection?.path, oldPath: activeSelection?.oldPath,
+      scope: activeSelection?.scope, commitSha: activeSelection?.commitSha || undefined,
+    }, diffRpc, capable),
+    enabled: Boolean(activeSelection && foreground && backendStatusQuery.data),
     refetchInterval: false,
     ...observationQueryOptions,
   });
@@ -167,7 +178,26 @@ export function FileReviewPanel(props: FilePanelProps) {
     { error: diffQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository },
   );
   const durableFailure = diffQuery.data && !diffQuery.data.ok && ["file_not_changed", "path_invalid", "worktree_missing", "commit_missing", "base_missing"].includes(diffQuery.data.error?.code || "");
-  const diff = durableFailure ? null : resultOf<DiffResult>(diffState.response);
+  const candidate = resultOf<DiffResult>(diffState.response);
+  const diff = durableFailure || typeof candidate?.patch !== "string" ? null : candidate;
+  const readTask = observationMeta(diffQuery.data).readTask;
+  useEffect(() => {
+    if (!readTask || !activeSelection?.projectConfig) return;
+    void sendDiagnostic({ phase: 'file-read-pending', platform: Platform.OS, details: { foreground: String(foreground), coordinator: JSON.stringify(observationRefreshDiagnostics(queryClient, activeSelection.projectConfig)).slice(0, 4000) } }).catch(() => {});
+  }, [readTask, foreground, activeSelection?.projectConfig, queryClient]);
+  const trace = useRef({ key: '', id: '', at: 0, shown: false, active: false });
+  if (trace.current.key !== readKey || foreground && !trace.current.active) trace.current = { key: readKey, id: `click:${Date.now()}:${Math.random().toString(36).slice(2)}`, at: Date.now(), shown: false, active: foreground };
+  trace.current.active = foreground;
+  useEffect(() => {
+    if (!readKey || !foreground) return;
+    void sendDiagnostic({ phase: 'file-read-click', platform: Platform.OS, details: { interactionId: trace.current.id, clientBuild: DIFF_READ_BUILD, protocol: String(capable ? DIFF_READ_PROTOCOL : 0) } }).catch(() => {});
+  }, [readKey, foreground]);
+  useEffect(() => {
+    if (!foreground || !diff || trace.current.shown) return;
+    trace.current.shown = true;
+    const observation = (diff as unknown as { observation?: { requestId?: string } }).observation;
+    void sendDiagnostic({ phase: 'file-read-visible', platform: Platform.OS, details: { interactionId: trace.current.id, requestId: observation?.requestId || '', elapsedMs: String(Date.now() - trace.current.at), clientBuild: DIFF_READ_BUILD } }).catch(() => {});
+  }, [diff, readKey, foreground]);
   const error = responseErrorLabel(diffQuery.data, diffQuery.error, Boolean(diff), copy);
 
   function close(selection: FileReviewSelection): void {
@@ -175,12 +205,13 @@ export function FileReviewPanel(props: FilePanelProps) {
   }
 
   return (
-    <View style={styles.screen} accessibilityLabel={copy.changesTitle} onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
+    <View ref={activity.ref} style={styles.screen} accessibilityLabel={copy.changesTitle} onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
       <View style={styles.header}>
         <View style={styles.headerCopy}>
           <Text numberOfLines={1} style={styles.title}>{copy.text_01970ba582}</Text>
         </View>
         <View style={styles.headerActions}>
+          {diffQuery.data?.ok === false && (diffQuery.data.error?.details as { terminal?: boolean })?.terminal ? <IconButton label={`${diffQuery.data.error?.message || copy.observationDegraded} · ${copy.refreshNow}`} icon="CircleAlert" color={theme.colors.statusWarning} onPress={() => { reader.retry(readKey); void diffQuery.refetch({ cancelRefetch: false }); }} /> : null}
           <IconButton
             label={mode === "split" ? copy.switchToUnified : copy.switchToSplit}
             icon={mode === "split" ? "Columns2" : "Rows3"}
@@ -252,7 +283,9 @@ export function FileReviewPanel(props: FilePanelProps) {
             </View>
           </View>
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
-          {diffState.expired ? <Text style={styles.staleText}>{copy.text_6d6e071a12}</Text> : null}
+          {!capable && backendStatusQuery.data?.state === "ready" ? <Text style={styles.metaText}>{copy.diffCompatibility}</Text> : null}
+          {readTask && !diff ? <Text style={styles.emptyText}>{readTask.state === 'queued' ? copy.diffQueued : copy.text_a74b5d91fa}</Text> : null}
+          {error ? <Pressable accessibilityRole="button" onPress={() => { reader.retry(readKey); void diffQuery.refetch({ cancelRefetch: false }); }}><Text style={styles.metaText}>{copy.refreshNow}</Text></Pressable> : null}
           {diffQuery.isLoading ? <Text style={styles.emptyText}>{copy.text_a74b5d91fa}</Text> : null}
           {diff ? (
             <DiffViewer

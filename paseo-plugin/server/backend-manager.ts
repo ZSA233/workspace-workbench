@@ -1,3 +1,5 @@
+import { readerGeneration } from "./reader-identity.ts";
+import { DIFF_READ_BUILD, DIFF_READ_PROTOCOL } from "../shared/diff-read.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -66,7 +68,8 @@ function statusFor(
   const connectionState = connection(route);
   return {
     state,
-    ...(message ? { message } : {}),
+    ...(health?.diffRead?.protocol === DIFF_READ_PROTOCOL ? { readCapabilities: { protocol: DIFF_READ_PROTOCOL, refreshProtocol: health.refreshProtocol, pluginBuild: DIFF_READ_BUILD, pluginGeneration: readerGeneration, backendBuild: String(health.buildId || ""), backendGeneration: String(health.diffRead.generation) } } : {}),
+    ...(message || state !== 'ready' && connectionState.message ? { message: message || connectionState.message } : {}),
     socketPath: route.socketPath,
     ...(timing ? { timing } : {}),
     ...(typeof instanceId === "string" ? { instanceId } : {}),

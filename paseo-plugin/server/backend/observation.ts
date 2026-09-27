@@ -1,7 +1,13 @@
+import { RepositoryRefresh } from "./repository-refresh.ts";
+import { randomUUID } from "node:crypto";
+import { DiffContent } from "./diff-content.ts";
+import { DiffReadTasks } from "./diff-read-tasks.ts";
+import { FileStatistics } from "./file-statistics.ts";
 import { ObservationScheduler } from "./observation-scheduler.ts";
-import { existsSync, lstatSync } from "node:fs";
-import { join, isAbsolute } from "node:path";
-import { Git, type GitFile } from "./git.ts";
+import { existsSync } from "node:fs";
+import { lstat } from "node:fs/promises";
+import { join } from "node:path";
+import { Git, withBackgroundGit, type GitFile } from "./git.ts";
 import { Workspaces } from "./workspaces.ts";
 import { Runtime } from "./runtime.ts";
 import { ObservationCache, observationCacheIdentity } from "./cache.ts";
@@ -22,6 +28,7 @@ export const count = (files: Array<Partial<GitFile>>) => ({
   additions: files.reduce((n, f) => n + (f.additions || 0), 0),
   deletions: files.reduce((n, f) => n + (f.deletions || 0), 0),
   binaryFiles: files.filter((f) => f.binary).length,
+  ...(files.some(f => f.statisticsState && f.statisticsState !== "ready") ? { complete: false } : {}),
 });
 export const fileJson = (file: GitFile) => ({
   ...file,
@@ -44,6 +51,12 @@ export class Observation {
   cache: ObservationCache;
   scheduler: ObservationScheduler;
   activity: WorkspaceActivityIndex;
+  diffContent: DiffContent;
+  refresh: RepositoryRefresh;
+  diffTasks = new DiffReadTasks();
+  statistics = new FileStatistics();
+  private linkedReads = new Map<string, AbortController>();
+  private closing = false;
   constructor(
     workspaces: Workspaces,
     runtime: Runtime | null,
@@ -55,9 +68,11 @@ export class Observation {
     this.cache = cache;
     this.scheduler = scheduler;
     this.activity = new WorkspaceActivityIndex(workspaces.config);
+    this.diffContent = new DiffContent(workspaces, cache, scheduler);
+    this.refresh = new RepositoryRefresh(this);
   }
   git(repo: Json, deadline?: number, signal?: AbortSignal) {
-    return new Git(
+    const git = new Git(
       repo.worktreePath || repo.sourcePath,
       Math.min(
         this.workspaces.config.gitTimeout,
@@ -66,6 +81,9 @@ export class Observation {
       deadline,
       signal,
     );
+    git.statistics = this.statistics;
+    git.statisticsComplete = () => this.scheduler.statisticsChanged(git.path);
+    return git;
   }
   private async withinDeadline<T>(work: Promise<T>, deadline?: number, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) throw new WorkbenchError("observer_cancelled", "observation cancelled");
@@ -317,7 +335,27 @@ export class Observation {
     return this.activity.start(scanId, workspaces);
   }
   async close(): Promise<void> {
+    this.closing = true;
+    for (const abort of this.linkedReads.values()) abort.abort();
     await this.activity.close();
+  }
+  /** Gitlink metadata supplements the roster; it never gates cached rows. */
+  private linkedSupplement(workspace: Json): Json | undefined {
+    if (workspace.layout !== 'gitlink') return undefined;
+    const key = `linked-supplement:v1:${workspace.id}`;
+    const token = this.scheduler.workspaceToken(workspace.id) + stable(workspace);
+    const retained = this.cache.retained(key);
+    if (!this.closing && retained?.sourceToken !== token && !this.linkedReads.has(key)) {
+      const abort = new AbortController(); this.linkedReads.set(key, abort);
+      const signal = abort.signal;
+      const timer = setTimeout(() => abort.abort(), Math.min(30_000, this.workspaces.config.observationTimeout)); timer.unref();
+      void this.cache.read(key, token, () => withBackgroundGit(async () => {
+        const current = await this.workspaces.refreshLinked(workspace, signal);
+        const gitlinks = await gitlinkDetails(current.treePath, this.workspaces.config.gitTimeout, signal);
+        return { workspace: current, gitlinks, sourceToken: token, observation: { state: 'ready', observedAt: now() } };
+      }), true, true, { workspaceId: workspace.id }).catch(() => {}).finally(() => { clearTimeout(timer); this.linkedReads.delete(key); });
+    }
+    return { ...retained, pending: retained?.sourceToken !== token };
   }
   async fingerprint(repo: Json) {
     return this.scheduler.token(repo.worktreePath || repo.sourcePath);
@@ -328,6 +366,17 @@ export class Observation {
   async detail(params: Json, signal?: AbortSignal) {
     const workspaceId = String(params.workspaceId || "");
     const baseWorkspace = this.workspaces.get(workspaceId);
+    if (params.mode === 'roster') {
+      const supplement = this.linkedSupplement(baseWorkspace);
+      const workspace = supplement?.workspace || baseWorkspace;
+      const repositories = workspace.repositories.map((repo: Json) => this.refresh.retained(workspace, repo) || this.cache.retained(`summary:v2:${repo.worktreePath || repo.sourcePath}`) || {
+        ...repo, registeredBranch: repo.branch || null, branch: '', head: null, refState: 'unknown', refCandidates: [], status: 'unknown', dirty: null, unpushed: null,
+        dirtyPaths: [], issues: [], changeIssues: [], workingChanges: null, changes: null, changesLoaded: false, worktreeExists: existsSync(repo.worktreePath || repo.sourcePath), observationPending: true,
+      });
+      return { schemaVersion: protocol, workspace: this.summary(workspace, repositories), repositories,
+        ...(supplement?.gitlinks ? { gitlinks: supplement.gitlinks } : {}),
+        observation: { state: 'ready', refreshing: !!supplement?.pending, observedAt: now(), validationKey: `workspace:${workspaceId}`, validationToken: this.scheduler.workspaceToken(workspaceId) } };
+    }
     // Do not make a cached detail wait for Gitlink refreshes, watcher setup, or
     // a new scheduler generation. The cache accepts an async fingerprint and
     // probes it after returning the last useful snapshot; a cold request still
@@ -407,114 +456,30 @@ export class Observation {
       }, true, false, { workspaceId },
     );
   }
+  async diffRead(params: Json): Promise<Json> {
+    const action = params.action || 'start', requestId = String(params.requestId || '');
+    if (action === 'status') return this.diffTasks.status(String(params.taskId || ''), requestId);
+    if (action === 'release') return this.diffTasks.release(String(params.taskId || ''), requestId);
+    if (action !== 'start') throw new WorkbenchError('request_invalid', 'Unsupported diff action');
+    const context = this.diffContent.identify(params);
+    const stat = context.immutable ? null : await lstat(join(context.path, params.path)).catch(() => null);
+    if (Number.isFinite(params.readDeadline) && Date.now() >= params.readDeadline) throw new WorkbenchError('observer_timeout', 'Diff start request expired before acceptance');
+    const sourceKey = `${context.taskKey}:${stat?.ino}:${stat?.mtimeMs}:${stat?.size}`;
+    return this.diffTasks.start(sourceKey, requestId, (signal, deadline) => this.diffContent.read(params, deadline, signal), 30_000, context.identity);
+  }
   async repositoryQuery(method: string, params: Json, signal?: AbortSignal) {
-    if (method === "repository.diff") {
-      if (typeof params.path !== "string" || !params.path)
-        throw new WorkbenchError("path_required", "path is required");
-      if (isAbsolute(params.path) || params.path.split("/").includes(".."))
-        throw new WorkbenchError(
-          "path_invalid",
-          "diff path must remain inside the repository",
-        );
-    }
-    const workspace = await this.workspaces.refreshLinked(this.workspaces.get(String(params.workspaceId || "")), signal),
-      repo = this.workspaces.repository(
-        workspace,
-        params.repoPath || params.repositoryId || "",
-      );
-    await this.scheduler.register(workspace.id, repo.worktreePath || repo.sourcePath,
-      () => this.repository(repo, Date.now() + this.workspaces.config.observationTimeout));
-    if (params.force) this.scheduler.force(workspace.id);
-    const git = this.git(repo);
-    const immutableIdentity = params.scope === "commit" && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(String(params.commitSha || ""))
-      ? `${git.path}:${params.commitSha}:${method}:${params.path || ""}` : undefined;
-    const validationScope = params.scope === "branch" || params.scope === "commit" ? "refs" : "working";
-    const validationToken = this.scheduler.token(git.path, validationScope);
-    let marker = "";
-    if (params.path && !immutableIdentity)
+    if (method === 'repository.diff') {
+      const requestId = `legacy:${randomUUID()}`;
+      const deadline = Date.now() + Math.min(this.workspaces.config.observationTimeout, Number(params.observationBudgetMs) || this.workspaces.config.observationTimeout);
+      let task: Json | undefined;
       try {
-        const st = lstatSync(join(git.path, params.path));
-        marker = `${st.mtimeMs}:${st.size}`;
-      } catch {}
-    return this.cache.read(
-      `${method}:${workspace.id}:${observationCacheIdentity(params)}`,
-      (immutableIdentity || this.scheduler.token(git.path, validationScope)) + stable(repo) + marker,
-      async () => {
-        const deadline = Date.now() + Math.min(this.workspaces.config.observationTimeout, Number(params.observationBudgetMs) || this.workspaces.config.observationTimeout);
-        return this.withinDeadline(
-          (async () => {
-            const git = this.git(repo, deadline, signal),
-              [, upstream] = await git.upstream(),
-              baseSha = repo.baseSha || upstream,
-              scope = params.scope || "branch",
-              head = immutableIdentity ? String(params.commitSha) : await git.head();
-            const common = {
-              schemaVersion: protocol,
-              workspaceId: workspace.id,
-              repoPath: repo.repoPath,
-              head,
-              observation: { state: "ready", observedAt: now(), validationKey: `${git.path}#${validationScope}`, validationToken,
-                ...(immutableIdentity ? { immutableIdentity } : { validationDependencies: { [`${git.path}#${validationScope}`]: validationToken } }) },
-            };
-            if (method === "repository.graph") {
-              const historyMode =
-                  params.historyMode ||
-                  (workspace.kind === "live" ? "full" : "branch"),
-                maxCommits = Math.max(
-                  1,
-                  Math.min(200, Number(params.maxCommits) || 50),
-                ),
-                graph = await git.graph(historyMode === "branch" && !baseSha ? "full" : historyMode, baseSha, maxCommits);
-              return {
-                ...common,
-                branch: await git.branch(),
-                baseSha,
-                truncated: graph.hasOlder,
-                ...graph,
-              };
-            }
-            if (method === "repository.changes") {
-              const files = (await git.files(scope, baseSha, params.commitSha, repo.role === "gitlink-root")).map(
-                fileJson,
-              );
-              return {
-                ...common,
-                scope,
-                baseSha: immutableIdentity ? (await git.text(["rev-parse", "--verify", `${params.commitSha}^`]).catch(() => "")) : baseSha,
-                files,
-                summary: count(files),
-                issues: [],
-              };
-            }
-            const diff = await git.diff(
-                scope,
-                String(params.path || ""),
-                baseSha,
-                params.commitSha,
-              ),
-              bytes = Buffer.from(diff.patch),
-              limit = this.workspaces.config.maxDiffBytes;
-            // Drop a partial UTF-8 sequence at the truncation boundary.
-            let end = Math.min(bytes.length, limit);
-            while (end < bytes.length && end > 0 && (bytes[end] & 0xc0) === 0x80)
-              end--;
-            return {
-              ...common,
-              scope,
-              path: params.path,
-              baseSha: diff.left,
-              left: diff.left,
-              right: diff.right,
-              patch: bytes.subarray(0, end).toString("utf8"),
-              head: diff.right || head,
-              binary: /Binary files |GIT binary patch/.test(diff.patch),
-              truncated: bytes.length > limit,
-            };
-          })(),
-          deadline,
-          signal,
-        );
-      }, true, false, { workspaceId: workspace.id, repoPath: git.path },
-    );
+        if (signal?.aborted) throw new WorkbenchError('observer_cancelled', 'Diff caller cancelled');
+        task = await this.diffRead({ ...params, requestId, readDeadline: deadline });
+        if (task.state === 'queued' || task.state === 'running') task = await this.diffTasks.wait(task.taskId, requestId, deadline, signal);
+        if (task.state !== 'ready') throw new WorkbenchError(task.error?.code || 'git_diff_failed', task.error?.message || 'File read failed', task.error?.details);
+        return task.result;
+      } finally { if (task) this.diffTasks.release(task.taskId, requestId); }
+    }
+    return this.refresh.query(method, params, signal);
   }
 }

@@ -1,10 +1,12 @@
+import { promisify } from "node:util";
+const execFileAsync = promisify(execFile);
 /** Opt-in integration evidence: an actual Paseo daemon loads this plugin.
  * Uses an isolated home, registry, Git repositories and loopback listener.
  * Never changes the user's installed plugin. WORKBENCH_LIVE_AGENTS=1 also
  * invokes real Codex agents against only these temporary repositories.
  */
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, execFile } from "node:child_process";
 import {
   mkdtempSync,
   realpathSync,
@@ -108,6 +110,8 @@ const env = {
   ...process.env,
   NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --expose-gc`.trim(),
   PASEO_HOME: home,
+  PASEO_DICTATION_ENABLED: "false",
+  PASEO_VOICE_MODE_ENABLED: "false",
   WORKSPACE_WORKBENCH_PROJECT_REGISTRY: registry,
   WORKSPACE_WORKBENCH_PLUGIN_ROOT: plugin,
   WORKBENCH_TEST_HOST_DROP: "1",
@@ -469,7 +473,7 @@ try {
   assert.equal(restored.ok, true, JSON.stringify(restored));
   assert.equal(restored.result.state, "active");
   report.checks.push("panel RPC remove/restore retained the same workspace and worktrees");
-  execFileSync(
+  await execFileAsync(
     cli,
     [
       "plugin",
@@ -532,7 +536,7 @@ try {
     console.log(JSON.stringify({ kind: "ui-ready", url: `http://127.0.0.1:${port}`, project: resolve(configs[0], ".."), continueFile: join(root, "continue") }));
     await wait(() => existsSync(join(root, "continue")), 600_000);
   }
-  execFileSync(
+  await execFileAsync(
     cli,
     [
       "plugin",
@@ -574,7 +578,7 @@ try {
 } finally {
   await client.close().catch(() => {});
   try {
-    execFileSync(
+    await execFileAsync(
       cli,
       ["daemon", "stop", "--home", home, "--timeout", "5", "--json"],
       { env, timeout: 10000, stdio: ["ignore", "pipe", "pipe"] },
@@ -583,5 +587,9 @@ try {
   daemon.kill("SIGTERM");
   await Promise.race([new Promise((r) => daemon.once("exit", r)), delay(5000)]);
   if (daemon.exitCode === null && !daemon.signalCode) daemon.kill("SIGKILL");
+  if (process.env.WORKBENCH_VERIFY_OUTPUT) {
+    mkdirSync(process.env.WORKBENCH_VERIFY_OUTPUT, { recursive: true });
+    writeFileSync(join(process.env.WORKBENCH_VERIFY_OUTPUT, "paseo-daemon.log"), logs);
+  }
   if (report.ok) rmSync(root, { recursive: true, force: true });
 }

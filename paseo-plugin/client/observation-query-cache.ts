@@ -3,7 +3,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import type { ObserverResponse } from '../shared/observer.ts';
 import { observationMeta, type QueryView } from './observation-coordinator.ts';
 const eventKinds = new Set(['agent-review', 'agent-review-history', 'execution-binding', 'agent-context']);
-const kinds = new Set([...eventKinds, 'workspace-list', 'workspace-detail', 'repository-graph', 'repository-changes', 'file-review', 'review']);
+const kinds = new Set([...eventKinds, 'workspace-list', 'workspace-detail', 'repository-refresh', 'repository-summary', 'repository-graph', 'repository-changes', 'file-review', 'review']);
 
 function queryKind(key: readonly unknown[], project: string): string {
   if (key[0] !== 'workspace-workbench') return '';

@@ -598,6 +598,9 @@ test("repository graph and changes keep ready state during stale branch refresh"
       repositoryId: "one",
       scope: "branch",
     };
+    // Warm watcher identity first: initialization can invalidate the initial
+    // snapshot, but elapsed cache TTL alone must never invalidate it.
+    await service.observation.scheduler.register(workspace.id, workspace.repositories[0].worktreePath);
     const graph = await service.handle("repository.graph", graphParams);
     const changes = await service.handle("repository.changes", changesParams);
     assert.equal(graph.observation.state, "ready");
@@ -902,15 +905,12 @@ test("root, rename and symlink diffs preserve selected-path boundaries", async (
     const secret = join(f.root, "secret");
     writeFileSync(secret, "outside-secret");
     symlinkSync(secret, join(path, "external"));
-    await assert.rejects(
-      service.handle("repository.diff", {
-        workspaceId: w.id,
-        repositoryId: "one",
-        scope: "working",
-        path: "external",
-      }),
-      /outside repository/,
-    );
+    const linked = await service.handle("repository.diff", {
+      workspaceId: w.id, repositoryId: "one", scope: "working", path: "external",
+    });
+    assert.match(linked.patch, /new file mode 120000/);
+    assert.doesNotMatch(linked.patch, /outside-secret/);
+
   } finally {
     await service.close();
     rmSync(f.root, { recursive: true, force: true });

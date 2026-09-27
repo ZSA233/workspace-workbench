@@ -1,4 +1,5 @@
-import { gitDiagnostics } from "./git.ts";
+import { EventLoopMetrics } from "../event-loop-metrics.ts";
+import { gitDiagnostics, withMutationGit } from "./git.ts";
 import { buildId } from "../../shared/build-id.mjs";
 import { loadConfig, type Config } from "./config.ts";
 import { Workspaces } from "./workspaces.ts";
@@ -28,8 +29,9 @@ export class Service {
   cache: ObservationCache;
   observation: Observation;
   startedAt = Date.now();
+  eventLoop = new EventLoopMetrics();
   version: string;
-  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts"]);
+  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts"]);
   constructor(config: Config, version = "0.1.3") {
     this.config = config;
     this.version = version;
@@ -53,7 +55,12 @@ export class Service {
       implementation: "node",
       version: this.version,
       buildId: this.build,
+      generation: this.observation.diffTasks.generation,
+      eventLoop: this.eventLoop.snapshot(),
       git: gitDiagnostics(),
+      diffRead: this.observation.diffTasks.health(),
+      refreshProtocol: 1,
+      fileStatistics: this.observation.statistics.health(),
       project: {
         id: this.config.projectId,
         displayName: this.config.displayName,
@@ -73,7 +80,7 @@ export class Service {
   }
   async handle(method: string, params: Json = {}, signal?: AbortSignal): Promise<Json> {
     if (managementMethods.has(method))
-      return this.workspaces.mutations.run(async () => {
+      return withMutationGit(() => this.workspaces.mutations.run(async () => {
         if (!["observer.reload", "main.repositories.save", "linked.workspaces.save"].includes(method) && !this.config.managementEnabled)
           throw new WorkbenchError(
             "capability_unavailable",
@@ -87,7 +94,7 @@ export class Service {
           this.observation.scheduler.force();
           this.observation.scheduler.rosterChanged();
         }
-      });
+      }));
     switch (method) {
       case "observer.versions":
         return this.observation.scheduler.versions(Array.isArray(params.workspaceIds) ? params.workspaceIds.slice(0, 100).filter((id: unknown) => typeof id === "string") : []);
@@ -177,6 +184,12 @@ export class Service {
           issues,
         };
       }
+      case "observer.refresh":
+        return this.observation.refresh.request(params);
+      case "repository.summary":
+        return this.observation.refresh.query(method, params, signal);
+      case "repository.diff.read":
+        return this.observation.diffRead(params);
       case "repository.graph":
       case "repository.changes":
       case "repository.diff":
@@ -261,6 +274,10 @@ export class Service {
     return this.workspaces.cleanup(params, method === "workspace.delete");
   }
   async close() {
+    this.eventLoop.close();
+    await this.observation.refresh.close();
+    await this.observation.diffTasks.close();
+    await this.observation.statistics.close();
     await this.workspaces.mutations.drain();
     await this.observation.close();
     await this.observation.scheduler.close();

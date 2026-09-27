@@ -29,7 +29,7 @@ export function versionDelta(previous: Versions | null, value: Versions) {
 export function shouldRefreshVersionedQuery(projectConfig: string, delta: ReturnType<typeof versionDelta>, key: readonly unknown[], data: ObserverResponse | undefined, active: boolean) {
   if (!active || key[0] !== 'workspace-workbench' || !key.includes(projectConfig)) return false;
   const kind = key.map(String);
-  if (delta.reset) return kind.some(part => ['workspace-list', 'workspace-detail', 'repository-graph', 'repository-changes', 'file-review', 'review', 'agent-review', 'agent-review-history', 'execution-binding', 'agent-context'].includes(part));
+  if (delta.reset) return kind.some(part => ['workspace-list', 'workspace-detail', 'repository-refresh', 'repository-summary', 'repository-graph', 'repository-changes', 'file-review', 'review', 'agent-review', 'agent-review-history', 'execution-binding', 'agent-context'].includes(part));
   if (key.includes('execution-binding') || key.includes('agent-context')) return delta.session;
   if (key.includes('agent-review') || key.includes('agent-review-history')) return delta.review;
   if (key.includes('workspace-list')) return delta.roster || delta.fallback;

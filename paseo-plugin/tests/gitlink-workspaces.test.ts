@@ -46,6 +46,35 @@ async function detailUntil(service: Service, workspaceId: string, ready: (detail
   throw new Error("Gitlink observation did not converge");
 }
 
+test('roster returns immediately while Gitlink pointers load separately and retains their result', async () => {
+  const f = fixture(), original = Git.prototype.run;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const calls: string[] = [];
+  try {
+    const candidates = await f.service.handle('linked.workspaces.list');
+    await f.service.handle('linked.workspaces.save', { revision: candidates.revision, repositories: [f.outer] });
+    const live = f.service.workspaces.list().find(row => row.kind === 'linked-live')!;
+    Git.prototype.run = async function(...args) { calls.push(args[0][0]); await gate; return original.apply(this, args); };
+    const initial = await f.service.handle('workspace.detail', { workspaceId: live.id, mode: 'roster' });
+    assert.equal(initial.repositories.length, 2);
+    assert.equal(initial.observation.refreshing, true);
+    assert.equal(initial.gitlinks, undefined);
+    release();
+    let result = initial;
+    for (let i = 0; i < 100 && !result.gitlinks; i++) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      result = await f.service.handle('workspace.detail', { workspaceId: live.id, mode: 'roster' });
+    }
+    assert.equal(result.gitlinks[0].checkoutSha, f.pinned);
+    assert.equal(result.observation.refreshing, false);
+    assert.ok(!calls.includes('status'), 'pointer supplement must not scan whole-repository status');
+    const count = calls.length;
+    await f.service.handle('workspace.detail', { workspaceId: live.id, mode: 'roster' });
+    assert.equal(calls.length, count);
+  } finally { release(); await f.service.close(); Git.prototype.run = original; rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("selected Gitlink root appears as one live workspace and creates matching nested branches", async () => {
   const f = fixture();
   try {

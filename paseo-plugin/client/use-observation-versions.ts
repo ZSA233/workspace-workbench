@@ -43,7 +43,7 @@ export function refreshObservations(client: QueryClient, project: string, matche
 }
 export function observationRefreshDiagnostics(client: QueryClient, project: string) {
   const counters = controllers.get(client)?.get(project)?.coordinator.counters;
-  return counters ? { ...counters, reasons: { ...counters.reasons } } : null;
+  return counters ? { ...counters, reasons: { ...counters.reasons }, state: controllers.get(client)?.get(project)?.coordinator.debug() } : null;
 }
 export function useObservationVersions(projectConfig: string | undefined, workspaceIds: string[], enabled = true) {
   const [issue, setIssue] = useState<string | null>(null);

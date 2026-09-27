@@ -1,3 +1,6 @@
+import { readerGeneration } from "./reader-identity.ts";
+import { EventLoopMetrics } from "./event-loop-metrics.ts";
+import { DIFF_READ_BUILD } from "../shared/diff-read.ts";
 import { boundedDeadline } from "../shared/request-deadline.mjs";
 import { sessionRevision } from "./session-observation.ts";
 import { reviewRevision } from "./agent-review-store.ts";
@@ -39,7 +42,7 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
-const versionedMethods = new Set<string>(["observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.graph", "repository.changes", "repository.diff"]);
+const versionedMethods = new Set<string>(["observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
 const mutationMethods = new Set<string>([
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
   "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete",
@@ -51,7 +54,7 @@ const BRIDGE_IN_FLIGHT = 16;
 const READ_METHODS = new Set<string>([
   "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify",
   "workspace.operation.status",
-  "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff",
+  "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary",
   "review-set.compare", "review-set.brief",
 ]);
 // Paseo currently gives plugin RPC calls a shorter host budget than the
@@ -62,9 +65,10 @@ const READ_METHODS = new Set<string>([
 // is reported by the backend; this generation identifies the observer bridge
 // process itself.
 const SERVER_BUILD_ID = "observer-bridge-v2";
-const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "review-set.compare", "review-set.brief"]);
+const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(method?: string): number {
+  if (method === "repository.diff.read" || method === "observer.refresh") return 2_000;
   const project = currentProject();
   let timing = DEFAULT_OBSERVATION_TIMING;
   try { if (project) timing = loadConfig(project.configPath).timing; } catch {
@@ -78,7 +82,7 @@ function configuredBridgeTimeoutMs(method?: string): number {
 }
 
 function requestParams(input: QueryInput): Record<string, unknown> {
-  if (!READ_METHODS.has(input.method) || !["workspace.detail", "repository.graph", "repository.changes", "repository.diff"].includes(input.method))
+  if (!READ_METHODS.has(input.method) || !["workspace.detail", "repository.summary", "repository.graph", "repository.changes", "repository.diff"].includes(input.method))
     return input.params || {};
   const project = currentProject();
   const timing = project ? (() => { try { return loadConfig(project.configPath).timing; } catch { return DEFAULT_OBSERVATION_TIMING; } })() : DEFAULT_OBSERVATION_TIMING;
@@ -91,10 +95,12 @@ function requestParams(input: QueryInput): Record<string, unknown> {
 
 class BridgeError extends Error {
   readonly code: string;
+  readonly stage: string;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, stage = "bridge") {
     super(message);
     this.name = "BridgeError";
+    this.stage = stage;
     this.code = code;
   }
 }
@@ -137,7 +143,7 @@ function withObservationMetadata(response: ObserverResponse): ObserverResponse {
     result: {
       ...result,
       pluginBuildId: SERVER_BUILD_ID,
-      pluginGeneration: `${SERVER_BUILD_ID}:${process.pid}`,
+      pluginGeneration: readerGeneration,
       ...(backendInstanceId ? { backendInstanceId } : {}),
       observedAt: new Date().toISOString(),
       ...(Array.isArray(result.issues) ? { issues: result.issues } : {}),
@@ -155,10 +161,10 @@ export class ObserverBridge {
   private completedRequests = 0;
   private failedRequests = 0;
   private timeoutRequests = 0;
-  private failures: Array<{ requestId: string; method: string; code: string; stage: string; at: string; durationMs: number }> = [];
+  private failures: Array<{ requestId: string; method: string; code: string; stage: string; at: string; durationMs: number; readRequestId?: string }> = [];
 
   private recordFailure(request: SocketRequest, code: string, startedAt: number, stage: string) {
-    this.failures.push({ requestId: request.id, method: request.method, code, stage,
+    this.failures.push({ requestId: request.id, ...(typeof request.params.requestId === "string" ? { readRequestId: request.params.requestId } : {}), method: request.method, code, stage,
       at: new Date().toISOString(), durationMs: Date.now() - startedAt });
     if (this.failures.length > 32) this.failures.shift();
   }
@@ -181,7 +187,7 @@ export class ObserverBridge {
       completedRequests: this.completedRequests,
       failedRequests: this.failedRequests,
       timeoutRequests: this.timeoutRequests,
-      generation: `${SERVER_BUILD_ID}:${process.pid}`,
+      generation: readerGeneration,
       recentFailures: [...this.failures],
       methods: [...this.methodStats.entries()].sort((a, b) => b[1].requests - a[1].requests).slice(0, 32).map(([method, stats]) => ({ method, ...stats })),
     };
@@ -190,6 +196,7 @@ export class ObserverBridge {
   private request(request: SocketRequest, timeoutMs: number): Promise<ObserverResponse> {
     return new Promise((resolveResponse, reject) => {
       let settled = false;
+      let connected = false;
       let buffer = "";
       let socket: Socket | undefined;
       const finish = (callback: () => void) => {
@@ -202,7 +209,7 @@ export class ObserverBridge {
       const cancel = () => fail(new BridgeError("observer_unavailable", "observer bridge closed"));
       this.cancellations.add(cancel);
       const timer = setTimeout(() => {
-        finish(() => reject(new BridgeError("observer_timeout", "observer request timed out")));
+        finish(() => reject(new BridgeError("observer_timeout", "observer request timed out", connected ? "backend-response" : "connect")));
       }, timeoutMs);
       const fail = (error: Error) => {
         clearTimeout(timer);
@@ -210,7 +217,7 @@ export class ObserverBridge {
       };
       socket = createConnection(configuredSocketPath());
       socket.setEncoding("utf8");
-      socket.on("connect", () => socket?.write(`${JSON.stringify(request)}\n`));
+      socket.on("connect", () => { connected = true; socket?.write(`${JSON.stringify(request)}\n`); });
       socket.on("data", (chunk: string | Buffer) => {
         buffer += String(chunk);
         if (Buffer.byteLength(buffer) > 32 * 1024 * 1024) { fail(new BridgeError("observer_output_limit", "observer response exceeded limit")); return; }
@@ -293,7 +300,7 @@ export class ObserverBridge {
       })
       .catch(error => {
         this.failedRequests++;
-        this.recordFailure(request, error instanceof BridgeError ? error.code : "observer_failed", startedAt, "bridge");
+        this.recordFailure(request, error instanceof BridgeError ? error.code : "observer_failed", startedAt, error instanceof BridgeError ? error.stage : "bridge");
         stats.failures++;
         stats.maxMs = Math.max(stats.maxMs, Date.now() - startedAt);
         if (error instanceof BridgeError && error.code === "observer_timeout") this.timeoutRequests++;
@@ -314,6 +321,7 @@ export class ObserverBridge {
 }
 
 const bridge = new ObserverBridge();
+const eventLoop = new EventLoopMetrics();
 
 export async function handleObserver(input: QueryInput, context?: AgentContext): Promise<ObserverResponse> {
   try {
@@ -348,7 +356,7 @@ export async function handleObserver(input: QueryInput, context?: AgentContext):
         const response = await bridge.call(request);
         if (response.ok) recordBackendSuccess(currentProject()?.configPath);
         if (request.method === "observer.health" && response.ok && response.result && typeof response.result === "object")
-          return withObservationMetadata({ ...response, result: { ...response.result, bridge: bridge.health() } });
+          return withObservationMetadata({ ...response, result: { ...response.result, bridge: { ...bridge.health(), buildId: DIFF_READ_BUILD, eventLoop: eventLoop.snapshot() } } });
         if (request.method === "observer.versions" && response.ok && response.result && typeof response.result === "object")
           return withObservationMetadata({ ...response, result: { ...response.result, reviewRevision: reviewRevision(), sessionRevision: sessionRevision() } });
         return response;
@@ -384,6 +392,7 @@ export function queryObserver(input: QueryInput): Promise<ObserverResponse> {
 }
 
 export function closeObserverBridge(): void {
+  eventLoop.close();
   bridge.close();
 }
 

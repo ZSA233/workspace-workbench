@@ -202,6 +202,7 @@ export function observationTimingFromWire(value: unknown): ObservationTiming {
 }
 
 export function readBudgetMs(method: string, timing: ObservationTiming = DEFAULT_OBSERVATION_TIMING): number {
+  if (method === "repository.diff.read") return 2_000;
   if (method === "observer.health") return timing.readBudgetsMs.health;
   if (method === "observer.versions") return timing.readBudgetsMs.versions;
   if (method === "workspace.list") return timing.readBudgetsMs.list;

@@ -234,7 +234,7 @@ export function useLastSuccessfulResponse(
         // observations. Keep that response visible, but do not advance the
         // last-successful timestamp.
         entry.response = response;
-      } else if (response.ok) {
+      } else if (response.ok && (responseClass !== "refreshing" || !entry.response)) {
         // A first structured non-ready response is still useful content.
         // Retain it so a later transport failure cannot turn the page blank.
         entry.response = response;

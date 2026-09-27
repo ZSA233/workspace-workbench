@@ -154,6 +154,7 @@ test('different request deadlines share dynamic observation cache entries', asyn
   Git.prototype.run = async function(...args) { commands++; return original.apply(this, args); };
   try {
     const workspaceId = (await service.handle('workspace.list', {})).workspaces[0].id;
+    await service.observation.scheduler.register(workspaceId, f.repo);
     const params = { workspaceId, repoPath: 'repo', scope: 'working' };
     await service.handle('repository.changes', { ...params, observationBudgetMs: 5000 });
     const before = commands;

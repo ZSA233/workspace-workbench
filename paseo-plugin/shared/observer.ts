@@ -26,9 +26,12 @@ export const observerMethods = [
   "linked.workspaces.list",
   "linked.workspace.preview",
   "linked.workspaces.save",
+  "repository.summary",
+  "observer.refresh",
   "repository.graph",
   "repository.changes",
   "repository.diff",
+  "repository.diff.read",
   "review-set.compare",
   "review-set.brief",
 ] as const;

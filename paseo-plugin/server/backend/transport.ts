@@ -22,7 +22,7 @@ import {
 } from "./storage.ts";
 const cancellableMethods = new Set([
   "observer.versions", "workspace.list", "workspace.detail", "workspace.identify",
-  "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff",
+  "workspace.orphan.preview", "repository.summary", "repository.graph", "repository.changes", "repository.diff",
   "review-set.compare", "review-set.brief",
 ]);
 export async function socketAlive(path: string): Promise<boolean> {
@@ -60,6 +60,10 @@ export async function response(service: Service, raw: string, signal?: AbortSign
       (typeof request.params !== "object" || Array.isArray(request.params))
     )
       throw new WorkbenchError("request_invalid", "params must be an object");
+    if (['repository.diff.read', 'observer.refresh'].includes(request.method) && Number.isFinite(request.deadline)) {
+      if (!remainingMs(request.deadline)) throw new WorkbenchError('observer_timeout', 'Diff control request expired before dispatch');
+      request.params = { ...(request.params || {}), readDeadline: request.deadline };
+    }
     if (cancellableMethods.has(String(request.method)) && Number.isFinite(request.deadline)) {
       const remaining = remainingMs(request.deadline);
       if (!remaining) throw new WorkbenchError('observation_timeout', 'request deadline expired before backend dispatch');

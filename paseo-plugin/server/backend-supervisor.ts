@@ -330,6 +330,7 @@ export class BackendSupervisor {
         this.children.delete(route.configPath);
     });
     const deadline = Date.now() + 8000;
+    let lastHealth: Json | null = null;
     while (Date.now() < deadline && !this.closed) {
       if (child.exitCode !== null || child.signalCode)
         throw new WorkbenchError(
@@ -337,6 +338,7 @@ export class BackendSupervisor {
           entry.error || "backend exited during startup",
         );
       const health = await backendRequest(route.socketPath, "observer.health", {}, 2_000);
+      lastHealth = health;
       if (
         health?.ok &&
         health.result?.implementation === "node" &&
@@ -352,7 +354,7 @@ export class BackendSupervisor {
     else child.kill("SIGTERM");
     throw new WorkbenchError(
       "backend_start_failed",
-      entry.error || "backend startup timed out",
+      entry.error || `backend startup timed out (${lastHealth ? `health received; version=${lastHealth.result?.version || 'unknown'}, pidMatches=${lastHealth.result?.process?.pid === child.pid}, closing=${!!lastHealth.result?.process?.closing}` : 'no health response'}; pid=${child.pid || 'unassigned'})`,
     );
   }
   async close() {

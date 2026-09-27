@@ -3,6 +3,8 @@ export type WorkbenchLocale = "zh-CN" | "en-US";
 /** Central default UI copy; stable keys survive component moves. */
 const zhCopy = {
   observationStatus: "观察状态",
+  diffCompatibility: "文件读取使用兼容模式，插件组件尚未完成更新。",
+  diffQueued: "正在等待文件读取…",
   observationValidated: "最近校验",
   observationStale: "观察数据可能已过期",
   observationUnavailable: "观察暂不可用",
@@ -652,6 +654,8 @@ export type WorkbenchCopy = {
 const enCopy: WorkbenchCopy = {
   ...zhCopy,
   observationStatus: "Observation status",
+  diffCompatibility: "File reader is in compatibility mode; plugin components have not all updated.",
+  diffQueued: "Waiting to read file…",
   observationValidated: "Last validated",
   observationStale: "Observation may be stale",
   observationUnavailable: "Observation unavailable",

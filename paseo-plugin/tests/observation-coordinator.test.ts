@@ -191,3 +191,46 @@ test('partial cached responses participate in failure backoff rather than rapid 
   await s.time.advance(1); assert.equal(calls, 2);
   await s.time.advance(5000); assert.equal(calls, 3); s.coordinator.close();
 });
+
+test('read tasks use the shared coordinator polling cadence and stop on background departure', async () => {
+  const s = setup(), a = s.add('a'); let calls = 0;
+  const pending = (ms: number) => ({ ok: true, result: { observation: { state: 'ready', refreshing: true, readTask: { state: 'queued', deadline: s.time.now() + 30000, nextPollMs: ms } } } });
+  a.data = pending(250);
+  a.fetch = async () => { calls++; a.data = pending(calls === 1 ? 500 : 1000); s.coordinator.changed(); };
+  const leave = s.coordinator.subscribe(['w']); await s.time.advance(249); assert.equal(calls, 0);
+  await s.time.advance(1); assert.equal(calls, 1);
+  await s.time.advance(500); assert.equal(calls, 2);
+  leave(); await s.time.advance(10000); assert.equal(calls, 2); s.coordinator.close();
+});
+
+test('terminal file errors are not replayed by version polling or retry timers', async () => {
+  const s = setup(), a = s.add('a');
+  a.data = { ok: false, error: { code: 'git_timeout', message: 'failed', details: { terminal: true, readTask: true } } };
+  s.coordinator.subscribe(['w']); await s.time.advance(120000);
+  assert.deepEqual(s.counts, {}); s.coordinator.close();
+});
+
+test('React Query initial fetch completing with a pending task does not lose the first status poll', async () => {
+  const s = setup(), a = s.add('a');
+  a.data = undefined;
+  s.coordinator.subscribe(['w'], false); // activation queues the initial read
+  a.fetching = true; s.coordinator.changed(); // QueryObserver starts its own read
+  a.data = { ok: true, result: { observation: { state: 'ready', refreshing: true, readTask: { state: 'running', deadline: s.time.now() + 30000, nextPollMs: 250 } } } };
+  a.fetching = false; s.coordinator.changed();
+  await s.time.advance(250);
+  assert.equal(s.counts.a, 1);
+  s.coordinator.close();
+});
+
+test('a hidden panel does not poll its pending file while another panel keeps the project active', async () => {
+  const s = setup(), hidden = s.add('hidden'), visible = s.add('visible');
+  hidden.data = { ok: true, result: { observation: { state: 'ready', refreshing: true, readTask: { state: 'running', deadline: s.time.now() + 30000, nextPollMs: 250 } } } };
+  hidden.active = false;
+  s.coordinator.subscribe(['w']);
+  await s.time.advance(1000);
+  assert.equal(s.counts.hidden, undefined);
+  hidden.active = true; visible.active = false; s.coordinator.changed();
+  await s.time.advance(250);
+  assert.equal(s.counts.hidden, 1);
+  s.coordinator.close();
+});

@@ -229,6 +229,23 @@ export class ObservationCache {
     this.background.add(probe);
     void probe.finally(() => this.background.delete(probe));
   }
+  get epoch() { return this.generation; }
+  retained(key: string): Json | undefined {
+    const entry = this.entries.get(key);
+    return entry ? this.metadata(entry, this.flights.has(key), this.failures.get(key)) : undefined;
+  }
+  publish(key: string, fingerprint: string, value: Json, scope?: CachePublication, expectedEpoch = this.generation): void {
+    if (this.closed || expectedEpoch !== this.generation) return;
+    this.failures.delete(key);
+    this.entries.set(key, { value, fingerprint, time: Date.now(), bytes: Buffer.byteLength(JSON.stringify(value)) });
+    this.trim(); this.onProduced?.(scope);
+  }
+  peek(key: string, fingerprint: string): Json | undefined {
+    const entry = this.entries.get(key);
+    if (!entry || entry.fingerprint !== fingerprint || this.failures.has(key) || entry.value.observation?.state !== 'ready') return undefined;
+    this.entries.delete(key); this.entries.set(key, entry);
+    return this.metadata(entry);
+  }
   async read(key: string, fingerprint: Fingerprint, work: () => Promise<Json>, versioned = false, waitFresh = false, scope?: CachePublication) {
     if (this.closed) throw new WorkbenchError("observer_closed", "observation cache is closed");
     const entry = this.entries.get(key);

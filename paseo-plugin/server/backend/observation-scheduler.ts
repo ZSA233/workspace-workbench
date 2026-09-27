@@ -88,6 +88,10 @@ export class ObservationScheduler {
     if (scope?.repoPath) this.repositoryVersions.set(scope.repoPath, (this.repositoryVersions.get(scope.repoPath) || 0) + 1);
   }
   rosterChanged() { this.rosterRevision++; this.revision++; }
+  statisticsChanged(path: string) {
+    const repo = this.repos.get(path);
+    if (repo) this.event(repo, true, false);
+  }
   force(workspace?: string) {
     for (const r of this.repos.values()) if (!workspace || this.workspaces.get(workspace)?.has(r.path)) {
       if (workspace) this.touch(r);

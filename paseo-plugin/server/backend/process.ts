@@ -8,10 +8,12 @@ export async function command(
     timeout?: number;
     env?: NodeJS.ProcessEnv;
     maxBytes?: number;
+    truncate?: boolean;
     signal?: AbortSignal;
   },
 ) {
-  return new Promise<{ stdout: string; stderr: string; code: number }>(
+  if (options.signal?.aborted) throw new WorkbenchError("observer_cancelled", `${executable} cancelled before spawn`);
+  return new Promise<{ stdout: string; stderr: string; code: number; truncated: boolean; bytes: number }>(
     (resolve, reject) => {
       const child = spawn(executable, args, {
         cwd: options.cwd,
@@ -20,6 +22,9 @@ export async function command(
         detached: process.platform !== "win32",
       });
       const kill = () => {
+        // A failed spawn can still have a native handle but no PID. Never call
+        // ChildProcess.kill in that state: pid 0 may target the caller group.
+        if (!child.pid || child.pid <= 0) return;
         try {
           if (process.platform !== "win32" && child.pid)
             process.kill(-child.pid, "SIGKILL");
@@ -28,6 +33,7 @@ export async function command(
       };
       const stdout: Buffer[] = [],
         stderr: Buffer[] = [];
+      let truncated = false;
       let bytes = 0,
         failure: WorkbenchError | null = null;
       let settled = false;
@@ -39,8 +45,12 @@ export async function command(
         kill();
       }, options.timeout || 10000);
       const collect = (chunks: Buffer[], chunk: Buffer) => {
+        const previous = bytes;
         bytes += chunk.length;
-        if (bytes > (options.maxBytes || 32 * 1024 * 1024)) {
+        const maxBytes = options.maxBytes || 32 * 1024 * 1024;
+        if (bytes > maxBytes && options.truncate && chunks === stdout) {
+          if (!truncated) { chunks.push(chunk.subarray(0, Math.max(0, maxBytes - previous))); truncated = true; kill(); }
+        } else if (bytes > maxBytes) {
           failure = new WorkbenchError(
             "output_limit",
             `${executable} output exceeded limit`,
@@ -72,11 +82,23 @@ export async function command(
         if (failure) reject(failure);
         else
           resolve({
-            stdout: Buffer.concat(stdout).toString("utf8"),
+            stdout: decodeOutput(Buffer.concat(stdout), truncated),
             stderr: Buffer.concat(stderr).toString("utf8"),
-            code: code ?? -1,
+            code: truncated ? 0 : code ?? -1,
+              truncated, bytes,
           });
       });
     },
   );
+}
+
+function decodeOutput(data: Buffer, truncated: boolean): string {
+  if (!truncated) return data.toString('utf8');
+  let start = data.length - 1;
+  while (start >= 0 && (data[start] & 0xc0) === 0x80) start--;
+  if (start >= 0) {
+    const lead = data[start], width = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+    if (start + width > data.length) data = data.subarray(0, start);
+  }
+  return data.toString('utf8');
 }

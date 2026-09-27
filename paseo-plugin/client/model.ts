@@ -255,6 +255,7 @@ export function resolveWorkspaceSelection(input: {
 }
 
 export type RepositorySummary = {
+  observationPending?: boolean;
   name: string;
   repoPath: string;
   status: string;
@@ -283,6 +284,7 @@ export type RepositorySummary = {
 };
 
 export type ChangeSummary = {
+  complete?: boolean;
   files: number;
   additions: number;
   deletions: number;
@@ -370,6 +372,7 @@ export function issueDisplayLabel(code: string, strings: WorkbenchCopy = copy): 
 }
 
 export type FileChange = {
+  statisticsState?: "ready" | "deferred" | "unavailable";
   path: string;
   oldPath?: string | null;
   status: string;
@@ -377,7 +380,7 @@ export type FileChange = {
   additions: number | null;
   deletions: number | null;
   worktreeOnly?: boolean;
-  binary?: boolean;
+  binary?: boolean | null;
   truncated?: boolean;
   missing?: boolean;
 };
@@ -457,7 +460,7 @@ export type DiffResult = {
   scope: string;
   patch: string;
   truncated: boolean;
-  binary?: boolean;
+  binary?: boolean | null;
   status?: string;
   statusLabel?: string;
   baseSha?: string | null;
@@ -527,6 +530,7 @@ export function mergePartialDetail(previous: DetailResult, next: DetailResult): 
 export type TreeRow =
   | {
       kind: "directory";
+      complete?: boolean;
       path: string;
       label: string;
       depth: number;
@@ -653,6 +657,7 @@ function directoryForPath(root: MutableTreeDirectory, parts: string[], file: Fil
 }
 
 function directoryStats(directory: MutableTreeDirectory): {
+  complete?: boolean;
   fileCount: number;
   additions: number;
   deletions: number;
@@ -665,13 +670,15 @@ function directoryStats(directory: MutableTreeDirectory): {
     }),
     { fileCount: 0, additions: 0, deletions: 0 },
   );
+  let incomplete = directory.files.some(file => file.statisticsState && file.statisticsState !== 'ready');
   for (const child of directory.directories.values()) {
     const stats = directoryStats(child);
+    if (stats.complete === false) incomplete = true;
     own.fileCount += stats.fileCount;
     own.additions += stats.additions;
     own.deletions += stats.deletions;
   }
-  return own;
+  return incomplete ? { ...own, complete: false } : own;
 }
 
 export function buildTreeRows(

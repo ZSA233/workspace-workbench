@@ -8,6 +8,7 @@ export function selectedChangeSummary(
   scope: ChangeScope,
   current: boolean,
 ): ChangeSummary | null {
+  if (changes?.summary.complete === false) return null;
   if (!current || !repository || !changes || scope === "commit" || changes.scope !== scope) return null;
   if (changes.workspaceId !== workspaceId || changes.repoPath !== repository.repoPath) return null;
   if ((changes.head || null) !== (repository.head || null)) return null;

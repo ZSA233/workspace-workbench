@@ -1,3 +1,6 @@
+import { DaemonClient } from '@getpaseo/client/internal/daemon-client';
+import WebSocket from 'ws';
+import { createDiffPerformanceFixture, percentile95 } from './diff-performance-fixture.mjs';
 /** Actual bundled Paseo UI in a fresh headless browser and isolated daemon. */
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
@@ -12,9 +15,9 @@ const plugin = resolve(import.meta.dirname, '..'), root = resolve(plugin, '..');
 const output = resolve(process.env.WORKBENCH_VERIFY_OUTPUT || join(root, '.local/verification/ui'));
 mkdirSync(output, { recursive: true });
 const child = spawn(process.execPath, [join(plugin, 'scripts/verify-live.mjs')], {
-  cwd: root, env: { ...process.env, WORKBENCH_LIVE_UI: '1' }, stdio: ['ignore','pipe','pipe'],
+  cwd: root, env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_VERIFY_OUTPUT: output }, stdio: ['ignore','pipe','pipe'],
 });
-let logs = '', ui, browser;
+let logs = '', ui, browser, observerClient;
 const exited = new Promise(resolveExit => child.once('exit', code => resolveExit(code)));
 child.stderr.on('data', b => { logs += b; });
 const ready = new Promise((resolveReady, reject) => {
@@ -29,6 +32,8 @@ const report = { kind: 'actual-paseo-headless-ui', checks: [], screenshots: [], 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 try {
   ui = await ready;
+  observerClient = new DaemonClient({ url: `ws://${new URL(ui.url).host}/ws`, clientId: 'workbench-ui-observation-proof', clientType: 'mcp', reconnect: { enabled: false }, webSocketFactory: (url, options) => new WebSocket(url, options?.protocols, { headers: options?.headers }) });
+  await observerClient.connect();
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1600, height: 1050 } });
   page.on('pageerror', e => report.pageErrors.push(e.message));
@@ -42,11 +47,11 @@ try {
       const value = JSON.parse(frame.payload);
       const message = value.type === 'session' ? value.message : value;
       if (message?.type !== 'plugin.rpc.invoke.request' || message.pluginId !== 'workspace-workbench-paseo') return;
-      for (const operation of ['observer.versions', 'repository.graph', 'repository.changes', 'repository.diff'])
+      for (const operation of ['observer.versions', 'repository.graph', 'repository.changes', 'repository.diff', 'repository.diff.read'])
         if (JSON.stringify(message).includes(`"${operation}"`)) { observationTrace.push({ at: Date.now(), operation }); if (observationTrace.length > 200) observationTrace.shift(); }
       if (!measuringRpc) return;
       rpcMethods.set(message.method, (rpcMethods.get(message.method) || 0) + 1);
-      for (const operation of ['observer.versions', 'repository.graph', 'repository.changes', 'repository.diff'])
+      for (const operation of ['observer.versions', 'repository.graph', 'repository.changes', 'repository.diff', 'repository.diff.read'])
         if (JSON.stringify(message).includes(`"${operation}"`)) rpcOperations.set(operation, (rpcOperations.get(operation) || 0) + 1);
     } catch {}
   }));
@@ -54,7 +59,7 @@ try {
   const health = async () => { const response = await backendRequest(join(ui.project,'s.sock'), 'observer.health'); assert.ok(response?.ok); return response.result; };
   const panel = async () => {
     await page.getByText('Workspace Workbench',{exact:true}).first().click();
-    await page.getByText('Repositories',{exact:true}).waitFor({timeout:15_000});
+    await page.getByText('Repositories',{exact:true}).filter({ visible: true }).first().waitFor({timeout:15_000});
   };
   await page.goto(ui.url);
   await page.getByText('Add project',{exact:true}).first().click();
@@ -62,10 +67,11 @@ try {
   await page.getByPlaceholder('Search directories or enter a path...').fill(ui.project);
   await page.getByText('Open this path',{exact:true}).click();
   await page.getByText('Workspace Workbench',{exact:true}).first().click();
-  await page.getByText('Repositories',{exact:true}).waitFor();
+  await page.getByText('Repositories',{exact:true}).filter({ visible: true }).first().waitFor();
   report.checks.push('the active host workspace selected its registered project automatically without a startup project picker');
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor();
   assert.equal(await page.getByText('Not loaded',{exact:true}).count(),0);
+  if (!process.env.WORKBENCH_UI_PERFORMANCE_ONLY) {
   await page.getByText('one',{exact:true}).first().click();
   await page.getByText(/current ref:/i).waitFor();
   report.checks.push('clicking a repository row opened the compact reference details drawer');
@@ -86,7 +92,7 @@ try {
   assert.equal(adopted.result.repositories.length,3);
   assert.equal(adopted.result.repositories.filter(repo=>repo.branch).length,1);
   assert.ok(adopted.result.repositories.some(repo=>repo.repoPath==='extra'));
-  await page.getByText('Repositories',{exact:true}).waitFor({timeout:20000});
+  await page.getByText('Repositories',{exact:true}).filter({ visible: true }).first().waitFor({timeout:20000});
   await page.getByText('recovered/legacy/extra',{exact:true}).waitFor({timeout:20000});
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor({timeout:20000});
   await page.getByText(/Reached the start of history/).first().waitFor({timeout:20000});
@@ -141,7 +147,8 @@ try {
   report.checks.push('only the selected repository displayed calculated colored change counts');
   await page.getByText('ui-proof.txt',{exact:true}).first().click();
   await page.getByText('line one',{exact:true}).waitFor();
-  for (let n=0;n<10;n++) {
+  const editSamples = Math.max(1, Math.min(10, Number(process.env.WORKBENCH_UI_EDIT_SAMPLES) || 10));
+  for (let n=0;n<editSamples;n++) {
     const text=`automatic edit ${n}`;started=Date.now();appendFileSync(file,text+'\n');
     await page.getByText(text,{exact:true}).waitFor({timeout:22000});
     report.latenciesMs.push(Date.now()-started);
@@ -155,7 +162,7 @@ try {
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.getByText('while unfocused',{exact:true}).waitFor({timeout:22000});
   await screenshot('03-live-file-diff.png');
-  report.checks.push('file click opened the real diff; ten disk edits appeared without manual refresh; blur paused updates and focus resumed them');
+  report.checks.push(`file click opened the real diff; ${editSamples} disk edits appeared without manual refresh; blur paused updates and focus resumed them`);
   let before;
   for(let n=0;n<30;n++){ before=await health(); if(!before.git.running&&!before.git.queued)break;await sleep(100); }
   rpcMethods.clear(); rpcOperations.clear(); measuringRpc = true;
@@ -254,11 +261,112 @@ try {
   await page.getByText(/主工作区审核始终手动|Main workspace reviews are always manual/).waitFor();
   await screenshot('11-main-read-only-review.png');
   report.checks.push('main workspace exposes the independent read-only Agent Review tab');
+  }
+  // Interactive latency evidence on a fixed large fixture in this isolated host.
+  await page.getByText('Workspace', { exact: true }).first().click();
+  await page.getByText('one', { exact: true }).filter({ visible: true }).first().click();
+  report.largeFixture = await createDiffPerformanceFixture(join(ui.project, 'one'));
+  await page.getByText(/diff-performance/).filter({ visible: true }).first().waitFor({ timeout: 30000 });
+  const actionabilityMs = [];
+  report.fileActionabilityMs = actionabilityMs;
+  const openBulk = async index => {
+    await panel();
+    await page.getByText('one', { exact: true }).filter({ visible: true }).first().click();
+    await page.getByText(/diff-performance/).filter({ visible: true }).first().waitFor({ timeout: 22000 });
+    const filename = `file-${String(index).padStart(5, '0')}.txt`;
+    const item = page.getByText(new RegExp(`^(?:diff-performance/)?${filename.replace('.', '\\.')}$`)).filter({ visible: true }).first();
+    const renderedFiles = page.getByText(/^(?:diff-performance\/)?file-\d+\.txt$/).filter({ visible: true });
+    if (!await renderedFiles.count()) await page.getByText('diff-performance', { exact: true }).filter({ visible: true }).first().click();
+    // A row outside the virtual window is absent from the DOM. Do not interpret
+    // that as a collapsed directory or wait for a row without scrolling to it.
+    for (let attempt = 0; attempt < 30 && !await item.count(); attempt++) {
+      const first = renderedFiles.first(); await first.waitFor();
+      const firstIndex = Number((await first.innerText()).match(/file-(\d+)/)?.[1]);
+      await first.evaluate((element, direction) => {
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+          if (/(auto|scroll)/.test(getComputedStyle(parent).overflowY) && parent.scrollHeight > parent.clientHeight) {
+            parent.scrollTop += direction * Math.max(100, parent.clientHeight * .8); break;
+          }
+        }
+      }, firstIndex > index ? -1 : 1);
+      await sleep(50);
+    }
+    await item.waitFor();
+    // Virtual lists expose overscan rows outside their scroll viewport. Scroll
+    // that viewport first, then resolve the row again after its window updates.
+    await item.evaluate(element => {
+      for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+        if (/(auto|scroll)/.test(getComputedStyle(parent).overflowY) && parent.scrollHeight > parent.clientHeight) {
+          const row = element.getBoundingClientRect(), box = parent.getBoundingClientRect();
+          if (row.top < box.top || row.bottom > box.bottom) parent.scrollTop += row.top - box.top - parent.clientHeight / 2;
+          break;
+        }
+      }
+    });
+    await item.waitFor();
+    // Locator.click also waits for scrolling/layout stability before dispatching
+    // input. Record that preparation separately from actual click-to-content.
+    await page.evaluate(() => {
+      window.__workbenchPointerAt = null;
+      document.addEventListener('pointerdown', () => { window.__workbenchPointerAt = Date.now(); }, { once: true, capture: true });
+    });
+    const start = Date.now(); await item.click();
+    await page.getByText(`changed ${index}`, { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 3000 });
+    const clickedAt = await page.evaluate(() => window.__workbenchPointerAt);
+    assert.equal(typeof clickedAt, 'number', 'file click did not dispatch a pointer event');
+    actionabilityMs.push(clickedAt - start);
+    return Date.now() - clickedAt;
+  };
+  const firstReads = [];
+  for (let i = 0; i < 5; i++) firstReads.push(await openBulk(i));
+  const cacheClicks = [];
+  for (let n = 0; n < 12; n++) {
+    const index = n % 5, filename = `file-${String(index).padStart(5, '0')}.txt`;
+    const start = Date.now();
+    await page.getByRole('tab', { name: new RegExp(filename.replace('.', '\\.')) }).click();
+    await page.getByText(`changed ${index}`, { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 2000 });
+    cacheClicks.push(Date.now() - start);
+  }
+  report.fileLatency = { coldMs: firstReads, cachedMs: cacheClicks, coldP95Ms: percentile95(firstReads), cachedP95Ms: percentile95(cacheClicks) };
+  assert.ok(report.fileLatency.coldP95Ms <= 3000, JSON.stringify(report.fileLatency));
+  assert.ok(report.fileLatency.cachedP95Ms <= 200, JSON.stringify(report.fileLatency));
+  report.checks.push('actual large-repository file clicks met cold P95 <= 3s and cached P95 <= 200ms');
+  const roster = await backendRequest(join(ui.project, 's.sock'), 'workspace.list', {});
+  const mainId = roster.result.workspaces.find(workspace => workspace.kind === 'live').id;
+  let pressure = true;
+  const producers = Array.from({ length: 3 }, (_, producer) => (async () => {
+    let round = 0;
+    while (pressure) {
+      await backendRequest(join(ui.project, 's.sock'), 'repository.graph', { workspaceId: mainId, repoPath: 'one', historyMode: 'full', maxCommits: 1 + ((producer * 60 + round++) % 200) }, 8000).catch(() => {});
+    }
+  })());
+  const busyReads = [], healthLatencies = [];
+  try {
+    for (let i = 20; i < 25; i++) busyReads.push(await openBulk(i));
+    for (let n = 0; n < 10; n++) {
+      const start = Date.now();
+      const result = await observerClient.invokePluginRpc('workspace-workbench-paseo', 'workspace.workbench.query', { projectConfig: join(ui.project, 'project.json'), method: 'observer.health', params: {} });
+      assert.equal(result.ok, true); healthLatencies.push(Date.now() - start);
+    }
+  } finally { pressure = false; await Promise.allSettled(producers); }
+  report.fileLatency.busyMs = busyReads; report.fileLatency.busyP95Ms = percentile95(busyReads);
+  report.healthRpcP95Ms = percentile95(healthLatencies);
+  assert.ok(report.fileLatency.busyP95Ms <= 3000, JSON.stringify(report.fileLatency));
+  assert.ok(report.healthRpcP95Ms <= 500);
+  await panel();
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await sleep(300);
+  assert.equal(await page.locator('[aria-busy="true"]:visible').count(), 0, 'backgrounded Workbench retained a busy spinner');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  report.checks.push('file clicks met the latency target under three concurrent observation readers; blur cleared busy indicators');
   assert.deepEqual(report.pageErrors,[]);
   report.ok=true;
 } catch(error) {
   report.ok=false;report.error=error.message;
+  if (error.stdout || error.stderr || error.killed) report.commandFailure = { stdout: error.stdout, stderr: error.stderr, code: error.code, signal: error.signal, killed: error.killed };
   if (ui) {
+    report.backendStatusAtFailure = await observerClient?.invokePluginRpc('workspace-workbench-paseo', 'workspace.workbench.backend.status', { projectConfig: join(ui.project, 'project.json') }).catch(() => null);
+    report.clientAtFailure = (await observerClient?.invokePluginRpc('workspace-workbench-paseo', 'workspace.workbench.diagnostics', { limit: 100 }).catch(() => null))?.clientEvents?.filter(event => event.phase.startsWith('file-read-'));
     report.backendAtFailure = (await backendRequest(join(ui.project,'s.sock'), 'observer.health').catch(() => null))?.result;
     const list = (await backendRequest(join(ui.project,'s.sock'), 'workspace.list').catch(() => null))?.result;
     report.versionsAtFailure = (await backendRequest(join(ui.project,'s.sock'), 'observer.versions', { workspaceIds: list?.workspaces?.map(w => w.id) || [] }).catch(() => null))?.result;
@@ -270,6 +378,7 @@ try {
   process.exitCode=1;
 } finally {
   await browser?.close();
+  await observerClient?.close();
   if(ui)writeFileSync(ui.continueFile,'continue\n');
   const code=await Promise.race([exited,sleep(30_000).then(()=> 'timeout')]);
   if(code!==0){report.ok=false;report.lifecycleExit=code;process.exitCode=1;if(code==='timeout')child.kill('SIGTERM');}

@@ -1,7 +1,11 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
-import { join, isAbsolute } from "node:path";
-import { canonical, inside, WorkbenchError, type Json } from "./storage.ts";
+import { setImmediate as yieldTurn } from "node:timers/promises";
+import { countFile, type FileStatistics } from "./file-statistics.ts";
+import { readSingleDiff } from "./file-diff.ts";
+import { gitQueue, gitIntent } from "./git-scheduler.ts";
+export { withBackgroundGit, withInteractiveGit, withMutationGit } from "./git-scheduler.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { canonical, WorkbenchError, type Json } from "./storage.ts";
 import { command } from "./process.ts";
 
 export type GitFile = {
@@ -10,117 +14,33 @@ export type GitFile = {
   oldPath: string | null;
   additions: number | null;
   deletions: number | null;
-  binary: boolean;
+  binary: boolean | null;
+  statisticsState?: "ready" | "deferred" | "unavailable";
 };
-let running = 0;
-const priority = new AsyncLocalStorage<number>();
 let commands = 0, timedOut = 0;
-export const gitDiagnostics = () => ({ running, queued: waiting.length, commands, timedOut });
-export const withBackgroundGit = <T>(operation: () => Promise<T>): Promise<T> => priority.run(1, operation);
-type GitWaiter = {
-  priority: number;
-  resolve: () => void;
-  reject: (error: WorkbenchError) => void;
-  timer?: ReturnType<typeof setTimeout>;
-  signal?: AbortSignal;
-  onAbort?: () => void;
-  settled: boolean;
-};
-const waiting: GitWaiter[] = [];
+export const gitDiagnostics = () => ({ ...gitQueue.health(), commands, timedOut });
 function observationTimeout(): WorkbenchError {
-  return new WorkbenchError(
-    "observation_timeout",
-    "observation deadline exceeded while waiting for a Git slot",
-  );
-}
-function removeWaiter(waiter: GitWaiter): void {
-  const index = waiting.indexOf(waiter);
-  if (index >= 0) waiting.splice(index, 1);
-}
-async function acquireGitSlot(deadline?: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted)
-    throw new WorkbenchError("observer_cancelled", "observation cancelled");
-  if (deadline !== undefined && Date.now() >= deadline)
-    throw observationTimeout();
-  if (running < 4) {
-    running++;
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const waiter: GitWaiter = {
-      priority: priority.getStore() || 0,
-      resolve,
-      reject,
-      signal,
-      settled: false,
-    };
-    const remaining = deadline === undefined ? undefined : deadline - Date.now();
-    if (remaining !== undefined && remaining <= 0) {
-      waiter.settled = true;
-      reject(observationTimeout());
-      return;
-    }
-    waiting.push(waiter);
-    waiting.sort((a, b) => a.priority - b.priority);
-    if (remaining !== undefined)
-      waiter.timer = setTimeout(() => {
-        if (waiter.settled) return;
-        removeWaiter(waiter);
-        waiter.settled = true;
-        waiter.signal?.removeEventListener("abort", waiter.onAbort!);
-        waiter.reject(observationTimeout());
-      }, remaining);
-    const onAbort = () => {
-      if (waiter.settled) return;
-      removeWaiter(waiter);
-      waiter.settled = true;
-      if (waiter.timer) clearTimeout(waiter.timer);
-      waiter.reject(new WorkbenchError("observer_cancelled", "observation cancelled"));
-    };
-    waiter.onAbort = onAbort;
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-function releaseGitSlot(): void {
-  while (waiting.length) {
-    const waiter = waiting.shift()!;
-    if (waiter.settled) continue;
-    waiter.settled = true;
-    if (waiter.timer) clearTimeout(waiter.timer);
-    waiter.signal?.removeEventListener("abort", waiter.onAbort!);
-    waiter.resolve();
-    return;
-  }
-  running--;
-}
-async function gitSlot<T>(operation: () => Promise<T>, deadline?: number, signal?: AbortSignal): Promise<T> {
-  let acquired = false;
-  await acquireGitSlot(deadline, signal);
-  acquired = true;
-  try {
-    if (deadline !== undefined && Date.now() >= deadline)
-      throw observationTimeout();
-    return await operation();
-  } finally {
-    if (acquired) releaseGitSlot();
-  }
+  return new WorkbenchError('observation_timeout', 'observation deadline exceeded', { stage: 'git' });
 }
 export class Git {
   path: string;
   timeout: number;
   deadline?: number;
   signal?: AbortSignal;
+  statistics?: FileStatistics;
+  statisticsComplete?: () => void;
   constructor(path: string, timeout = 3000, deadline?: number, signal?: AbortSignal) {
     this.path = canonical(path);
     this.timeout = timeout;
     this.deadline = deadline;
     this.signal = signal;
   }
-  async run(args: string[], check = true) {
+  async run(args: string[], check = true, output?: { maxBytes: number; truncate?: boolean }) {
     if (this.signal?.aborted) throw new WorkbenchError("observer_cancelled", "Git request cancelled");
     let result;
     try {
-      result = await gitSlot(() =>
+      const scheduling = gitIntent(args);
+      result = await gitQueue.run(() =>
         {
           const remaining = this.deadline === undefined
             ? this.timeout
@@ -129,7 +49,7 @@ export class Git {
           commands++;
           return command(
             "git",
-            ["-c", "core.fsmonitor=false", "-C", this.path, ...args],
+            ["--literal-pathspecs", "-c", "core.fsmonitor=false", "-C", this.path, ...args],
             {
               cwd: this.path,
               timeout: Math.max(1, Math.min(this.timeout, remaining)),
@@ -140,11 +60,14 @@ export class Git {
                 GIT_EXTERNAL_DIFF: "",
               },
               signal: this.signal,
+              ...output,
             },
           );
         },
+        scheduling.intent,
         this.deadline,
         this.signal,
+        scheduling.progress,
       );
       if (this.deadline !== undefined && Date.now() >= this.deadline)
         throw observationTimeout();
@@ -354,12 +277,14 @@ export class Git {
     base?: string | null,
     commit?: string | null,
     ignoreSubmoduleContent = false,
+    namesOnly = false,
+    selectedPaths?: string[],
   ): Promise<GitFile[]> {
     const hasHead = await this.head(),
       range = await this.range(scope, base, commit);
     const diffArgs = scope === "working" && ignoreSubmoduleContent
       ? [...range.args, "--ignore-submodules=dirty"] : range.args;
-    const empty = scope === "working" && !hasHead;
+    const empty = scope === "working" && (!hasHead || selectedPaths?.length === 0);
     const names = empty
       ? []
       : (
@@ -369,10 +294,12 @@ export class Git {
             "--name-status",
             "-z",
             "--find-renames",
+            ...(selectedPaths ? ["--", ...selectedPaths] : []),
           ])
         ).stdout.split("\0");
     const result: GitFile[] = [];
     for (let i = 0; i < names.length; ) {
+      if (i % 512 === 0) await yieldTurn();
       const status = names[i++];
       if (!status) continue;
       let path = names[i++],
@@ -387,15 +314,18 @@ export class Git {
         oldPath,
         additions: null,
         deletions: null,
-        binary: false,
+        binary: namesOnly ? null : false,
+        ...(namesOnly ? { statisticsState: 'deferred' as const } : {}),
       });
     }
-    const stats = empty
+    const byPath = new Map(result.map(file => [file.path, file]));
+    const stats = empty || namesOnly
       ? []
       : (
           await this.run([...diffArgs, "--no-ext-diff", "--numstat", "-z"])
         ).stdout.split("\0");
     for (let i = 0; i < stats.length; ) {
+      if (i % 512 === 0) await yieldTurn();
       const fields = stats[i++].split("\t");
       if (fields.length < 3) continue;
       let path = fields.slice(2).join("\t");
@@ -403,7 +333,7 @@ export class Git {
         i++;
         path = stats[i++];
       }
-      const file = result.find((item) => item.path === path);
+      const file = byPath.get(path);
       if (file)
         Object.assign(file, {
           additions: fields[0] === "-" ? null : Number(fields[0]),
@@ -411,87 +341,23 @@ export class Git {
           binary: fields[0] === "-",
         });
     }
-    if (scope === "working")
-      for (const [status, path] of await this.status())
-        if (status === "??" && !result.some((item) => item.path === path)) {
-          let additions: number | null = null;
-          try {
-            const target = join(this.path, path);
-            if (!inside(target, this.path)) throw new Error("outside");
-            const data = lstatSync(target).isSymbolicLink()
-              ? Buffer.from(readlinkSync(target))
-              : readFileSync(target);
-            const text = new TextDecoder("utf-8", { fatal: true }).decode(data);
-            if (!data.includes(0))
-              additions = text
-                ? text.split("\n").length - (text.endsWith("\n") ? 1 : 0)
-                : 0;
-          } catch {}
-          result.push({
-            path,
-            status: "A",
-            oldPath: null,
-            additions,
-            deletions: 0,
-            binary: additions === null,
-          });
-        }
+    if (scope === "working") {
+      let remaining = 4 * 1024 * 1024;
+      for (const [status, path] of await this.status(ignoreSubmoduleContent)) {
+        if ((status !== "??" && hasHead) || byPath.has(path) || (!hasHead && status[1] === 'D')) continue;
+        if (namesOnly) { result.push({ path, status: 'A', oldPath: null, additions: null, deletions: null, binary: null, statisticsState: 'deferred' }); continue; }
+        const budget = Math.min(remaining, 1048576);
+        const stats = this.statistics
+          ? await this.statistics.read(join(this.path, path), this.path, budget, this.signal, this.statisticsComplete, this.deadline)
+          : await countFile(join(this.path, path), this.path, budget, this.signal, this.deadline);
+        remaining = Math.max(0, remaining - stats.bytes);
+        result.push({ path, status: 'A', oldPath: null, additions: stats.additions, deletions: 0, binary: stats.binary, statisticsState: stats.statisticsState });
+      }
+    }
     return result;
   }
-  async diff(
-    scope: string,
-    path: string,
-    base?: string | null,
-    commit?: string | null,
-  ) {
-    if (isAbsolute(path) || path.split("/").includes(".."))
-      throw new WorkbenchError("path_invalid", "diff path must be relative");
-    const file = (await this.files(scope, base, commit)).find(
-      (item) => item.path === path,
-    );
-    if (!file)
-      throw new WorkbenchError(
-        "file_not_changed",
-        "file is not in selected changes",
-      );
-    const range = await this.range(scope, base, commit);
-    const untracked =
-      scope === "working" &&
-      (!(await this.head()) ||
-        (await this.status()).some(
-          ([code, name]) => code === "??" && name === path,
-        ));
-    if (untracked && !inside(join(this.path, path), this.path))
-      throw new WorkbenchError(
-        "path_invalid",
-        "untracked file points outside repository",
-      );
-    const args = untracked
-      ? [
-          "diff",
-          "--no-ext-diff",
-          "--no-index",
-          "--unified=80",
-          "--",
-          "/dev/null",
-          path,
-        ]
-      : [
-          ...range.args,
-          "--no-ext-diff",
-          "--unified=80",
-          "--",
-          ...(file.oldPath ? [file.oldPath] : []),
-          path,
-        ];
-    const result = await this.run(args, false);
-    if (result.code !== 0 && !(untracked && result.code === 1))
-      throw new WorkbenchError("git_diff_failed", result.stderr);
-    return {
-      patch: result.stdout,
-      left: untracked ? null : range.left,
-      right: range.right,
-    };
+  async diff(scope: string, path: string, base?: string | null, commit?: string | null, options?: { oldPath?: string | null; maxBytes?: number }) {
+    return readSingleDiff(this, scope, path, base, commit, options);
   }
   async graph(mode: string, base: string | null, limit: number) {
     const head = await this.head();
@@ -508,7 +374,7 @@ export class Git {
       throw new WorkbenchError("history_mode_invalid", "invalid history mode");
     if (mode === "branch" && !base)
       throw new WorkbenchError("base_missing", "base is required");
-    const safeBase = base ? await this.commit(base) : null;
+    const safeBase = base ? /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(base) ? base : await this.commit(base) : null;
     const lines = (
       await this.text([
         "log",
@@ -516,7 +382,7 @@ export class Git {
         "--date-order",
         `--max-count=${limit + 1}`,
         "--pretty=format:%H%x00%P%x00%h%x00%s%x00%an%x00%aI",
-        ...(mode === "branch" ? [`${safeBase}..${head}`] : []),
+        ...(mode === "branch" ? [`${safeBase}..${head}`] : [head]),
       ])
     )
       .split("\n")
@@ -550,7 +416,7 @@ export class Git {
         authoredAt: "",
         isBase: true,
       });
-    const refs = (await this.refs(head)).filter((ref) =>
+    const refs = (await this.refs()).filter((ref) =>
       nodes.some((node) => node.sha === ref.sha),
     );
     const branch = await this.branch(),

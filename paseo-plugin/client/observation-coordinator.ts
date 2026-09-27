@@ -3,6 +3,7 @@ import type { ObserverResponse } from '../shared/observer.ts';
 import { shouldRefreshVersionedQuery, versionDelta, type Versions } from './version-invalidation.ts';
 
 export type ObservationMeta = {
+  readTask?: { state: string; nextPollMs: number; deadline: number };
   state?: string; validationKey?: string; validationToken?: string;
   validationDependencies?: Record<string, string>; immutableIdentity?: string;
   refreshing?: boolean; cacheState?: string; validatedAt?: string; observedAt?: string;
@@ -35,6 +36,7 @@ export type Clock = { now(): number; set(fn: () => void, ms: number): unknown; c
 const clock: Clock = { now: Date.now, set: (fn, ms) => setTimeout(fn, ms), clear: timer => clearTimeout(timer as ReturnType<typeof setTimeout>) };
 type Task = { due: number; reason: string };
 type Entry = { active: boolean; lastUsed: number; seen?: ObserverResponse; seenError?: unknown; failures: number; followToken: string; follows: number; lastAttempt: number; task?: Task; running: boolean; pending?: Task; waiters: Set<() => void> };
+const terminalRead = (q: QueryView) => (q.data?.error?.details as { terminal?: boolean } | undefined)?.terminal === true;
 const durable = new Set(['path_invalid', 'file_not_changed', 'worktree_missing', 'repository_missing', 'commit_missing', 'base_missing', 'workspace_not_found']);
 
 /** Owns refresh decisions, not payloads. QueryClient remains the single data cache. */
@@ -100,13 +102,17 @@ export class ObservationCoordinator {
           e.seen = q.data; e.seenError = q.error;
           if (q.error || q.data?.ok === false || q.data?.ok && meta.state && meta.state !== 'ready') {
             e.failures++;
-            if (!durable.has(q.data?.error?.code || '')) this.enqueue(e, policy.retryMs[Math.min(e.failures - 1, 3)], 'retry');
+            if (!terminalRead(q) && !durable.has(q.data?.error?.code || '')) this.enqueue(e, policy.retryMs[Math.min(e.failures - 1, 3)], 'retry');
           } else if (q.data?.ok) {
             e.failures = 0;
             if (!meta.refreshing && meta.cacheState !== 'refreshing') {
               if (e.task?.reason === 'follow-up' || e.task?.reason === 'retry') e.task = undefined;
             }
           }
+        }
+        if (meta.readTask) {
+          if (!q.fetching && !e.running && !e.task) this.enqueue(e, meta.readTask.nextPollMs, 'read-task');
+          continue;
         }
         const refreshing = meta.refreshing || meta.cacheState === 'refreshing';
         if (refreshing) {
@@ -121,7 +127,7 @@ export class ObservationCoordinator {
           if (state === 'unknown' && (!this.versioned || !Object.keys(dependencies(meta)).length) && now - Math.max(q.updatedAt, e.lastAttempt) >= policy.legacyReadMs) this.enqueue(e, 0, 'legacy-activation');
           if (this.versioned && !meta.immutableIdentity && (now - this.validatedAt >= policy.pollMs || state === 'unknown' && Object.keys(dependencies(meta)).length > 0)) this.pollAt = Math.min(this.pollAt, now);
         }
-        if (activated && !q.eventOnly && (q.error || q.data?.ok === false) && !durable.has(q.data?.error?.code || '') && !e.task)
+        if (activated && !terminalRead(q) && !q.eventOnly && (q.error || q.data?.ok === false) && !durable.has(q.data?.error?.code || '') && !e.task)
           this.enqueue(e, 0, 'retry');
         if (activated && !q.eventOnly && !q.data && !q.fetching && !q.error) this.enqueue(e, 0, 'initial');
       }
@@ -188,7 +194,9 @@ export class ObservationCoordinator {
         this.changed();
       });
     }
-    this.arm();
+    // QueryObserver can finish its initial read before our queued activation
+    // runs. Reconcile the returned pending state after dropping that duplicate.
+    this.changed();
   }
   private async poll() {
     this.pollRunning = true; this.pollAt = Infinity;
@@ -211,6 +219,7 @@ export class ObservationCoordinator {
         const e = this.entries.get(q.id);
         if (!q.active || !e) continue;
         const meta = observationMeta(q.data), state = validation(q.data, value);
+        if (meta.readTask || terminalRead(q)) continue;
         if (restarted && !meta.immutableIdentity) { this.enqueue(e, 0, 'backend-generation'); continue; }
         if (q.data?.ok && state === 'same') {
           if (!meta.refreshing && meta.cacheState !== 'refreshing' && meta.state === 'ready') q.validate(new Date(now).toISOString());
@@ -232,6 +241,10 @@ export class ObservationCoordinator {
       }
       this.changed();
     }
+  }
+  debug() {
+    return { enabled: this.enabled, subscribers: this.subscriptions.size, timer: this.timer !== undefined, pollRunning: this.pollRunning,
+      queries: this.host.queries().filter(q => q.active).slice(0, 12).map(q => ({ kind: q.key[1] === 'file-review' ? 'file-review' : q.key[2], active: q.active, fetching: q.fetching, readTask: !!observationMeta(q.data).readTask, scheduled: this.entries.get(q.id)?.task?.reason, running: this.entries.get(q.id)?.running })) };
   }
   close() { this.closed = true; this.generation++; if (this.timer !== undefined) this.time.clear(this.timer); this.subscriptions.clear(); for (const e of this.entries.values()) for (const done of e.waiters) done(); this.entries.clear(); }
 }

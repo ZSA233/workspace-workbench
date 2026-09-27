@@ -334,6 +334,7 @@ export const SectionAllocationContext = createContext<{
 } | null>(null);
 
 export function SectionViewport({
+  windowed = false,
   onScroll,
   id,
   layout,
@@ -345,6 +346,7 @@ export function SectionViewport({
   styles,
   children,
 }: {
+  windowed?: boolean;
   onScroll?: ScrollViewProps["onScroll"];
   id: ObserverSectionId;
   layout: SectionLayoutPreference;
@@ -377,14 +379,14 @@ export function SectionViewport({
   useEffect(() => () => { if (active.current) latest.current?.cancel(); }, []);
   const dragging = Boolean(allocation?.dragging);
   const viewportStyle = { maxHeight: sectionAutoMaxHeight(id, availableHeight, id === "changes"), minHeight: MIN_SECTION_HEIGHT };
-  const boundedStyle = allocation ? allocation.outerScroll ? { maxHeight: undefined, minHeight: 0 } : { height: allocation.sizes[id], minHeight: 0, maxHeight: allocation.sizes[id] } : viewportStyle;
+  const boundedStyle = allocation ? allocation.outerScroll ? windowed ? viewportStyle : { maxHeight: undefined, minHeight: 0 } : { height: allocation.sizes[id], minHeight: 0, maxHeight: allocation.sizes[id] } : viewportStyle;
   return (
     <View style={[styles.sectionViewportFrame, !resizable && { minHeight: MIN_SECTION_HEIGHT }]}>
       <ScrollView
         onScroll={onScroll}
         scrollEventThrottle={32}
         nestedScrollEnabled
-        scrollEnabled={!dragging && !allocation?.outerScroll}
+        scrollEnabled={!dragging && (!allocation?.outerScroll || windowed)}
         onContentSizeChange={(_, height) => { setContentHeight(height); allocation?.measureContent?.(id, height + (resizable ? 6 : 0)); }}
         onLayout={(event) => {
           const height = event.nativeEvent.layout.height;

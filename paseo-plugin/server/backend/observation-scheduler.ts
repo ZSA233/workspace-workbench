@@ -1,10 +1,11 @@
 import { OBSERVATION_POLICY } from '../../shared/observation-policy.ts';
 import { randomUUID } from 'node:crypto';
-import { accessSync, constants, existsSync } from 'node:fs';
+import { constants } from 'node:fs';
+import { access } from 'node:fs/promises';
 import { resolve, join, relative } from 'node:path';
 import * as watcher from '@parcel/watcher';
 import { Git, withBackgroundGit } from './git.ts';
-import { canonical, WorkbenchError } from './storage.ts';
+import { canonicalAsync, WorkbenchError } from './storage.ts';
 
 type Subscription = { unsubscribe(): Promise<void> };
 type Watch = { users: Set<Repo>; promise: Promise<Subscription | null>; close?: () => void };
@@ -37,8 +38,9 @@ export class ObservationScheduler {
       degradedMs: 30_000, debounceMs: 300, maxWaitMs: 1_000, subscribeMs: 5_000, retentionMs: 300_000, ...options };
     this.timer = setInterval(() => this.tick(), 1_000); this.timer.unref();
   }
-  register(workspace: string, path: string, refresh?: () => Promise<unknown>) {
-    path = canonical(path);
+  async register(workspace: string, path: string, refresh?: () => Promise<unknown>) {
+    path = await canonicalAsync(path);
+    if (this.closed) return;
     let repo = this.repos.get(path);
     if (!repo) {
       repo = { path, working: 0, refs: 0, lease: 0, verified: Date.now(), issue: null,
@@ -77,7 +79,7 @@ export class ObservationScheduler {
       }) };
   }
   token(path: string, scope: 'working' | 'refs' = 'working') {
-    const r = this.repos.get(path) || this.repos.get(canonical(path));
+    const r = this.repos.get(path) || this.repos.get(resolve(path));
     return `${this.instanceId}:${r?.refs || 0}:${scope === 'working' ? r?.working || 0 : ''}`;
   }
   workspaceToken(id: string) { return [...(this.workspaces.get(id) || [])].map(path => this.token(path)).join(':'); }
@@ -103,21 +105,19 @@ export class ObservationScheduler {
     if (this.closed) return Promise.resolve();
     const promise = (async () => {
       try {
-        if (!existsSync(repo.path))
-          throw new WorkbenchError('repository_missing', 'Repository directory does not exist');
-        try { accessSync(repo.path, constants.R_OK | constants.X_OK); }
-        catch { throw new WorkbenchError('repository_access_denied', 'Repository directory is not accessible'); }
-        const git = new Git(repo.path, 3_000, Date.now() + 10_000);
+        try { await access(repo.path, constants.R_OK | constants.X_OK); }
+        catch (error) { throw new WorkbenchError((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'repository_missing' : 'repository_access_denied', 'Repository directory is not accessible'); }
+        const git = new Git(repo.path, 3_000, Date.now() + 10_000, undefined, true);
         if (await git.root() !== repo.path)
           throw new WorkbenchError('repository_root_mismatch', 'Observation requires an exact Git worktree root');
-        const gitDir = canonical(await git.text(['rev-parse', '--absolute-git-dir']));
-        const commonDir = resolve(repo.path, await git.text(['rev-parse', '--git-common-dir']));
+        const gitDir = await canonicalAsync(await git.text(['rev-parse', '--absolute-git-dir']));
+        const commonDir = await canonicalAsync(resolve(repo.path, await git.text(['rev-parse', '--git-common-dir'])));
         const tracked = (await git.text(['ls-files', '-z'])).split('\0').filter(Boolean);
         const ignored = (await git.text(['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']))
           .split('\0').filter(p => p.endsWith('/') && !tracked.some(t => t.startsWith(p))).map(p => resolve(repo.path, p));
         await this.watch(repo, repo.path, [join(repo.path, '.git'), ...ignored], false);
         await this.watch(repo, gitDir, [join(gitDir, 'objects')], true);
-        if (canonical(commonDir) !== gitDir) await this.watch(repo, canonical(commonDir), [join(commonDir, 'objects'), join(commonDir, 'worktrees')], true);
+        if (commonDir !== gitDir) await this.watch(repo, commonDir, [join(commonDir, 'objects'), join(commonDir, 'worktrees')], true);
         if (this.closed) return;
         repo.issue = null; repo.failures = 0; repo.retryAt = 0; repo.working++; repo.refs++; this.revision++;
       } catch (error) {

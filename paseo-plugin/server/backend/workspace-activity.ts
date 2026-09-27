@@ -1,7 +1,8 @@
 import { join, resolve } from "node:path";
 import { Git, withBackgroundGit } from "./git.ts";
 import type { Config } from "./config.ts";
-import { atomicJson, hash, now, optionalJson, type Json } from "./storage.ts";
+import { canonicalAsync, hash, now, optionalJson, type Json } from "./storage.ts";
+import { DerivedJsonWriter } from './derived-json.ts';
 
 const CACHE_TTL_MS = 30 * 60_000;
 const FAILURE_RETRY_MS = 5 * 60_000;
@@ -44,10 +45,12 @@ export class WorkspaceActivityIndex {
   private scans = new Map<string, Scan>();
   private cancelledScanIds = new Set<string>();
   private activeScanId: string | null = null;
+  private writer: DerivedJsonWriter;
 
   constructor(config: Config) {
     this.config = config;
     this.path = join(config.stateRoot, "workspace-activity.json");
+    this.writer = new DerivedJsonWriter(this.path);
     try {
       const saved = optionalJson(this.path);
       if (saved.version === 1 && saved.repositories && typeof saved.repositories === "object") {
@@ -185,6 +188,7 @@ export class WorkspaceActivityIndex {
     for (const scan of this.scans.values()) this.cancel(scan.id);
     await Promise.allSettled([...this.scans.values()].map((scan) => scan.promise).filter((promise): promise is Promise<void> => Boolean(promise)));
     this.persist();
+    await this.writer.flush();
   }
 
   private async run(scan: Scan, targets: RepositoryTarget[]): Promise<void> {
@@ -194,7 +198,8 @@ export class WorkspaceActivityIndex {
         const attemptedAt = now();
         try {
           const timeout = Math.min(this.config.gitTimeout, this.config.foregroundGitTimeout || this.config.gitTimeout);
-          const result = await withBackgroundGit(() => new Git(target.path, timeout, undefined, scan.controller.signal)
+          const path = await canonicalAsync(target.path);
+          const result = await withBackgroundGit(() => new Git(path, timeout, undefined, scan.controller.signal, true)
             .run(["show", "-s", "--format=%H%x00%cI", "HEAD"], false));
           if (scan.controller.signal.aborted) break;
           const [head, latestCommitAt] = result.stdout.trim().split("\0");
@@ -252,7 +257,7 @@ export class WorkspaceActivityIndex {
   private persist(): void {
     this.trim();
     try {
-      atomicJson(this.path, { version: 1, repositories: Object.fromEntries(this.repositories) } satisfies ActivityFile);
+      this.writer.save({ version: 1, repositories: Object.fromEntries(this.repositories) } satisfies ActivityFile);
     } catch {
       // The index is a performance hint; a disk failure must not fail observation.
     }

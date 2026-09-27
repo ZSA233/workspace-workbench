@@ -7,7 +7,7 @@ class SnapshotGit extends Git {
   private reads = new Map<string, ReturnType<Git['run']>>();
   readonly trace: Json[];
   phase = 'critical';
-  constructor(path: string, timeout: number, deadline: number, signal: AbortSignal | undefined, trace: Json[]) { super(path, timeout, deadline, signal); this.trace = trace; }
+  constructor(path: string, timeout: number, deadline: number, signal: AbortSignal | undefined, trace: Json[]) { super(path, timeout, deadline, signal, true); this.trace = trace; }
   override run(args: string[], check = true, output?: { maxBytes: number; truncate?: boolean }) {
     const key = stable({ args, check, output });
     const existing = this.reads.get(key);
@@ -44,9 +44,7 @@ export class RepositoryRefresh {
   private statistics = new Map<string, { abort: AbortController; promise: Promise<void> }>();
   constructor(observation: Observation) { this.observation = observation; }
   private context(params: Json) {
-    const workspace = this.observation.workspaces.get(String(params.workspaceId || ''));
-    const repo = this.observation.workspaces.repository(workspace, params.repoPath || params.repositoryId || '');
-    return { workspace, repo, path: repo.worktreePath || repo.sourcePath };
+    return this.observation.workspaces.observationRecords.request('context', { workspaceId: String(params.workspaceId || ''), repository: params.repoPath || params.repositoryId || '' }, params.prefetch === true);
   }
   key(method: string, workspace: Json, params: Json) {
     const options = method === 'repository.graph' ? { historyMode: params.historyMode || (workspace.kind === 'live' ? 'full' : 'branch'), maxCommits: Number(params.maxCommits) || 50 }
@@ -56,7 +54,7 @@ export class RepositoryRefresh {
   retained(workspace: Json, repo: Json) { return this.observation.cache.retained(this.key('repository.summary', workspace, { repoPath: repo.repoPath }))?.repository; }
 
   private async cycle(params: Json, signal?: AbortSignal, deadline = Date.now() + 30_000) {
-    const { workspace, repo, path } = this.context(params);
+    const { workspace, repo, path } = await this.context(params);
     const cacheEpoch = this.observation.cache.epoch;
     const trace: Json[] = [];
     const git = new SnapshotGit(path, this.observation.workspaces.config.gitTimeout, deadline, signal, trace);
@@ -99,7 +97,7 @@ export class RepositoryRefresh {
     return { workspace, repo, path, trace, produce, token, refsToken, cacheEpoch, statistics: async (signal: AbortSignal) => { git.signal = signal; git.phase = 'statistics'; return produce('changes', false); } };
   }
   async query(method: string, params: Json, signal?: AbortSignal): Promise<Json> {
-    const { workspace, repo, path } = this.context(params);
+    const { workspace, repo, path } = await this.context(params);
     const area = method.slice('repository.'.length);
     const scope = area === 'graph' || area === 'summary' || (params.scope || 'branch') === 'working' ? 'working' : 'refs';
     const fingerprint = this.observation.scheduler.token(path, scope) + stable(repo);
@@ -127,7 +125,8 @@ export class RepositoryRefresh {
     if (params.action === 'release') return tasks.release(String(params.taskId || ''), requestId);
     if (params.action && params.action !== 'start') throw new WorkbenchError('request_invalid', 'Unknown refresh action');
     if (Number.isFinite(params.readDeadline) && Date.now() >= params.readDeadline) throw new WorkbenchError('observer_timeout', 'Refresh request expired before acceptance');
-    const { workspace, repo, path } = this.context(params);
+    const { workspace, repo, path } = await this.context(params);
+    if (Number.isFinite(params.readDeadline) && Date.now() >= params.readDeadline) throw new WorkbenchError('observer_timeout', 'Refresh request expired while reading metadata');
     const identity = stable({ workspaceId: workspace.id, path, historyMode: params.historyMode || null, maxCommits: params.maxCommits || 50, scope: params.scope || 'working', commitSha: params.commitSha || null });
     // Concurrent clicks use the same identity while a generation is unfinished.
     const key = `refresh:${identity}:${this.observation.scheduler.token(path)}${params.force ? `:manual:${requestId}` : ''}`;

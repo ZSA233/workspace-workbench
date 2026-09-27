@@ -286,20 +286,20 @@ export class Observation {
     return { ...result, observedAt: now(), durationMs: Date.now() - started };
   }
   async list(params: Json, signal?: AbortSignal) {
-    const orphanScan = await this.workspaces.orphanSnapshot(params.force === true, 250, signal),
+    const metadata = await this.workspaces.observationRecords.request('roster', { force: params.force === true });
+    const orphanScan = metadata.orphanScan,
       orphanCandidates = orphanScan.candidates,
       orphanIds = new Set(orphanCandidates.map((candidate: Json) => candidate.id)),
       c = this.workspaces.config,
-      workspaces = this.workspaces
-        .list()
-        .filter((w) => (params.includeRemoved || w.state !== "removed") &&
+      workspaces = metadata.workspaces
+        .filter((w: Json) => (params.includeRemoved || w.state !== "removed") &&
           !(orphanIds.has(w.id) && ["record_invalid", "adopting", "adopt_failed"].includes(w.state)));
-    const discovered = await this.workspaces.discoverySnapshot(false, 0, signal);
+    const discovered = metadata.discovered;
     if (signal?.aborted) throw new WorkbenchError("observer_cancelled", "observation cancelled");
     return {
       schemaVersion: protocol,
       project: { id: c.projectId, displayName: c.displayName },
-      workspaces: workspaces.map((w) => this.summary(w, [], true)),
+      workspaces: workspaces.map((w: Json) => this.summary(w, [], true)),
       orphanCandidates,
       capabilities: this.workspaces.capabilities(),
       discoveredCandidates: discovered.repositories,
@@ -321,7 +321,7 @@ export class Observation {
       },
     };
   }
-  activityRequest(params: Json): Json {
+  async activityRequest(params: Json): Promise<Json> {
     const action = String(params.action || "status"),
       scanId = String(params.scanId || "");
     if (action === "status") return this.activity.status(scanId);
@@ -331,7 +331,7 @@ export class Observation {
       ? [...new Set(params.workspaceIds.slice(0, 500).filter((value: unknown): value is string => typeof value === "string" && value.length <= 256))]
       : [];
     const requestedIds = new Set(requested),
-      workspaces = this.workspaces.list().filter((workspace) => requestedIds.has(workspace.id));
+      workspaces = (await this.workspaces.observationRecords.request('list')).filter((workspace: Json) => requestedIds.has(workspace.id));
     return this.activity.start(scanId, workspaces);
   }
   async close(): Promise<void> {
@@ -365,7 +365,7 @@ export class Observation {
   }
   async detail(params: Json, signal?: AbortSignal) {
     const workspaceId = String(params.workspaceId || "");
-    const baseWorkspace = this.workspaces.get(workspaceId);
+    const baseWorkspace = await this.workspaces.observationRecords.request('get', { workspaceId });
     if (params.mode === 'roster') {
       const supplement = this.linkedSupplement(baseWorkspace);
       const workspace = supplement?.workspace || baseWorkspace;
@@ -461,7 +461,7 @@ export class Observation {
     if (action === 'status') return this.diffTasks.status(String(params.taskId || ''), requestId);
     if (action === 'release') return this.diffTasks.release(String(params.taskId || ''), requestId);
     if (action !== 'start') throw new WorkbenchError('request_invalid', 'Unsupported diff action');
-    const context = this.diffContent.identify(params);
+    const context = await this.diffContent.identify(params);
     const stat = context.immutable ? null : await lstat(join(context.path, params.path)).catch(() => null);
     if (Number.isFinite(params.readDeadline) && Date.now() >= params.readDeadline) throw new WorkbenchError('observer_timeout', 'Diff start request expired before acceptance');
     const sourceKey = `${context.taskKey}:${stat?.ino}:${stat?.mtimeMs}:${stat?.size}`;

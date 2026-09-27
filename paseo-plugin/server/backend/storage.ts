@@ -13,6 +13,14 @@ import {
 } from "node:fs";
 import { dirname, resolve, relative, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
+import { realpath } from 'node:fs/promises';
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const canonicalSnapshot = new AsyncLocalStorage<Map<string, string>>();
+/** Scoped to one read-only metadata operation; never reused for a mutation. */
+export function withCanonicalSnapshot<T>(work: () => T): T {
+  return canonicalSnapshot.run(new Map(), work);
+}
 
 export type Json = Record<string, any>;
 export class WorkbenchError extends Error {
@@ -45,11 +53,17 @@ export function canonical(path: string): string {
       : path.startsWith("~/")
         ? join(homedir(), path.slice(2))
         : resolve(path);
-  if (existsSync(expanded)) return realpathSync(expanded);
+  const snapshot = canonicalSnapshot.getStore();
+  const cached = snapshot?.get(expanded);
+  if (cached !== undefined) return cached;
+  if (existsSync(expanded)) {
+    const value = realpathSync(expanded); snapshot?.set(expanded, value); return value;
+  }
   const parent = dirname(expanded);
-  return parent === expanded
+  const value = parent === expanded
     ? expanded
     : join(canonical(parent), relative(parent, expanded));
+  snapshot?.set(expanded, value); return value;
 }
 export function inside(path: string, root: string, allowRoot = false): boolean {
   const part = relative(canonical(root), canonical(path));
@@ -59,6 +73,15 @@ export function inside(path: string, root: string, allowRoot = false): boolean {
     !part.startsWith("../") &&
     !isAbsolute(part)
   );
+}
+export async function canonicalAsync(path: string): Promise<string> {
+  const expanded = path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : resolve(path);
+  try { return await realpath(expanded); }
+  catch (error) {
+    if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code || '')) throw error;
+    const parent = dirname(expanded);
+    return parent === expanded ? expanded : join(await canonicalAsync(parent), relative(parent, expanded));
+  }
 }
 export function readJson(path: string): Json {
   return JSON.parse(readFileSync(path, "utf8"));

@@ -31,7 +31,7 @@ export class Service {
   startedAt = Date.now();
   eventLoop = new EventLoopMetrics();
   version: string;
-  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts"]);
+  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts"]);
   constructor(config: Config, version = "0.1.3") {
     this.config = config;
     this.version = version;
@@ -58,6 +58,7 @@ export class Service {
       generation: this.observation.diffTasks.generation,
       eventLoop: this.eventLoop.snapshot(),
       git: gitDiagnostics(),
+      recordReads: this.workspaces.observationRecords.health(),
       diffRead: this.observation.diffTasks.health(),
       refreshProtocol: 1,
       fileStatistics: this.observation.statistics.health(),
@@ -90,6 +91,7 @@ export class Service {
           return await this.mutate(method, params);
         } finally {
           this.workspaces.invalidateOrphanScan();
+          this.workspaces.observationRecords.invalidate();
           this.cache.clear();
           this.observation.scheduler.force();
           this.observation.scheduler.rosterChanged();
@@ -109,9 +111,7 @@ export class Service {
       case "workspace.detail":
         return this.observation.detail(params, signal);
       case "workspace.identify":
-        return this.workspaces.identify(
-          String(params.directory || this.config.sourceRoot),
-        );
+        return this.workspaces.observationRecords.request('identify', { directory: String(params.directory || this.config.sourceRoot) });
       case "workspace.operation.status":
         return this.workspaces.operationStatus(String(params.operationId || ""));
       case "main.repositories.list":
@@ -159,7 +159,7 @@ export class Service {
         };
       }
       case "workspace.reviewRuntime": {
-        const w = this.workspaces.get(String(params.workspaceId || ""));
+        const w = await this.workspaces.observationRecords.request('get', { workspaceId: String(params.workspaceId || '') });
         if (w.state !== "active")
           throw new WorkbenchError("workspace_state_invalid", "workspace is not active");
         const repositories = [], issues = [];
@@ -275,6 +275,7 @@ export class Service {
   }
   async close() {
     this.eventLoop.close();
+    await this.workspaces.observationRecords.close();
     await this.observation.refresh.close();
     await this.observation.diffTasks.close();
     await this.observation.statistics.close();

@@ -15,6 +15,7 @@ import { discover, type Config, type Repository, repositoryPath } from "./config
 import { Git } from "./git.ts";
 import { childPath, indexGitlinks, commitGitlinks, linkedCandidates, type Gitlink } from "./gitlinks.ts";
 import { orphanCandidates, orphanPreview } from "./orphans.ts";
+import { ObservationRecords } from './observation-records.ts';
 import {
   atomicJson,
   canonical,
@@ -107,6 +108,7 @@ type DiscoveryScanSnapshot = {
 
 export class Workspaces {
   config: Config;
+  readonly observationRecords = new ObservationRecords(() => this.config, () => this.onOrphanScanChanged?.());
   readonly mutations = new SerialQueue();
   onOrphanScanChanged?: () => void;
   onDiscoveryChanged?: () => void;

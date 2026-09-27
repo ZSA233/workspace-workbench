@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { type Config } from "./config.ts";
-import { atomicJson, issue, optionalJson, stable, WorkbenchError, type Json } from "./storage.ts";
+import { issue, optionalJson, stable, WorkbenchError, type Json } from "./storage.ts";
+import { writeDerivedJson } from './derived-json.ts';
 
 /** Transport budget and refresh intent cannot change the identity of content. */
 export function observationCacheIdentity(params: Json): string {
@@ -305,7 +306,7 @@ export class ObservationCache {
     this.generation++;
     while (this.flights.size || this.background.size)
       await Promise.allSettled([...this.flights.values(), ...this.background]);
-    atomicJson(this.path, { version: 1, entries: [...this.entries] });
+    await writeDerivedJson(this.path, { version: 1, entries: [...this.entries] });
     this.entries.clear();
     this.failures.clear();
     this.probes.clear();

@@ -5,7 +5,7 @@ import { gitQueue, gitIntent } from "./git-scheduler.ts";
 export { withBackgroundGit, withInteractiveGit, withMutationGit } from "./git-scheduler.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { canonical, WorkbenchError, type Json } from "./storage.ts";
+import { canonical, canonicalAsync, WorkbenchError, type Json } from "./storage.ts";
 import { command } from "./process.ts";
 
 export type GitFile = {
@@ -29,8 +29,8 @@ export class Git {
   signal?: AbortSignal;
   statistics?: FileStatistics;
   statisticsComplete?: () => void;
-  constructor(path: string, timeout = 3000, deadline?: number, signal?: AbortSignal) {
-    this.path = canonical(path);
+  constructor(path: string, timeout = 3000, deadline?: number, signal?: AbortSignal, canonicalized = false) {
+    this.path = canonicalized ? path : canonical(path);
     this.timeout = timeout;
     this.deadline = deadline;
     this.signal = signal;
@@ -108,7 +108,7 @@ export class Git {
     );
   }
   async root() {
-    return canonical(await this.text(["rev-parse", "--show-toplevel"]));
+    return canonicalAsync(await this.text(["rev-parse", "--show-toplevel"]));
   }
   async head() {
     const r = await this.run(["rev-parse", "--verify", "HEAD"], false);

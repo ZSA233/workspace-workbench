@@ -21,7 +21,7 @@ export async function buildArchive(base = root, outputDir = join(base, "dist")) 
   const archive = join(resolve(outputDir), `workspace-workbench-paseo-${version}.tar.gz`);
   execFileSync("tar", ["-czf", archive, "-C", join(base, "paseo-plugin"), ...entries], { stdio: "inherit" });
   const contents = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).split("\n");
-  for (const required of ["mcp.mjs", "mcp-gateway.mjs", "shared/request-scheduler.mjs", "server/paseo-endpoint.mjs", "package.json"]) {
+  for (const required of ["mcp.mjs", "mcp-gateway.mjs", "shared/request-scheduler.mjs", "server/paseo-endpoint.mjs", "server/backend/observation-records-worker.ts", "server/backend/observation-records.ts", "server/backend/derived-json.ts", "package.json"]) {
     if (!contents.includes(required)) throw new Error(`release archive missing runtime entry: ${required}`);
   }
   return archive;

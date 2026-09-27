@@ -2,7 +2,7 @@ import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Git, withBackgroundGit } from './git.ts';
 import { validateDiffPath } from './file-diff.ts';
-import { canonical, stable, WorkbenchError, type Json } from './storage.ts';
+import { stable, WorkbenchError, type Json } from './storage.ts';
 import type { Workspaces } from './workspaces.ts';
 import type { ObservationCache } from './cache.ts';
 import type { ObservationScheduler } from './observation-scheduler.ts';
@@ -12,14 +12,12 @@ export class DiffContent {
   private cache: ObservationCache;
   private scheduler: ObservationScheduler;
   constructor(workspaces: Workspaces, cache: ObservationCache, scheduler: ObservationScheduler) { this.workspaces = workspaces; this.cache = cache; this.scheduler = scheduler; }
-  identify(params: Json) {
+  async identify(params: Json) {
     if (typeof params.path !== 'string' || !params.path) throw new WorkbenchError('path_required', 'Diff path is required');
     validateDiffPath(params.path);
     if (params.oldPath != null && typeof params.oldPath !== 'string') throw new WorkbenchError('path_invalid', 'Previous path must be a string');
     if (params.oldPath) validateDiffPath(params.oldPath);
-    const workspace = this.workspaces.get(String(params.workspaceId || ''));
-    const repo = this.workspaces.repository(workspace, params.repoPath || params.repositoryId || '');
-    const path = canonical(repo.worktreePath || repo.sourcePath);
+    const { workspace, repo, path } = await this.workspaces.observationRecords.request('context', { workspaceId: String(params.workspaceId || ''), repository: params.repoPath || params.repositoryId || '' });
     const scope = String(params.scope || 'branch');
     if (scope === 'commit' && (typeof params.commitSha !== 'string' || !params.commitSha)) throw new WorkbenchError('commit_required', 'Commit is required');
     if (!['working', 'branch', 'commit'].includes(scope)) throw new WorkbenchError('scope_invalid', 'Unsupported diff scope');
@@ -29,13 +27,13 @@ export class DiffContent {
     return { workspace, repo, path, scope, token, immutable, identity, key: `diff-content:${identity}`, taskKey: `${identity}:${immutable ? '' : token}` };
   }
   async read(params: Json, deadline: number, signal?: AbortSignal): Promise<Json> {
-    const context = this.identify(params);
+    const context = await this.identify(params);
     const { workspace, repo, path, scope, token, immutable, key } = context;
     const file = immutable ? null : await lstat(join(path, params.path)).catch(() => null);
     const fingerprint = immutable ? context.identity : `${token}:${file?.ino}:${file?.mtimeMs}:${file?.size}`;
     const cached = this.cache.peek(key, fingerprint);
     if (cached) return { ...cached, cacheHit: true };
-    const git = new Git(path, this.workspaces.config.gitTimeout, deadline, signal);
+    const git = new Git(path, this.workspaces.config.gitTimeout, deadline, signal, true);
     if (await git.root() !== path) throw new WorkbenchError('repository_root_mismatch', 'Expected the recorded worktree root');
     const base = scope === 'branch' ? repo.baseSha || (await git.upstream())[1] : null;
     const value = await this.cache.read(key, fingerprint, async () => {

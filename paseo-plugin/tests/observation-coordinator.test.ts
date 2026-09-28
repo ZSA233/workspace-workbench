@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ObservationCoordinator, validation, type Clock, type QueryView } from '../client/observation-coordinator.ts';
+import { createObservationCoordinator, validation, type Clock, type QueryView } from '../client/observation-coordinator.ts';
 import { OBSERVATION_POLICY as policy } from '../shared/observation-policy.ts';
 import type { ObserverResponse } from '../shared/observer.ts';
 
@@ -25,7 +25,7 @@ function setup() {
   const tokens: Record<string, string> = { '/a#working': '1', '/b#working': '1', roster: '1' };
   let reads = 0, fail = false;
   const issues: (string | null)[] = [], queries: QueryView[] = [], counts: Record<string, number> = {};
-  const coordinator = new ObservationCoordinator('p', {
+  const coordinator = createObservationCoordinator('p', {
     queries: () => queries,
     read: async () => { reads++; if (fail) throw Error('offline'); return { ok: true, result: { instanceId: 'one', revision: 1, tokens } }; },
     issue: v => issues.push(v),
@@ -131,7 +131,7 @@ test('business transport errors use bounded backoff rather than an immediate ret
 
 test('late old-subscription version responses cannot update the current view', async () => {
   const time = new FakeClock(); let resolve!: (r: ObserverResponse) => void; const issues: (string | null)[] = [];
-  const c = new ObservationCoordinator('p', { queries: () => [], read: () => new Promise(r => { resolve = r; }), issue: v => issues.push(v) }, time);
+  const c = createObservationCoordinator('p', { queries: () => [], read: () => new Promise(r => { resolve = r; }), issue: v => issues.push(v) }, time);
   const unsubscribe = c.subscribe(['old']); await time.advance(0); unsubscribe(); c.subscribe(['new']);
   resolve({ ok: false, error: { code: 'old', message: 'old' } }); await time.advance(0);
   assert.ok(!issues.includes('old')); assert.equal(c.counters.versionReads, 2); c.close();
@@ -166,7 +166,7 @@ test('backend generation change refreshes roster even when its numeric token is 
     data: { ok: true, result: { observation: { state: 'ready', validationKey: 'roster', validationToken: '1' } } },
     fetch: async () => { calls++; }, validate: () => {},
   };
-  const c = new ObservationCoordinator('p', { queries: () => [q], read: async () => ({ ok: true, result: { instanceId, revision: 0, tokens: { roster: '1' } } }), issue: () => {} }, time);
+  const c = createObservationCoordinator('p', { queries: () => [q], read: async () => ({ ok: true, result: { instanceId, revision: 0, tokens: { roster: '1' } } }), issue: () => {} }, time);
   c.subscribe(['w']); await time.advance(0); assert.equal(calls, 0);
   instanceId = 'new'; await time.advance(15_000); assert.equal(calls, 1); c.close();
 });

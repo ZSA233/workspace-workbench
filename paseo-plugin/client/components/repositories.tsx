@@ -85,6 +85,8 @@ export const WorkspaceView = memo(function WorkspaceView({
   onOpenLayoutMenu,
   onPrepareToolchain,
   preparingToolchain,
+  preparationProgress,
+  confirmedRepositoryCount,
   graphPlatform,
   theme,
   styles,
@@ -130,6 +132,8 @@ export const WorkspaceView = memo(function WorkspaceView({
   onOpenLayoutMenu: () => void;
   onPrepareToolchain?: () => void;
   preparingToolchain?: boolean;
+  preparationProgress?: string;
+  confirmedRepositoryCount?: number;
   graphPlatform: PanelProps["layout"]["platform"];
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
@@ -191,7 +195,7 @@ export const WorkspaceView = memo(function WorkspaceView({
     <View onLayout={(event) => onContentLayout(event.nativeEvent.layout.height)}>
       {detailError ? <Text style={styles.warningText}>{detailError}</Text> : null}
       {toolchain && toolchain.status !== "ready" && toolchain.status !== "not_applicable" ? (
-        <ToolchainNotice toolchain={toolchain} repositoryCount={repositories.length} styles={styles} onPrepare={onPrepareToolchain} preparing={preparingToolchain} />
+        <ToolchainNotice toolchain={toolchain} repositoryCount={repositories.length} styles={styles} onPrepare={onPrepareToolchain} preparing={preparingToolchain} progress={preparationProgress} />
       ) : null}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
@@ -205,7 +209,7 @@ export const WorkspaceView = memo(function WorkspaceView({
           />
           <View style={styles.sectionHeaderRight}>
             <InlineRefresh visible={detailRefreshing} theme={theme} styles={styles} />
-            <Text style={styles.sectionCount}>{detailLoading ? "…" : `${repositories.length}`}</Text>
+            <Text accessibilityLabel={copy.repositoryVerificationCount.replace("{0}", String(confirmedRepositoryCount ?? repositories.filter(repo => !repo.observationPending && !!repo.branch).length)).replace("{1}", String(repositories.length))} style={styles.sectionCount}>{detailLoading ? "…" : `${repositories.length}`}</Text>
           </View>
         </View>
         {!sectionLayout.repositories.collapsed ? (
@@ -334,12 +338,14 @@ export function ToolchainNotice({
   styles,
   onPrepare,
   preparing,
+  progress,
 }: {
   toolchain: NonNullable<WorkspaceSummary["toolchain"]>;
   repositoryCount: number;
   styles: ReturnType<typeof makeStyles>;
   onPrepare?: () => void;
   preparing?: boolean;
+  progress?: string;
 }) {
   const copy = useWorkbenchCopy();
   const preparedCount = Object.values(toolchain.preparedRepositories).filter((item) => item.status === "ready").length;
@@ -351,7 +357,7 @@ export function ToolchainNotice({
     missing_system_command: copy.text_81772f8606,
     version_conflict: copy.text_a94df0c5c2,
   };
-  const detail = toolchain.issues[0]?.message || copy.text_9e44dbbc0e;
+  const detail = progress || toolchain.issues[0]?.message || copy.text_9e44dbbc0e;
   return (
     <View style={styles.toolchainNotice}>
       <View style={styles.sectionHeader}>
@@ -390,7 +396,8 @@ export function RepositoryRow({
   const hasTransientIssue = repository.issues.concat(repository.changeIssues).some((issue) => isTransientIssueCode(issue.code));
   const stale = Boolean(repository.observationStale || hasTransientIssue);
   const status = stale ? "stale" : repository.status || (repository.dirty ? "dirty" : "clean");
-  const statusTone = statusColor(status, theme);
+  const statusTone = status === "unknown" && repository.issues.length === 0
+    ? theme.colors.foregroundMuted : statusColor(status, theme);
   return (
     <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={[styles.repositoryRow, selected && styles.repositoryRowActive]}>
       <View style={[styles.repositoryDot, { backgroundColor: statusTone }]} />

@@ -1,3 +1,4 @@
+import { PrepareTasks } from "./prepare-tasks.ts";
 import { EventLoopMetrics } from "../event-loop-metrics.ts";
 import { gitDiagnostics, withMutationGit } from "./git.ts";
 import { buildId } from "../../shared/build-id.mjs";
@@ -8,7 +9,7 @@ import { Runtime } from "./runtime.ts";
 import { Observation, protocol } from "./observation.ts";
 import { runtimeIdentity } from "./identity.ts";
 import { compareObserved } from "./review.ts";
-import { issue, stable, WorkbenchError, type Json } from "./storage.ts";
+import { issue, stable, hash, WorkbenchError, type Json } from "./storage.ts";
 export const managementMethods = new Set([
   "observer.reload",
   "workspace.create",
@@ -26,12 +27,13 @@ export class Service {
   config: Config;
   workspaces: Workspaces;
   runtime: Runtime | null;
+  preparations: PrepareTasks;
   cache: ObservationCache;
   observation: Observation;
   startedAt = Date.now();
   eventLoop = new EventLoopMetrics();
   version: string;
-  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts"]);
+  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts"]);
   constructor(config: Config, version = "0.1.3") {
     this.config = config;
     this.version = version;
@@ -45,6 +47,8 @@ export class Service {
     );
     this.workspaces.onOrphanScanChanged = () => this.observation.scheduler.rosterChanged();
     this.workspaces.onDiscoveryChanged = () => this.observation.scheduler.rosterChanged();
+    this.preparations = new PrepareTasks(this.workspaces, workspaceId => { this.observation.scheduler.published({workspaceId}); });
+    this.workspaces.preparationActive = id => this.preparations.active(id);
     this.cache.onProduced = scope => this.observation.scheduler.published(scope);
   }
   health() {
@@ -61,6 +65,8 @@ export class Service {
       recordReads: this.workspaces.observationRecords.health(),
       diffRead: this.observation.diffTasks.health(),
       refreshProtocol: 1,
+      prepareProtocol: 1,
+      basicSummaryProtocol: 1,
       fileStatistics: this.observation.statistics.health(),
       project: {
         id: this.config.projectId,
@@ -80,6 +86,14 @@ export class Service {
     };
   }
   async handle(method: string, params: Json = {}, signal?: AbortSignal): Promise<Json> {
+    if (method === 'workspace.prepare.task') return params.action === 'status' ? this.preparations.request(params) : this.workspaces.mutations.run(() => this.preparations.request(params));
+    if (method === 'workspace.prepare') {
+      const task = await this.workspaces.mutations.run(() => this.preparations.request({...params, action:'start', requestId: params.requestId || `legacy:${hash(stable(params))}`}));
+      const state = await this.preparations.wait(task.operationId);
+      if (state.state === 'ready' || state.state === 'failed' && state.repositories[0]?.result) return state.repositories[0].result;
+      if (state.state === 'interrupted') throw new WorkbenchError('operation_interrupted', 'Preparation interrupted; inspect the operation before continuing', {operationId:task.operationId,method:'workspace.prepare.task',action:'status',statusTool:'workbench_workspace_operation_status',dispatched:true});
+      throw new WorkbenchError('operation_pending', 'Runtime preparation continues; query its operation status without replaying it', {operationId:task.operationId,method:'workspace.prepare.task',action:'status',statusTool:'workbench_workspace_operation_status',dispatched:true});
+    }
     if (managementMethods.has(method))
       return withMutationGit(() => this.workspaces.mutations.run(async () => {
         if (!["observer.reload", "main.repositories.save", "linked.workspaces.save"].includes(method) && !this.config.managementEnabled)
@@ -92,8 +106,8 @@ export class Service {
         } finally {
           this.workspaces.invalidateOrphanScan();
           this.workspaces.observationRecords.invalidate();
-          this.cache.clear();
-          this.observation.scheduler.force();
+          if (params.workspaceId) this.cache.invalidateWorkspace(String(params.workspaceId));
+          this.observation.scheduler.force(params.workspaceId ? String(params.workspaceId) : undefined);
           this.observation.scheduler.rosterChanged();
         }
       }));
@@ -112,8 +126,11 @@ export class Service {
         return this.observation.detail(params, signal);
       case "workspace.identify":
         return this.workspaces.observationRecords.request('identify', { directory: String(params.directory || this.config.sourceRoot) });
-      case "workspace.operation.status":
+      case "workspace.operation.status": {
+        const preparation = await this.preparations.request({action:'status',operationId:String(params.operationId || '')});
+        if(preparation.state !== 'idle') return {operationId:preparation.operationId,workspaceId:preparation.workspaceId,stage:preparation.state,result:preparation};
         return this.workspaces.operationStatus(String(params.operationId || ""));
+      }
       case "main.repositories.list":
         return this.workspaces.mainCandidates();
       case "linked.workspaces.list":
@@ -242,32 +259,12 @@ export class Service {
     if (method === "workspace.create") return this.workspaces.create(params);
     if (method === "workspace.orphan.adopt") return this.workspaces.adoptOrphan(params);
     if (method === "workspace.addRepositories") {
-      const workspace = await this.workspaces.add(params),
-        preparations = [];
-      if (this.runtime)
-        for (const requested of params.repositories)
-          preparations.push(
-            await this.runtime.prepare(
-              workspace,
-              this.workspaces.repository(workspace, requested).id,
-            ),
-          );
-      return { ...workspace, preparations };
-    }
-    if (method === "workspace.prepare") {
-      if (!this.runtime)
-        throw new WorkbenchError(
-          "capability_unavailable",
-          "runtime preparation unavailable",
-        );
-      const w = this.workspaces.get(String(params.workspaceId || ""));
-      return this.runtime.prepare(
-        w,
-        this.workspaces.repository(
-          w,
-          params.repositoryId || params.repoPath || "",
-        ).id,
-      );
+      const workspace: Json = await this.workspaces.add(params);
+      if (!this.runtime) return {...workspace,preparations:[]};
+      const task = await this.preparations.request({action:'start',workspaceId:workspace.id,repositories:params.repositories,requestId:`add-prepare:${hash(stable(params))}`});
+      const state = await this.preparations.wait(task.operationId);
+      return {...workspace, preparationOperationId:task.operationId, preparations:state.repositories.map((repo:Json)=>repo.result || {repositoryId:repo.id,status:repo.state,operationId:task.operationId})};
+
     }
     if (method === "workspace.remove") return this.workspaces.remove(params);
     if (method === "workspace.restore") return this.workspaces.restore(params);
@@ -275,6 +272,7 @@ export class Service {
   }
   async close() {
     this.eventLoop.close();
+    await this.preparations.close();
     await this.workspaces.observationRecords.close();
     await this.observation.refresh.close();
     await this.observation.diffTasks.close();

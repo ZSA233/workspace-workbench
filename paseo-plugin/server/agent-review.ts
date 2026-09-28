@@ -1481,8 +1481,12 @@ export async function handleReviewSettingsUpdate(input: { projectConfig: string;
 
 export async function handleReviewModels(input: { projectConfig: string; workspaceId?: string }, context: AgentContext): Promise<ReturnType<typeof reviewModels.output.parse>> {
   try {
-    const runtime = input.workspaceId ? await currentRuntime(input.workspaceId, context) : null;
-    const cwd = runtime?.treePath || currentProject()?.sourceRoot;
+    // Model discovery needs a validated working directory, not a content digest.
+    const metadata = input.workspaceId ? await (context.query || queryObserver)({method:"workspace.detail",params:{workspaceId:input.workspaceId,mode:"roster"}}) : null;
+    if (metadata && !metadata.ok) throw new Error(metadata.error?.code || "workspace_metadata_unavailable");
+    const workspace = (metadata?.result as {workspace?: {id?:string;treePath?:string}} | undefined)?.workspace;
+    if (input.workspaceId && workspace?.id !== input.workspaceId) throw new Error("workspace_metadata_identity_changed");
+    const cwd = workspace?.treePath || currentProject()?.sourceRoot;
     if (!cwd) throw new Error("reviewer_workspace_unavailable");
     return { ok: true, provider: "codex", models: await availableCodexModels(context, cwd) };
   } catch (error) {

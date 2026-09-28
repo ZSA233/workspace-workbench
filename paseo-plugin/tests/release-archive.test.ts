@@ -12,6 +12,6 @@ test('release archive contains the gateway and shared connection runtime', async
   try {
     const archive = await buildArchive(resolve(import.meta.dirname,'../..'),output);
     const entries = execFileSync('tar',['-tzf',archive],{encoding:'utf8'}).split('\n');
-    for (const file of ['mcp.mjs','mcp-gateway.mjs','shared/request-scheduler.mjs','shared/mcp-router.mjs','server/paseo-endpoint.mjs','server/backend/observation-records-worker.ts','server/backend/observation-records.ts','server/backend/derived-json.ts']) assert.ok(entries.includes(file),file);
+    for (const file of ['mcp.mjs','mcp-gateway.mjs','shared/request-scheduler.mjs','shared/mcp-router.mjs','server/paseo-endpoint.mjs','server/backend/observation-records-worker.ts','server/backend/observation-records.ts','server/backend/derived-json.ts', 'server/backend/prepare-worker.ts', 'server/backend/prepare-tasks.ts', 'server/backend/operation-storage.ts', 'shared/task-state.ts']) assert.ok(entries.includes(file),file);
   } finally { rmSync(output,{recursive:true,force:true}); }
 });

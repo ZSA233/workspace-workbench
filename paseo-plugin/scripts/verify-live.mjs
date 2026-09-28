@@ -29,6 +29,20 @@ const plugin = resolve(import.meta.dirname, ".."),
   home = join(root, "paseo"),
   registry = join(root, "projects.json");
 mkdirSync(home);
+let preparationFixture;
+if (process.env.WORKBENCH_LIVE_PREPARE === "1") {
+  const installed=join(root,"fake-go"), marker=join(root,"installed"), count=join(root,"install-count"), manager=join(root,"fake-mise");
+  mkdirSync(join(installed,"bin"),{recursive:true});
+  writeFileSync(join(installed,"bin","go"),'#!/bin/sh\necho "go version go1.99.0 test"\n',{mode:0o755});
+  writeFileSync(manager,`#!/bin/sh
+case "$1" in
+install) echo install >> '${count}'; sleep 35; touch '${marker}';;
+where) test -f '${marker}' || exit 1; echo '${installed}';;
+*) exit 1;;
+esac
+`,{mode:0o755});
+  preparationFixture={manager,count};
+}
 const configs = [];
 const git = (path, args) =>
   execFileSync("git", ["-C", path, ...args], {
@@ -76,6 +90,7 @@ for (const project of ["a", "b"]) {
       repositories: ["one", "two", "three"].map((id) => ({ id, path: id })),
       management: { enabled: true },
       limits: { cacheTtlSeconds: 0.5 },
+      ...(preparationFixture && project === "a" ? {toolchain:{mode:"mise",managerPath:preparationFixture.manager,repositories:{one:{go:"1.99"}}}} : {}),
     }),
   );
 }
@@ -116,6 +131,15 @@ const env = {
   WORKSPACE_WORKBENCH_PLUGIN_ROOT: plugin,
   WORKBENCH_TEST_HOST_DROP: "1",
 };
+if (process.env.WORKBENCH_LIVE_SLOW_GIT === "1") {
+  const bin=join(root,"git-injection");mkdirSync(bin);
+  const actualGit=execFileSync("which",["git"],{encoding:"utf8"}).trim();
+  writeFileSync(join(bin,"git"),`#!/bin/sh
+case "$PWD" in */slow-basic/one) for arg in "$@"; do if [ "$arg" = status ]; then sleep 35; break; fi; done;; esac
+exec '${actualGit}' "$@"
+`,{mode:0o755});
+  env.PATH=`${bin}:${env.PATH || ''}`;
+}
 delete env.WORKSPACE_WORKBENCH_CONFIG;
 const cli = process.env.PASEO_CLI || "paseo";
 const daemon = spawn(
@@ -351,6 +375,35 @@ try {
     repositories: ["one"],
   });
   assert.equal(created.ok, true, JSON.stringify(created));
+  if (preparationFixture) {
+    const input={action:"start",workspaceId:"sample",repositories:["one"],requestId:"live-long-prepare"};
+    const started=Date.now(), accepted=await rpc(configs[0],"workspace.prepare.task",input);
+    assert.equal(accepted.ok,true,JSON.stringify(accepted));
+    assert.ok(Date.now()-started<2000,"preparation acceptance exceeds control budget");
+    const duplicate=await rpc(configs[0],"workspace.prepare.task",input);
+    assert.equal(duplicate.result.operationId,accepted.result.operationId);
+    let state=accepted;
+    while(Date.now()-started<60000 && ["queued","running"].includes(state.result.state)) {
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      state=await rpc(configs[0],"workspace.prepare.task",{action:"status",operationId:accepted.result.operationId});
+      assert.equal(state.ok,true,JSON.stringify(state));
+    }
+    assert.equal(state.result.state,"ready",JSON.stringify(state));
+    assert.equal(readFileSync(preparationFixture.count,"utf8").trim(),"install");
+    report.checks.push("actual host preparation task exceeded 30 seconds, accepted within 2 seconds, and duplicate start installed only once");
+  }
+  if (process.env.WORKBENCH_LIVE_SLOW_GIT === "1") {
+    const createdSlow=await rpc(configs[0],"workspace.create",{name:"slow-basic",repositories:["one","two"]});assert.equal(createdSlow.ok,true,JSON.stringify(createdSlow));
+    const slowInput={workspaceId:"slow-basic",repoPath:"one",summaryOnly:true,requestId:"slow-basic-one"};
+    const slow=await rpc(configs[0],"observer.refresh",slowInput);assert.equal(slow.ok,true,JSON.stringify(slow));
+    const fastStarted=Date.now();let fast=await rpc(configs[0],"observer.refresh",{...slowInput,repoPath:"two",requestId:"fast-basic-two"});
+    while(fast.ok && ["queued","running"].includes(fast.result.state) && Date.now()-fastStarted<5000){await new Promise(resolve=>setTimeout(resolve,100));fast=await rpc(configs[0],"observer.refresh",{action:"status",taskId:fast.result.taskId,requestId:"fast-basic-two"});}
+    assert.equal(fast.ok,true,JSON.stringify(fast));assert.equal(fast.result.state,"ready",JSON.stringify(fast));assert.equal(fast.result.result.regions.summary.state,"ready");assert.ok(Date.now()-fastStarted<5000);
+    let slowState=slow;
+    while(slowState.ok && ["queued","running"].includes(slowState.result.state) && Date.now()-fastStarted<40000){await new Promise(resolve=>setTimeout(resolve,1000));slowState=await rpc(configs[0],"observer.refresh",{action:"status",taskId:slow.result.taskId,requestId:"slow-basic-one"});}
+    assert.equal(slowState.ok,true,JSON.stringify(slowState));assert.ok(["failed","cancelled"].includes(slowState.result.state)||slowState.result.result?.regions?.summary?.state === "failed",JSON.stringify(slowState));
+    report.checks.push("actual host: a status command delayed beyond 30 seconds did not block another repository's basic state (under 5 seconds); the slow task reported a terminal failure");
+  }
   const hook = join(root, "a/three/.git/hooks/post-checkout");
   writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   const params = {
@@ -372,7 +425,15 @@ try {
   assert.equal(added.result.id, created.result.id);
   assert.equal(added.result.createdAt, created.result.createdAt);
   const repeated = await rpc(configs[0], "workspace.addRepositories", params);
+  assert.equal(repeated.ok,true,JSON.stringify(repeated));
   assert.equal(repeated.result.repositories.length, 3);
+  if (repeated.result.preparationOperationId) {
+    const operationId=repeated.result.preparationOperationId;
+    let preparation=await rpc(configs[0],"workspace.prepare.task",{action:"status",operationId});
+    const until=Date.now()+30000;
+    while(preparation.ok && ["queued","running"].includes(preparation.result.state) && Date.now()<until){await new Promise(resolve=>setTimeout(resolve,100));preparation=await rpc(configs[0],"workspace.prepare.task",{action:"status",operationId});}
+    assert.equal(preparation.ok,true,JSON.stringify(preparation));assert.equal(preparation.result.state,"ready",JSON.stringify(preparation));
+  }
   report.checks.push(
     "real post-checkout hook failure retained partial addition; retry and idempotency preserved ID/history",
   );

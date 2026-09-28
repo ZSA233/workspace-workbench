@@ -62,3 +62,11 @@ lifecycle tests verify the state machine, not model compliance. Run
 handoff and coordinator review in the temporary project. It consumes model usage
 and requires an available authenticated Codex provider. `WORKBENCH_LIVE_MODEL`
 optionally selects the model. The report distinguishes model evidence from RPC checks.
+
+### Runtime preparation in progress
+
+`operation_pending` means the accepted preparation continues in the background;
+it is not permission to submit a new installation. Keep the original workflow
+request identity, inspect its status, and resume that same workflow after the
+operation completes. An interrupted preparation requires explicit continuation;
+never infer successful installation from a lost response or replay a handoff.

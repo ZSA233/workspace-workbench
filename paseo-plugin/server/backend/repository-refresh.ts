@@ -1,3 +1,4 @@
+import { BasicReads } from "./basic-reads.ts";
 import { Git, withBackgroundGit } from './git.ts';
 import { now, stable, issue, WorkbenchError, type Json } from './storage.ts';
 import { count, fileJson, protocol, type Observation } from './observation.ts';
@@ -6,6 +7,8 @@ import { count, fileJson, protocol, type Observation } from './observation.ts';
 class SnapshotGit extends Git {
   private reads = new Map<string, ReturnType<Git['run']>>();
   readonly trace: Json[];
+  basic?: BasicReads;
+  sourceVersion = "";
   phase = 'critical';
   constructor(path: string, timeout: number, deadline: number, signal: AbortSignal | undefined, trace: Json[]) { super(path, timeout, deadline, signal, true); this.trace = trace; }
   override run(args: string[], check = true, output?: { maxBytes: number; truncate?: boolean }) {
@@ -13,7 +16,8 @@ class SnapshotGit extends Git {
     const existing = this.reads.get(key);
     if (existing) return existing;
     const start = Date.now();
-    const promise = super.run(args, check, output).then(value => {
+    const basic = !output && ['rev-parse','symbolic-ref','status'].includes(args[0]);
+    const promise = (basic && this.basic ? this.basic.read(this.path,this.sourceVersion,args,check,this.timeout,this.signal) : super.run(args, check, output)).then(value => {
       this.trace.push({ phase: this.phase, command: args[0], durationMs: Date.now() - start, bytes: value.bytes, ok: true }); return value;
     }, error => {
       this.trace.push({ phase: this.phase, command: args[0], durationMs: Date.now() - start, ok: false, code: issue(error).code }); throw error;
@@ -39,6 +43,7 @@ class SnapshotGit extends Git {
 }
 export class RepositoryRefresh {
   private observation: Observation;
+  private basic = new BasicReads();
   private closed = false;
   private producers = new Set<AbortController>();
   private statistics = new Map<string, { abort: AbortController; promise: Promise<void> }>();
@@ -56,8 +61,10 @@ export class RepositoryRefresh {
   private async cycle(params: Json, signal?: AbortSignal, deadline = Date.now() + 30_000) {
     const { workspace, repo, path } = await this.context(params);
     const cacheEpoch = this.observation.cache.epoch;
+    const workspaceEpoch = this.observation.cache.workspaceEpoch(workspace.id);
     const trace: Json[] = [];
     const git = new SnapshotGit(path, this.observation.workspaces.config.gitTimeout, deadline, signal, trace);
+    git.basic = this.basic; git.sourceVersion = this.observation.scheduler.token(path) + `:${workspaceEpoch}`;
     git.statistics = this.observation.statistics;
     git.statisticsComplete = () => this.observation.scheduler.statisticsChanged(path);
     if (await git.root() !== git.path) throw new WorkbenchError('repository_root_mismatch', 'Expected recorded repository root');
@@ -68,17 +75,24 @@ export class RepositoryRefresh {
     // Registration prepares independently; an index scan never gates cached content.
     void withBackgroundGit(() => this.observation.scheduler.register(workspace.id, path, () => this.prewarm(params))).catch(() => {});
     const base = async () => repo.baseSha || (await git.upstream())[1];
-    const produce = async (area: string, namesOnly = true): Promise<Json> => {
+    const produce = async (area: string, namesOnly = true, partial?: (value: Json) => void): Promise<Json> => {
       const scope = params.scope || 'working';
       const common = { schemaVersion: protocol, workspaceId: workspace.id, repoPath: repo.repoPath };
       if (area === 'summary') {
-        const [head, branch, status] = await Promise.all([git.head(), git.branch(), git.status(repo.role === 'gitlink-root')]);
+        const cached = this.observation.cache.retained(this.key('repository.summary',workspace,params));
+        if (!params.summaryOnly && !params.force && cached?.observation?.state === 'ready' && cached.observation.validationToken === token && cached.repository.registeredBranch === (repo.branch || null) && cached.repository.baseSha === (repo.baseSha || null)) return cached;
+        const refsRead = Promise.all([git.head(),git.branch()]);
+        const statusRead = git.status(repo.role === 'gitlink-root', false, params.summaryOnly === true).then(status=>({status,error:null}),error=>({status:null,error}));
+        const [head, branch] = await refsRead;
         const baseSha = await base();
-        return { ...common, repository: { ...repo, registeredBranch: repo.branch || null, branch: branch || '', head, headShort: head?.slice(0, 8) || null,
-          refState: branch ? 'attached' : 'detached', refCandidates: [], status: status.length ? 'dirty' : branch ? 'clean' : 'detached',
-          observationPending: false, worktreeExists: true, dirty: status.length > 0, dirtyPaths: status.map(([, path]) => path),
+        const result = (status: Array<[string,string]> | null): Json => ({ ...common, repository: { ...repo, registeredBranch: repo.branch || null, branch: branch || '', head, headShort: head?.slice(0, 8) || null,
+          refState: branch ? 'attached' : 'detached', refCandidates: [], status: status === null ? 'unknown' : status.length ? 'dirty' : branch ? 'clean' : 'detached',
+          observationPending: status === null, observationStale: false, worktreeExists: true, dirty: status === null ? null : status.length > 0, dirtyPaths: params.summaryOnly || status === null ? [] : status.map(([, path]) => path), basicOnly: params.summaryOnly === true,
           baseSha, baseShaShort: baseSha?.slice(0, 8) || null, branchScopeAvailable: !!baseSha,
-          ahead: null, behind: null, unpushed: null, workingChanges: null, changes: null, changesLoaded: false, issues: [], changeIssues: [], observedAt: now() }, observation: meta('working') };
+          ahead: null, behind: null, unpushed: null, workingChanges: null, changes: null, changesLoaded: false, issues: [], changeIssues: [], observedAt: now() }, observation: meta('working') });
+        partial?.(result(null));
+        const completed=await statusRead;if(completed.error)throw completed.error;
+        return result(completed.status);
       }
       const baseSha = await base();
       if (area === 'graph') {
@@ -94,7 +108,7 @@ export class RepositoryRefresh {
         files, summary: count(files), issues: [], observation: { ...meta(scope === 'working' ? 'working' : 'refs'),
           ...(immutable ? { immutableIdentity: `${path}:${params.commitSha}:changes` } : {}), statisticsPending: namesOnly && files.length > 0 } };
     };
-    return { workspace, repo, path, trace, produce, token, refsToken, cacheEpoch, statistics: async (signal: AbortSignal) => { git.signal = signal; git.phase = 'statistics'; return produce('changes', false); } };
+    return { workspace, repo, path, trace, produce, token, refsToken, cacheEpoch, workspaceEpoch, statistics: async (signal: AbortSignal) => { git.signal = signal; git.phase = 'statistics'; return produce('changes', false); } };
   }
   async query(method: string, params: Json, signal?: AbortSignal): Promise<Json> {
     const { workspace, repo, path } = await this.context(params);
@@ -111,7 +125,7 @@ export class RepositoryRefresh {
       const ownedSignal = abort.signal;
       const work = async () => {
         const deadline = Date.now() + Math.min(30_000, this.observation.workspaces.config.observationTimeout, background ? 30_000 : Number(params.observationBudgetMs) || 30_000);
-        const cycle = await this.cycle({ ...params, scope: params.scope || 'branch' }, ownedSignal, deadline);
+        const cycle = await this.cycle({ ...params, summaryOnly: area === 'summary', scope: params.scope || 'branch' }, ownedSignal, deadline);
         return cycle.produce(area, false);
       };
       try { return await (background ? withBackgroundGit(work) : work()); }
@@ -127,11 +141,11 @@ export class RepositoryRefresh {
     if (Number.isFinite(params.readDeadline) && Date.now() >= params.readDeadline) throw new WorkbenchError('observer_timeout', 'Refresh request expired before acceptance');
     const { workspace, repo, path } = await this.context(params);
     if (Number.isFinite(params.readDeadline) && Date.now() >= params.readDeadline) throw new WorkbenchError('observer_timeout', 'Refresh request expired while reading metadata');
-    const identity = stable({ workspaceId: workspace.id, path, historyMode: params.historyMode || null, maxCommits: params.maxCommits || 50, scope: params.scope || 'working', commitSha: params.commitSha || null });
+    const identity = stable({ workspaceId: workspace.id, path, historyMode: params.historyMode || null, maxCommits: params.maxCommits || 50, scope: params.scope || 'working', commitSha: params.commitSha || null, summaryOnly: params.summaryOnly === true });
     // Concurrent clicks use the same identity while a generation is unfinished.
     const key = `refresh:${identity}:${this.observation.scheduler.token(path)}${params.force ? `:manual:${requestId}` : ''}`;
     if (!params.force) {
-      const areas = ['summary', 'graph', 'changes'];
+      const areas = params.summaryOnly ? ['summary'] : ['summary', 'graph', 'changes'];
       const retained = areas.map(area => this.observation.cache.retained(this.key(`repository.${area}`, workspace, { ...params, scope: params.scope || 'working' })));
       // Persisted results display immediately, but a new backend generation is
       // not considered validated until this task has checked its source.
@@ -143,25 +157,25 @@ export class RepositoryRefresh {
     }
     return tasks.start(key, requestId, async (signal, deadline, publish) => {
       const acceptedAt = Date.now();
-      const regions: Json = Object.fromEntries(['summary', 'graph', 'changes'].map(area => [area, { state: 'queued', phase: 'identity', result: this.observation.cache.retained(this.key(`repository.${area}`, workspace, { ...params, scope: params.scope || 'working' })) }]));
+      const regions: Json = Object.fromEntries((params.summaryOnly ? ['summary'] : ['summary', 'graph', 'changes']).map(area => [area, { state: 'queued', phase: 'identity', result: this.observation.cache.retained(this.key(`repository.${area}`, workspace, { ...params, scope: params.scope || 'working' })) }]));
       const value: Json = { protocol: 1, refreshId: requestId, workspaceId: workspace.id, repoPath: repo.repoPath, acceptedAt, regions, trace: [] };
       const update = () => publish({ ...value, regions: { ...regions } });
       update();
       const cycle = await this.cycle(params, signal, deadline); value.trace = cycle.trace;
       await Promise.all(Object.keys(regions).map(async area => {
         const start = Date.now(); regions[area] = { result: regions[area].result, state: 'running', phase: area === 'summary' ? 'status' : area === 'graph' ? 'history-and-refs' : 'file-names', startedAt: start }; update();
-        try { const result = await cycle.produce(area); if (cycle.cacheEpoch !== this.observation.cache.epoch) throw new WorkbenchError('observation_superseded', 'Workspace changed during refresh'); const token = area === 'changes' && (params.scope || 'working') !== 'working' ? cycle.refsToken : cycle.token;
+        try { const result = await cycle.produce(area, true, partial => { regions[area] = {...regions[area],result:partial}; update(); }); if (cycle.cacheEpoch !== this.observation.cache.epoch || cycle.workspaceEpoch !== this.observation.cache.workspaceEpoch(workspace.id)) throw new WorkbenchError('observation_superseded', 'Workspace changed during refresh'); const token = area === 'changes' && (params.scope || 'working') !== 'working' ? cycle.refsToken : cycle.token;
           const scope = area === 'changes' && (params.scope || 'working') !== 'working' ? 'refs' : 'working';
           if (Number(this.observation.cache.retained(this.key(`repository.${area}`, workspace, { ...params, scope: params.scope || 'working' }))?.observation?.readStartedAt || 0) <= Number(result.observation.readStartedAt)) this.observation.cache.publish(this.key(`repository.${area}`, workspace, { ...params, scope: params.scope || 'working' }), token + stable(repo), result, { workspaceId: workspace.id, repoPath: path }, cycle.cacheEpoch);
           regions[area] = { state: 'ready', phase: 'published', result, durationMs: Date.now() - start, completedAt: Date.now() }; }
-        catch (error) { regions[area] = { state: 'failed', phase: 'git', error: issue(error), durationMs: Date.now() - start }; }
+        catch (error) { regions[area] = { result: regions[area].result, state: 'failed', phase: 'git', error: issue(error), durationMs: Date.now() - start }; }
         update();
       }));
       value.completedAt = Date.now();
-      value.observation = { state: 'ready', observedAt: now(), validationKey: `${path}#working`, validationToken: cycle.token, refreshing: !!regions.changes.result?.observation?.statisticsPending };
+      value.observation = { state: 'ready', observedAt: now(), validationKey: `${path}#working`, validationToken: cycle.token, refreshing: !!regions.changes?.result?.observation?.statisticsPending };
       // Optional statistics are a separate ordinary query/cache fill. They do
       // not own the critical refresh completion or reuse a cancelled signal.
-      if (regions.changes.state === 'ready' && regions.changes.result.observation.statisticsPending) {
+      if (regions.changes?.state === 'ready' && regions.changes.result.observation.statisticsPending) {
         const statisticsKey = `${identity}:${cycle.token}`;
         if (!this.closed && !this.statistics.has(statisticsKey) && this.statistics.size < 32) {
           const abort = new AbortController();
@@ -169,13 +183,13 @@ export class RepositoryRefresh {
             const result = await cycle.statistics(abort.signal);
             const scope = (params.scope || 'working') === 'working' ? 'working' : 'refs';
             const token = scope === 'working' ? cycle.token : cycle.refsToken;
-            if (!abort.signal.aborted && token === this.observation.scheduler.token(path, scope) && Number(this.observation.cache.retained(this.key('repository.changes', workspace, { ...params, scope: params.scope || 'working' }))?.observation?.readStartedAt || 0) <= Number(result.observation.readStartedAt)) this.observation.cache.publish(this.key('repository.changes', workspace, { ...params, scope: params.scope || 'working' }), token + stable(repo), result, { workspaceId: workspace.id, repoPath: path }, cycle.cacheEpoch);
+            if (!abort.signal.aborted && cycle.workspaceEpoch === this.observation.cache.workspaceEpoch(workspace.id) && token === this.observation.scheduler.token(path, scope) && Number(this.observation.cache.retained(this.key('repository.changes', workspace, { ...params, scope: params.scope || 'working' }))?.observation?.readStartedAt || 0) <= Number(result.observation.readStartedAt)) this.observation.cache.publish(this.key('repository.changes', workspace, { ...params, scope: params.scope || 'working' }), token + stable(repo), result, { workspaceId: workspace.id, repoPath: path }, cycle.cacheEpoch);
           }).catch(() => {}).finally(() => this.statistics.delete(statisticsKey));
           this.statistics.set(statisticsKey, { abort, promise });
         }
       }
       return value;
-    }, Math.min(30_000, this.observation.workspaces.config.observationTimeout), `refresh:${identity}`, params.prefetch ? 'background' : 'observation');
+    }, Math.min(30_000, this.observation.workspaces.config.observationTimeout), `refresh:${identity}`, params.prefetch && !params.summaryOnly ? 'background' : 'observation');
   }
   private async prewarm(params: Json): Promise<Json> {
     if (this.closed) return { status: 'closed' };
@@ -189,6 +203,7 @@ export class RepositoryRefresh {
   }
   async close() {
     this.closed = true;
+    await this.basic.close();
     for (const abort of this.producers) abort.abort();
     for (const task of this.statistics.values()) task.abort.abort();
     await Promise.allSettled([...this.statistics.values()].map(task => task.promise));

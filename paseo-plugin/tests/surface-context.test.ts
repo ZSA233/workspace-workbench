@@ -14,7 +14,7 @@ test("Surface uses the plugin-owned workspace snapshot instead of host Surface h
   const implementation = panel.slice(panel.indexOf("export function WorkbenchSurfacePanel"), panel.indexOf("export function ObserverPanelContent"));
   assert.ok(!/useWorkspace\(|useAgent\(|usePaseo\(/.test(implementation));
   assert.ok(!panel.includes("usePaseo"));
-  assert.ok(!panel.includes("useWorkspace"));
+  assert.ok(!/\buseWorkspace\s*\(/.test(panel));
   assert.ok(panel.includes("useWorkbenchWorkspaceSnapshot"));
   clearWorkbenchWorkspaceSnapshots();
 });

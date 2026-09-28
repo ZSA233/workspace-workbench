@@ -40,58 +40,54 @@ const terminalRead = (q: QueryView) => (q.data?.error?.details as { terminal?: b
 const durable = new Set(['path_invalid', 'file_not_changed', 'worktree_missing', 'repository_missing', 'commit_missing', 'base_missing', 'workspace_not_found']);
 
 /** Owns refresh decisions, not payloads. QueryClient remains the single data cache. */
-export class ObservationCoordinator {
-  private entries = new Map<string, Entry>();
-  private versions: Versions | null = null;
-  private subscriptions = new Map<object, { ids: string[]; versions: boolean }>();
-  private timer: unknown;
-  private pollAt = Infinity;
-  private pollRunning = false;
-  private validatedAt = -Infinity;
-  private validatedIds = new Set<string>();
-  private failures = 0;
-  private failureSince: number | null = null;
-  private hostFailures = 0;
-  private hostFailureSince: number | null = null;
-  private generation = 0;
-  private scanning = false;
-  private closed = false;
-  readonly counters = { cacheHits: 0, versionReads: 0, businessReads: 0, merged: 0, reasons: {} as Record<string, number> };
-  readonly project: string;
-  private host: CoordinatorHost;
-  private time: Clock;
-  constructor(project: string, host: CoordinatorHost, time: Clock = clock) { this.project = project; this.host = host; this.time = time; }
-  subscribe(ids: string[], versions = true): () => void {
-    const resuming = this.subscriptions.size === 0;
+export function createObservationCoordinator(project: string, host: CoordinatorHost, time: Clock = clock) {
+  let entries = new Map<string, Entry>();
+  let versions: Versions | null = null;
+  let subscriptions = new Map<object, { ids: string[]; versions: boolean }>();
+  let timer: unknown;
+  let pollAt = Infinity;
+  let pollRunning = false;
+  let validatedAt = -Infinity;
+  let validatedIds = new Set<string>();
+  let failures = 0;
+  let failureSince: number | null = null;
+  let hostFailures = 0;
+  let hostFailureSince: number | null = null;
+  let generation = 0;
+  let scanning = false;
+  let closed = false;
+  const counters = { cacheHits: 0, versionReads: 0, businessReads: 0, merged: 0, reasons: {} as Record<string, number> };
+  function subscribe(ids: string[], allowVersions = true): () => void {
+    const resuming = subscriptions.size === 0;
     const key = {};
-    this.subscriptions.set(key, { ids, versions });
-    if (versions && (resuming || this.time.now() - this.validatedAt >= policy.pollMs || ids.some(id => !this.validatedIds.has(id)))) this.pollAt = this.time.now();
-    this.changed();
+    subscriptions.set(key, { ids, versions: allowVersions });
+    if (allowVersions && (resuming || time.now() - validatedAt >= policy.pollMs || ids.some(id => !validatedIds.has(id)))) pollAt = time.now();
+    changed();
     return () => {
-      this.subscriptions.delete(key);
-      if (!this.subscriptions.size) {
-        this.generation++; this.pollAt = Infinity;
-        for (const entry of this.entries.values()) { entry.active = false; entry.task = undefined; entry.pending = undefined; for (const done of entry.waiters) done(); entry.waiters.clear(); }
-        this.host.issue(null);
+      subscriptions.delete(key);
+      if (!subscriptions.size) {
+        generation++; pollAt = Infinity;
+        for (const entry of entries.values()) { entry.active = false; entry.task = undefined; entry.pending = undefined; for (const done of entry.waiters) done(); entry.waiters.clear(); }
+        host.issue(null);
       }
-      this.arm();
+      arm();
     };
   }
-  private get enabled() { return this.subscriptions.size > 0 && !this.closed; }
-  private get warningWindow() {
-    const windows = this.host.queries().filter(q => q.active && !q.eventOnly).map(q => q.validationWindowMs || policy.warningMs);
+  function enabled() { return subscriptions.size > 0 && !closed; }
+  function warningWindow() {
+    const windows = host.queries().filter(q => q.active && !q.eventOnly).map(q => q.validationWindowMs || policy.warningMs);
     return windows.length ? Math.min(...windows) : policy.warningMs;
   }
-  private get versioned() { return [...this.subscriptions.values()].some(s => s.versions); }
-  changed(): void {
-    if (!this.enabled || this.scanning) return;
-    this.scanning = true;
+  function versioned() { return [...subscriptions.values()].some(s => s.versions); }
+  function changed(): void {
+    if (!enabled() || scanning) return;
+    scanning = true;
     try {
-      const now = this.time.now(), present = new Set<string>();
-      for (const q of this.host.queries()) {
+      const now = time.now(), present = new Set<string>();
+      for (const q of host.queries()) {
         present.add(q.id);
-        let e = this.entries.get(q.id);
-        if (!e) { e = { active: false, lastUsed: now, failures: 0, followToken: '', follows: 0, lastAttempt: 0, running: false, waiters: new Set() }; this.entries.set(q.id, e); }
+        let e = entries.get(q.id);
+        if (!e) { e = { active: false, lastUsed: now, failures: 0, followToken: '', follows: 0, lastAttempt: 0, running: false, waiters: new Set() }; entries.set(q.id, e); }
         const activated = q.active && !e.active;
         e.active = q.active;
         if (!q.active) { e.task = undefined; e.pending = undefined; for (const done of e.waiters) done(); e.waiters.clear(); continue; }
@@ -102,7 +98,7 @@ export class ObservationCoordinator {
           e.seen = q.data; e.seenError = q.error;
           if (q.error || q.data?.ok === false || q.data?.ok && meta.state && meta.state !== 'ready') {
             e.failures++;
-            if (!terminalRead(q) && !durable.has(q.data?.error?.code || '')) this.enqueue(e, policy.retryMs[Math.min(e.failures - 1, 3)], 'retry');
+            if (!terminalRead(q) && !durable.has(q.data?.error?.code || '')) enqueue(e, policy.retryMs[Math.min(e.failures - 1, 3)], 'retry');
           } else if (q.data?.ok) {
             e.failures = 0;
             if (!meta.refreshing && meta.cacheState !== 'refreshing') {
@@ -111,140 +107,142 @@ export class ObservationCoordinator {
           }
         }
         if (meta.readTask) {
-          if (!q.fetching && !e.running && !e.task) this.enqueue(e, meta.readTask.nextPollMs, 'read-task');
+          if (!q.fetching && !e.running && !e.task) enqueue(e, meta.readTask.nextPollMs, 'read-task');
           continue;
         }
         const refreshing = meta.refreshing || meta.cacheState === 'refreshing';
         if (refreshing) {
           const token = JSON.stringify([dependencies(meta), (q.data?.result as any)?.cache?.updatedAt || meta.observedAt]);
           if (e.followToken !== token) { e.followToken = token; e.follows = 0; }
-          if (e.follows < policy.followUpMs.length && !q.fetching && !e.running && !e.task) this.enqueue(e, policy.followUpMs[e.follows], 'follow-up');
+          if (e.follows < policy.followUpMs.length && !q.fetching && !e.running && !e.task) enqueue(e, policy.followUpMs[e.follows], 'follow-up');
         }
         if (activated && q.data?.ok && !q.eventOnly) {
-          const state = validation(q.data, this.versions);
-          if (state === 'same') this.counters.cacheHits++;
-          if (state === 'changed') this.enqueue(e, 0, 'activation-change');
-          if (state === 'unknown' && (!this.versioned || !Object.keys(dependencies(meta)).length) && now - Math.max(q.updatedAt, e.lastAttempt) >= policy.legacyReadMs) this.enqueue(e, 0, 'legacy-activation');
-          if (this.versioned && !meta.immutableIdentity && (now - this.validatedAt >= policy.pollMs || state === 'unknown' && Object.keys(dependencies(meta)).length > 0)) this.pollAt = Math.min(this.pollAt, now);
+          const state = validation(q.data, versions);
+          if (state === 'same') counters.cacheHits++;
+          if (state === 'changed') enqueue(e, 0, 'activation-change');
+          if (state === 'unknown' && (!versioned() || !Object.keys(dependencies(meta)).length) && now - Math.max(q.updatedAt, e.lastAttempt) >= policy.legacyReadMs) enqueue(e, 0, 'legacy-activation');
+          if (versioned() && !meta.immutableIdentity && (now - validatedAt >= policy.pollMs || state === 'unknown' && Object.keys(dependencies(meta)).length > 0)) pollAt = Math.min(pollAt, now);
         }
         if (activated && !terminalRead(q) && !q.eventOnly && (q.error || q.data?.ok === false) && !durable.has(q.data?.error?.code || '') && !e.task)
-          this.enqueue(e, 0, 'retry');
-        if (activated && !q.eventOnly && !q.data && !q.fetching && !q.error) this.enqueue(e, 0, 'initial');
+          enqueue(e, 0, 'retry');
+        if (activated && !q.eventOnly && !q.data && !q.fetching && !q.error) enqueue(e, 0, 'initial');
       }
-      for (const [id, entry] of this.entries) if (!present.has(id) || !entry.active && now - entry.lastUsed >= policy.retentionMs) { for (const done of entry.waiters) done(); this.entries.delete(id); }
-    } finally { this.scanning = false; }
-    this.arm();
+      for (const [id, entry] of entries) if (!present.has(id) || !entry.active && now - entry.lastUsed >= policy.retentionMs) { for (const done of entry.waiters) done(); entries.delete(id); }
+    } finally { scanning = false; }
+    arm();
   }
   /** Used after a known mutation or explicit refresh; running reads are never cancelled/restarted. */
-  refresh(matches: (q: QueryView) => boolean = () => true): Promise<void> {
-    if (!this.enabled) return Promise.resolve();
-    this.changed();
+  function refresh(matches: (q: QueryView) => boolean = () => true): Promise<void> {
+    if (!enabled()) return Promise.resolve();
+    changed();
     const waits: Promise<void>[] = [];
-    for (const q of this.host.queries()) if (q.active && matches(q)) {
-      const entry = this.entries.get(q.id);
+    for (const q of host.queries()) if (q.active && matches(q)) {
+      const entry = entries.get(q.id);
       if (entry) {
         waits.push(new Promise<void>(resolve => entry.waiters.add(resolve)));
-        this.enqueue(entry, 0, 'manual');
+        enqueue(entry, 0, 'manual');
       }
     }
-    if (this.versioned) this.pollAt = this.time.now();
-    this.arm();
+    if (versioned()) pollAt = time.now();
+    arm();
     return Promise.all(waits).then(() => undefined);
   }
-  private enqueue(e: Entry, delay: number, reason: string) {
-    if (reason !== 'manual' && e.failures) delay = Math.max(delay, e.lastAttempt + policy.retryMs[Math.min(e.failures - 1, 3)] - this.time.now());
+  function enqueue(e: Entry, delay: number, reason: string) {
+    if (reason !== 'manual' && e.failures) delay = Math.max(delay, e.lastAttempt + policy.retryMs[Math.min(e.failures - 1, 3)] - time.now());
     if (e.running) {
-      const pending = { due: this.time.now() + delay, reason };
+      const pending = { due: time.now() + delay, reason };
       if (!e.pending || pending.due < e.pending.due || reason === 'manual') e.pending = pending;
-      this.counters.merged++; return;
+      counters.merged++; return;
     }
     if (e.task) {
-      this.counters.merged++;
-      if (reason === 'manual') { e.task = { due: Math.min(e.task.due, this.time.now() + delay), reason }; return; }
-      if (e.task.due <= this.time.now() + delay) return;
+      counters.merged++;
+      if (reason === 'manual') { e.task = { due: Math.min(e.task.due, time.now() + delay), reason }; return; }
+      if (e.task.due <= time.now() + delay) return;
     }
-    e.task = { due: this.time.now() + delay, reason };
+    e.task = { due: time.now() + delay, reason };
   }
-  private arm() {
-    if (this.timer !== undefined) this.time.clear(this.timer);
-    this.timer = undefined;
-    if (!this.enabled) return;
-    const due = Math.min(this.versioned && !this.pollRunning ? this.pollAt : Infinity, ...[...this.entries.values()].map(e => e.active && !e.running ? e.task?.due ?? Infinity : Infinity));
-    if (Number.isFinite(due)) this.timer = this.time.set(() => { this.timer = undefined; this.tick(); }, Math.max(0, due - this.time.now()));
+  function arm() {
+    if (timer !== undefined) time.clear(timer);
+    timer = undefined;
+    if (!enabled()) return;
+    const due = Math.min(versioned() && !pollRunning ? pollAt : Infinity, ...[...entries.values()].map(e => e.active && !e.running ? e.task?.due ?? Infinity : Infinity));
+    if (Number.isFinite(due)) timer = time.set(() => { timer = undefined; tick(); }, Math.max(0, due - time.now()));
   }
-  private tick() {
-    if (!this.enabled) return;
-    if (this.versioned && !this.pollRunning && this.pollAt <= this.time.now()) void this.poll();
-    for (const q of this.host.queries()) {
-      const e = this.entries.get(q.id);
-      if (!e?.active || !q.active || e.running || !e.task || e.task.due > this.time.now()) continue;
-      if (q.fetching) { e.task.due = this.time.now() + 250; continue; }
+  function tick() {
+    if (!enabled()) return;
+    if (versioned() && !pollRunning && pollAt <= time.now()) void poll();
+    for (const q of host.queries()) {
+      const e = entries.get(q.id);
+      if (!e?.active || !q.active || e.running || !e.task || e.task.due > time.now()) continue;
+      if (q.fetching) { e.task.due = time.now() + 250; continue; }
       const reason = e.task.reason; e.task = undefined;
       if (reason === 'initial' && q.data?.ok) continue;
-      if (['version-change', 'activation-change'].includes(reason) && validation(q.data, this.versions) === 'same' && !observationMeta(q.data).refreshing) continue;
-      e.running = true; e.lastAttempt = this.time.now();
+      if (['version-change', 'activation-change'].includes(reason) && validation(q.data, versions) === 'same' && !observationMeta(q.data).refreshing) continue;
+      e.running = true; e.lastAttempt = time.now();
       if (reason === 'follow-up') e.follows++;
-      this.counters.businessReads++; this.counters.reasons[reason] = (this.counters.reasons[reason] || 0) + 1;
+      counters.businessReads++; counters.reasons[reason] = (counters.reasons[reason] || 0) + 1;
       const waiters = [...e.waiters]; e.waiters.clear();
       void q.fetch().catch(() => {}).finally(() => {
         for (const done of waiters) done();
         e.running = false;
         const pending = e.pending; e.pending = undefined;
-        if (this.enabled && e.active && pending) this.enqueue(e, Math.max(0, pending.due - this.time.now()), pending.reason);
-        this.changed();
+        if (enabled() && e.active && pending) enqueue(e, Math.max(0, pending.due - time.now()), pending.reason);
+        changed();
       });
     }
     // QueryObserver can finish its initial read before our queued activation
     // runs. Reconcile the returned pending state after dropping that duplicate.
-    this.changed();
+    changed();
   }
-  private async poll() {
-    this.pollRunning = true; this.pollAt = Infinity;
-    const generation = this.generation;
-    const ids = [...new Set([...this.subscriptions.values()].flatMap(s => s.ids))].sort();
-    this.counters.versionReads++;
+  async function poll() {
+    pollRunning = true; pollAt = Infinity;
+    const pollGeneration = generation;
+    const ids = [...new Set([...subscriptions.values()].flatMap(s => s.ids))].sort();
+    counters.versionReads++;
     try {
-      const response = await this.host.read(ids);
-      if (!this.enabled || generation !== this.generation) return;
+      const response = await host.read(ids);
+      if (!enabled() || pollGeneration !== generation) return;
       if (!response.ok) throw new Error(response.error?.code || 'observer_unavailable');
-      const value = response.result as Versions, now = this.time.now();
-      const restarted = this.versions !== null && this.versions.instanceId !== value.instanceId;
-      const delta = versionDelta(this.versions, value);
-      this.versions = value; this.validatedAt = now; this.validatedIds = new Set(ids);
-      this.failures = 0; this.failureSince = null;
+      const value = response.result as Versions, now = time.now();
+      const restarted = versions !== null && versions.instanceId !== value.instanceId;
+      const delta = versionDelta(versions, value);
+      versions = value; validatedAt = now; validatedIds = new Set(ids);
+      failures = 0; failureSince = null;
       const disconnected = ['disconnected', 'disposed', 'closed'].includes(value.hostTransport?.state || '');
-      if (disconnected) { this.hostFailures++; this.hostFailureSince ??= now; } else { this.hostFailures = 0; this.hostFailureSince = null; }
-      this.host.issue(this.hostFailures >= 3 && now - (this.hostFailureSince ?? now) >= this.warningWindow ? 'host_transport_unavailable' : null);
-      for (const q of this.host.queries()) {
-        const e = this.entries.get(q.id);
+      if (disconnected) { hostFailures++; hostFailureSince ??= now; } else { hostFailures = 0; hostFailureSince = null; }
+      host.issue(hostFailures >= 3 && now - (hostFailureSince ?? now) >= warningWindow() ? 'host_transport_unavailable' : null);
+      for (const q of host.queries()) {
+        const e = entries.get(q.id);
         if (!q.active || !e) continue;
         const meta = observationMeta(q.data), state = validation(q.data, value);
         if (meta.readTask || terminalRead(q)) continue;
-        if (restarted && !meta.immutableIdentity) { this.enqueue(e, 0, 'backend-generation'); continue; }
+        if (restarted && !meta.immutableIdentity) { enqueue(e, 0, 'backend-generation'); continue; }
         if (q.data?.ok && state === 'same') {
           if (!meta.refreshing && meta.cacheState !== 'refreshing' && meta.state === 'ready') q.validate(new Date(now).toISOString());
           // A cache publication can finish without changing the source token.
-          else if (!q.fetching) this.enqueue(e, 0, 'refresh-completion');
-        } else if (state === 'changed') this.enqueue(e, 0, 'version-change');
-        else if (q.data?.ok && (shouldRefreshVersionedQuery(this.project, delta, q.key, q.data, true) || !q.eventOnly && now - Math.max(q.updatedAt, e.lastAttempt) >= policy.legacyReadMs)) this.enqueue(e, 0, 'legacy-validation');
-        else if (!q.eventOnly && !q.data?.ok && !durable.has(q.data?.error?.code || '') && !q.fetching && !e.task) this.enqueue(e, 0, 'recovery');
+          else if (!q.fetching) enqueue(e, 0, 'refresh-completion');
+        } else if (state === 'changed') enqueue(e, 0, 'version-change');
+        else if (q.data?.ok && (shouldRefreshVersionedQuery(project, delta, q.key, q.data, true) || !q.eventOnly && now - Math.max(q.updatedAt, e.lastAttempt) >= policy.legacyReadMs)) enqueue(e, 0, 'legacy-validation');
+        else if (!q.eventOnly && !q.data?.ok && !durable.has(q.data?.error?.code || '') && !q.fetching && !e.task) enqueue(e, 0, 'recovery');
       }
     } catch (error) {
-      if (!this.enabled || generation !== this.generation) return;
-      this.failures++; this.failureSince ??= this.time.now();
-      if (this.enabled && generation === this.generation && this.failures >= 3 && this.time.now() - this.failureSince >= this.warningWindow) this.host.issue(error instanceof Error ? error.message : 'observer_unavailable');
+      if (!enabled() || pollGeneration !== generation) return;
+      failures++; failureSince ??= time.now();
+      if (enabled() && pollGeneration === generation && failures >= 3 && time.now() - failureSince >= warningWindow()) host.issue(error instanceof Error ? error.message : 'observer_unavailable');
     } finally {
-      this.pollRunning = false;
-      if (this.enabled) {
-        const missing = [...this.subscriptions.values()].some(s => s.ids.some(id => !this.validatedIds.has(id)));
-        this.pollAt = this.time.now() + (this.failures ? policy.retryMs[Math.min(this.failures - 1, 3)] : missing || generation !== this.generation ? 0 : policy.pollMs);
+      pollRunning = false;
+      if (enabled()) {
+        const missing = [...subscriptions.values()].some(s => s.ids.some(id => !validatedIds.has(id)));
+        pollAt = time.now() + (failures ? policy.retryMs[Math.min(failures - 1, 3)] : missing || pollGeneration !== generation ? 0 : policy.pollMs);
       }
-      this.changed();
+      changed();
     }
   }
-  debug() {
-    return { enabled: this.enabled, subscribers: this.subscriptions.size, timer: this.timer !== undefined, pollRunning: this.pollRunning,
-      queries: this.host.queries().filter(q => q.active).slice(0, 12).map(q => ({ kind: q.key[1] === 'file-review' ? 'file-review' : q.key[2], active: q.active, fetching: q.fetching, readTask: !!observationMeta(q.data).readTask, scheduled: this.entries.get(q.id)?.task?.reason, running: this.entries.get(q.id)?.running })) };
+  function debug() {
+    return { enabled: enabled(), subscribers: subscriptions.size, timer: timer !== undefined, pollRunning: pollRunning,
+      queries: host.queries().filter(q => q.active).slice(0, 12).map(q => ({ kind: q.key[1] === 'file-review' ? 'file-review' : q.key[2], active: q.active, fetching: q.fetching, readTask: !!observationMeta(q.data).readTask, scheduled: entries.get(q.id)?.task?.reason, running: entries.get(q.id)?.running })) };
   }
-  close() { this.closed = true; this.generation++; if (this.timer !== undefined) this.time.clear(this.timer); this.subscriptions.clear(); for (const e of this.entries.values()) for (const done of e.waiters) done(); this.entries.clear(); }
+  function close() { closed = true; generation++; if (timer !== undefined) time.clear(timer); subscriptions.clear(); for (const e of entries.values()) for (const done of e.waiters) done(); entries.clear(); }
+  return { project, counters, subscribe, changed, refresh, debug, close };
 }
+export type ObservationCoordinator = ReturnType<typeof createObservationCoordinator>;

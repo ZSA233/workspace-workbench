@@ -22,6 +22,20 @@ import { Git, gitDiagnostics } from "../server/backend/git.ts";
 import { ObservationCache } from "../server/backend/cache.ts";
 import { WorkspaceActivityIndex } from "../server/backend/workspace-activity.ts";
 import { type Json, WorkbenchError } from "../server/backend/storage.ts";
+async function prepareRuntime(service: Service, params: Json): Promise<Json> {
+  try { return await service.handle("workspace.prepare", params); }
+  catch(error) {
+    if(!(error instanceof WorkbenchError) || error.code !== 'operation_pending') throw error;
+    const details=error.details as Json;
+    for(let n=0;n<200;n++) {
+      const task=await service.handle('workspace.prepare.task',{action:'status',operationId:details.operationId});
+      if(task.state==='ready') return task.repositories[0].result;
+      if(!['queued','running'].includes(task.state)) throw Error(JSON.stringify(task));
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    throw Error('Runtime preparation did not finish');
+  }
+}
 import { observationTimingFromWire, readBudgetMs, resolveObservationTiming } from "../shared/observation-timing.ts";
 
 export function fixture(extra: Json = {}) {
@@ -373,7 +387,7 @@ test("Node runtime preparation supports Node and Python project requirements", a
   const service = new Service(f.config);
   try {
     const created = await service.handle("workspace.create", { name: "sample", repositories: ["one"] });
-    const prepared = await service.handle("workspace.prepare", { workspaceId: created.id, repositoryId: "one" });
+    const prepared = await prepareRuntime(service, { workspaceId: created.id, repositoryId: "one" });
     assert.equal(prepared.status, "ready");
     const runtime = await service.handle("workspace.runtime", { workspaceId: created.id });
     assert.equal(runtime.toolchain.environment.variables.NPM_CONFIG_CACHE, join(service.runtime!.cacheRoot(created), "npm"));
@@ -951,7 +965,7 @@ test("local Node CLI execution validates prepared runtimes and init preserves ex
       executeLocal(service, "local", "one", [process.execPath, "--version"]),
       /prepare/,
     );
-    await service.handle("workspace.prepare", {
+    await prepareRuntime(service, {
       workspaceId: "local",
       repositoryId: "one",
     });

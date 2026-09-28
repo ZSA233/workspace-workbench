@@ -41,6 +41,7 @@ test("preview is read-only; execute prepares, creates one child, retries without
   const paseo = { agents: { ref: (id: string) => ({ refresh: async () => ({ agent: id === "parent" ? parent(root, planning) : worker }), send: async () => { throw new Error("unexpected redelivery"); } }), list: async () => ({ entries: worker ? [{ agent: worker }] : [], pageInfo: { hasMore: false } }) }, workspaces: { open: async () => ({ id: "paseo-fixture", agents: { create: async (options: { config: unknown; labels: Record<string,string>; parent?: string }) => { creates++; assert.equal((options.config as { modeId: string }).modeId, "auto"); assert.equal(options.parent, undefined); assert.equal(options.labels["workspace-workbench.relationship"], "independent"); worker = { ...parent(root + "/tree"), id: "child", labels: options.labels, status: "idle", workspaceId: "paseo-fixture" }; return { id: "child", current: () => worker, send: async () => {} }; } } }) } } as unknown as PaseoApi;
   const query = async (input: { method: string }) => {
     calls.push(input.method);
+    if(input.method === "workspace.prepare.task") return {ok:true,result:{state:"ready",operationId:"prepared"}};
     if (input.method === "workspace.list") return { ok: true, result: { capabilities: { create: true, agent: true, prepare: true } } };
     if (input.method === "workspace.runtime") return { ok: true, result: { workspaceId: "sample", managed: true, treePath: root + "/tree", capabilities: { agent: true } } };
     if (input.method === "workspace.detail") return { ok: true, result: { workspace: { sourceRoot: root }, repositories: [{ id: "api", name: "API", repoPath: ".", sourcePath: root, worktreePath: root }] } };
@@ -69,7 +70,7 @@ test("preview is read-only; execute prepares, creates one child, retries without
     const resumedById = await withProject({ projectConfig: config }, () => orchestrate("execute", workflowStatusRequest.parse({ requestId: "one" }), "parent", { paseo, query }));
     assert.equal((resumedById as { ok?: boolean }).ok, true);
     assert.equal(creates, 1);
-    assert.ok(calls.indexOf("workspace.create") < calls.indexOf("workspace.prepare"));
+    assert.ok(calls.indexOf("workspace.create") < calls.indexOf("workspace.prepare.task"));
     await run("execute", canonicalRequest);
     assert.equal(creates, 1);
     assert.equal(calls.filter((method) => method === "workspace.create").length, 1);

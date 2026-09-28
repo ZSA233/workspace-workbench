@@ -387,14 +387,16 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
       if (!repositories?.length) throw new Error("workspace_repositories_unavailable");
       for (const repository of repositories) {
         await verifyExecution();
-        const response = await query({ method: "workspace.prepare", params: { workspaceId: progress.workspaceId, repositoryId: repository.id } });
-        const preparation = response.result as { status?: string; issues?: Array<{ code?: string; message?: string; details?: unknown }> } | undefined;
-        if (!response.ok || preparation?.status === "prepare_failed") {
-          writeState(key, { ...progress, stage: "prepare-failed" });
-          const issue = preparation?.issues?.find((item) => item.message) || null;
-          return { ok: false, error: response.error || (issue ? { code: issue.code || "prepare_failed", message: issue.message || "Runtime preparation failed", ...(issue.details === undefined ? {} : { details: issue.details }) } : { code: "prepare_failed", message: "Runtime preparation failed" }) };
+        const response = await query({method:'workspace.prepare.task',params:{action:'start',workspaceId:progress.workspaceId,repositories:[repository.id],requestId:`handoff-prepare:${key}:${repository.id}`}});
+        if(!response.ok) return response;
+        const preparation=response.result as {state:string;operationId:string};
+        if(preparation.state !== 'ready') {
+          writeState(key,{...progress,stage:'prepare-pending'});
+          return {ok:false,error:{code:'operation_pending',message:'Runtime preparation is pending; resume this handoff after checking the same operation',details:{operationId:preparation.operationId,method:'workspace.prepare.task',action:'status',statusTool:'workbench_workspace_operation_status',dispatched:true}}};
         }
       }
+
+
     }
     const runtime = await query({ method: "workspace.runtime", params: { workspaceId: progress.workspaceId } });
     if (!runtime.ok) return runtime;

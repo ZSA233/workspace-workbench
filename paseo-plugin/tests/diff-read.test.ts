@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { Git } from '../server/backend/git.ts';
 import { GitQueue } from '../server/backend/git-scheduler.ts';
 import { DiffReadTasks } from '../server/backend/diff-read-tasks.ts';
-import { DiffReadClient } from '../client/diff-read-client.ts';
+import { createDiffReadClient } from '../client/diff-read-client.ts';
 import { countFile } from '../server/backend/file-statistics.ts';
 import { Service } from '../server/backend/service.ts';
 import { loadConfig } from '../server/backend/config.ts';
@@ -100,7 +100,7 @@ test('job deadline and subscriber lease cancel owned work and terminal status ke
 });
 
 test('UI task client reuses identity after a lost response and releases the returned task after blur', async () => {
-  const client = new DiffReadClient(); const calls: Record<string, unknown>[] = []; let n = 0;
+  const client = createDiffReadClient(); const calls: Record<string, unknown>[] = []; let n = 0;
   const rpc = async (_: string, params: Record<string, unknown>) => {
     calls.push(params);
     if (++n === 1) return { ok: false, error: { code: 'observer_timeout', message: 'lost' } };
@@ -140,7 +140,7 @@ test('returning to a cancelled task waits for its cleanup rather than reusing it
 });
 
 test('failed reads stop automatic replay; backend generation loss restarts only once', async () => {
-  const client = new DiffReadClient(); let calls = 0;
+  const client = createDiffReadClient(); let calls = 0;
   const failed = async () => { calls++; return { ok: true, result: { protocol: 1, taskId: 't', generation: 'g', deadline: Date.now() + 30_000, state: 'failed', error: { code: 'git_timeout', message: 'timeout' } } }; };
   assert.equal((await client.read('one', {}, failed, true)).ok, false);
   await client.read('one', {}, failed, true); assert.equal(calls, 1);
@@ -148,7 +148,7 @@ test('failed reads stop automatic replay; backend generation loss restarts only 
 });
 
 test('UI restarts a lost task after backend generation change once, while same-generation loss is terminal', async () => {
-  const client = new DiffReadClient(); let call = 0;
+  const client = createDiffReadClient(); let call = 0;
   const rpc = async () => {
     call++;
     if (call === 1 || call === 3) return { ok: true, result: { protocol: 1, taskId: String(call), generation: call === 1 ? 'old' : 'new', state: 'running', deadline: Date.now() + 30000 } };

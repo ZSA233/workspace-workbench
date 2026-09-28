@@ -33,6 +33,9 @@ export class ObservationCache {
   private background = new Set<Promise<unknown>>();
   private failures = new Map<string, string>();
   private generation = 0;
+  private workspaceGenerations = new Map<string, number>();
+  workspaceEpoch(id: string) { return this.workspaceGenerations.get(id) || 0; }
+  invalidateWorkspace(id: string) { this.workspaceGenerations.set(id, this.workspaceEpoch(id) + 1); }
   private closed = false;
   onProduced?: (scope?: CachePublication) => void;
   config: Config;
@@ -103,6 +106,7 @@ export class ObservationCache {
     if (active) return active;
     if (this.flights.size >= 32) throw new WorkbenchError("observer_busy", "snapshot computation limit reached");
     const generation = this.generation;
+    const workspaceGeneration = scope?.workspaceId ? this.workspaceEpoch(scope.workspaceId) : 0;
     const flight = work()
       .then((value) => {
         const previous = this.entries.get(key);
@@ -152,7 +156,7 @@ export class ObservationCache {
           time: Date.now(),
           bytes: Buffer.byteLength(JSON.stringify(value)),
         };
-        if (generation === this.generation) {
+        if (generation === this.generation && (!scope?.workspaceId || workspaceGeneration === this.workspaceEpoch(scope.workspaceId))) {
           this.entries.delete(key);
           this.entries.set(key, entry);
           this.trim();

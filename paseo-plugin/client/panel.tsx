@@ -1,3 +1,6 @@
+import { hydrateRepositorySummaries } from "./repository-refresh-client";
+import { usePreparationTask } from "./use-preparation-task";
+import { useWorkspaceSummaries } from "./use-workspace-summaries";
 import { useRepositoryRefresh } from "./use-repository-refresh";
 import { clientDiagnostic } from "../shared/client-diagnostics";
 import { observationQueryOptions } from '../shared/observation-policy.ts';
@@ -494,7 +497,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [lifecycleResponse, setLifecycleResponse] = useState<WorkspaceLifecycleResponse | null>(null);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
   const [lifecycleBusyWorkspaceId, setLifecycleBusyWorkspaceId] = useState("");
-  const [preparingToolchain, setPreparingToolchain] = useState(false);
+
 
   useEffect(() => {
     setSelectionResolved(false);
@@ -779,9 +782,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [listReady, observedWorkspaces, preferences.hydrated, selectedWorkspaceId, selectionResolved, workspaceFilter]);
 
   const refreshCapable = backendQuery.data?.readCapabilities?.refreshProtocol === 1;
+  const basicCapable = backendQuery.data?.readCapabilities?.basicSummaryProtocol === 1;
   const detailQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "workspace-detail", selectedWorkspaceId],
-    queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, mode: refreshCapable ? "roster" : "summary", refreshToolchain: false } }),
+    queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, mode: basicCapable ? "roster" : "summary", refreshToolchain: false } }),
     enabled: foreground && Boolean(selectedWorkspaceId && selectedWorkspace && backendReady && listReady),
     refetchInterval: false,
     refetchIntervalInBackground: false,
@@ -800,7 +804,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     && (!isRecoverableObserverFailure(detailQuery.data, detailQuery.error)
       || (detailState.failureAgeMs ?? RECOVERABLE_FAILURE_GRACE_MS) >= RECOVERABLE_FAILURE_GRACE_MS);
   const displayDetail = listReady && detail?.workspace.id === selectedWorkspaceId
-    ? detail
+    ? hydrateRepositorySummaries(queryClient, projectConfig, detail)
     : null;
   const selectorWorkspace = selectedWorkspace && displayDetail
     ? { ...selectedWorkspace, ...displayDetail.workspace }
@@ -883,16 +887,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const changesFailure = queryFailureForDisplay(changesState, changesQuery.data, changesQuery.error, localizedCopy);
   const refreshInput = { workspaceId: selectedWorkspaceId, repoPath: selectedRepoPath, historyMode: graphView.historyMode, maxCommits: graphView.maxCommits, scope: changesScope, commitSha: selectedCommit || undefined };
   const refreshRpc = (params: Record<string, unknown>) => rpc({ method: 'observer.refresh', params });
-  const selectedRefresh = useRepositoryRefresh(projectConfig, refreshInput, refreshCapable && foreground && tab === 'workspace' && !!selectedRepoPath && !!selectedWorkspaceId && backendReady, refreshRpc);
-  const [warmIndex, setWarmIndex] = useState(0);
-  const warmPaths = useMemo(() => (displayDetail?.repositories || []).map(repo => repo.repoPath).filter(path => path !== selectedRepoPath).slice(0, 10), [selectedWorkspaceId, displayDetail?.repositories.map(repo => repo.repoPath).join('|'), selectedRepoPath]);
-  const warmIdentity = JSON.stringify([projectConfig, selectedWorkspaceId, warmPaths]);
-  useEffect(() => { setWarmIndex(0); }, [warmIdentity]);
-  const warmRepo = warmPaths[warmIndex] || '';
-  const warmRefresh = useRepositoryRefresh(projectConfig, { ...refreshInput, repoPath: warmRepo, commitSha: undefined, scope: changeScope }, refreshCapable && foreground && tab === 'workspace' && !selectedRefresh.pending && !!selectedRefresh.result && !!warmRepo && backendReady, refreshRpc, true);
-  useEffect(() => {
-    if (warmRefresh.query.data && !warmRefresh.pending && !warmRefresh.query.isFetching) setWarmIndex(index => index + 1);
-  }, [warmRefresh.query.data, warmRefresh.pending, warmRefresh.query.isFetching]);
+  const selectedRefresh = useRepositoryRefresh(projectConfig, refreshInput, refreshCapable && foreground && tab === 'workspace' && !!selectedRepoPath && !!selectedWorkspaceId && backendReady && (!basicCapable || !!selectedRepository && !selectedRepository.observationPending && typeof selectedRepository.dirty === 'boolean'), refreshRpc);
+  const basicSummaries = useWorkspaceSummaries(projectConfig, selectedWorkspaceId, (displayDetail?.repositories || []).map(repo => repo.repoPath), selectedRepoPath, basicCapable && foreground && tab === 'workspace' && backendReady, refreshRpc, {historyMode: graphView.historyMode, maxCommits: graphView.maxCommits});
   reportNativeDiagnostic("project-panel-changes-state", queryDiagnosticDetails(changesQuery.data, changesQuery.error, changesQuery, changesState));
 
   useEffect(() => {
@@ -978,7 +974,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const reviewModelsQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "agent-review-models", selectedWorkspaceId],
     queryFn: () => reviewModelsRpc({ projectConfig, workspaceId: selectedWorkspaceId }),
-    enabled: Boolean(projectConfig && backendReady && selectedWorkspaceId && listReady), staleTime: 5 * 60_000, refetchOnWindowFocus: false, retry: false,
+    enabled: Boolean(foreground && reviewSettingsOpen && projectConfig && backendReady && selectedWorkspaceId && listReady), staleTime: 5 * 60_000, refetchOnWindowFocus: false, retry: false,
   });
   const agentReview = (agentReviewQuery.data?.session || null) as ReviewSession | null;
   const reviewPreferences = reviewSettingsQuery.data?.effective;
@@ -1154,8 +1150,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       changesState.expired ||
       (tab === "review" && reviewState.expired),
   );
-  const observationRefreshing = foreground && (refreshCapable ? !selectedRefresh.slow && (selectedRefresh.manual || selectedRefresh.pending && !graph && !changes) : manualRefreshing || observationAreas.some((area) => area.fetching && !area.snapshot.response));
-  const observationDegraded = selectedRefresh.failed || Boolean(observationIssue) || observationAreas.some((area) => area.snapshot.status === "degraded");
+  const observationRefreshing = foreground && (basicSummaries.currentRunning || (refreshCapable ? !selectedRefresh.slow && (selectedRefresh.manual || selectedRefresh.pending && !graph && !changes) : manualRefreshing || observationAreas.some((area) => area.fetching && !area.snapshot.response)));
+  const observationDegraded = selectedRefresh.failed || basicSummaries.failures.some(failure => failure.repoPath === selectedRepoPath) || Boolean(observationIssue) || observationAreas.some((area) => area.snapshot.status === "degraded");
   reportNativeDiagnostic("project-panel-observation-state", {
     foreground: String(foreground),
     listReady: String(listReady),
@@ -1178,27 +1174,23 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     return latest;
   }, null);
 
+  const prepareCapable = backendQuery.data?.readCapabilities?.prepareProtocol === 1;
+  const preparation = usePreparationTask(projectConfig, selectedWorkspaceId, prepareCapable && foreground && backendReady && !!selectedWorkspaceId, rpc);
+  const preparingToolchain = preparation.busy;
+  const preparationLabels: Record<string, string> = locale === 'zh-CN'
+    ? {queued:'排队中',running:'准备中',prepare:'准备中',checking:'检查运行时',installing:'安装中',verifying:'验证中','waiting-install-lock':'等待其他安装完成',ready:'已完成',failed:'准备失败',interrupted:'等待继续',reconcile:'核对已安装结果',reconciled:'已核对',recovering:'正在恢复任务状态'}
+    : {queued:'Queued',running:'Preparing',prepare:'Preparing',checking:'Checking runtimes',installing:'Installing',verifying:'Verifying','waiting-install-lock':'Waiting for another installation',ready:'Complete',failed:'Preparation failed',interrupted:'Awaiting continuation',reconcile:'Checking installed results',reconciled:'Reconciled',recovering:'Recovering task status'};
+  const preparationPhase = preparationLabels[String(preparation.task?.phase || '')] || preparation.task?.state || '';
+
   const prepareSelectedToolchain = useCallback(async () => {
-    if (!selectedWorkspaceId || selectedWorkspaceIsMain || !displayDetail || preparingToolchain) return;
-    setPreparingToolchain(true);
-    let failure: string | null = null;
-    try {
-      for (const repository of displayDetail.repositories) {
-        const response = await rpc({ method: "workspace.prepare", params: { workspaceId: selectedWorkspaceId, repositoryId: repository.repoPath } });
-        const result = response.result as { status?: string; issues?: Array<{ message?: string }> } | undefined;
-        if (!response.ok || result?.status === "prepare_failed") {
-          failure = response.error?.message || result?.issues?.find((issue) => issue.message)?.message || localizedCopy.text_273309c58d;
-          break;
-        }
-      }
-      await Promise.allSettled([refreshArea("workspace-detail"), refreshArea("workspace-list")]);
-    } catch (error) {
-      failure = error instanceof Error ? error.message : localizedCopy.text_273309c58d;
-    } finally {
-      setPreparingToolchain(false);
-    }
-    if (failure) toast.error(failure);
-  }, [detailQuery.refetch, displayDetail, listQuery.refetch, localizedCopy.text_273309c58d, preparingToolchain, rpc, selectedWorkspaceId, selectedWorkspaceIsMain, toast]);
+    if (!prepareCapable) { toast.error(locale === 'zh-CN' ? '服务尚未支持任务式准备，请更新插件后重试' : 'Update the plugin service to prepare runtimes'); return; }
+    if (!displayDetail || preparingToolchain) return;
+    await preparation.start(displayDetail.repositories.map(repository => repository.repoPath));
+  }, [prepareCapable, displayDetail, preparingToolchain, preparation.start, locale, toast]);
+  useEffect(() => {
+    if (['ready','failed','interrupted'].includes(preparation.task?.state)) void refreshArea('workspace-detail');
+  }, [preparation.task?.state, preparation.task?.updatedAt]);
+
 
   const refreshLegacy = useObservationRefresh(() => [
       backendQuery.refetch(),
@@ -1213,9 +1205,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     ], observationTiming.clientRefreshTimeoutMs, setManualRefreshing);
   const refreshAll = useCallback(() => {
     if (!refreshCapable) return refreshLegacy();
+    void backendQuery.refetch();
     selectedRefresh.refresh();
+    basicSummaries.refresh();
     void refreshArea('workspace-list');
-  }, [refreshCapable, refreshLegacy, selectedRefresh.refresh, refreshArea]);
+  }, [refreshCapable, refreshLegacy, selectedRefresh.refresh, refreshArea, basicSummaries.refresh, backendQuery.refetch]);
 
 
   // The version poll resumes observation queries; only bootstrap needs a direct retry.
@@ -1577,7 +1571,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         if (Math.abs(width - panelWidth) > 1) setPanelWidth(width);
       }}
     >
-      {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await refreshArea("workspace-list"); await refreshArea("workspace-detail"); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
+      {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await refreshArea("workspace-list"); await refreshArea("workspace-detail"); await refreshArea("workspace-prepare"); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
       {mainRepositoriesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingMainRepositories) setMainRepositoriesOpen(false); }} title={localizedCopy.mainRepositoryTitle}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
           <Text style={styles.layoutMenuHint}>{localizedCopy.mainRepositoryHint}</Text>
@@ -1819,6 +1813,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               onOpenLayoutMenu={openLayoutMenu}
               onPrepareToolchain={!selectedWorkspaceIsMain ? prepareSelectedToolchain : undefined}
               preparingToolchain={preparingToolchain}
+              confirmedRepositoryCount={basicCapable ? basicSummaries.confirmed : undefined}
+              preparationProgress={preparation.task?.state === 'recovering' || preparation.error ? localizedCopy.prepareRecovering : preparation.task && preparation.task.state !== 'idle' ? `${localizedCopy.prepareProgress}: ${preparation.task.repositories?.filter((repo: any) => repo.state === 'ready').length || 0}/${preparation.task.repositories?.length || 0}${['failed','interrupted'].includes(preparation.task.state) ? ` · ${localizedCopy.prepareNeedsContinue}` : ''}` : undefined}
               graphPlatform={layout.platform}
               theme={theme}
               styles={styles}
@@ -1850,6 +1846,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       </View>
       <AnchoredMenu open={statusMenuOpen} onClose={() => setStatusMenuOpen(false)} theme={theme}>
         <Text style={styles.layoutMenuHint}>{observationLabel}</Text>
+        {backendReady && !basicCapable ? <Text style={styles.layoutMenuHint}>{localizedCopy.basicObservationCompatibility}</Text> : null}
+        {preparation.task && preparation.task.state !== 'idle' ? <Text style={styles.layoutMenuHint}>{locale === 'zh-CN' ? '运行时准备' : 'Runtime preparation'} · {preparationPhase} · {(preparation.task.repositories || []).filter((repo: any) => repo.state === 'ready').length}/{preparation.task.repositories?.length || 0}</Text> : null}
+        {basicCapable ? <Text style={styles.layoutMenuHint}>{locale === 'zh-CN' ? '仓库状态已确认' : 'Repositories verified'} {basicSummaries.confirmed}/{basicSummaries.total}</Text> : null}
+        {preparation.task?.error?.message ? <Text style={styles.warningText}>{String(preparation.task.error.message).slice(0, 240)}</Text> : null}
+        {(preparation.task?.repositories || []).filter((repo: any) => repo.state === 'failed').map((repo: any) => <Text key={repo.id} style={styles.warningText}>{repo.id} · {String(repo.result?.issues?.[0]?.message || localizedCopy.prepareNeedsContinue).slice(0, 240)}</Text>)}
+        {basicSummaries.failures.map(failure => <Text key={failure.repoPath} style={styles.warningText}>{failure.repoPath} · {failure.message}</Text>)}
         {refreshCapable && selectedRefresh.slow && selectedRefresh.pending ? <Text style={styles.layoutMenuHint}>{locale === 'zh-CN' ? '当前仓库仍在更新，已有内容可继续使用' : 'Current repository is still updating; existing content remains available'}</Text> : null}
         {refreshCapable ? Object.entries(selectedRefresh.result?.regions || {}).map(([area, region]) => <Text key={area} style={region.state === 'failed' ? styles.warningText : styles.layoutMenuHint}>{area} · {region.state} · {region.phase}{region.durationMs !== undefined ? ` · ${region.durationMs} ms` : ''}</Text>) : null}
         {backendQuery.data && !backendQuery.data.readCapabilities ? <Text style={styles.layoutMenuHint}>{localizedCopy.diffCompatibility}</Text> : null}

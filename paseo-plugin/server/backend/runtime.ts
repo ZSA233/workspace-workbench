@@ -1,3 +1,5 @@
+import { writeOperation } from "./operation-storage.ts";
+import { withRuntimeInstall } from "./runtime-install-lock.ts";
 import {
   accessSync,
   constants,
@@ -68,6 +70,8 @@ export function which(name: string): string | null {
   );
 }
 export class Runtime {
+  signal?: AbortSignal;
+  onProgress?: (phase: string, tool: string) => void;
   config: Config;
   mode: string;
   manager: string;
@@ -274,6 +278,7 @@ export class Runtime {
         binPaths: paths,
       };
       for (const [tool, version] of Object.entries(requested)) {
+        if (this.signal?.aborted) throw new WorkbenchError("operation_interrupted", "Runtime preparation interrupted");
         tools.add(tool);
         const r = (requirements[tool] ||= { requested: [], resolved: [] });
         r.requested.push(version);
@@ -356,6 +361,7 @@ export class Runtime {
       const r = await command(path, adapters[tool].args, {
         cwd: this.root,
         timeout: 10000,
+        signal: this.signal,
         env,
       });
       return r.code === 0
@@ -392,6 +398,8 @@ export class Runtime {
     };
     try {
       for (const [tool, version] of Object.entries(requested)) {
+        if (this.signal?.aborted) throw new WorkbenchError("operation_interrupted", "Runtime preparation interrupted");
+        this.onProgress?.("checking", tool);
         const matches = (resolved: string) =>
           resolved === version || resolved.startsWith(version + ".");
         let found = false;
@@ -427,25 +435,21 @@ export class Runtime {
           );
         const env = this.environment(workspace, [tool], true),
           spec = `${tool}@${version}`;
-        const install = await command(manager, ["install", spec, "--yes"], {
-          cwd: this.root,
-          timeout: 300000,
-          env,
+        this.onProgress?.("waiting-install-lock", tool);
+        const root = await withRuntimeInstall(`${env.MISE_DATA_DIR || manager}:${spec}`, this.signal, async () => {
+          let where = await command(manager, ["where", spec], {cwd:this.root,timeout:10000,env,signal:this.signal});
+          if (where.code !== 0 || !where.stdout.trim().startsWith("/") || !executable(join(where.stdout.trim(), "bin", tool))) {
+            this.onProgress?.("installing", tool);
+            const install = await command(manager, ["install", spec, "--yes"], {cwd:this.root,timeout:300000,env,signal:this.signal});
+            if (install.code) throw new WorkbenchError("prepare_failed", install.stderr);
+            where = await command(manager, ["where", spec], {cwd:this.root,timeout:10000,env,signal:this.signal});
+          }
+          const root=where.stdout.trim();
+          if(where.code || !root.startsWith("/") || !executable(join(root,"bin",tool))) throw new WorkbenchError("toolchain_not_ready","runtime executable missing");
+          return root;
         });
-        if (install.code)
-          throw new WorkbenchError("prepare_failed", install.stderr);
-        const where = await command(manager, ["where", spec], {
-            cwd: this.root,
-            timeout: 10000,
-            env,
-          }),
-          root = where.stdout.trim(),
-          path = join(root, "bin", tool);
-        if (where.code || !root.startsWith("/") || !executable(path))
-          throw new WorkbenchError(
-            "toolchain_not_ready",
-            "runtime executable missing",
-          );
+        this.onProgress?.("verifying", tool);
+        const path = join(root, "bin", tool);
         const resolved = await this.version(workspace, tool, path);
         if (!matches(resolved))
           throw new WorkbenchError(
@@ -461,7 +465,7 @@ export class Runtime {
       entry.status = "prepare_failed";
       entry.issues = [issue(error)];
     }
-    atomicJson(this.file(workspace), { ...saved, [repositoryId]: entry });
+    await writeOperation(this.file(workspace), { ...saved, [repositoryId]: entry });
     return { workspaceId: workspace.id, repositoryId, ...entry };
   }
 }

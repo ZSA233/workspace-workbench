@@ -24,12 +24,12 @@ const publicTools = [
   { name: "workbench_artifact_register", description: "Register a handoff asset from a local path or image data." },
   { name: "workbench_workspace_preview", description: "Optional local preview that freezes handoff materials without Git changes; it does not require a Paseo host connection. Use direct create for a simple Git Workspace." },
   { name: "workbench_workspace_execute", description: "Run the saved preview; requestId alone is enough after preview. Full input remains accepted. Report success and end this turn." },
-  { name: "workbench_workspace_status", description: "Read an uncertain Workspace handoff using its request ID (requestId); use operation_status for a Git operationId." },
+  { name: "workbench_workspace_status", description: "Read an uncertain Workspace handoff using its request ID (requestId); use operation_status for a Git or preparation operationId." },
   { name: "workbench_workspace_submit", description: "Submit an authorized task and original paths, then create or reuse its Workspace and start the worker without a separate preview." },
   { name: "workbench_workspace_create", description: "Create or reuse a Git Workspace only. This does not require an Agent, handoff, Reviewer or parent session." },
   { name: "workbench_workspace_delegate", description: "Explicitly delegate an already-created Workspace with the supplied handoff. Creating the Workspace and starting an Agent remain separate actions." },
   { name: "workbench_workspace_add_repositories", description: "Add repositories to an existing flat managed Workspace without creating a new Workspace or Agent session." },
-  { name: "workbench_workspace_operation_status", description: "Read the durable status of a Git Workspace creation operation by operationId." },
+  { name: "workbench_workspace_operation_status", description: "Read the durable status of a Workspace creation or runtime preparation operation by operationId." },
   connectionTool,
   { name: "workbench_review_preview", description: "Preview review context without starting a Reviewer." },
   { name: "workbench_review_execute", description: "Start or continue the Workspace Agent Review orchestration." },
@@ -357,7 +357,7 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
   const directWorkspaceAction = tool?.name === "workbench_workspace_create" || tool?.name === "workbench_workspace_add_repositories" || tool?.name === "workbench_workspace_operation_status" || tool?.name === "workbench_workspace_preview";
   const delegateAction = tool?.name === "workbench_workspace_delegate";
   if (tool?.name === "workbench_workspace_status" && typeof args.requestId !== "string") {
-    return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: { code: "workspace_status_request_id_required", message: "workbench_workspace_status requires the requestId returned by workspace_submit, preview, or execute; use workbench_workspace_operation_status with operationId for Git creation status." } }) }], isError: true };
+    return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: { code: "workspace_status_request_id_required", message: "workbench_workspace_status requires the requestId returned by workspace_submit, preview, or execute; use workbench_workspace_operation_status with operationId for creation or preparation status." } }) }], isError: true };
   }
   const needsToken = (!directWorkspaceAction || tool?.name === "workbench_workspace_preview") && !runtime.token;
   const failure = (code, dispatched = false, stage = "context") => ({ content: [{ type: "text", text: JSON.stringify({ ok: false,

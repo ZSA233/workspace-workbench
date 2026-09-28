@@ -42,7 +42,7 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
-const versionedMethods = new Set<string>(["observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
+const versionedMethods = new Set<string>(["workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
 const mutationMethods = new Set<string>([
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
   "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete",
@@ -68,7 +68,7 @@ const SERVER_BUILD_ID = "observer-bridge-v2";
 const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(method?: string): number {
-  if (method === "repository.diff.read" || method === "observer.refresh") return 2_000;
+  if (method === "workspace.prepare.task" || method === "workspace.prepare" || method === "repository.diff.read" || method === "observer.refresh") return 2_000;
   const project = currentProject();
   let timing = DEFAULT_OBSERVATION_TIMING;
   try { if (project) timing = loadConfig(project.configPath).timing; } catch {
@@ -269,7 +269,8 @@ export class ObserverBridge {
     this.cache.delete(key);
     const active = this.inFlight.get(key);
     if (active) return active;
-    if (this.inFlight.size >= BRIDGE_IN_FLIGHT && !["observer.health", "observer.versions"].includes(input.method))
+    const control = ["observer.health", "observer.versions"].includes(input.method) || ["observer.refresh", "repository.diff.read", "workspace.prepare.task"].includes(input.method) && input.params.action === "status";
+    if (this.inFlight.size >= (control ? 64 : BRIDGE_IN_FLIGHT))
       return { ok: false, error: { code: "observer_busy", message: "observer request limit reached; retry" } };
     const request: SocketRequest = { id: `${process.pid}:${++this.sequence}`, method: input.method, params };
     const timeout = configuredBridgeTimeoutMs(input.method);
@@ -305,7 +306,7 @@ export class ObserverBridge {
         stats.maxMs = Math.max(stats.maxMs, Date.now() - startedAt);
         if (error instanceof BridgeError && error.code === "observer_timeout") this.timeoutRequests++;
         if (!replayableMethods.has(input.method) && error instanceof BridgeError)
-          return { ok: false, error: { code: "request_uncertain_retry_same_identity", message: "Response unavailable; reconcile the saved operation before retrying" } };
+          return { ok: false, error: { code: "request_uncertain_retry_same_identity", message: "Response unavailable; reconcile the saved operation before retrying", details: { method: input.method, requestId: input.params.requestId, stage: error.stage, dispatched: error.stage !== "connect", ...(input.method === "workspace.prepare.task" ? { status: { method: "workspace.prepare.task", action: "status", requestId: input.params.requestId, operationId: input.params.operationId, workspaceId: input.params.workspaceId } } : {}) } } };
         throw error;
       })
       .finally(() => this.inFlight.delete(key));
@@ -365,7 +366,7 @@ export async function handleObserver(input: QueryInput, context?: AgentContext):
         const project = currentProject();
         if (project) recordBackendFailure(project.configPath, error instanceof Error ? error.message : String(error));
         if (!replayableMethods.has(request.method) && error instanceof BridgeError)
-          return { ok: false, error: { code: "request_uncertain_retry_same_identity", message: "Response unavailable; reconcile the saved operation before retrying" } };
+          return { ok: false, error: { code: "request_uncertain_retry_same_identity", message: "Response unavailable; reconcile the saved operation before retrying", details: { method: input.method, requestId: input.params.requestId, stage: error.stage, dispatched: error.stage !== "connect", ...(input.method === "workspace.prepare.task" ? { status: { method: "workspace.prepare.task", action: "status", requestId: input.params.requestId, operationId: input.params.operationId, workspaceId: input.params.workspaceId } } : {}) } } };
         if (!project || !["observer_connection_refused", "observer_unavailable"].includes(code)) throw error;
         const backend = await startBackend(project.configPath);
         if (backend.state !== "ready") throw error;

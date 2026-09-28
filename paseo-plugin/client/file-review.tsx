@@ -1,5 +1,5 @@
 import { clientDiagnostic } from "../shared/client-diagnostics.ts";
-import { DiffReadClient, type DiffRpc } from "./diff-read-client.ts";
+import { createDiffReadClient, type DiffRpc } from "./diff-read-client.ts";
 import { DIFF_READ_PROTOCOL, DIFF_READ_BUILD } from "../shared/diff-read.ts";
 import { observationMeta } from "./observation-coordinator.ts";
 import { observationQueryOptions } from '../shared/observation-policy.ts';
@@ -140,7 +140,7 @@ export function FileReviewPanel(props: FilePanelProps) {
     }
   }, [activeKey, activeSelection, hostWorkspaceId]);
 
-  const reader = useRef(new DiffReadClient()).current;
+  const reader = useRef(createDiffReadClient()).current;
   const readKey = activeSelection ? selectionKey(activeSelection) : '';
   const readRpcRef = useRef<DiffRpc>(async () => ({ ok: false }));
   const diffRpc: DiffRpc = (method, params) => rpc({ method, params, projectConfig: activeSelection?.projectConfig });

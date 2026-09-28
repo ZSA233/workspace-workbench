@@ -5,14 +5,14 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { observationQueryOptions } from '../shared/observation-policy.ts';
 import { observationMeta } from './observation-coordinator.ts';
-import { RepositoryRefreshClient, publishRefresh, repositoryQueryKeys, type RefreshInput, type RefreshResult, type RefreshRpc } from './repository-refresh-client.ts';
+import { createRepositoryRefreshClient, publishRefresh, repositoryQueryKeys, type RefreshInput, type RefreshResult, type RefreshRpc } from './repository-refresh-client.ts';
 
 /** Query payloads stay in QueryClient; the shared coordinator owns job polling. */
 export function useRepositoryRefresh(project: string, input: RefreshInput, enabled: boolean, rpc: RefreshRpc, prefetch = false) {
   const client = useQueryClient();
   const diagnostic = useRpc(clientDiagnostic);
   const sent = useRef(new Set<string>());
-  const reader = useRef(new RepositoryRefreshClient()).current;
+  const reader = useRef(createRepositoryRefreshClient()).current;
   const identity = JSON.stringify([project, input]);
   const keys = useMemo(() => repositoryQueryKeys(project, input), [identity]);
   const force = useRef(false);
@@ -25,7 +25,7 @@ export function useRepositoryRefresh(project: string, input: RefreshInput, enabl
     queryFn: () => reader.readRefresh(identity, input, rpc, force.current, prefetch),
     enabled, ...observationQueryOptions,
   });
-  const result = (query.data?.ok ? query.data.result : null) as RefreshResult | null;
+  const result = (query.data?.result || null) as RefreshResult | null;
   const pending = !!observationMeta(query.data).readTask;
   useEffect(() => {
     if (!enabled) return;

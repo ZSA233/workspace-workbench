@@ -1,3 +1,4 @@
+import { taskIdentity } from "../../shared/task-state.ts";
 import { randomUUID } from 'node:crypto';
 import { DIFF_READ_PROTOCOL, type DiffReadState } from '../../shared/diff-read.ts';
 import { issue, WorkbenchError, type Json } from './storage.ts';
@@ -15,11 +16,11 @@ export class DiffReadTasks {
   private events: Json[] = [];
   constructor() { this.timer = setInterval(() => this.sweep(), 250); this.timer.unref(); }
   private event(task: Task, outcome: string) {
-    this.events.push({ at: new Date().toISOString(), generation: this.generation, taskId: task.id, requestIds: [...task.consumers.keys()].slice(0, 8), phase: task.phase, outcome, durationMs: Date.now() - task.started, queueMs: task.queueMs });
+    this.events.push({ at: new Date().toISOString(), generation: this.generation, taskId: task.id, requestIds: [...task.consumers.keys()].slice(0, 8), phase: task.phase, outcome, ...(task.result?.workspaceId ? {workspaceId:task.result.workspaceId,repoPath:task.result.repoPath} : {}), ...(Array.isArray(task.result?.trace) ? {commands:task.result.trace.slice(-24)} : {}), durationMs: Date.now() - task.started, queueMs: task.queueMs });
     if (this.events.length > 64) this.events.shift();
   }
   private snapshot(task: Task, requestId: string): Json {
-    return { protocol: DIFF_READ_PROTOCOL, generation: this.generation, requestId, taskId: task.id, state: task.state, phase: task.phase, acceptedAt: task.started, deadline: task.deadline, queueMs: task.queueMs, ...(task.result ? { result: task.result } : {}), ...(task.error ? { error: task.error } : {}) };
+    return { ...taskIdentity(task.id, this.generation, task.state, task.phase, task.started), requestId, deadline: task.deadline, queueMs: task.queueMs, ...(task.result ? { result: task.result } : {}), ...(task.error ? { error: task.error } : {}) };
   }
   async start(key: string, requestId: string, work: (signal: AbortSignal, deadline: number, publish: (value: Json) => void) => Promise<Json>, budgetMs = 30_000, identity = key, intent: 'interactive' | 'observation' | 'background' = 'interactive'): Promise<Json> {
     if (this.closed) throw new WorkbenchError('observer_closed', 'Diff reader closed');

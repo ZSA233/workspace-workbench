@@ -8,7 +8,7 @@ import { Service } from '../server/backend/service.ts';
 import { loadConfig } from '../server/backend/config.ts';
 import { Git } from '../server/backend/git.ts';
 import { QueryClient } from '@tanstack/react-query';
-import { RepositoryRefreshClient, publishRefresh, repositoryQueryKeys } from '../client/repository-refresh-client.ts';
+import { createRepositoryRefreshClient, publishRefresh, repositoryQueryKeys } from '../client/repository-refresh-client.ts';
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 const git = (p: string, ...args: string[]) => execFileSync('git', ['-C', p, ...args], { encoding: 'utf8' }).trim();
 function fixture() {
@@ -105,7 +105,7 @@ test('persisted snapshots survive restart and are returned before delayed Git re
 });
 
 test('the shared UI job client returns partial regions and late results stay in their own repository cache', async () => {
-  const reader = new RepositoryRefreshClient(), client = new QueryClient();
+  const reader = createRepositoryRefreshClient(), client = new QueryClient();
   const input = { workspaceId: 'w', repoPath: 'one', scope: 'working', historyMode: 'full', maxCommits: 50 };
   const result = await reader.readRefresh('one', input, async params => ({ ok: true, result: { protocol: 1, taskId: 't', requestId: params.requestId, generation: 'g', deadline: Date.now()+30000, state: 'running', result: { regions: { summary: { state: 'ready', result: { repository: { repoPath: 'one', head: 'a' } } } } } } }));
   assert.ok((result.result as any).observation.readTask);
@@ -175,4 +175,75 @@ test('a user joining queued prefetch promotes it into the reserved observation c
     assert.equal(current.state, 'ready'); assert.equal(current.taskId, queued.taskId); assert.equal(executions, 1);
     assert.equal(gitQueue.health().byIntent.background, 2);
   } finally { release(); await Promise.all(background); await tasks.close(); }
+});
+
+test('basic observation completes without reading a graph or file diff', async () => {
+  const f=fixture(), original=Git.prototype.run;
+  const calls:string[]=[];
+  Git.prototype.run=async function(...args) { calls.push(args[0][0]); if(['log','diff','diff-tree'].includes(args[0][0])) throw Error('heavy read forbidden'); return original.apply(this,args); };
+  try {
+    const id=(await f.service.handle('workspace.list',{})).workspaces[0].id;
+    const task=await finish(f.service,{workspaceId:id,repoPath:'two',summaryOnly:true,requestId:'basic'});
+    assert.deepEqual(Object.keys(task.result.regions),['summary']);
+    assert.equal(task.result.regions.summary.state,'ready');
+    assert.ok(!calls.includes('log'));assert.ok(!calls.includes('diff'));
+  } finally {Git.prototype.run=original;await f.service.close();rmSync(f.root,{recursive:true,force:true});}
+});
+
+test('cached summary rehydrates a new roster placeholder without another leaf update', () => {
+  const client=new QueryClient(), input={workspaceId:'w',repoPath:'one',scope:'working',historyMode:'branch',maxCommits:50};
+  const key=['workspace-workbench','p','workspace-detail','w'];
+  const result={repository:{repoPath:'one',branch:'main',refState:'attached',observationPending:false},observation:{readStartedAt:10}};
+  const refresh={regions:{summary:{state:'ready',phase:'cache',result}}};
+  publishRefresh(client,'p',input,refresh);
+  client.setQueryData(key,{ok:true,result:{repositories:[{repoPath:'one',branch:'',observationPending:true}]}});
+  publishRefresh(client,'p',input,refresh);
+  assert.equal((client.getQueryData<any>(key)).result.repositories[0].branch,'main');
+  client.setQueryData(key,{ok:true,result:{repositories:[{repoPath:'one',branch:'new',readStartedAt:20}]}});
+  publishRefresh(client,'p',input,refresh);
+  assert.equal((client.getQueryData<any>(key)).result.repositories[0].branch,'new');client.clear();
+});
+
+test('twelve basic subscriptions complete independently of one blocked repository', async () => {
+  const f=fixture(); await f.service.close();
+  const {readFileSync}=await import('node:fs');
+  const raw=JSON.parse(readFileSync(f.config,'utf8'));
+  for(let index=2;index<12;index++) {const id=`repo-${index}`;execFileSync('git',['clone','-q','--shared',join(f.root,'one'),join(f.root,id)]);raw.repositories.push({id,path:id});}
+  writeFileSync(f.config,JSON.stringify(raw));const service=new Service(loadConfig(f.config)),original=Git.prototype.run;
+  Git.prototype.run=async function(...args){
+    if(this.path===join(f.root,'one')&&args[0][0]==='status') await new Promise<never>((_,reject)=>{const cancel=()=>reject(Error('cancelled'));if(this.signal?.aborted)cancel();else this.signal?.addEventListener('abort',cancel,{once:true});});
+    return original.apply(this,args);
+  };
+  try {
+    const workspace=(await service.handle('workspace.list',{})).workspaces[0];
+    const tasks=await Promise.all(raw.repositories.map((repo:any)=>service.handle('observer.refresh',{workspaceId:workspace.id,repoPath:repo.id,summaryOnly:true,prefetch:true,requestId:repo.id})));
+    for(let index=1;index<tasks.length;index++) {
+      let task=tasks[index];for(let n=0;n<150 && ['queued','running'].includes(task.state);n++){await sleep(20);task=await service.handle('observer.refresh',{action:'status',taskId:task.taskId,requestId:raw.repositories[index].id});}
+      assert.equal(task.state,'ready');assert.equal(task.result.regions.summary.state,'ready');
+    }
+    const slow=await service.handle('observer.refresh',{action:'status',taskId:tasks[0].taskId,requestId:'one'});assert.ok(['queued','running'].includes(slow.state));
+  } finally {await service.close();Git.prototype.run=original;rmSync(f.root,{recursive:true,force:true});}
+});
+
+test('an older summary repairs placeholders from the newest cached leaf, never its older result', () => {
+  const client=new QueryClient(), input={workspaceId:'w',repoPath:'one',scope:'working',historyMode:'branch',maxCommits:50};
+  const key=['workspace-workbench','p','workspace-detail','w'];
+  client.setQueryData(repositoryQueryKeys('p',input).summary,{ok:true,result:{repository:{repoPath:'one',branch:'new'},observation:{readStartedAt:20}}});
+  client.setQueryData(key,{ok:true,result:{repositories:[{repoPath:'one',branch:'',observationPending:true}]}});
+  publishRefresh(client,'p',input,{regions:{summary:{state:'ready',phase:'late',result:{repository:{repoPath:'one',branch:'old'},observation:{readStartedAt:10}}}}});
+  assert.equal(client.getQueryData<any>(key).result.repositories[0].branch,'new');client.clear();
+});
+
+test('a partial follow-up keeps the known dirty state and late rosters hydrate from leaf data', async () => {
+  const {hydrateRepositorySummaries}=await import('../client/repository-refresh-client.ts');
+  const client=new QueryClient(),input={workspaceId:'w',repoPath:'one',scope:'working',historyMode:'branch',maxCommits:50};
+  const key=['workspace-workbench','p','workspace-detail','w'];
+  const ready={repoPath:'one',branch:'main',head:'a',status:'clean',dirty:false,observationPending:false,issues:[]};
+  client.setQueryData(key,{ok:true,result:{workspace:{id:'w'},repositories:[ready]}});
+  publishRefresh(client,'p',input,{regions:{summary:{state:'ready',phase:'complete',result:{repository:ready,observation:{readStartedAt:10}}}}});
+  publishRefresh(client,'p',input,{regions:{summary:{state:'running',phase:'status',result:{repository:{...ready,status:'unknown',dirty:null,observationPending:true},observation:{readStartedAt:20}}}}});
+  assert.equal(client.getQueryData<any>(key).result.repositories[0].status,'clean');
+  const restored=hydrateRepositorySummaries(client,'p',{workspace:{id:'w'},repositories:[{repoPath:'one',branch:'',dirty:null,observationPending:true}]});
+  assert.equal(restored.repositories[0].branch,'main');assert.equal(restored.repositories[0].dirty,false);assert.equal(restored.repositories[0].observationPending,true);
+  client.clear();
 });

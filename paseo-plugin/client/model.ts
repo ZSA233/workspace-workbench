@@ -255,6 +255,7 @@ export function resolveWorkspaceSelection(input: {
 }
 
 export type RepositorySummary = {
+  basicOnly?: boolean;
   observationPending?: boolean;
   name: string;
   repoPath: string;

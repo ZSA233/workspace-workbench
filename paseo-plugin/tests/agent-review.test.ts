@@ -117,7 +117,7 @@ function harness(): Harness {
     send: async (message: string) => { reviewerSent.push(message); },
   };
   const context = {
-    query: async () => ({ ok: true, result: runtime }),
+    query: async (input: {method:string}) => ({ ok: true, result: input.method === "workspace.detail" ? {workspace:{...runtime,id:runtime.workspaceId}} : runtime }),
     paseo: {
       providers: {
         listModels: async () => ({ provider: "codex", models, fetchedAt: new Date().toISOString(), requestId: "models" }),
@@ -912,4 +912,16 @@ test("blocked or failed filesystem deletion preserves all runtime history", asyn
     assert.equal(result.error?.code, scenario.expectedCode);
     assert.equal((result.result as { canDelete?: boolean })?.canDelete, scenario.impact.canDelete);
   }
+});
+
+test('model discovery reads roster metadata without building a review snapshot', async () => {
+  const fixture=harness();
+  await withFixture(fixture,async()=>{
+    const query=fixture.context.query!;const methods:string[]=[];
+    fixture.context.query=async input=>{methods.push(input.method);assert.notEqual(input.method,'workspace.reviewRuntime');return query(input);};
+    const result=await handleReviewModels({projectConfig:fixture.config,workspaceId:'managed-fixture'},fixture.context);
+    assert.equal(result.ok,true);assert.deepEqual(methods,['workspace.detail']);
+    const panel=readFileSync(new URL('../client/panel.tsx',import.meta.url),'utf8');
+    assert.ok(panel.includes('enabled: Boolean(foreground && reviewSettingsOpen && projectConfig && backendReady && selectedWorkspaceId && listReady)'));
+  });
 });

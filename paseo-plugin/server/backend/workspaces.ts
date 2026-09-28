@@ -107,6 +107,7 @@ type DiscoveryScanSnapshot = {
 };
 
 export class Workspaces {
+  preparationActive: (id: string) => boolean = () => false;
   config: Config;
   readonly observationRecords = new ObservationRecords(() => this.config, () => this.onOrphanScanChanged?.());
   readonly mutations = new SerialQueue();
@@ -721,6 +722,7 @@ export class Workspaces {
     });
   }
   assertIdle(id: string) {
+    if (this.preparationActive(id)) throw new WorkbenchError("workspace_task_active", "Runtime preparation is active");
     try {
       const bindings =
         optionalJson(join(this.config.stateRoot, "agent-bindings.json"))
@@ -1110,7 +1112,6 @@ export class Workspaces {
         "workspace_state_invalid",
         "only active managed workspaces can add repositories",
       );
-    this.assertIdle(workspace.id);
     if (!Array.isArray(params.repositories) || !params.repositories.length)
       throw new WorkbenchError("request_invalid", "select repositories to add");
     const journal = Object.assign(
@@ -1148,6 +1149,8 @@ export class Workspaces {
         pending || (await this.plan(repo, workspace, baseRef || repo.defaultBase || "HEAD")),
       );
     }
+    if (!plans.length) return {...workspace, addedRepositories, existingRepositories};
+    this.assertIdle(workspace.id);
     workspace.repositoryAdditions = journal;
     for (const plan of plans) {
       journal[plan.id] = plan;

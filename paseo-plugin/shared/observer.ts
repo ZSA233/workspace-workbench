@@ -17,6 +17,7 @@ export const observerMethods = [
   "workspace.orphan.adopt",
   "workspace.addRepositories",
   "workspace.prepare",
+  "workspace.prepare.task",
   "workspace.cleanup",
   "workspace.remove",
   "workspace.restore",

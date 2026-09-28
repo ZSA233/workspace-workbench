@@ -72,7 +72,7 @@ export class ObservationRecords {
         if (this.worker === worker && message.event === 'roster-changed') { this.changed(); return; }
         if (this.worker !== worker || message.id !== this.active?.id) return;
         const item = this.active!; this.active = undefined; this.flights.delete(item.key); this.completed++;
-        this.recent.push({operation:item.operation,queueMs:(item.startedAt || item.acceptedAt)-item.acceptedAt,executionMs:Date.now()-(item.startedAt || item.acceptedAt),failed:!!message.error});
+        this.recent.push({operation:item.operation,queueMs:(item.startedAt || item.acceptedAt)-item.acceptedAt,executionMs:Date.now()-(item.startedAt || item.acceptedAt),failed:!!message.error,...(message.recordReads ? {recordReads:message.recordReads} : {})});
         if (this.recent.length > 16) this.recent.shift();
         if (message.error) item.reject(new WorkbenchError(message.error.code, message.error.message, message.error.details));
         else if (item.operation === 'roster') {

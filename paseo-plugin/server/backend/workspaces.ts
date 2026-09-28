@@ -16,6 +16,7 @@ import { Git } from "./git.ts";
 import { childPath, indexGitlinks, commitGitlinks, linkedCandidates, type Gitlink } from "./gitlinks.ts";
 import { orphanCandidates, orphanPreview } from "./orphans.ts";
 import { ObservationRecords } from './observation-records.ts';
+import {RecordCatalog} from './record-catalog.ts';
 import {
   atomicJson,
   canonical,
@@ -550,8 +551,10 @@ export class Workspaces {
     }
   }
   read(path: string): Json | null {
+    try { return this.validateRecord(path, readJson(path)); } catch { return null; }
+  }
+  private validateRecord(path: string, value: Json): Json | null {
     try {
-      const value = readJson(path);
       if (
         value.schemaVersion !== 1 ||
         value.id !== basename(path, ".json") ||
@@ -590,9 +593,21 @@ export class Workspaces {
       return null;
     }
   }
-  list(): Json[] {
+  private recordCatalog = new RecordCatalog();
+  private recordValidationMs = 0;
+  recordReadHealth() { return {...this.recordCatalog.health(),validationMs:this.recordValidationMs}; }
+  async roster(): Promise<Json[]> {
+    const rows = await this.recordCatalog.read(this.config.recordsRoot);
+    const start=performance.now();
+    try{return this.assembleList(rows.map(({path,value}) => value && this.validateRecord(path,value) || this.invalidRecord(path)));}
+    finally{this.recordValidationMs=performance.now()-start;}
+  }
+  private invalidRecord(path: string): Json {
+    return {id:basename(path,'.json'),displayName:basename(path,'.json'),kind:'managed',managed:true,state:'record_invalid',repositories:[]};
+  }
+  private mainWorkspace(): Json {
     const c = this.config;
-    const main = {
+    return {
       id: "main",
       displayName: c.mainWorkspaceName,
       kind: "live",
@@ -605,19 +620,15 @@ export class Workspaces {
       createdAt: null,
       updatedAt: null,
     };
-    const records = readdirSync(c.recordsRoot)
-      .filter((path) => path.endsWith(".json"))
-      .map(
-        (path) =>
-          this.read(join(c.recordsRoot, path)) || {
-            id: basename(path, ".json"),
-            displayName: basename(path, ".json"),
-            kind: "managed",
-            managed: true,
-            state: "record_invalid",
-            repositories: [],
-          },
-      );
+  }
+  list(): Json[] {
+    return this.assembleList(readdirSync(this.config.recordsRoot).filter(path=>path.endsWith('.json')).map(name=>{
+      const path=join(this.config.recordsRoot,name);
+      return this.read(path) || this.invalidRecord(path);
+    }));
+  }
+  private assembleList(records: Json[]): Json[] {
+    const main = this.mainWorkspace();
     records.sort((a, b) =>
       String(b.updatedAt || b.createdAt || "").localeCompare(
         String(a.updatedAt || a.createdAt || ""),
@@ -627,9 +638,9 @@ export class Workspaces {
     return [main, ...linked, ...records];
   }
   get(id: string): Json {
-    if (id === "main") return this.list()[0];
+    if (id === "main") return this.mainWorkspace();
     if (id.startsWith("linked-")) {
-      const linked = this.list().find((item: Json) => item.id === id && item.kind === "linked-live");
+      const linked = this.linkedSelection().roots.map((entry:Json)=>this.linkedWorkspace(entry)).find((item: Json) => item.id === id);
       if (linked) return linked;
     }
     const path = this.recordPath(id),

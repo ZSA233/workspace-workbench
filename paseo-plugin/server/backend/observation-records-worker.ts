@@ -18,7 +18,7 @@ parentPort!.on('message', async ({ id, operation, input, config, event }) => {
         const discovered = await workspaces!.discoverySnapshot(false, 0);
         return { orphanScan, discovered };
       }
-      if (operation === 'roster') return { workspaces: workspaces!.list() };
+      if (operation === 'roster') return { workspaces: await workspaces!.roster() };
       if (operation === 'list') return workspaces!.list();
       if (operation === 'identify') return workspaces!.identify(input.directory);
       const workspace = workspaces!.get(input.workspaceId);
@@ -27,6 +27,6 @@ parentPort!.on('message', async ({ id, operation, input, config, event }) => {
       const repo = workspaces!.repository(workspace, input.repository);
       return { workspace, repo, path: canonical(repo.worktreePath || repo.sourcePath) };
     });
-    parentPort!.postMessage({ id, value });
+    parentPort!.postMessage({ id, value, ...(operation === 'roster' ? {recordReads:workspaces!.recordReadHealth()} : {}) });
   } catch (error) { parentPort!.postMessage({ id, error: issue(error) }); }
 });

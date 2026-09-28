@@ -27,7 +27,8 @@ async function prepareRuntime(service: Service, params: Json): Promise<Json> {
   catch(error) {
     if(!(error instanceof WorkbenchError) || error.code !== 'operation_pending') throw error;
     const details=error.details as Json;
-    for(let n=0;n<200;n++) {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
       const task=await service.handle('workspace.prepare.task',{action:'status',operationId:details.operationId});
       if(task.state==='ready') return task.repositories[0].result;
       if(!['queued','running'].includes(task.state)) throw Error(JSON.stringify(task));
@@ -1039,7 +1040,17 @@ test("repository IDs matching JavaScript prototype names retain journals and run
       repositories: ["__proto__"],
     });
     assert.equal(result.repositories.length, 2);
-    assert.equal(result.preparations[0].status, "prepare_failed");
+    let preparation = await service.handle("workspace.prepare.task", {
+      action: "status", operationId: result.preparationOperationId,
+    });
+    const deadline = Date.now() + 30_000;
+    while (["queued", "running"].includes(preparation.state) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      preparation = await service.handle("workspace.prepare.task", {
+        action: "status", operationId: result.preparationOperationId,
+      });
+    }
+    assert.equal(preparation.repositories[0].result?.status, "prepare_failed");
     await assert.rejects(
       service.handle("workspace.runtime", { workspaceId: "keys" }),
       /prepare runtimes/,

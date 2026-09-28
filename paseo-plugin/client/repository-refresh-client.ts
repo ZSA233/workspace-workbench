@@ -6,6 +6,11 @@ export type RefreshInput = { workspaceId: string; repoPath: string; historyMode:
 export type RefreshRegion = { state: string; phase: string; completedAt?: number; durationMs?: number; result?: any; error?: { code: string; message: string } };
 export type RefreshResult = { refreshId?: string; regions?: Record<string, RefreshRegion>; acceptedAt?: number; completedAt?: number; observation?: any };
 export type RefreshRpc = (params: Record<string, unknown>) => Promise<ObserverResponse>;
+export function refreshRegionFeedback(response: ObserverResponse | undefined, area: 'graph' | 'changes', hasContent: boolean, prerequisiteFailed = false) {
+  const region = (response?.result as RefreshResult | undefined)?.regions?.[area];
+  const failed = region ? ['failed', 'cancelled'].includes(region.state) : response?.ok === false || prerequisiteFailed;
+  return {failed, loading: !hasContent && !failed && (!response || !region || ['queued', 'running'].includes(region.state))};
+}
 /** Identities, cancellation and uncertain-start recovery are shared with file reads. */
 export function createRepositoryRefreshClient() {
   // Dynamic source evaluation on Hermes cannot safely construct these classes.

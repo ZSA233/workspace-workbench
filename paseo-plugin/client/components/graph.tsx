@@ -277,7 +277,7 @@ export function CommitGraph({
               <GraphCanvas rows={rows} width={railWidth} height={graphHeight} selectedCommit={selectedCommit} showWorktree={showWorktree} worktreeSelected={changeScope === "working"} platform={graphPlatform} theme={theme} />
             </View>
           ) : null}
-          {!loading && !rows.length ? <Text style={styles.emptyText}>{copy.text_a07cd6a10e}</Text> : null}
+          {graph && !loading && !error && !rows.length ? <Text style={styles.emptyText}>{copy.text_a07cd6a10e}</Text> : null}
           {graph?.historyMode === "full" && hasOlder ? (
             <Pressable accessibilityRole="button" disabled={loadingMore} onPress={onGraphMore} style={[styles.historyButton, loadingMore && styles.historyButtonDisabled]}>
               {loadingMore ? <ActivityIndicator color={observerAccent(theme)} size="small" /> : null}

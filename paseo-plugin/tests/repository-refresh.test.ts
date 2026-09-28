@@ -247,3 +247,14 @@ test('a partial follow-up keeps the known dirty state and late rosters hydrate f
   assert.equal(restored.repositories[0].branch,'main');assert.equal(restored.repositories[0].dirty,false);assert.equal(restored.repositories[0].observationPending,true);
   client.clear();
 });
+
+test('task-based regions distinguish unread, running, failed, and genuinely empty results', async () => {
+  const {refreshRegionFeedback}=await import('../client/repository-refresh-client.ts');
+  assert.deepEqual(refreshRegionFeedback(undefined,'graph',false),{loading:true,failed:false});
+  const response=(state:string):any=>({ok:true,result:{regions:{graph:{state}}}});
+  assert.deepEqual(refreshRegionFeedback(response('running'),'graph',false),{loading:true,failed:false});
+  assert.deepEqual(refreshRegionFeedback(response('running'),'graph',true),{loading:false,failed:false});
+  assert.deepEqual(refreshRegionFeedback(response('failed'),'graph',false),{loading:false,failed:true});
+  assert.deepEqual(refreshRegionFeedback(response('ready'),'graph',true),{loading:false,failed:false});
+  assert.deepEqual(refreshRegionFeedback(undefined,'changes',false,true),{loading:false,failed:true});
+});

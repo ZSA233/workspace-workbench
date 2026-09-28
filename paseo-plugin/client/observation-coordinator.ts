@@ -168,28 +168,32 @@ export function createObservationCoordinator(project: string, host: CoordinatorH
     const due = Math.min(versioned() && !pollRunning ? pollAt : Infinity, ...[...entries.values()].map(e => e.active && !e.running ? e.task?.due ?? Infinity : Infinity));
     if (Number.isFinite(due)) timer = time.set(() => { timer = undefined; tick(); }, Math.max(0, due - time.now()));
   }
+  // Each request owns a function scope. Hermes dynamic source evaluation can
+  // reuse loop-local bindings in asynchronous callbacks, leaving sibling
+  // queries marked running forever if cleanup is captured inside the loop.
+  function runQuery(q: QueryView) {
+    const e = entries.get(q.id);
+    if (!e?.active || !q.active || e.running || !e.task || e.task.due > time.now()) return;
+    if (q.fetching) { e.task.due = time.now() + 250; return; }
+    const reason = e.task.reason; e.task = undefined;
+    if (reason === 'initial' && q.data?.ok) return;
+    if (['version-change', 'activation-change'].includes(reason) && validation(q.data, versions) === 'same' && !observationMeta(q.data).refreshing) return;
+    e.running = true; e.lastAttempt = time.now();
+    if (reason === 'follow-up') e.follows++;
+    counters.businessReads++; counters.reasons[reason] = (counters.reasons[reason] || 0) + 1;
+    const waiters = [...e.waiters]; e.waiters.clear();
+    void q.fetch().catch(() => {}).finally(() => {
+      for (const done of waiters) done();
+      e.running = false;
+      const pending = e.pending; e.pending = undefined;
+      if (enabled() && e.active && pending) enqueue(e, Math.max(0, pending.due - time.now()), pending.reason);
+      changed();
+    });
+  }
   function tick() {
     if (!enabled()) return;
     if (versioned() && !pollRunning && pollAt <= time.now()) void poll();
-    for (const q of host.queries()) {
-      const e = entries.get(q.id);
-      if (!e?.active || !q.active || e.running || !e.task || e.task.due > time.now()) continue;
-      if (q.fetching) { e.task.due = time.now() + 250; continue; }
-      const reason = e.task.reason; e.task = undefined;
-      if (reason === 'initial' && q.data?.ok) continue;
-      if (['version-change', 'activation-change'].includes(reason) && validation(q.data, versions) === 'same' && !observationMeta(q.data).refreshing) continue;
-      e.running = true; e.lastAttempt = time.now();
-      if (reason === 'follow-up') e.follows++;
-      counters.businessReads++; counters.reasons[reason] = (counters.reasons[reason] || 0) + 1;
-      const waiters = [...e.waiters]; e.waiters.clear();
-      void q.fetch().catch(() => {}).finally(() => {
-        for (const done of waiters) done();
-        e.running = false;
-        const pending = e.pending; e.pending = undefined;
-        if (enabled() && e.active && pending) enqueue(e, Math.max(0, pending.due - time.now()), pending.reason);
-        changed();
-      });
-    }
+    for (const q of host.queries()) runQuery(q);
     // QueryObserver can finish its initial read before our queued activation
     // runs. Reconcile the returned pending state after dropping that duplicate.
     changed();

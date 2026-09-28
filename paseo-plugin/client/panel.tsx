@@ -1,4 +1,4 @@
-import { hydrateRepositorySummaries } from "./repository-refresh-client";
+import { hydrateRepositorySummaries, refreshRegionFeedback } from "./repository-refresh-client";
 import { usePreparationTask } from "./use-preparation-task";
 import { useWorkspaceSummaries } from "./use-workspace-summaries";
 import { useRepositoryRefresh } from "./use-repository-refresh";
@@ -858,7 +858,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const graphState = useLastSuccessfulResponse(`repository-graph:${projectConfig}:${selectedWorkspaceId}:${selectedRepoPath}:${graphView.historyMode}:${graphView.maxCommits}`, graphQuery.data, { error: graphQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository });
   const graph = resultOf<GraphResult>(graphState.response);
   const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error, localizedCopy);
-  reportNativeDiagnostic("project-panel-graph-state", queryDiagnosticDetails(graphQuery.data, graphQuery.error, graphQuery, graphState));
+  reportNativeDiagnostic("project-panel-graph-state", {projectConfig,workspaceId:selectedWorkspaceId,repoPath:selectedRepoPath,nodeCount:String(graph?.nodes?.length ?? ""),...queryDiagnosticDetails(graphQuery.data, graphQuery.error, graphQuery, graphState)});
   const changesScope: ChangeScope = selectedCommit ? "commit" : changeScope;
   const changesQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "repository-changes", selectedWorkspaceId, selectedRepoPath, changesScope, selectedCommit],
@@ -887,7 +887,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const refreshRpc = (params: Record<string, unknown>) => rpc({ method: 'observer.refresh', params });
   const selectedRefresh = useRepositoryRefresh(projectConfig, refreshInput, refreshCapable && foreground && tab === 'workspace' && !!selectedRepoPath && !!selectedWorkspaceId && backendReady && (!basicCapable || !!selectedRepository && !selectedRepository.observationPending && typeof selectedRepository.dirty === 'boolean'), refreshRpc);
   const basicSummaries = useWorkspaceSummaries(projectConfig, selectedWorkspaceId, (displayDetail?.repositories || []).map(repo => repo.repoPath), selectedRepoPath, basicCapable && foreground && tab === 'workspace' && backendReady, refreshRpc, {historyMode: graphView.historyMode, maxCommits: graphView.maxCommits});
-  reportNativeDiagnostic("project-panel-changes-state", queryDiagnosticDetails(changesQuery.data, changesQuery.error, changesQuery, changesState));
+  const basicFailed = basicSummaries.failures.some(failure => failure.repoPath === selectedRepoPath);
+  const graphFeedback = refreshRegionFeedback(selectedRefresh.query.data, 'graph', Boolean(graph), basicFailed);
+  const changesFeedback = refreshRegionFeedback(selectedRefresh.query.data, 'changes', Boolean(changes), basicFailed);
+  reportNativeDiagnostic("project-panel-changes-state", {projectConfig,workspaceId:selectedWorkspaceId,repoPath:selectedRepoPath,...queryDiagnosticDetails(changesQuery.data, changesQuery.error, changesQuery, changesState)});
 
   useEffect(() => {
     if (changeTreeMode !== null || !changes) return;
@@ -1782,13 +1785,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               detailRefreshing={manualRefreshing}
               detailError={listUnavailable ? localizedCopy.workspaceListUnavailable : detailFailure}
               graph={displayDetail ? graph : null}
-              graphLoading={graphQuery.isFetching && !graph}
+              graphLoading={Boolean(selectedRepository) && (refreshCapable ? graphFeedback.loading : graphQuery.isFetching && !graph)}
               graphRefreshing={manualRefreshing}
-              graphError={graphFailure}
+              graphError={graphFailure || (refreshCapable && graphFeedback.failed ? localizedCopy.observationUnavailable : null)}
               changes={displayDetail ? changes : null}
-              changesLoading={changesQuery.isFetching && !changes}
+              changesLoading={Boolean(selectedRepository) && (refreshCapable ? changesFeedback.loading : changesQuery.isFetching && !changes)}
               changesRefreshing={manualRefreshing}
-              changesError={changesFailure}
+              changesError={changesFailure || (refreshCapable && changesFeedback.failed ? localizedCopy.observationUnavailable : null)}
               changesStale={changesState.expired}
               changesCurrent={Boolean(changes) && !changesState.stale && !changesFailure}
               treeMode={changeTreeMode || defaultTreeMode(changes?.files || [])}

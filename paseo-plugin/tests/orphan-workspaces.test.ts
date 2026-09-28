@@ -29,10 +29,21 @@ function fixture() {
   return { root, tree, service: new Service(loadConfig(configPath)) };
 }
 
+// Authoritative records arrive first; orphan discovery publishes separately.
+async function scannedList(service: Service) {
+  for (let i=0;i<200;i++) {
+    const result=await service.handle('workspace.list');
+    if (result.orphanScan.state === 'ready') return result;
+    assert.notEqual(result.orphanScan.state,'failed');
+    await new Promise(resolve=>setTimeout(resolve,20));
+  }
+  throw Error('orphan discovery did not finish');
+}
+
 test("orphan is auto-listed, previewed, and adopted without inventing a base", async () => {
   const f = fixture();
   try {
-    const list = await f.service.handle("workspace.list");
+    const list = await scannedList(f.service);
     assert.deepEqual(list.orphanCandidates.map((item: { id: string }) => item.id), ["lost"]);
     assert.equal(list.workspaces.some((item: { id: string }) => item.id === "lost"), false);
     const preview = await f.service.handle("workspace.orphan.preview", { workspaceId: "lost" });
@@ -47,7 +58,7 @@ test("orphan is auto-listed, previewed, and adopted without inventing a base", a
     assert.equal(git(join(f.tree, "alpha"), "branch", "--show-current"), "recovered/lost/alpha");
     assert.equal(git(join(f.tree, "beta"), "rev-parse", "--abbrev-ref", "HEAD"), "HEAD");
     assert.equal((await f.service.handle("workspace.orphan.adopt", request)).state, "active");
-    const after = await f.service.handle("workspace.list");
+    const after = await scannedList(f.service);
     assert.equal(after.orphanCandidates.length, 0);
     assert.ok(after.workspaces.some((item: { id: string }) => item.id === "lost"));
     const detail = await f.service.handle("workspace.detail", { workspaceId: "lost" });
@@ -103,7 +114,7 @@ test("partial branch switch resumes from persisted adoption plan without duplica
     const request = { workspaceId: "lost", fingerprint: preview.fingerprint, branches: { alpha: "recovered/lost/alpha", beta: "recovered/lost/beta" } };
     await assert.rejects(f.service.handle("workspace.orphan.adopt", request), /injected failure/);
     assert.equal(f.service.workspaces.get("lost").state, "adopt_failed");
-    assert.equal((await f.service.handle("workspace.list")).orphanCandidates[0].resume, true);
+    assert.equal((await scannedList(f.service)).orphanCandidates[0].resume, true);
     assert.deepEqual((await f.service.handle("workspace.orphan.preview", { workspaceId: "lost" })).plannedBranches, request.branches);
     Git.prototype.run = original;
     const resumed = await f.service.handle("workspace.orphan.adopt", request);
@@ -121,7 +132,7 @@ test("an invalid legacy record and extra metadata remain visible and are preserv
     writeFileSync(recordPath, "{legacy record}");
     mkdirSync(join(f.tree, ".workspace"));
     writeFileSync(join(f.tree, ".workspace", "notes.txt"), "keep me");
-    const listed = await f.service.handle("workspace.list");
+    const listed = await scannedList(f.service);
     assert.equal(listed.orphanCandidates[0].recordInvalid, true);
     assert.equal(listed.workspaces.some((item: { id: string }) => item.id === "lost"), false);
     const preview = await f.service.handle("workspace.orphan.preview", { workspaceId: "lost" });

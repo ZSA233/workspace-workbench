@@ -94,6 +94,8 @@ function requestParams(input: QueryInput): Record<string, unknown> {
 }
 
 class BridgeError extends Error {
+  requestId?: string;
+  elapsedMs?: number;
   readonly code: string;
   readonly stage: string;
 
@@ -300,6 +302,7 @@ export class ObserverBridge {
         return withObservationMetadata(response);
       })
       .catch(error => {
+        if (error instanceof BridgeError) { error.requestId = request.id; error.elapsedMs = Date.now() - startedAt; }
         this.failedRequests++;
         this.recordFailure(request, error instanceof BridgeError ? error.code : "observer_failed", startedAt, error instanceof BridgeError ? error.stage : "bridge");
         stats.failures++;
@@ -384,7 +387,7 @@ export async function handleObserver(input: QueryInput, context?: AgentContext):
       : code === "observer_connection_refused" || code === "observer_unavailable"
         ? copy.text_64c3cc39e8
         : copy.text_83008521f9;
-    return { ok: false, error: { code, message } };
+    return { ok: false, error: { code, message, ...(error instanceof BridgeError ? {details:{method:input.method,requestId:error.requestId,stage:error.stage,elapsedMs:error.elapsedMs,dispatched:error.stage !== 'connect'}} : {}) } };
   }
 }
 

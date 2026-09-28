@@ -12,12 +12,13 @@ parentPort!.on('message', async ({ id, operation, input, config, event }) => {
       workspaces.onOrphanScanChanged = workspaces.onDiscoveryChanged = () => parentPort!.postMessage({ event: 'roster-changed' });
     }
     const value = await withCanonicalSnapshot(async () => {
-      if (operation === 'roster') {
+      if (operation === 'supplements') {
+        if (input.snapshotOnly) return workspaces!.observationSupplementSnapshot();
         const orphanScan = await workspaces!.orphanSnapshot(input.force === true, 250);
-        const workspacesList = workspaces!.list();
         const discovered = await workspaces!.discoverySnapshot(false, 0);
-        return { orphanScan, workspaces: workspacesList, discovered };
+        return { orphanScan, discovered };
       }
+      if (operation === 'roster') return { workspaces: workspaces!.list() };
       if (operation === 'list') return workspaces!.list();
       if (operation === 'identify') return workspaces!.identify(input.directory);
       const workspace = workspaces!.get(input.workspaceId);

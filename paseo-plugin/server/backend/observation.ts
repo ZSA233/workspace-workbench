@@ -316,6 +316,7 @@ export class Observation {
         observedAt: now(),
         durationMs: 0,
         deferred: true,
+        refreshing: [orphanScan.state, discovered.state].some(state => state === 'scanning' || state === 'stale'),
         validationKey: "roster",
         validationToken: String(this.scheduler.rosterRevision),
       },

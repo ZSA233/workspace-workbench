@@ -150,8 +150,7 @@ export const WorkspaceView = memo(function WorkspaceView({
   if (unavailable) {
     return (
       <View>
-        {detailError ? <Text style={styles.warningText}>{detailError}</Text> : null}
-        <Text style={styles.emptyText}>{detailLoading ? copy.text_96c3e67563 : copy.text_07f7471155}</Text>
+        <Text style={styles.emptyText}>{detailError || (detailLoading ? copy.text_96c3e67563 : copy.text_07f7471155)}</Text>
       </View>
     );
   }

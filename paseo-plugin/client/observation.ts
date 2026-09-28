@@ -12,6 +12,11 @@ export const RECOVERABLE_FAILURE_GRACE_MS = OBSERVATION_POLICY.warningMs;
 export type ObservationStatus = "loading" | "fresh" | "refreshing" | "degraded" | "expired" | "unavailable";
 export type ObservationResponseClass = "ready" | "refreshing" | "degraded" | "unavailable";
 
+/** Missing content is not an empty result, even during a recoverable failure. */
+export function initialContentState(hasContent: boolean, failed: boolean): 'ready' | 'loading' | 'unavailable' {
+  return hasContent ? 'ready' : failed ? 'unavailable' : 'loading';
+}
+
 export function boundedRefresh<T>(
   request: Promise<T>,
   timeoutMs: number,

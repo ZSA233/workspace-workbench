@@ -445,6 +445,11 @@ export class Workspaces {
     this.orphanScan = { ...this.orphanScan, state: this.orphanScan.promise ? "scanning" : "stale", completedAt: undefined, reason: "mutation" };
   }
   async orphanCandidates(): Promise<Json[]> { return (await this.orphanSnapshot()).candidates; }
+  observationSupplementSnapshot(): Json {
+    const {promise: _orphanPromise, ...orphanScan} = this.orphanScan;
+    const {promise: _discoveryPromise, ...discovered} = this.discoveryScans.get(false) || {state:'stale',repositories:[],incomplete:true,scannedDirectories:0};
+    return {orphanScan, discovered};
+  }
   async orphanPreview(id: string, signal?: AbortSignal) {
     const preview = await orphanPreview(this.config, id, signal);
     const record = this.read(this.recordPath(id));

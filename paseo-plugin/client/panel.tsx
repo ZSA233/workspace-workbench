@@ -59,7 +59,7 @@ type WorkspaceFilter,
 type WorkspaceSummary,
 type WorkspaceTask
 } from "./model";
-import { boundedRefresh, RECOVERABLE_FAILURE_GRACE_MS, useLastSuccessfulResponse } from "./observation";
+import { boundedRefresh, initialContentState, RECOVERABLE_FAILURE_GRACE_MS, useLastSuccessfulResponse } from "./observation";
 import { useRefreshOnForeground } from "./foreground-refresh";
 import { usePanelForeground } from "./foreground-activity";
 import { useObserverPreferences } from "./preferences";
@@ -528,7 +528,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   });
   const listState = useLastSuccessfulResponse(`workspace-list:${projectConfig}`, listQuery.data, { error: listQuery.error, staleAfterMs: observationTiming.staleWindowsMs.list });
   const listResult = resultOf<ListResult>(listState.response);
-  const listFailure = queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
+  const listFailure = !listResult && listState.failed ? localizedCopy.workspaceListUnavailable : queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
   reportNativeDiagnostic("project-panel-list-state", queryDiagnosticDetails(listQuery.data, listQuery.error, listQuery, listState));
   const listReady = Boolean(listResult);
   const orphanPreviewQuery = useQuery({
@@ -542,10 +542,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const observationIssue = useObservationVersions(projectConfig, tab === "review" ? [selectedWorkspaceId, ...reviewIds] : [selectedWorkspaceId], observationVersionsEnabled);
 
   useEffect(() => { if (listReady) props.onProjectReady?.(); }, [listReady, props.onProjectReady]);
-  const listUnavailable = !listReady
-    && listState.initialFailure
-    && (!isRecoverableObserverFailure(listQuery.data, listQuery.error)
-      || (listState.failureAgeMs ?? RECOVERABLE_FAILURE_GRACE_MS) >= RECOVERABLE_FAILURE_GRACE_MS);
+  const listContentState = initialContentState(listReady, listState.failed);
+  const listUnavailable = listContentState === 'unavailable';
   const observedWorkspaces = useMemo(() => {
     const rows = listReady ? listResult?.workspaces || [] : [];
     return sortByLatestCommit ? sortWorkspacesByLatestCommit(rows) : sortWorkspaces(rows);
@@ -1706,9 +1704,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         filter={workspaceFilter}
         open={selectorOpen}
         latestCommitProgress={activityScanProgress}
-        loading={!listResult && listQuery.isFetching}
+        ready={listReady}
+        loading={listContentState === 'loading'}
         refreshing={manualRefreshing}
-        failure={listFailure}
+        failure={listUnavailable ? localizedCopy.workspaceListUnavailable : listFailure}
+        onRetry={listUnavailable ? () => { void refreshArea('workspace-list'); } : undefined}
         onOpen={openWorkspaceSelector}
         onFilter={setWorkspaceFilter}
         onSelect={(id) => { cancelWorkspaceActivityScan(); selectWorkspace(id); }}
@@ -1774,9 +1774,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
             <WorkspaceView
               detail={displayDetail}
               unavailable={listUnavailable || detailUnavailable}
-              detailLoading={detailQuery.isLoading && !detail}
+              detailLoading={listContentState === 'loading' || detailQuery.isLoading && !detail}
               detailRefreshing={manualRefreshing}
-              detailError={detailFailure}
+              detailError={listUnavailable ? localizedCopy.workspaceListUnavailable : detailFailure}
               graph={displayDetail ? graph : null}
               graphLoading={graphQuery.isFetching && !graph}
               graphRefreshing={manualRefreshing}

@@ -35,3 +35,11 @@ test("warnings require three failures and a full validation window", () => {
   assert.equal(persistentObservationFailure(3, 90_000, 90_000), true);
   assert.equal(persistentObservationFailure(0, null, 90_000), false);
 });
+
+test('initial list failure is unavailable, not an empty roster or a cached warning', async () => {
+  const {initialContentState}=await import('../client/observation.ts');
+  assert.equal(initialContentState(false,false),'loading');
+  assert.equal(initialContentState(false,true),'unavailable');
+  assert.equal(initialContentState(true,true),'ready');
+  assert.equal(initialContentState(true,false),'ready');
+});

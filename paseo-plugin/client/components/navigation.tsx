@@ -168,8 +168,10 @@ export function WorkspaceSelector({
   filter,
   open,
   loading,
+  ready = true,
   refreshing,
   failure,
+  onRetry,
   onOpen,
   onFilter,
   onSelect,
@@ -194,8 +196,10 @@ export function WorkspaceSelector({
   filter: WorkspaceFilter;
   open: boolean;
   loading: boolean;
+  ready?: boolean;
   refreshing: boolean;
   failure: string | null;
+  onRetry?: () => void;
   onOpen: () => void;
   onFilter: (filter: WorkspaceFilter) => void;
   onSelect: (id: string) => void;
@@ -238,12 +242,13 @@ export function WorkspaceSelector({
           {!loading && selectedWorkspace && workspaceMeta(selectedWorkspace, localizedCopy) ? (
             <Text numberOfLines={1} style={styles.selectorMeta}>{workspaceMeta(selectedWorkspace, localizedCopy)}</Text>
           ) : null}
-          {!loading && !selectedWorkspace ? <Text numberOfLines={1} style={styles.selectorMeta}>{formatCopyFrom(localizedCopy, "text_2e046dd497", [workspaces.length])}</Text> : null}
+          {ready && !loading && !selectedWorkspace ? <Text numberOfLines={1} style={styles.selectorMeta}>{formatCopyFrom(localizedCopy, "text_2e046dd497", [workspaces.length])}</Text> : null}
         </View>
         <View style={styles.selectorChevron}>
           <Icon name={open ? "ChevronUp" : "ChevronDown"} size={15} color={theme.colors.foregroundMuted} />
         </View>
       </Pressable>
+      {!ready && failure && onRetry ? <Pressable accessibilityRole="button" onPress={onRetry} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.setupRetry}</Text></Pressable> : null}
       {statusControl}
       {onOpenLayoutMenu ? <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.text_1744b62533} onPress={onOpenLayoutMenu} style={[styles.layoutMenuButton, { width: 36, height: 36 }]}><Icon name="Ellipsis" size={18} color={theme.colors.foregroundMuted} /></Pressable> : null}
       </View>
@@ -259,7 +264,7 @@ export function WorkspaceSelector({
                 style={[styles.filterButton, filter === item.id && styles.filterButtonActive]}
               >
                 <Text style={[styles.filterButtonText, filter === item.id && styles.filterButtonTextActive]}>{item.label}</Text>
-                <Text style={[styles.filterCount, filter === item.id && styles.filterCountActive]}>{item.count}</Text>
+                {ready ? <Text style={[styles.filterCount, filter === item.id && styles.filterCountActive]}>{item.count}</Text> : null}
               </Pressable>
             ))}
           </View>
@@ -278,7 +283,7 @@ export function WorkspaceSelector({
           {latestCommitProgress && latestCommitProgress.total > latestCommitProgress.completed ? <Text style={[styles.selectorListLabel, { marginTop: 5 }]}>{formatCopyFrom(localizedCopy, "workspaceActivityProgress", [latestCommitProgress.completed, latestCommitProgress.total])}</Text> : null}
           <View style={styles.selectorListHeader}>
             <Text style={styles.selectorListLabel}>{localizedCopy.text_205b4561ed}</Text>
-            <Text style={styles.selectorListCount}>{search ? `${searchedWorkspaces.length}${localizedCopy.text_42099b4af0}${visibleWorkspaces.length}` : `${visibleWorkspaces.length}${localizedCopy.text_42099b4af0}${workspaceTotal}`}</Text>
+            {ready ? <Text style={styles.selectorListCount}>{search ? `${searchedWorkspaces.length}${localizedCopy.text_42099b4af0}${visibleWorkspaces.length}` : `${visibleWorkspaces.length}${localizedCopy.text_42099b4af0}${workspaceTotal}`}</Text> : null}
           </View>
           <FlatList
             data={searchedWorkspaces}
@@ -306,7 +311,7 @@ export function WorkspaceSelector({
             showsVerticalScrollIndicator={visibleWorkspaces.length > 7}
             style={styles.workspaceOptionList}
             windowSize={7}
-            ListEmptyComponent={!loading ? <Text style={styles.emptyText}>{search ? localizedCopy.workspaceSearchEmpty : localizedCopy.text_daa32fe25c}</Text> : null}
+            ListEmptyComponent={ready && !loading ? <Text style={styles.emptyText}>{search ? localizedCopy.workspaceSearchEmpty : localizedCopy.text_daa32fe25c}</Text> : null}
           />
           {filter === "all" && orphanCandidates?.length ? <View style={{ maxHeight: 170 }}>
             <Text style={styles.selectorListLabel}>{localizedCopy.orphanHeading} · {orphanCandidates.length}</Text>

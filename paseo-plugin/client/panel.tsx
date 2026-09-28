@@ -1,3 +1,4 @@
+import { observationMeta } from './observation-coordinator';
 import { hydrateRepositorySummaries, refreshRegionFeedback } from "./repository-refresh-client";
 import { usePreparationTask } from "./use-preparation-task";
 import { useWorkspaceSummaries } from "./use-workspace-summaries";
@@ -1151,7 +1152,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       changesState.expired ||
       (tab === "review" && reviewState.expired),
   );
-  const observationRefreshing = foreground && (basicSummaries.currentRunning || (refreshCapable ? !selectedRefresh.slow && (selectedRefresh.manual || selectedRefresh.pending && !graph && !changes) : manualRefreshing || observationAreas.some((area) => area.fetching && !area.snapshot.response)));
+  const observationRefreshing = foreground && (basicSummaries.currentRunning || (refreshCapable ? !selectedRefresh.slow && ((selectedRefresh.manual || !graph && !changes) && (observationMeta(selectedRefresh.query.data).readTask?.state === 'running' || selectedRefresh.query.isFetching && !selectedRefresh.query.data)) : manualRefreshing || observationAreas.some((area) => area.fetching && !area.snapshot.response)));
   const observationDegraded = selectedRefresh.failed || basicSummaries.failures.some(failure => failure.repoPath === selectedRepoPath) || Boolean(observationIssue) || observationAreas.some((area) => area.snapshot.status === "degraded");
   reportNativeDiagnostic("project-panel-observation-state", {
     foreground: String(foreground),
@@ -1787,11 +1788,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               graph={displayDetail ? graph : null}
               graphLoading={Boolean(selectedRepository) && (refreshCapable ? graphFeedback.loading : graphQuery.isFetching && !graph)}
               graphRefreshing={manualRefreshing}
-              graphError={graphFailure || (refreshCapable && graphFeedback.failed ? localizedCopy.observationUnavailable : null)}
+              graphError={graphFailure || (refreshCapable && graphFeedback.failed ? (graph ? localizedCopy.observationUpdatePending : localizedCopy.observationUpdateFailed) : null)}
               changes={displayDetail ? changes : null}
               changesLoading={Boolean(selectedRepository) && (refreshCapable ? changesFeedback.loading : changesQuery.isFetching && !changes)}
               changesRefreshing={manualRefreshing}
-              changesError={changesFailure || (refreshCapable && changesFeedback.failed ? localizedCopy.observationUnavailable : null)}
+              changesError={changesFailure || (refreshCapable && changesFeedback.failed ? (changes ? localizedCopy.observationUpdatePending : localizedCopy.observationUpdateFailed) : null)}
               changesStale={changesState.expired}
               changesCurrent={Boolean(changes) && !changesState.stale && !changesFailure}
               treeMode={changeTreeMode || defaultTreeMode(changes?.files || [])}
@@ -1860,7 +1861,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         {(preparation.task?.repositories || []).filter((repo: any) => repo.state === 'failed').map((repo: any) => <Text key={repo.id} style={styles.warningText}>{repo.id} · {String(repo.result?.issues?.[0]?.message || localizedCopy.prepareNeedsContinue).slice(0, 240)}</Text>)}
         {basicSummaries.failures.map(failure => <Text key={failure.repoPath} style={styles.warningText}>{failure.repoPath} · {failure.message}</Text>)}
         {refreshCapable && selectedRefresh.slow && selectedRefresh.pending ? <Text style={styles.layoutMenuHint}>{locale === 'zh-CN' ? '当前仓库仍在更新，已有内容可继续使用' : 'Current repository is still updating; existing content remains available'}</Text> : null}
-        {refreshCapable ? Object.entries(selectedRefresh.result?.regions || {}).map(([area, region]) => <Text key={area} style={region.state === 'failed' ? styles.warningText : styles.layoutMenuHint}>{area} · {region.state} · {region.phase}{region.durationMs !== undefined ? ` · ${region.durationMs} ms` : ''}</Text>) : null}
+        {refreshCapable ? Object.entries(selectedRefresh.result?.regions || {}).map(([area, region]) => <Text key={area} style={region.state === 'failed' ? styles.warningText : styles.layoutMenuHint}>{area} · {region.state} · {region.phase}{region.durationMs !== undefined ? ` · ${region.durationMs} ms` : ''}{region.error ? ` · ${region.error.code}: ${region.error.message}` : ''}</Text>) : null}
+        {refreshCapable && selectedRefresh.query.data?.error ? <Text style={styles.warningText}>{selectedRefresh.query.data.error.code} · {selectedRefresh.query.data.error.message}{(selectedRefresh.query.data.error.details as any)?.recovery === 'repository' ? (locale === 'zh-CN' ? ' · 将自动恢复' : ' · Automatic recovery scheduled') : ''}</Text> : null}
         {backendQuery.data && !backendQuery.data.readCapabilities ? <Text style={styles.layoutMenuHint}>{localizedCopy.diffCompatibility}</Text> : null}
         <Text style={styles.layoutMenuHint}>{localizedCopy.text_a6625c543c}{formatObservedTime(lastSuccessfulAt, localizedCopy)}</Text>
         {observationIssue ? <Text style={styles.warningText}>{localizedCopy.observationUnavailable}: {observationIssue}</Text> : null}

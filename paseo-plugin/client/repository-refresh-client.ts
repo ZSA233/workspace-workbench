@@ -3,12 +3,12 @@ import type { ObserverResponse } from '../shared/observer.ts';
 import { createDiffReadClient } from './diff-read-client.ts';
 
 export type RefreshInput = { workspaceId: string; repoPath: string; historyMode: string; maxCommits: number; scope: string; commitSha?: string; summaryOnly?: boolean };
-export type RefreshRegion = { state: string; phase: string; completedAt?: number; durationMs?: number; result?: any; error?: { code: string; message: string } };
-export type RefreshResult = { refreshId?: string; regions?: Record<string, RefreshRegion>; acceptedAt?: number; completedAt?: number; observation?: any };
+export type RefreshRegion = { state: string; phase: string; completedAt?: number; durationMs?: number; result?: any; error?: { code: string; message: string }; recovery?: {retryable:boolean;stage:string;requestId:string} };
+export type RefreshResult = { outcome?: 'ready' | 'partial-failure'; refreshId?: string; regions?: Record<string, RefreshRegion>; acceptedAt?: number; completedAt?: number; observation?: any };
 export type RefreshRpc = (params: Record<string, unknown>) => Promise<ObserverResponse>;
 export function refreshRegionFeedback(response: ObserverResponse | undefined, area: 'graph' | 'changes', hasContent: boolean, prerequisiteFailed = false) {
   const region = (response?.result as RefreshResult | undefined)?.regions?.[area];
-  const failed = region ? ['failed', 'cancelled'].includes(region.state) : response?.ok === false || prerequisiteFailed;
+  const failed = region?.state === 'ready' ? false : response?.ok === false || prerequisiteFailed || !!region && ['failed', 'cancelled'].includes(region.state);
   return {failed, loading: !hasContent && !failed && (!response || !region || ['queued', 'running'].includes(region.state))};
 }
 /** Identities, cancellation and uncertain-start recovery are shared with file reads. */
@@ -41,7 +41,7 @@ export function publishRefresh(client: QueryClient, project: string, input: Refr
   const keys = repositoryQueryKeys(project, input);
   for (const area of ['summary', 'graph', 'changes'] as const) {
     const region = value.regions?.[area];
-    if (!region?.result) continue;
+    if (!region?.result || ['failed', 'cancelled'].includes(region.state)) continue;
     const previous = client.getQueryData<ObserverResponse>(keys[area]);
     const summary = Number((previous?.result as any)?.observation?.readStartedAt || 0) > Number(region.result.observation?.readStartedAt || 0) ? previous!.result as any : region.result;
     if (area === 'summary') {

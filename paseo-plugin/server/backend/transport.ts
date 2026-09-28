@@ -285,7 +285,10 @@ export async function serveSocket(
         let task: Promise<unknown>;
         task = response(service, line, controller.signal)
           .then((value) => {
-            if (!socket.destroyed) socket.write(JSON.stringify(value) + "\n");
+            const serializeStarted=Date.now();
+            const wire=JSON.stringify(value) + "\n";
+            if(parsedMethod === 'observer.refresh') service.observation.refresh.recordTransfer(String(request.params?.requestId || ''),Date.now()-serializeStarted,Buffer.byteLength(wire),!socket.destroyed);
+            if (!socket.destroyed) socket.write(wire);
           })
           .finally(() => {
             clearTimeout(deadlineTimer);

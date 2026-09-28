@@ -1,3 +1,4 @@
+import { WorkbenchError } from '../server/backend/storage.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
@@ -257,4 +258,73 @@ test('task-based regions distinguish unread, running, failed, and genuinely empt
   assert.deepEqual(refreshRegionFeedback(response('failed'),'graph',false),{loading:false,failed:true});
   assert.deepEqual(refreshRegionFeedback(response('ready'),'graph',true),{loading:false,failed:false});
   assert.deepEqual(refreshRegionFeedback(undefined,'changes',false,true),{loading:false,failed:true});
+});
+
+test('partial region failure is recoverable and never revalidates retained failed content', async()=>{
+  const reader=createRepositoryRefreshClient(), input={workspaceId:'w',repoPath:'one',historyMode:'branch',maxCommits:50,scope:'working'};
+  const calls:any[]=[];
+  const rpc=async(params:any):Promise<any>=>{calls.push(params);return {ok:true,result:{protocol:1,generation:'g',taskId:'t',deadline:Date.now()+30000,state:'ready',result:{regions:{summary:{state:'ready',phase:'cache',result:{observation:{state:'ready'}}},graph:{state:'failed',phase:'git',error:{code:'git_timeout',message:'slow'},result:{nodes:['old'],observation:{readStartedAt:1}}}}}}};};
+  const failed=await reader.readRefresh('one',input,rpc);
+  assert.equal(failed.ok,false);assert.equal((failed.error?.details as any).recovery,'repository');
+  const client=new QueryClient(),key=repositoryQueryKeys('p',input).graph;
+  const prior={ok:true,result:{nodes:['kept'],observation:{readStartedAt:2}}};client.setQueryData(key,prior);
+  publishRefresh(client,'p',input,failed.result as any);assert.deepEqual(client.getQueryData(key),prior);
+  await reader.readRefresh('one',input,rpc);assert.notEqual(calls[0].requestId,calls[1].requestId);
+  client.clear();
+});
+
+test('metadata stalls do not block refresh acceptance, status, or release',async()=>{
+  const f=fixture(),records=f.service.workspaces.observationRecords;
+  const original=records.request.bind(records);let unblock!:()=>void;
+  const held=new Promise<void>(r=>unblock=r);
+  records.request=async(...args:Parameters<typeof records.request>)=>{if(args[0]==='context')await held;return original(...args);};
+  try{
+    const start=Date.now();const task=await f.service.handle('observer.refresh',{workspaceId:'main',repoPath:'one',requestId:'held-context'});
+    assert.ok(Date.now()-start<500);assert.ok(['queued','running'].includes(task.state));
+    const at=Date.now();const status=await f.service.handle('observer.refresh',{action:'status',taskId:task.taskId,requestId:'held-context'});
+    assert.ok(Date.now()-at<100);assert.equal(status.result.regions.graph.phase,'metadata');
+    await f.service.handle('observer.refresh',{action:'release',taskId:task.taskId,requestId:'held-context'});
+  }finally{unblock();await f.service.close();rmSync(f.root,{recursive:true,force:true});}
+});
+
+test('expired client wait reconciles original task before replacing computation',async t=>{
+  let now=100000;t.mock.method(Date,'now',()=>now);
+  const reader=createRepositoryRefreshClient(),input={workspaceId:'w',repoPath:'one',historyMode:'branch',maxCommits:50,scope:'working'};
+  const calls:any[]=[];let complete=false;
+  const rpc=async(params:any):Promise<any>=>{calls.push(params);return {ok:true,result:{protocol:1,generation:'g',taskId:'original',deadline:130000,state:complete?'ready':'running',result:{regions:{graph:{state:complete?'ready':'running',phase:'git',result:complete?{nodes:['new']}:undefined}}}}};};
+  await reader.readRefresh('one',input,rpc);now+=31000;
+  const failed=await reader.readRefresh('one',input,rpc);assert.equal(failed.ok,false);assert.equal(calls.length,1);
+  reader.retry('one'); // manual refresh must reconcile the same uncertain task too
+  complete=true;const recovered=await reader.readRefresh('one',input,rpc);
+  assert.equal(recovered.ok,true);assert.equal(calls[1].action,'status');assert.equal(calls[1].requestId,calls[0].requestId);assert.equal(calls[1].taskId,'original');
+});
+
+test('permanent region failure stays terminal until explicit retry',async()=>{
+  const reader=createRepositoryRefreshClient(),input={workspaceId:'w',repoPath:'one',historyMode:'branch',maxCommits:50,scope:'working'};let calls=0;
+  const rpc=async():Promise<any>=>{calls++;return {ok:true,result:{protocol:1,generation:'g',taskId:'t',deadline:Date.now()+30000,state:'failed',error:{code:'commit_missing',message:'missing'}}};};
+  const first=await reader.readRefresh('one',input,rpc);assert.equal((first.error?.details as any).recovery,undefined);
+  await reader.readRefresh('one',input,rpc);assert.equal(calls,1);
+  reader.retry('one');await reader.readRefresh('one',input,rpc);assert.equal(calls,2);
+});
+
+test('failed forced graph check cannot be hidden by same-token cache during recovery',async()=>{
+  const f=fixture(),original=Git.prototype.graph;let fail=false,reads=0;
+  Git.prototype.graph=async function(...args){reads++;if(fail){throw new WorkbenchError('git_timeout','injected timeout');}return original.apply(this,args);};
+  try{
+    const input={workspaceId:'main',repoPath:'one',scope:'working',historyMode:'full'};
+    await finish(f.service,{...input,requestId:'baseline',force:true});
+    fail=true;const failed=await finish(f.service,{...input,requestId:'failure',force:true});
+    assert.equal(failed.result.outcome,'partial-failure');assert.equal(failed.result.regions.graph.state,'failed');
+    const before=reads;fail=false;
+    const recovered=await finish(f.service,{...input,requestId:'recovery'});
+    assert.equal(recovered.result.regions.graph.state,'ready');assert.ok(reads>before);
+    assert.equal(recovered.result.regions.summary.phase,'cache');
+  }finally{Git.prototype.graph=original;await f.service.close();rmSync(f.root,{recursive:true,force:true});}
+});
+
+test('task failure during metadata does not leave queued regions loading forever',async()=>{
+  const {refreshRegionFeedback}=await import('../client/repository-refresh-client.ts');
+  const response:any={ok:false,error:{code:'observer_refresh_timeout',message:'expired'},result:{regions:{graph:{state:'queued',phase:'metadata'},changes:{state:'ready',phase:'cache'}}}};
+  assert.deepEqual(refreshRegionFeedback(response,'graph',false),{failed:true,loading:false});
+  assert.deepEqual(refreshRegionFeedback(response,'changes',true),{failed:false,loading:false});
 });

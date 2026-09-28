@@ -234,3 +234,27 @@ test('a hidden panel does not poll its pending file while another panel keeps th
   assert.equal(s.counts.hidden, 1);
   s.coordinator.close();
 });
+
+test('repository terminal failures recover with 5/15/30/60s backoff and pause while hidden', async () => {
+  const s = setup(), q = s.add('a');
+  const failure = (): ObserverResponse => ({ok:false,error:{code:'observer_refresh_timeout',message:'expired',details:{terminal:true,recovery:'repository'}}});
+  q.data=failure(); let calls=0;
+  q.fetch=async()=>{calls++;q.data=failure();s.coordinator.changed();};
+  let stop=s.coordinator.subscribe(['w']);
+  await s.time.advance(4999); assert.equal(calls,0);
+  await s.time.advance(1); assert.equal(calls,1);
+  await s.time.advance(14999); assert.equal(calls,1);
+  await s.time.advance(1); assert.equal(calls,2);
+  stop();await s.time.advance(120000);assert.equal(calls,2);
+  q.fetch=async()=>{calls++;q.data={ok:true,result:{observation:{state:'ready',validationKey:'/a#working',validationToken:'1'}}};s.coordinator.changed();};
+  stop=s.coordinator.subscribe(['w']);await s.time.advance(60000);assert.equal(calls,3);
+  await s.time.advance(120000);assert.equal(calls,3);stop();s.coordinator.close();
+});
+
+test('recovery backoff does not slow polling of the already accepted task',async()=>{
+  const s=setup(),q=s.add('a');let calls=0;
+  q.data={ok:false,error:{code:'observer_refresh_timeout',message:'expired',details:{terminal:true,recovery:'repository'}}};
+  q.fetch=async()=>{calls++;q.data=calls===1?{ok:true,result:{observation:{state:'ready',refreshing:true,readTask:{state:'running',nextPollMs:250,deadline:s.time.now()+30000}}}}:{ok:true,result:{observation:{state:'ready',validationKey:'/a#working',validationToken:'1'}}};s.coordinator.changed();};
+  s.coordinator.subscribe(['w']);await s.time.advance(5000);assert.equal(calls,1);
+  await s.time.advance(250);assert.equal(calls,2);s.coordinator.close();
+});

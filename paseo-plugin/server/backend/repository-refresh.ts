@@ -1,3 +1,4 @@
+import { refreshRetryable } from '../../shared/refresh-recovery.ts';
 import { BasicReads } from "./basic-reads.ts";
 import { Git, withBackgroundGit } from './git.ts';
 import { now, stable, issue, WorkbenchError, type Json } from './storage.ts';
@@ -44,6 +45,12 @@ class SnapshotGit extends Git {
 export class RepositoryRefresh {
   private observation: Observation;
   private basic = new BasicReads();
+  private controls: Json[] = [];
+  recordTransfer(requestId: string, serializeMs: number, bytes: number, sent: boolean) {
+    const event = [...this.controls].reverse().find(event => event.requestId === requestId);
+    if(event) Object.assign(event,{serializeMs,bytes,sent});
+  }
+  controlHealth() { return {recent:this.controls.filter(event => Date.now()-event.at < 60_000)}; }
   private closed = false;
   private producers = new Set<AbortController>();
   private statistics = new Map<string, { abort: AbortController; promise: Promise<void> }>();
@@ -58,8 +65,8 @@ export class RepositoryRefresh {
   }
   retained(workspace: Json, repo: Json) { return this.observation.cache.retained(this.key('repository.summary', workspace, { repoPath: repo.repoPath }))?.repository; }
 
-  private async cycle(params: Json, signal?: AbortSignal, deadline = Date.now() + 30_000) {
-    const { workspace, repo, path } = await this.context(params);
+  private async cycle(params: Json, signal?: AbortSignal, deadline = Date.now() + 30_000, context?: {workspace:Json;repo:Json;path:string}) {
+    const { workspace, repo, path } = context || await this.context(params);
     const cacheEpoch = this.observation.cache.epoch;
     const workspaceEpoch = this.observation.cache.workspaceEpoch(workspace.id);
     const trace: Json[] = [];
@@ -133,46 +140,70 @@ export class RepositoryRefresh {
     }, true, false, { workspaceId: workspace.id, repoPath: path });
   }
   async request(params: Json): Promise<Json> {
+    const start=Date.now();let code='';
+    try { return await this.requestControl(params); }
+    catch(error) { code=issue(error).code;throw error; }
+    finally {
+      this.controls.push({at:Date.now(),action:params.action || 'start',requestId:params.requestId,durationMs:Date.now()-start,code,generation:this.observation.diffTasks.generation});
+      if(this.controls.length>64)this.controls.shift();
+    }
+  }
+  private async requestControl(params: Json): Promise<Json> {
     const tasks = this.observation.diffTasks;
     const requestId = String(params.requestId || '');
     if (params.action === 'status') return tasks.status(String(params.taskId || ''), requestId);
     if (params.action === 'release') return tasks.release(String(params.taskId || ''), requestId);
     if (params.action && params.action !== 'start') throw new WorkbenchError('request_invalid', 'Unknown refresh action');
     if (Number.isFinite(params.readDeadline) && Date.now() >= params.readDeadline) throw new WorkbenchError('observer_timeout', 'Refresh request expired before acceptance');
-    const { workspace, repo, path } = await this.context(params);
-    if (Number.isFinite(params.readDeadline) && Date.now() >= params.readDeadline) throw new WorkbenchError('observer_timeout', 'Refresh request expired while reading metadata');
-    const identity = stable({ workspaceId: workspace.id, path, historyMode: params.historyMode || null, maxCommits: params.maxCommits || 50, scope: params.scope || 'working', commitSha: params.commitSha || null, summaryOnly: params.summaryOnly === true });
-    // Concurrent clicks use the same identity while a generation is unfinished.
-    const key = `refresh:${identity}:${this.observation.scheduler.token(path)}${params.force ? `:manual:${requestId}` : ''}`;
+    // Control acceptance uses the requested identity only. Authoritative path
+    // validation happens inside the task before any Git or cache access.
+    const identity = stable({workspaceId:params.workspaceId,repository:params.repoPath || params.repositoryId,historyMode:params.historyMode || null,maxCommits:params.maxCommits || 50,scope:params.scope || 'working',commitSha:params.commitSha || null,summaryOnly:params.summaryOnly === true});
+    const key = `refresh:${identity}${params.force ? `:manual:${requestId}` : ''}`;
+    return tasks.start(key, requestId, async (signal, deadline, publish) => {
+      const metadataStarted = Date.now();
+      publish({refreshId:requestId,workspaceId:params.workspaceId,repoPath:params.repoPath,regions:Object.fromEntries((params.summaryOnly ? ['summary'] : ['summary','graph','changes']).map(area => [area,{state:'queued',phase:'metadata'}]))});
+      const { workspace, repo, path } = await this.context(params);
+      if (signal.aborted || Date.now() >= deadline) throw new WorkbenchError('observer_refresh_timeout','Refresh expired during metadata validation',{stage:'metadata'});
     if (!params.force) {
       const areas = params.summaryOnly ? ['summary'] : ['summary', 'graph', 'changes'];
       const retained = areas.map(area => this.observation.cache.retained(this.key(`repository.${area}`, workspace, { ...params, scope: params.scope || 'working' })));
       // Persisted results display immediately, but a new backend generation is
       // not considered validated until this task has checked its source.
-      if (retained.every((value, index) => value?.observation?.state === 'ready' && (value.observation.immutableIdentity || value.observation.validationToken === this.observation.scheduler.token(path, index === 2 && (params.scope || 'working') !== 'working' ? 'refs' : 'working')))) {
-        return { protocol: 1, generation: tasks.generation, requestId, taskId: '', state: 'ready', acceptedAt: Date.now(), deadline: Date.now() + 30000,
-          result: { refreshId: requestId, workspaceId: workspace.id, repoPath: repo.repoPath, cacheHit: true, observation: { ...retained[0]!.observation, refreshing: !!retained[2]?.observation?.statisticsPending },
-            regions: Object.fromEntries(areas.map((area, i) => [area, { state: 'ready', phase: 'cache', result: retained[i], completedAt: Date.now() }])) } };
+      if (retained.every((value, index) => value?.observation?.state === 'ready' && !value.repository?.observationPending && (value.observation.immutableIdentity || value.observation.validationToken === this.observation.scheduler.token(path, index === 2 && (params.scope || 'working') !== 'working' ? 'refs' : 'working')))) {
+        return { refreshId: requestId, workspaceId: workspace.id, repoPath: repo.repoPath, cacheHit: true, observation: { ...retained[0]!.observation, refreshing: !!retained[2]?.observation?.statisticsPending },
+            regions: Object.fromEntries(areas.map((area, i) => [area, { state: 'ready', phase: 'cache', result: retained[i], completedAt: Date.now() }])) };
       }
     }
-    return tasks.start(key, requestId, async (signal, deadline, publish) => {
       const acceptedAt = Date.now();
       const regions: Json = Object.fromEntries((params.summaryOnly ? ['summary'] : ['summary', 'graph', 'changes']).map(area => [area, { state: 'queued', phase: 'identity', result: this.observation.cache.retained(this.key(`repository.${area}`, workspace, { ...params, scope: params.scope || 'working' })) }]));
-      const value: Json = { protocol: 1, refreshId: requestId, workspaceId: workspace.id, repoPath: repo.repoPath, acceptedAt, regions, trace: [] };
+      const value: Json = { protocol: 1, refreshId: requestId, workspaceId: workspace.id, repoPath: repo.repoPath, acceptedAt, regions, trace: [{phase:'metadata',durationMs:Date.now()-metadataStarted}] };
       const update = () => publish({ ...value, regions: { ...regions } });
       update();
-      const cycle = await this.cycle(params, signal, deadline); value.trace = cycle.trace;
+      const cycle = await this.cycle(params, signal, deadline, {workspace,repo,path}); cycle.trace.unshift(...value.trace); value.trace = cycle.trace;
       await Promise.all(Object.keys(regions).map(async area => {
+        const retained = regions[area].result;
+        const expectedToken = area === 'changes' && (params.scope || 'working') !== 'working' ? cycle.refsToken : cycle.token;
+        if (!params.force && retained?.observation?.state === 'ready' && !retained.repository?.observationPending && (retained.observation.immutableIdentity || retained.observation.validationToken === expectedToken)) {
+          regions[area] = {state:'ready',phase:'cache',result:retained,completedAt:Date.now()}; update(); return;
+        }
         const start = Date.now(); regions[area] = { result: regions[area].result, state: 'running', phase: area === 'summary' ? 'status' : area === 'graph' ? 'history-and-refs' : 'file-names', startedAt: start }; update();
         try { const result = await cycle.produce(area, true, partial => { regions[area] = {...regions[area],result:partial}; update(); }); if (cycle.cacheEpoch !== this.observation.cache.epoch || cycle.workspaceEpoch !== this.observation.cache.workspaceEpoch(workspace.id)) throw new WorkbenchError('observation_superseded', 'Workspace changed during refresh'); const token = area === 'changes' && (params.scope || 'working') !== 'working' ? cycle.refsToken : cycle.token;
           const scope = area === 'changes' && (params.scope || 'working') !== 'working' ? 'refs' : 'working';
           if (Number(this.observation.cache.retained(this.key(`repository.${area}`, workspace, { ...params, scope: params.scope || 'working' }))?.observation?.readStartedAt || 0) <= Number(result.observation.readStartedAt)) this.observation.cache.publish(this.key(`repository.${area}`, workspace, { ...params, scope: params.scope || 'working' }), token + stable(repo), result, { workspaceId: workspace.id, repoPath: path }, cycle.cacheEpoch);
           regions[area] = { state: 'ready', phase: 'published', result, durationMs: Date.now() - start, completedAt: Date.now() }; }
-        catch (error) { regions[area] = { result: regions[area].result, state: 'failed', phase: 'git', error: issue(error), durationMs: Date.now() - start }; }
+        catch (error) {
+          const failure = issue(error);
+          const failedKey = this.key(`repository.${area}`, workspace, {...params,scope:params.scope || 'working'});
+          const old = this.observation.cache.retained(failedKey);
+          // Retain display content, but do not accept an old same-token result
+          // as proof that a failed explicit check has recovered.
+          if (old && Number(old.observation?.readStartedAt || 0) <= start && cycle.workspaceEpoch === this.observation.cache.workspaceEpoch(workspace.id)) this.observation.cache.publish(failedKey, expectedToken + stable(repo), {...old,observation:{...old.observation,state:'degraded'}}, {workspaceId:workspace.id,repoPath:path}, cycle.cacheEpoch);
+          regions[area] = { result: regions[area].result, state: 'failed', phase: 'git', error: failure, recovery: {retryable:refreshRetryable(failure.code),stage:'git',requestId}, durationMs: Date.now() - start }; }
         update();
       }));
       value.completedAt = Date.now();
-      value.observation = { state: 'ready', observedAt: now(), validationKey: `${path}#working`, validationToken: cycle.token, refreshing: !!regions.changes?.result?.observation?.statisticsPending };
+      value.outcome = Object.values(regions).some((region:any) => region.state === 'failed') ? 'partial-failure' : 'ready';
+      value.observation = { state: value.outcome === 'ready' ? 'ready' : 'degraded', observedAt: now(), validationKey: `${path}#working`, validationToken: cycle.token, refreshing: !!regions.changes?.result?.observation?.statisticsPending };
       // Optional statistics are a separate ordinary query/cache fill. They do
       // not own the critical refresh completion or reuse a cancelled signal.
       if (regions.changes?.state === 'ready' && regions.changes.result.observation.statisticsPending) {

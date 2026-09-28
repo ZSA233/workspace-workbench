@@ -36,7 +36,9 @@ export type Clock = { now(): number; set(fn: () => void, ms: number): unknown; c
 const clock: Clock = { now: Date.now, set: (fn, ms) => setTimeout(fn, ms), clear: timer => clearTimeout(timer as ReturnType<typeof setTimeout>) };
 type Task = { due: number; reason: string };
 type Entry = { active: boolean; lastUsed: number; seen?: ObserverResponse; seenError?: unknown; failures: number; followToken: string; follows: number; lastAttempt: number; task?: Task; running: boolean; pending?: Task; waiters: Set<() => void> };
-const terminalRead = (q: QueryView) => (q.data?.error?.details as { terminal?: boolean } | undefined)?.terminal === true;
+const recoverableRead = (q: QueryView) => (q.data?.error?.details as { recovery?: string } | undefined)?.recovery === 'repository';
+const retryDelay = (q: QueryView, failures: number) => (recoverableRead(q) ? policy.recoveryMs : policy.retryMs)[Math.min(Math.max(0, failures - 1), 3)];
+const terminalRead = (q: QueryView) => (q.data?.error?.details as { terminal?: boolean } | undefined)?.terminal === true && !recoverableRead(q);
 const durable = new Set(['path_invalid', 'file_not_changed', 'worktree_missing', 'repository_missing', 'commit_missing', 'base_missing', 'workspace_not_found']);
 
 /** Owns refresh decisions, not payloads. QueryClient remains the single data cache. */
@@ -98,9 +100,9 @@ export function createObservationCoordinator(project: string, host: CoordinatorH
           e.seen = q.data; e.seenError = q.error;
           if (q.error || q.data?.ok === false || q.data?.ok && meta.state && meta.state !== 'ready') {
             e.failures++;
-            if (!terminalRead(q) && !durable.has(q.data?.error?.code || '')) enqueue(e, policy.retryMs[Math.min(e.failures - 1, 3)], 'retry');
+            if (!terminalRead(q) && !durable.has(q.data?.error?.code || '')) enqueue(e, retryDelay(q, e.failures), 'retry');
           } else if (q.data?.ok) {
-            e.failures = 0;
+            if (!meta.readTask) e.failures = 0;
             if (!meta.refreshing && meta.cacheState !== 'refreshing') {
               if (e.task?.reason === 'follow-up' || e.task?.reason === 'retry') e.task = undefined;
             }
@@ -148,7 +150,7 @@ export function createObservationCoordinator(project: string, host: CoordinatorH
     return Promise.all(waits).then(() => undefined);
   }
   function enqueue(e: Entry, delay: number, reason: string) {
-    if (reason !== 'manual' && e.failures) delay = Math.max(delay, e.lastAttempt + policy.retryMs[Math.min(e.failures - 1, 3)] - time.now());
+    if (reason !== 'manual' && reason !== 'read-task' && e.failures) { const q = host.queries().find(q => entries.get(q.id) === e); delay = Math.max(delay, e.lastAttempt + (q ? retryDelay(q, e.failures) : policy.retryMs[Math.min(e.failures - 1, 3)]) - time.now()); }
     if (e.running) {
       const pending = { due: time.now() + delay, reason };
       if (!e.pending || pending.due < e.pending.due || reason === 'manual') e.pending = pending;

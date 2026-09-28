@@ -163,10 +163,10 @@ export class ObserverBridge {
   private completedRequests = 0;
   private failedRequests = 0;
   private timeoutRequests = 0;
-  private failures: Array<{ requestId: string; method: string; code: string; stage: string; at: string; durationMs: number; readRequestId?: string }> = [];
+  private failures: Array<{ requestId: string; method: string; code: string; stage: string; at: string; durationMs: number; readRequestId?: string; action?: string }> = [];
 
   private recordFailure(request: SocketRequest, code: string, startedAt: number, stage: string) {
-    this.failures.push({ requestId: request.id, ...(typeof request.params.requestId === "string" ? { readRequestId: request.params.requestId } : {}), method: request.method, code, stage,
+    this.failures.push({ requestId: request.id, ...(typeof request.params.requestId === "string" ? { readRequestId: request.params.requestId } : {}), method: request.method, ...(typeof request.params.action === 'string' ? {action:request.params.action} : {}), code, stage,
       at: new Date().toISOString(), durationMs: Date.now() - startedAt });
     if (this.failures.length > 32) this.failures.shift();
   }
@@ -258,9 +258,10 @@ export class ObserverBridge {
     }
     const params = requestParams(input);
     this.totalRequests++;
-    const stats = this.methodStats.get(input.method) || { requests: 0, completed: 0, failures: 0, maxMs: 0 };
+    const statsKey = input.method === 'observer.refresh' ? `${input.method}:${String(input.params.action || 'start')}` : input.method;
+    const stats = this.methodStats.get(statsKey) || { requests: 0, completed: 0, failures: 0, maxMs: 0 };
     stats.requests++;
-    this.methodStats.set(input.method, stats);
+    this.methodStats.set(statsKey, stats);
     if (this.methodStats.size > 64) this.methodStats.delete(this.methodStats.keys().next().value!);
     const startedAt = Date.now();
     const key = `${configuredSocketPath()}:${input.method}:${JSON.stringify(params)}`;
@@ -271,7 +272,7 @@ export class ObserverBridge {
     this.cache.delete(key);
     const active = this.inFlight.get(key);
     if (active) return active;
-    const control = ["observer.health", "observer.versions"].includes(input.method) || ["observer.refresh", "repository.diff.read", "workspace.prepare.task"].includes(input.method) && input.params.action === "status";
+    const control = ["observer.health", "observer.versions"].includes(input.method) || ["observer.refresh", "repository.diff.read", "workspace.prepare.task"].includes(input.method) && ["status", "release"].includes(String(input.params.action));
     if (this.inFlight.size >= (control ? 64 : BRIDGE_IN_FLIGHT))
       return { ok: false, error: { code: "observer_busy", message: "observer request limit reached; retry" } };
     const request: SocketRequest = { id: `${process.pid}:${++this.sequence}`, method: input.method, params };

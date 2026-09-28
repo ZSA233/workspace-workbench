@@ -1,3 +1,4 @@
+import { refreshRetryable } from '../shared/refresh-recovery.ts';
 import { DIFF_READ_PROTOCOL, type DiffReadStatus } from '../shared/diff-read.ts';
 import type { ObserverResponse } from '../shared/observer.ts';
 type Entry = { requestId: string; taskId?: string; generation?: string; deadline: number; polls: number; pending: boolean; released: boolean; restarts: number; failed?: ObserverResponse };
@@ -9,13 +10,19 @@ export function createDiffReadClient(partialResults = false) {
   async function read(key: string, params: Record<string, unknown>, rpc: DiffRpc, capable: boolean): Promise<ObserverResponse> {
     if (!capable) return rpc('repository.diff', params);
     let entry = entries.get(key);
-    if (entry?.failed && !entry.released) return entry.failed;
+    if (entry?.failed && !entry.released) {
+      if (!partialResults || !refreshRetryable(entry.failed.error?.code || '')) return entry.failed;
+      entry.failed = undefined;
+      // A local deadline does not prove the server has stopped. Reconcile the
+      // original identity before creating a replacement computation.
+      if (entry.taskId || entry.pending) { entry.pending = true; entry.deadline = Date.now() + 30_000; }
+    }
     if (!entry || !entry.pending || entry.released) {
       entry = { requestId: newId(), deadline: Date.now() + 30_000, polls: 0, pending: true, released: false, restarts: 0 };
       entries.set(key, entry);
       if (entries.size > 128) for (const [id, e] of entries) if (!e.pending || e.released) { entries.delete(id); break; }
     }
-    if (Date.now() >= entry.deadline) return fail(entry, { code: partialResults ? 'observer_refresh_timeout' : 'diff_read_timeout', message: partialResults ? 'Repository refresh deadline exceeded' : 'File read deadline exceeded' });
+    if (Date.now() >= entry.deadline) return fail(entry, { code: partialResults ? 'observer_refresh_timeout' : 'diff_read_timeout', message: partialResults ? 'Repository refresh deadline exceeded' : 'File read deadline exceeded', details:{stage:'client-wait',taskId:entry.taskId,generation:entry.generation} });
     let response: ObserverResponse;
     try { response = await rpc('repository.diff.read', entry.taskId ? { action: 'status', taskId: entry.taskId, requestId: entry.requestId } : { ...params, action: 'start', requestId: entry.requestId }); }
     catch { response = { ok: false, error: { code: 'observer_unavailable', message: 'File read connection unavailable' } }; }
@@ -24,15 +31,27 @@ export function createDiffReadClient(partialResults = false) {
       const generation = (error.details as { generation?: string } | undefined)?.generation;
       if (error.code === 'diff_task_missing' && generation && generation !== entry.generation && entry.restarts < 1) {
         entry.restarts++; entry.taskId = undefined; entry.generation = generation; entry.requestId = newId();
-      } else if (!['observer_timeout', 'observer_unavailable', 'observer_busy', 'observer_connection_refused', 'observer_socket_error'].includes(error.code)) return fail(entry, error);
+      } else if (partialResults && error.code === 'diff_task_missing') { entry.taskId = undefined; entry.pending = false; return fail(entry, error); } else if (!['observer_timeout', 'observer_unavailable', 'observer_busy', 'observer_connection_refused', 'observer_socket_error'].includes(error.code)) return fail(entry, error);
       return pending(entry, 'connecting');
     }
     const status = response.result as DiffReadStatus;
     if (status.protocol !== DIFF_READ_PROTOCOL) return fail(entry, { code: 'diff_protocol_mismatch', message: 'File reader update required' });
     entry.taskId = status.taskId; entry.generation = status.generation; entry.deadline = Math.min(entry.deadline, status.deadline);
     if (entry.released) { void rpc('repository.diff.read', { action: 'release', requestId: entry.requestId, taskId: entry.taskId }).catch(() => {}); }
-    if (status.state === 'ready') { entry.pending = false; const result = status.result as Record<string, unknown>; return { ok: true, result: { ...result, observation: { ...(result.observation as object), requestId: entry.requestId, taskId: status.taskId, generation: status.generation } } }; }
-    if (status.state === 'failed' || status.state === 'cancelled') return fail(entry, status.error || { code: 'observer_cancelled', message: 'File read cancelled' }, partialResults ? status.result : undefined);
+    if (status.state === 'ready') {
+      const result = status.result as Record<string, any>;
+      const failed = partialResults
+        ? Object.values(result?.regions || {}).filter((region: any) => ['failed', 'cancelled'].includes(region.state)) as Array<{error?: NonNullable<ObserverResponse['error']>}>
+        : [];
+      entry.pending = false;
+      if (failed.length) {
+        entry.taskId = undefined;
+        const error = failed.find(region => refreshRetryable(region.error?.code || ''))?.error || failed[0].error;
+        return fail(entry, error || {code:'observer_refresh_failed',message:'Repository update failed'}, result);
+      }
+      return {ok:true,result:{...result,observation:{...result.observation,requestId:entry.requestId,taskId:status.taskId,generation:status.generation}}};
+    }
+    if (status.state === 'failed' || status.state === 'cancelled') { entry.taskId = undefined; entry.pending = false; return fail(entry, status.error || { code: 'observer_cancelled', message: 'File read cancelled' }, partialResults ? status.result : undefined); }
     return pending(entry, status.state, partialResults ? status.result : undefined);
   }
   function pending(entry: Entry, state: string, partial?: unknown): ObserverResponse {
@@ -40,8 +59,8 @@ export function createDiffReadClient(partialResults = false) {
     return { ok: true, result: { ...(partial && typeof partial === 'object' ? partial : {}), observation: { state: 'ready', refreshing: true, readTask: { requestId: entry.requestId, taskId: entry.taskId, generation: entry.generation, state, deadline: entry.deadline, nextPollMs } } } };
   }
   function fail(entry: Entry, error: NonNullable<ObserverResponse['error']>, partial?: unknown): ObserverResponse {
-    entry.pending = false;
-    entry.failed = { ok: false, ...(partial && typeof partial === 'object' ? {result:partial} : {}), error: { ...error, details: { ...(error.details as object || {}), readTask: true, terminal: true, requestId: entry.requestId } } };
+    if (!partialResults) entry.pending = false;
+    entry.failed = { ok: false, ...(partial && typeof partial === 'object' ? {result:partial} : {}), error: { ...error, details: { ...(error.details as object || {}), readTask: true, terminal: true, ...(partialResults && refreshRetryable(error.code) ? {recovery:'repository'} : {}), requestId: entry.requestId } } };
     return entry.failed;
   }
   function release(key: string, rpc: DiffRpc) {
@@ -50,6 +69,14 @@ export function createDiffReadClient(partialResults = false) {
     entry.released = true;
     if (entry.pending) void rpc('repository.diff.read', { action: 'release', taskId: entry.taskId, requestId: entry.requestId }).catch(() => {});
   }
-  function retry(key: string) { const entry = entries.get(key); if (entry) { entry.failed = undefined; entry.released = true; } }
+  function retry(key: string) {
+    const entry = entries.get(key);
+    if (!entry) return;
+    if (partialResults && entry.pending && entry.failed && refreshRetryable(entry.failed.error?.code || '')) {
+      entry.failed = undefined; entry.deadline = Date.now() + 30_000;
+      return;
+    }
+    entry.failed = undefined; entry.released = true;
+  }
   return { read, release, retry };
 }

@@ -167,7 +167,9 @@ export class Observation {
       ...this.activity.summary(workspace),
       observedAt: roster ? null : now(),
       observationStale: roster,
-      ...(this.runtime ? { toolchain: this.runtime.summary(workspace) } : {}),
+      // A directory listing must not inspect installed binaries for every row.
+      // Selected workspace detail still supplies its runtime status.
+      ...(this.runtime && !roster ? { toolchain: this.runtime.summary(workspace) } : {}),
     };
   }
   async repository(repo: Json, deadline?: number, signal?: AbortSignal): Promise<Json> {

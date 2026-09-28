@@ -39,14 +39,14 @@ export class RecordCatalog {
         try { return await this.io.version(path); }
         finally { this.counters.versionMs += performance.now() - start; }
     }
-    async read(directory: string): Promise<Array<{
+    async read(directory: string, additionalPaths: string[] = []): Promise<Array<{
         path: string;
         value: Json | null;
     }>> {
         const start = performance.now();
         const names = await this.io.names(directory);
         this.counters.directoryMs += performance.now() - start;
-        const paths = names.filter(name => name.endsWith('.json')).sort().map(name => join(directory, name));
+        const paths = [...names.filter(name => name.endsWith('.json')).sort().map(name => join(directory, name)), ...additionalPaths];
         const present = new Set(paths);
         for (const path of this.cache.keys())
             if (!present.has(path))

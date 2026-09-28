@@ -529,7 +529,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listState = useLastSuccessfulResponse(`workspace-list:${projectConfig}`, listQuery.data, { error: listQuery.error, staleAfterMs: observationTiming.staleWindowsMs.list });
   const listResult = resultOf<ListResult>(listState.response);
   const listFailure = !listResult && listState.failed ? localizedCopy.workspaceListUnavailable : queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
-  reportNativeDiagnostic("project-panel-list-state", queryDiagnosticDetails(listQuery.data, listQuery.error, listQuery, listState));
+  reportNativeDiagnostic("project-panel-list-state", {projectConfig,...queryDiagnosticDetails(listQuery.data, listQuery.error, listQuery, listState)});
   const listReady = Boolean(listResult);
   const orphanPreviewQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "orphan-preview", orphanId],
@@ -1708,7 +1708,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         loading={listContentState === 'loading'}
         refreshing={manualRefreshing}
         failure={listUnavailable ? localizedCopy.workspaceListUnavailable : listFailure}
-        onRetry={listUnavailable ? () => { void refreshArea('workspace-list'); } : undefined}
+        retrying={listQuery.isFetching}
+        onRetry={listUnavailable ? () => {
+          reportNativeDiagnostic('workspace-list-retry', {projectConfig,at:String(Date.now()),fetching:String(listQuery.isFetching)});
+          void listQuery.refetch({cancelRefetch:false});
+        } : undefined}
         onOpen={openWorkspaceSelector}
         onFilter={setWorkspaceFilter}
         onSelect={(id) => { cancelWorkspaceActivityScan(); selectWorkspace(id); }}

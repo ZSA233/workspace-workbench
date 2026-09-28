@@ -172,6 +172,7 @@ export function WorkspaceSelector({
   refreshing,
   failure,
   onRetry,
+  retrying = false,
   onOpen,
   onFilter,
   onSelect,
@@ -200,6 +201,7 @@ export function WorkspaceSelector({
   refreshing: boolean;
   failure: string | null;
   onRetry?: () => void;
+  retrying?: boolean;
   onOpen: () => void;
   onFilter: (filter: WorkspaceFilter) => void;
   onSelect: (id: string) => void;
@@ -248,7 +250,7 @@ export function WorkspaceSelector({
           <Icon name={open ? "ChevronUp" : "ChevronDown"} size={15} color={theme.colors.foregroundMuted} />
         </View>
       </Pressable>
-      {!ready && failure && onRetry ? <Pressable accessibilityRole="button" onPress={onRetry} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.setupRetry}</Text></Pressable> : null}
+      {!ready && failure && onRetry ? <Pressable accessibilityRole="button" disabled={retrying} accessibilityState={{disabled:retrying,busy:retrying}} onPress={onRetry} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{retrying ? localizedCopy.observationRefreshing : localizedCopy.setupRetry}</Text></Pressable> : null}
       {statusControl}
       {onOpenLayoutMenu ? <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.text_1744b62533} onPress={onOpenLayoutMenu} style={[styles.layoutMenuButton, { width: 36, height: 36 }]}><Icon name="Ellipsis" size={18} color={theme.colors.foregroundMuted} /></Pressable> : null}
       </View>

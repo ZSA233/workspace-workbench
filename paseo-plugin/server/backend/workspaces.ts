@@ -17,6 +17,7 @@ import { childPath, indexGitlinks, commitGitlinks, linkedCandidates, type Gitlin
 import { orphanCandidates, orphanPreview } from "./orphans.ts";
 import { ObservationRecords } from './observation-records.ts';
 import {RecordCatalog} from './record-catalog.ts';
+import {filesystemRecordPaths,displayRecordPaths} from './record-paths.ts';
 import {
   atomicJson,
   canonical,
@@ -144,16 +145,18 @@ export class Workspaces {
     return join(this.config.stateRoot, "main-observation.json");
   }
   private linkedSelectionPath() { return join(this.config.stateRoot, "linked-workspaces.json"); }
-  private linkedSelection(): Json {
+  private linkedSelection(snapshot?: Json | null, paths = filesystemRecordPaths): Json {
+    const {canonical,inside}=paths;
     try {
-      const value = readJson(this.linkedSelectionPath());
-      return value.schemaVersion === 1 && Array.isArray(value.roots)
+      const value = snapshot === undefined ? readJson(this.linkedSelectionPath()) : snapshot;
+      return value?.schemaVersion === 1 && Array.isArray(value.roots)
         ? { ...value, roots: value.roots.filter((entry: Json) => typeof entry.path === "string" && inside(canonical(entry.path), this.config.sourceRoot)) }
         : { schemaVersion: 1, revision: 0, roots: [] };
     } catch { return { schemaVersion: 1, revision: 0, roots: [] }; }
   }
-  linkedId(path: string) { return `linked-${hash(canonical(path)).slice(0, 16)}`; }
-  private linkedRepositories(root: string, links: Gitlink[], treePath = root): Json[] {
+  linkedId(path: string, paths = filesystemRecordPaths) { return `linked-${hash(paths.canonical(path)).slice(0, 16)}`; }
+  private linkedRepositories(root: string, links: Gitlink[], treePath = root, paths = filesystemRecordPaths): Json[] {
+    const {childPath}=paths;
     return [
       { id: "@root", name: basename(root), repoPath: ".", sourcePath: root, worktreePath: treePath, mode: "live", role: "gitlink-root", baseRef: null, baseSha: null },
       ...links.map(link => ({ id: link.path, name: link.path, repoPath: link.path,
@@ -161,15 +164,16 @@ export class Workspaces {
         mode: "live", role: "gitlink-child", pinnedSha: link.sha, baseRef: null, baseSha: null })),
     ];
   }
-  private linkedWorkspace(entry: Json): Json {
+  private linkedWorkspace(entry: Json, paths = filesystemRecordPaths): Json {
+    const {canonical,childPath}=paths;
     const root = canonical(String(entry.path));
     const links = (Array.isArray(entry.links) ? entry.links : []).filter((link: Json) => {
       try { childPath(root, String(link.path)); return /^[0-9a-f]{40}$/.test(String(link.sha)); }
       catch { return false; }
     });
-    return { id: this.linkedId(root), displayName: String(entry.name || basename(root)), kind: "linked-live", layout: "gitlink",
+    return { id: this.linkedId(root,paths), displayName: String(entry.name || basename(root)), kind: "linked-live", layout: "gitlink",
       managed: false, state: "active", sourceRoot: root, treePath: root,
-      repositories: this.linkedRepositories(root, links),
+      repositories: this.linkedRepositories(root, links,root,paths),
       description: "Gitlink workspace", createdAt: null, updatedAt: entry.updatedAt || null };
   }
   async linkedCandidates(): Promise<Json> {
@@ -231,10 +235,10 @@ export class Workspaces {
     return { sourceWorkspaceId: source.id, rootBaseRef: ref, rootSha,
       links: entries.sort((a, b) => String(a.path).localeCompare(String(b.path))) };
   }
-  private mainSelection(): Json | null {
+  private mainSelection(snapshot?: Json | null): Json | null {
     try {
-      const value = readJson(this.mainSelectionPath());
-      return value.schemaVersion === 1 && Array.isArray(value.repositories) ? value : null;
+      const value = snapshot === undefined ? readJson(this.mainSelectionPath()) : snapshot;
+      return value?.schemaVersion === 1 && Array.isArray(value.repositories) ? value : null;
     } catch { return null; }
   }
   async mainCandidates(): Promise<Json> {
@@ -355,13 +359,13 @@ export class Workspaces {
     return { ...current, revision: current.revision + 1,
       repositories: current.repositories.map((repo: Json) => ({ ...repo, selected: selectedPaths.has(canonical(String(repo.path))) })) };
   }
-  private mainRepositories(): Json[] {
-    const saved = this.mainSelection();
-    if (!saved) return this.config.repositories.filter(repo => repo.enabled).map(repo => this.sourceRecord(repo));
-    return saved.repositories.map((repo: Json) => this.sourceRecord({ id: String(repo.id), name: String(repo.name), path: String(repo.path), enabled: true, role: null, defaultBase: null }));
+  private mainRepositories(snapshot?: Json | null, paths = filesystemRecordPaths): Json[] {
+    const saved = this.mainSelection(snapshot);
+    if (!saved) return this.config.repositories.filter(repo => repo.enabled).map(repo => this.sourceRecord(repo,paths));
+    return saved.repositories.map((repo: Json) => this.sourceRecord({ id: String(repo.id), name: String(repo.name), path: String(repo.path), enabled: true, role: null, defaultBase: null },paths));
   }
-  sourceRecord(repo: Repository): Json {
-    const path = repositoryPath(this.config, repo);
+  sourceRecord(repo: Repository, paths = filesystemRecordPaths): Json {
+    const path = paths.repositoryPath(this.config, repo);
     return {
       id: repo.id,
       name: repo.name,
@@ -553,7 +557,8 @@ export class Workspaces {
   read(path: string): Json | null {
     try { return this.validateRecord(path, readJson(path)); } catch { return null; }
   }
-  private validateRecord(path: string, value: Json): Json | null {
+  private validateRecord(path: string, value: Json, paths = filesystemRecordPaths): Json | null {
+    const {canonical,inside,repositoryPath,childPath}=paths;
     try {
       if (
         value.schemaVersion !== 1 ||
@@ -577,7 +582,13 @@ export class Workspaces {
         const configured = this.config.repositories.find(
           (item) => item.id === repo.id,
         );
-        const configuredSourceMatches = configured && canonical(repo.sourcePath) === repositoryPath(this.config, configured);
+        const configuredSourceMatches = configured && (
+          canonical(repo.sourcePath) === repositoryPath(this.config, configured) ||
+          // Saved source paths are canonical, whereas configuration may retain
+          // an in-root alias. Display can retain its identity without resolving
+          // that alias; authoritative reads below still use filesystem paths.
+          paths === displayRecordPaths && repo.repoPath === configured.path && inside(repo.sourcePath,this.config.sourceRoot,true)
+        );
         const adoptedSourceMatches = value.origin === "adopted" && repo.repoPath &&
           canonical(repo.sourcePath) === canonical(join(this.config.sourceRoot, repo.repoPath)) &&
           inside(repo.sourcePath, this.config.sourceRoot) &&
@@ -597,15 +608,21 @@ export class Workspaces {
   private recordValidationMs = 0;
   recordReadHealth() { return {...this.recordCatalog.health(),validationMs:this.recordValidationMs}; }
   async roster(): Promise<Json[]> {
-    const rows = await this.recordCatalog.read(this.config.recordsRoot);
+    const rows = await this.recordCatalog.read(this.config.recordsRoot,[this.mainSelectionPath(),this.linkedSelectionPath()]);
     const start=performance.now();
-    try{return this.assembleList(rows.map(({path,value}) => value && this.validateRecord(path,value) || this.invalidRecord(path)));}
+    try{
+      const selections = new Map(rows.map(row=>[row.path,row.value]));
+      const records = rows.filter(row=>dirname(row.path)===this.config.recordsRoot);
+      return this.assembleList(records.map(({path,value})=>value && this.validateRecord(path,value,displayRecordPaths) || this.invalidRecord(path)), {
+        main:selections.get(this.mainSelectionPath()) || null, linked:selections.get(this.linkedSelectionPath()) || null,
+      },displayRecordPaths);
+    }
     finally{this.recordValidationMs=performance.now()-start;}
   }
   private invalidRecord(path: string): Json {
     return {id:basename(path,'.json'),displayName:basename(path,'.json'),kind:'managed',managed:true,state:'record_invalid',repositories:[]};
   }
-  private mainWorkspace(): Json {
+  private mainWorkspace(snapshot?: Json | null, paths = filesystemRecordPaths): Json {
     const c = this.config;
     return {
       id: "main",
@@ -616,7 +633,7 @@ export class Workspaces {
       state: "active",
       sourceRoot: c.sourceRoot,
       treePath: c.sourceRoot,
-      repositories: this.mainRepositories(),
+      repositories: this.mainRepositories(snapshot,paths),
       createdAt: null,
       updatedAt: null,
     };
@@ -627,14 +644,14 @@ export class Workspaces {
       return this.read(path) || this.invalidRecord(path);
     }));
   }
-  private assembleList(records: Json[]): Json[] {
-    const main = this.mainWorkspace();
+  private assembleList(records: Json[], snapshots?: {main:Json|null;linked:Json|null}, paths = filesystemRecordPaths): Json[] {
+    const main = this.mainWorkspace(snapshots?.main,paths);
     records.sort((a, b) =>
       String(b.updatedAt || b.createdAt || "").localeCompare(
         String(a.updatedAt || a.createdAt || ""),
       ),
     );
-    const linked = this.linkedSelection().roots.map((entry: Json) => this.linkedWorkspace(entry));
+    const linked = this.linkedSelection(snapshots?.linked,paths).roots.map((entry: Json) => this.linkedWorkspace(entry,paths));
     return [main, ...linked, ...records];
   }
   get(id: string): Json {

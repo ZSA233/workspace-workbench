@@ -49,7 +49,7 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
     assert.match(bridge.url, /^http:\/\/127\.0\.0\.1:/);
     assert.match(bridge.headers?.Authorization || "", /Bearer/);
     const open = { agentId: "parent", cwd: root, purpose: "interactive", env: injected.env };
-    hooks.get("agent.session_open")!({ request: open });
+    await hooks.get("agent.session_open")!({ request: open });
     const contextRpc = rpcHandlers.get("workspace.workbench.agent_context");
     assert.ok(contextRpc);
     const liveContext = { paseo: { agents: { ref: () => ({ refresh: async () => ({ agent: { cwd: root, archivedAt: null } }) }) } } };
@@ -65,9 +65,9 @@ test("MCP binds exact identity; workers do not recurse; notifications steer and 
     assert.equal(resumed.error?.code, "workflow_not_found", "a live resumed agent reaches the ordinary status lookup");
     assert.equal(withProject({ projectConfig: config }, () => readState<{ revoked: boolean }>(`context:${currentToken}`))?.revoked, false);
     withProject({ projectConfig: config }, () => writeState(`context:${currentToken}`, { agentId: "parent", cwd: root, revoked: true }));
-    hooks.get("agent.session_open")!({ request: open });
+    await hooks.get("agent.session_open")!({ request: open });
     assert.equal(withProject({ projectConfig: config }, () => readState<{ revoked: boolean }>(`context:${currentToken}`))?.revoked, undefined);
-    const mismatched = hooks.get("agent.session_open")!({ request: { ...open, agentId: "another" } });
+    const mismatched = await hooks.get("agent.session_open")!({ request: { ...open, agentId: "another" } });
     assert.deepEqual(mismatched, { ...open, agentId: "another" });
     const worker = { ...request, env: { WORKBENCH_WORKER_WORKSPACE: "sample" } };
     assert.deepEqual(await hooks.get("agent.create")!({ request: worker }), worker);

@@ -1,3 +1,4 @@
+import { ObservationIndicator } from './observation-indicator';
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
@@ -87,11 +88,13 @@ export const WorkspaceView = memo(function WorkspaceView({
   preparingToolchain,
   preparationProgress,
   confirmedRepositoryCount,
+  observationTimes,
   graphPlatform,
   theme,
   styles,
 }: {
   detail: DetailResult | null;
+  observationTimes?: { detail?: string | null; graph?: string | null; changes?: string | null };
   unavailable: boolean;
   detailLoading: boolean;
   detailRefreshing: boolean;
@@ -147,18 +150,14 @@ export const WorkspaceView = memo(function WorkspaceView({
     setChangesRelativeTop(null);
   }, [selectedRepository?.repoPath]);
 
-  if (unavailable) {
-    return (
-      <View>
-        <Text style={styles.emptyText}>{detailError || (detailLoading ? copy.text_96c3e67563 : copy.text_07f7471155)}</Text>
-      </View>
-    );
-  }
   if (!detail) {
-    return <Text style={styles.emptyText}>{detailLoading ? copy.text_96c3e67563 : copy.text_981b8eb33f}</Text>;
+    return <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{copy.text_c91e6e6a53}</Text>
+      <ObservationIndicator error={detailError || (unavailable ? copy.observationUpdateFailed : null)} loading={detailLoading}
+        hasContent={false} lastSuccessfulAt={observationTimes?.detail} theme={theme} styles={styles} />
+    </View>;
   }
   const repositories = detail.repositories;
-  const toolchain = detail.workspace.toolchain;
   const changeSummary = selectedChangeSummary(
     selectedRepository,
     changes,
@@ -192,10 +191,6 @@ export const WorkspaceView = memo(function WorkspaceView({
     : availableHeight;
   return (
     <View onLayout={(event) => onContentLayout(event.nativeEvent.layout.height)}>
-      {detailError ? <Text style={styles.warningText}>{detailError}</Text> : null}
-      {toolchain && toolchain.status !== "ready" && toolchain.status !== "not_applicable" ? (
-        <ToolchainNotice toolchain={toolchain} repositoryCount={repositories.length} styles={styles} onPrepare={onPrepareToolchain} preparing={preparingToolchain} progress={preparationProgress} />
-      ) : null}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <SectionDisclosureButton
@@ -207,7 +202,7 @@ export const WorkspaceView = memo(function WorkspaceView({
             styles={styles}
           />
           <View style={styles.sectionHeaderRight}>
-            <InlineRefresh visible={detailRefreshing} theme={theme} styles={styles} />
+            <ObservationIndicator lastSuccessfulAt={observationTimes?.detail} hasContent={Boolean(detail)} error={detailError} loading={detailLoading} refreshing={detailRefreshing} theme={theme} styles={styles} />
             <Text accessibilityLabel={copy.repositoryVerificationCount.replace("{0}", String(confirmedRepositoryCount ?? repositories.filter(repo => !repo.observationPending && !!repo.branch).length)).replace("{1}", String(repositories.length))} style={styles.sectionCount}>{detailLoading ? "…" : `${repositories.length}`}</Text>
           </View>
         </View>
@@ -276,6 +271,7 @@ export const WorkspaceView = memo(function WorkspaceView({
           )) : null}
           <CommitGraph
             graphIdentity={graphIdentity}
+            lastSuccessfulAt={observationTimes?.graph}
             graph={graph}
             loading={graphLoading}
             error={graphError}
@@ -301,6 +297,7 @@ export const WorkspaceView = memo(function WorkspaceView({
             styles={styles}
           />
           <ChangedTree
+            lastSuccessfulAt={observationTimes?.changes}
             changes={changes}
             loading={changesLoading}
             refreshing={changesRefreshing}

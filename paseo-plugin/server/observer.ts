@@ -42,7 +42,7 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
-const versionedMethods = new Set<string>(["workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
+const versionedMethods = new Set<string>(["workspace.environment", "workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
 const mutationMethods = new Set<string>([
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
   "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete",
@@ -65,9 +65,11 @@ const READ_METHODS = new Set<string>([
 // is reported by the backend; this generation identifies the observer bridge
 // process itself.
 const SERVER_BUILD_ID = "observer-bridge-v2";
-const replayableMethods = new Set<string>(["observer.health", "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary", "review-set.compare", "review-set.brief"]);
+// Environment preparation uses a durable, declaration-scoped request identity.
+const replayableMethods = new Set<string>(["workspace.environment", "observer.health", "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(method?: string): number {
+  if (method === "workspace.environment") return 2_000;
   if (method === "workspace.prepare.task" || method === "workspace.prepare" || method === "repository.diff.read" || method === "observer.refresh") return 2_000;
   const project = currentProject();
   let timing = DEFAULT_OBSERVATION_TIMING;

@@ -1,3 +1,4 @@
+import { runtimeEnvironment, cacheExecutionConfig } from './session-environment.ts';
 import { withWorkspaceScope } from "./workspace-scope.ts";
 import type { BundleRef } from "../shared/handoff-materials.ts";
 import { assertBundleReady } from "./handoff-bundles.ts";
@@ -60,20 +61,6 @@ function runtimeAgentCwdMatches(runtime: RuntimeResult, cwd: string | null | und
     .some((candidate) => samePath(cwd, candidate));
 }
 
-function runtimeEnvironment(runtime: RuntimeResult): Record<string, string> {
-  const environment = runtime.toolchain?.environment;
-  const rawPathEntries = Array.isArray(environment?.pathEntries) ? environment.pathEntries : [];
-  const pathEntries = rawPathEntries.filter((value): value is string => typeof value === "string" && isAbsolute(value));
-  const variables: Record<string, string> = {};
-  const allowedVariables = new Set(["GOCACHE", "GOMODCACHE", "NPM_CONFIG_CACHE", "PIP_CACHE_DIR", "MISE_DATA_DIR", "MISE_CACHE_DIR", "GOTOOLCHAIN"]);
-  if (environment?.variables && typeof environment.variables === "object" && !Array.isArray(environment.variables)) {
-    for (const [key, value] of Object.entries(environment.variables as Record<string, unknown>)) {
-      if (allowedVariables.has(key) && typeof value === "string" && (key === "GOTOOLCHAIN" || isAbsolute(value))) variables[key] = value;
-    }
-  }
-  if (pathEntries.length) variables.PATH = [...pathEntries, process.env.PATH || ""].filter(Boolean).join(delimiter);
-  return variables;
-}
 
 function compactAgent(agent: PaseoAgent | null, binding: AgentBinding | null) {
   if (!agent) return null;
@@ -207,8 +194,8 @@ function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeRe
   return [
     "Workspace Workbench Agent handoff",
     relationship === "child"
-      ? "You are the execution child, not the coordinator. The Workspace has already been created and prepared. Execute this approved task; do not create or delegate another Workspace or Agent, and do not repeat planning unless start mode is plan-first."
-    : "You are an independent execution session. The Workspace has already been created and prepared. Execute this approved task; you may create another independent Workspace through Workbench when the task requires it, but do not recreate this assigned Workspace or delegate the same task.",
+      ? "You are the execution child, not the coordinator. The Workspace has been created. Check declared tool readiness before running build/test entry points. Execute this approved task; do not create or delegate another Workspace or Agent, and do not repeat planning unless start mode is plan-first."
+    : "You are an independent execution session. The Workspace has been created. Check declared tool readiness before running build/test entry points. Execute this approved task; you may create another independent Workspace through Workbench when the task requires it, but do not recreate this assigned Workspace or delegate the same task.",
     "",
     `Workspace: ${workspaceId}`,
     `Assigned directory: ${runtime.treePath}`,
@@ -247,10 +234,10 @@ function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeRe
 
 const delegates = new Map<string, { identity: string; promise: Promise<Awaited<ReturnType<typeof delegateAgent>>> }>();
 
-export async function handleAgentDelegate(input: AgentDelegateInput & { bundle?: BundleRef }, context: AgentContext) {
+export async function handleAgentDelegate(input: AgentDelegateInput & { bundle?: BundleRef; runtimeRepositories?: string[] }, context: AgentContext) {
   return withWorkspaceScope(input.workspaceId, () => handleAgentDelegateLocked(input, context));
 }
-async function handleAgentDelegateLocked(input: AgentDelegateInput & { bundle?: BundleRef }, context: AgentContext) {
+async function handleAgentDelegateLocked(input: AgentDelegateInput & { bundle?: BundleRef; runtimeRepositories?: string[] }, context: AgentContext) {
   const projectKey = `${currentProject()?.configPath || ""}:${input.workspaceId}`;
   const active = delegates.get(projectKey);
   const identity = JSON.stringify(input);
@@ -279,7 +266,7 @@ async function handleAgentDelegateLocked(input: AgentDelegateInput & { bundle?: 
 }
 
 async function delegateAgent(
-  input: AgentDelegateInput & { bundle?: BundleRef },
+  input: AgentDelegateInput & { bundle?: BundleRef; runtimeRepositories?: string[] },
   context: AgentContext,
 ) {
   const handoffHash = digest(input.handoff);
@@ -429,8 +416,9 @@ async function delegateAgent(
     const restrictedWorker = relationship === "child";
     const workerMcpServer = restrictedWorker ? "workspace-workbench-report" : "workspace-workbench";
     const gateway = project ? await mcpGatewayConfig(project.configPath, reportToken, restrictedWorker ? "execution-report" : "worker", input.workspaceId, { waitForReady: false }) : null;
+    const sessionDefaults = (await (context.query || queryObserver)({method:'workspace.environment',params:{workspaceId:input.workspaceId,cwd:runtime.treePath,...(input.runtimeRepositories?.length ? {repositories:input.runtimeRepositories} : {})}})).result || runtime;
     const workerEnv: Record<string, string> = {
-      ...runtimeEnvironment(runtime),
+      ...runtimeEnvironment(sessionDefaults),
       WORKBENCH_WORKER_WORKSPACE: input.workspaceId,
       ...(project ? { WORKBENCH_PROJECT_CONFIG: project.configPath } : {}),
       ...(gateway ? {
@@ -469,7 +457,7 @@ async function delegateAgent(
       ...(relationship === "child" ? { parent: input.parentAgentId } : {}),
       env: workerEnv,
       title: input.title || `${input.workspaceId} worker`,
-      config: workerConfig,
+      config: await cacheExecutionConfig(workerConfig, sessionDefaults, runtime.treePath),
       clientMessageId: handoffHash,
       labels: {
         "workspace-workbench.role": "workspace-worker",

@@ -1,5 +1,6 @@
+import { resolveRuntimeDeclarations } from './runtime-declarations.ts';
 import { taskIdentity } from "../../shared/task-state.ts";
-import { Worker } from 'node:worker_threads';
+import { Worker, type WorkerOptions } from 'node:worker_threads';
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -17,6 +18,7 @@ export class PrepareTasks {
     private serial: Promise<unknown> = Promise.resolve();
     private workspaces: Workspaces;
     private changed: (workspaceId: string) => void;
+    private workerFactory = (options: WorkerOptions) => new Worker(new URL('./prepare-worker.ts', import.meta.url), options);
     constructor(workspaces: Workspaces, changed: (workspaceId: string) => void) { this.workspaces = workspaces; this.changed = changed; }
     private get root() { return join(this.workspaces.config.stateRoot, 'prepare-operations'); }
     private save(record: Json) { return writeOperation(join(this.root, `${record.operationId}.json`), record); }
@@ -31,7 +33,7 @@ export class PrepareTasks {
                     record.phase = 'reconcile';
                     record.error = { code: 'operation_interrupted', message: 'Preparation interrupted; verify completed steps before continuing' };
                     const verified = await new Promise<Json[]>((resolve, reject) => {
-                        const worker = new Worker(new URL('./prepare-worker.ts', import.meta.url), { execArgv: ['--experimental-strip-types'], workerData: { config: record.config, workspace: record.workspace, inspect: true } });
+                        const worker = this.workerFactory({ execArgv: ['--experimental-strip-types'], workerData: { config: record.config, workspace: record.workspace, inspect: true } });
                         let received = false;
                         worker.once('message', message => { received = true; message.error ? reject(new Error(message.error.message)) : resolve(message.result); });
                         worker.once('error', reject);
@@ -75,7 +77,7 @@ export class PrepareTasks {
             throw new WorkbenchError('observer_closed', 'Preparation service closed');
         if (!['start', 'continue'].includes(params.action || 'start'))
             throw new WorkbenchError('request_invalid', 'Unknown preparation action');
-        if (!this.workspaces.config.managementEnabled || !this.workspaces.config.toolchain)
+        if (!this.workspaces.config.managementEnabled || !this.workspaces.config.toolchain && params.workspaceId === "main")
             throw new WorkbenchError('capability_unavailable', 'Runtime preparation disabled');
         const requestId = String(params.requestId || '');
         if (!requestId || requestId.length > 200)
@@ -97,7 +99,8 @@ export class PrepareTasks {
         if (!Array.isArray(requested) || !requested.length || requested.length > 256)
             throw new WorkbenchError("request_invalid", "Preparation requires a bounded repository list");
         const repositories = [...new Set<string>(requested.map((id: string) => this.workspaces.repository(workspace, id).id))];
-        const identity = stable({ workspaceId: workspace.id, repositories: [...repositories].sort(), requirements: this.workspaces.config.toolchain });
+        const resolved = await resolveRuntimeDeclarations(this.workspaces.config, {...workspace, repositories: workspace.repositories.filter((repo: Json) => repositories.includes(repo.id))});
+        const identity = stable({ workspaceId: workspace.id, repositories: [...repositories].sort(), requirements: resolved.config.toolchain });
         const active = [...this.records.values()].find(r => r.workspaceId === workspace.id && ['queued', 'running'].includes(r.state));
         if (active) {
             if (active.identity !== identity)
@@ -116,7 +119,7 @@ export class PrepareTasks {
         else {
             if ([...this.records.values()].filter(record => ['queued', 'running'].includes(record.state)).length >= 32)
                 throw new WorkbenchError('operation_capacity', 'Preparation queue capacity reached');
-            record = { protocol: 1, operationId: randomUUID(), requestIds: [requestId], identity, workspaceId: workspace.id, workspace, config: this.workspaces.config, state: 'queued', phase: 'queued', acceptedAt: Date.now(), repositories: repositories.map(id => ({ id, state: 'queued' })) };
+            record = { protocol: 1, operationId: randomUUID(), requestIds: [requestId], identity, workspaceId: workspace.id, workspace, config: resolved.config, state: 'queued', phase: 'queued', acceptedAt: Date.now(), repositories: repositories.map(id => ({ id, state: 'queued' })) };
         }
         record.updatedAt = Date.now();
         await this.save(record);
@@ -152,7 +155,7 @@ export class PrepareTasks {
             record.updatedAt = Date.now();
             await this.save(record);
             const result = await new Promise<Json>((resolve, reject) => {
-                const worker = new Worker(new URL('./prepare-worker.ts', import.meta.url), { execArgv: ['--experimental-strip-types'], workerData: { config: record.config, workspace: current, repositoryId: repo.id } });
+                const worker = this.workerFactory({ execArgv: ['--experimental-strip-types'], workerData: { config: record.config, workspace: current, repositoryId: repo.id } });
                 this.worker = worker;
                 if (this.closed)
                     worker.postMessage("close");

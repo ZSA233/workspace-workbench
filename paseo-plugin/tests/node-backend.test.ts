@@ -883,6 +883,12 @@ test("root, rename and symlink diffs preserve selected-path boundaries", async (
       }),
       path = w.repositories[0].worktreePath;
     const initial = git(path, ["rev-parse", "HEAD"]);
+    // This regression checks Git comparison semantics. Establish the real
+    // metadata worker before entering the bounded foreground read; worker
+    // startup and control deadlines have their own lifecycle tests.
+    await service.workspaces.observationRecords.request("context", {
+      workspaceId: w.id, repository: "one",
+    });
     assert.match(
       (
         await service.handle("repository.diff", {
@@ -962,10 +968,7 @@ test("local Node CLI execution validates prepared runtimes and init preserves ex
       name: "local",
       repositories: ["one"],
     });
-    await assert.rejects(
-      executeLocal(service, "local", "one", [process.execPath, "--version"]),
-      /prepare/,
-    );
+    assert.equal(await executeLocal(service, "local", "one", [process.execPath, "--version"]),0);
     await prepareRuntime(service, {
       workspaceId: "local",
       repositoryId: "one",
@@ -981,7 +984,7 @@ test("local Node CLI execution validates prepared runtimes and init preserves ex
     service.runtime!.requirements.one.node = "999";
     await assert.rejects(
       executeLocal(service, "local", "one", [process.execPath, "--version"]),
-      /prepare/,
+      /prepar/,
     );
   } finally {
     await service.close();
@@ -1051,10 +1054,8 @@ test("repository IDs matching JavaScript prototype names retain journals and run
       });
     }
     assert.equal(preparation.repositories[0].result?.status, "prepare_failed");
-    await assert.rejects(
-      service.handle("workspace.runtime", { workspaceId: "keys" }),
-      /prepare runtimes/,
-    );
+    const identity = await service.handle("workspace.runtime", {workspaceId:"keys"});
+    assert.equal(identity.toolchain.preparedRepositories["__proto__"].status,"prepare_failed");
     const saved = service.workspaces.get("keys");
     assert.equal(saved.repositories[1].id, "__proto__");
     assert.equal(Object.keys(saved.repositoryAdditions).length, 0);

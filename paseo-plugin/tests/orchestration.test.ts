@@ -70,7 +70,7 @@ test("preview is read-only; execute prepares, creates one child, retries without
     const resumedById = await withProject({ projectConfig: config }, () => orchestrate("execute", workflowStatusRequest.parse({ requestId: "one" }), "parent", { paseo, query }));
     assert.equal((resumedById as { ok?: boolean }).ok, true);
     assert.equal(creates, 1);
-    assert.ok(calls.indexOf("workspace.create") < calls.indexOf("workspace.prepare.task"));
+    assert.equal(calls.includes("workspace.prepare.task"), false, "tool installation does not gate session creation");
     await run("execute", canonicalRequest);
     assert.equal(creates, 1);
     assert.equal(calls.filter((method) => method === "workspace.create").length, 1);

@@ -1,3 +1,4 @@
+import { ObservationIndicator } from './observation-indicator';
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
@@ -31,6 +32,7 @@ const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
 export function ReviewView({
   workspaces,
   review,
+  lastSuccessfulAt,
   refreshing,
   error,
   reviewIds,
@@ -45,6 +47,7 @@ export function ReviewView({
   review: ReviewResult | null;
   refreshing: boolean;
   error: string | null;
+  lastSuccessfulAt?: string | null;
   reviewIds: string[];
   onToggle: (id: string) => void;
   targetOverrides: Record<string, string>;
@@ -61,11 +64,10 @@ export function ReviewView({
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitleRow}>
           <Text style={styles.sectionTitle}>{copy.text_5200400653}</Text>
-          <InlineRefresh visible={refreshing} theme={theme} styles={styles} />
+          <ObservationIndicator lastSuccessfulAt={lastSuccessfulAt} hasContent={Boolean(review)} error={error} loading={false} refreshing={refreshing} theme={theme} styles={styles} />
         </View>
         <Text style={styles.sectionCount}>{reviewIds.length}</Text>
       </View>
-      {error ? <Text style={styles.warningText}>{error}</Text> : null}
       <View style={styles.reviewWorkspaceList}>
         {workspaces.map((workspace) => {
           const selected = reviewIds.includes(workspace.id);

@@ -380,24 +380,6 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
       progress = { ...progress, workspaceId: (response.result as { id: string }).id, stage: "created" };
       writeState(key, progress);
     }
-    if (capabilities.prepare) {
-      const detail = await query({ method: "workspace.detail", params: { workspaceId: progress.workspaceId, summary: true } });
-      if (!detail.ok) return detail;
-      const repositories = (detail.result as { repositories: Array<{ id: string }> }).repositories;
-      if (!repositories?.length) throw new Error("workspace_repositories_unavailable");
-      for (const repository of repositories) {
-        await verifyExecution();
-        const response = await query({method:'workspace.prepare.task',params:{action:'start',workspaceId:progress.workspaceId,repositories:[repository.id],requestId:`handoff-prepare:${key}:${repository.id}`}});
-        if(!response.ok) return response;
-        const preparation=response.result as {state:string;operationId:string};
-        if(preparation.state !== 'ready') {
-          writeState(key,{...progress,stage:'prepare-pending'});
-          return {ok:false,error:{code:'operation_pending',message:'Runtime preparation is pending; resume this handoff after checking the same operation',details:{operationId:preparation.operationId,method:'workspace.prepare.task',action:'status',statusTool:'workbench_workspace_operation_status',dispatched:true}}};
-        }
-      }
-
-
-    }
     const runtime = await query({ method: "workspace.runtime", params: { workspaceId: progress.workspaceId } });
     if (!runtime.ok) return runtime;
     const expected = fullRequest.handoff.expected;
@@ -411,7 +393,7 @@ export async function orchestrate(action: "preview" | "execute" | "status" | "su
     progress = { ...progress, stage: "delegating" };
     writeState(key, progress);
     if (progress.bundle) writeBundleEnvironment(progress.bundle, runtime.result);
-    const result = await handleAgentDelegate({ workspaceId: progress.workspaceId!, parentAgentId, handoff: fullRequest.handoff, bundle: progress.bundle }, context);
+    const result = await handleAgentDelegate({ workspaceId: progress.workspaceId!, parentAgentId, handoff: fullRequest.handoff, bundle: progress.bundle, runtimeRepositories: fullRequest.repositories }, context);
     writeState(key, { ...progress, stage: result.ok ? "handed-off" : "handoff-blocked", result });
     return { ...handoffOutcome(result), requestId: fullRequest.requestId };
   })().finally(() => flights.delete(flightKey));

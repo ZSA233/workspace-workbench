@@ -142,9 +142,6 @@ export function workspaceSignals(workspace: WorkspaceSummary, strings: Workbench
   if ((workspace.dirtyRepositoryCount || 0) > 0) signals.push(strings.workspaceStatusDirty);
   if (workspace.unpushed) signals.push(strings.workspaceStatusUnpushed);
   if (workspace.blockerCount > 0) signals.push(strings.workspaceStatusNeedsReview);
-  if (workspace.toolchain?.status && workspace.toolchain.status !== "ready" && workspace.toolchain.status !== "not_applicable") {
-    signals.push(`toolchain ${workspace.toolchain.status}`);
-  }
   return signals;
 }
 

@@ -62,11 +62,12 @@ export function registeredProjects(options: { directory?: string } = {}): Projec
       const value = JSON.parse(readFileSync(configPath, "utf8"));
       const base = dirname(configPath);
       const expand = (value: string) => value === "auto" ? join(homedir(), ".config", "workspace-workbench", createHash("sha256").update(configPath).digest("hex").slice(0, 12) + ".sock") : value.startsWith("~/") ? join(homedir(), value.slice(2)) : resolve(base, value);
-      const sourceRoot = resolve(base, value.sourceRoot || ".");
+      const canonicalRoot = (path: string) => { try { return realpathSync(path); } catch { return path; } };
+      const sourceRoot = canonicalRoot(resolve(base, value.sourceRoot || "."));
       const stateRoot = resolve(base, value.stateRoot || join(sourceRoot, ".workspace-workbench"));
-      const workspaceRoot = resolve(base, value.workspaceRoot || join(stateRoot, "workspaces"));
+      const workspaceRoot = canonicalRoot(resolve(base, value.workspaceRoot || join(stateRoot, "workspaces")));
       const recordsRoot = resolve(base, value.recordsRoot || join(workspaceRoot, "records"));
-      const treesRoot = resolve(base, value.treesRoot || join(workspaceRoot, "trees"));
+      const treesRoot = canonicalRoot(resolve(base, value.treesRoot || join(workspaceRoot, "trees")));
       return [{ configPath, sourceRoot, stateRoot, workspaceRoot, recordsRoot, treesRoot, socketPath: expand(value.socketPath || join(stateRoot, "observer.sock")), displayName: value.project?.displayName || value.project?.id || "Workspace" }];
     } catch { return []; }
   });

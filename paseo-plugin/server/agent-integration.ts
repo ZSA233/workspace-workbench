@@ -1,3 +1,4 @@
+import { bindSessionEnvironment, bindSessionRuntime } from './session-environment.ts';
 import { sessionChanged } from "./session-observation.ts";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -32,6 +33,7 @@ export function registerAgentIntegration(server: PluginServerContext, currentApi
     if (request.env?.WORKBENCH_WORKER_WORKSPACE || request.env?.WORKBENCH_REVIEW_ONLY) return request;
     let project;
     try { project = resolveProject({ directory: request.config.cwd }); } catch { return request; }
+    request = {...request,...await bindSessionRuntime(project,request.config,request.env || {})};
     const bridge = bridgeConfig(project.configPath);
     if (!bridge) return request;
     const token = randomUUID();
@@ -63,9 +65,10 @@ export function registerAgentIntegration(server: PluginServerContext, currentApi
     return { ...request, env: { ...request.env, ...environment }, config: { ...request.config,
       mcpServers: { ...request.config.mcpServers, "workspace-workbench": gateway },
     } };
-  }), server.before("agent.session_open", ({ request }) => {
+  }), server.before("agent.session_open", async ({ request }) => {
     if (request.env?.WORKBENCH_WORKER_WORKSPACE || request.env?.WORKBENCH_REVIEW_ONLY) return request;
     if (request.purpose !== "interactive") return request;
+    try { const project=resolveProject({directory:request.cwd}); request={...request,env:await bindSessionEnvironment(project,request.cwd,request.env || {})}; } catch {}
     let project;
     try { project = resolveProject({ directory: request.cwd }); } catch { return request; }
     const bridge = bridgeConfig(project.configPath);

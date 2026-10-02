@@ -93,7 +93,8 @@ try {
   assert.equal(adopted.result.repositories.filter(repo=>repo.branch).length,1);
   assert.ok(adopted.result.repositories.some(repo=>repo.repoPath==='extra'));
   await page.getByText('Repositories',{exact:true}).filter({ visible: true }).first().waitFor({timeout:20000});
-  await page.getByText('recovered/legacy/extra',{exact:true}).waitFor({timeout:20000});
+  await page.getByText('extra',{exact:true}).filter({visible:true}).first().click();
+  await page.getByText(/Current ref: recovered\/legacy\/extra/i).waitFor({timeout:20000});
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor({timeout:20000});
   await page.getByText(/Reached the start of history/).first().waitFor({timeout:20000});
   await screenshot('01-orphan-adopted.png');

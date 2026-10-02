@@ -182,12 +182,12 @@ export default function contribute(server: PluginServerContext) {
   });
   withHost.handle(agentStatusQuery, (input, context) => withProject(input, () => handleAgentStatus(input, context)));
   withHost.handle(agentDelegate, (input, context) => withProject(input, async () => {
-    try { return agentDelegate.output.parse(await orchestrate("execute", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)); }
+    try { return agentDelegate.output.parse({ ...(await orchestrate("execute", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context) as Record<string, unknown>), workspaceId: input.workspaceId }); }
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
   withHost.handle(workspaceBindingQuery, (input, context) => withProject(input, () => handleWorkspaceBinding(input, context)));
   withHost.handle(workspaceDelegate, (input, context) => withProject(input, async () => {
-    try { return workspaceDelegate.output.parse(await orchestrate("execute", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)); }
+    try { return workspaceDelegate.output.parse({ ...(await orchestrate("execute", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context) as Record<string, unknown>), workspaceId: input.workspaceId }); }
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
   withHost.handle(workspaceLifecycle, (input, context) => withProject(input, () => handleWorkspaceLifecycle(input, context)));

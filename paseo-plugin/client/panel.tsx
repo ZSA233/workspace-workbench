@@ -180,7 +180,7 @@ import { WorkspaceDeletionPanel } from "./components/workspace-deletion";
 
 import { ExecutionBindingCard } from "./components/agent";
 
-import { WorkspaceView } from "./components/repositories";
+import { WorkspaceView, ToolchainNotice } from "./components/repositories";
 
 import { ReviewView } from "./components/review";
 import { AgentReviewView } from "./components/agent-review";
@@ -500,8 +500,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [lifecycleBusyWorkspaceId, setLifecycleBusyWorkspaceId] = useState("");
 
 
+  useEffect(() => { setSelectionResolved(false); }, [preferenceScopeKey]);
   useEffect(() => {
-    setSelectionResolved(false);
     setSelectedRepoPath("");
     setSelectedCommit("");
     setSelectedFile("");
@@ -802,6 +802,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     && detailState.initialFailure
     && (!isRecoverableObserverFailure(detailQuery.data, detailQuery.error)
       || (detailState.failureAgeMs ?? RECOVERABLE_FAILURE_GRACE_MS) >= RECOVERABLE_FAILURE_GRACE_MS);
+  const environmentQuery = useQuery({
+    queryKey: ["workspace-workbench", projectConfig, "environment", selectedWorkspaceId],
+    queryFn: () => rpc({ method: "workspace.environment", params: { workspaceId: selectedWorkspaceId, prepare: false } }),
+    enabled: foreground && layoutMenuOpen && Boolean(selectedWorkspaceId && backendQuery.data?.readCapabilities?.environmentProtocol === 1),
+    staleTime: 30_000, refetchOnWindowFocus: false, retry: false,
+  });
+  const menuToolchain = resultOf<any>(environmentQuery.data)?.toolchain;
   const displayDetail = listReady && detail?.workspace.id === selectedWorkspaceId
     ? hydrateRepositorySummaries(queryClient, projectConfig, detail)
     : null;
@@ -1780,6 +1787,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           ) : null}
           {tab === "workspace" ? (
             <WorkspaceView
+              observationTimes={{ detail: detailState.lastSuccessfulAt, graph: graphState.lastSuccessfulAt, changes: changesState.lastSuccessfulAt }}
               detail={displayDetail}
               unavailable={listUnavailable || detailUnavailable}
               detailLoading={listContentState === 'loading' || detailQuery.isLoading && !detail}
@@ -1837,6 +1845,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
             <ReviewView
               key={reviewIds.join("|")}
               workspaces={allWorkspaces.filter((workspace) => !isMainWorkspace(workspace))}
+              lastSuccessfulAt={reviewState.lastSuccessfulAt}
               review={review}
               refreshing={manualRefreshing}
               error={review ? null : reviewFailure}
@@ -1917,6 +1926,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         onSelectMainRepositories={selectedWorkspaceId === "main" ? () => { setLayoutMenuOpen(false); setMainRepositoryFilter(""); setMainRepositoriesOpen(true); } : undefined}
         onSelectLinkedWorkspaces={() => { setLayoutMenuOpen(false); setLinkedWorkspaceFilter(""); setLinkedWorkspacesOpen(true); }}
         onOpenStorage={openStorageMenu}
+        runtimeNotice={(menuToolchain || displayDetail?.workspace.toolchain) && (menuToolchain || displayDetail?.workspace.toolchain).status !== 'not_applicable' ? <ToolchainNotice toolchain={menuToolchain || displayDetail!.workspace.toolchain} repositoryCount={displayDetail?.repositories.length || 0} styles={styles} onPrepare={!selectedWorkspaceIsMain ? prepareSelectedToolchain : undefined} preparing={preparingToolchain} progress={preparation.task?.state !== 'idle' ? preparationPhase : undefined} /> : undefined}
         onOpenRuntimeSettings={openRuntimeSettings}
         onOpenReviewSettings={openReviewSettings}
         open={layoutMenuOpen}

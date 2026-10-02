@@ -1,3 +1,4 @@
+import { ObservationIndicator } from './observation-indicator';
 import { changeRowOffsets, changeListWindow } from "../change-list-window.ts";
 import {
 type PluginAgentPanelProps,
@@ -42,6 +43,7 @@ const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
 export function ChangedTree({
   changes,
   loading,
+  lastSuccessfulAt,
   refreshing,
   error,
   stale,
@@ -64,6 +66,7 @@ export function ChangedTree({
   loading: boolean;
   refreshing: boolean;
   error: string | null;
+  lastSuccessfulAt?: string | null;
   stale: boolean;
   mode: ChangeTreeMode;
   onMode: (mode: ChangeTreeMode) => void;
@@ -118,8 +121,7 @@ export function ChangedTree({
             theme={theme}
             styles={styles}
           />
-          <InlineRefresh visible={refreshing} theme={theme} styles={styles} />
-          {stale ? <View accessibilityLabel={copy.observationStale} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.statusWarning }} /> : null}
+          <ObservationIndicator lastSuccessfulAt={lastSuccessfulAt} hasContent={Boolean(changes)} error={error} loading={loading} refreshing={refreshing} stale={stale} theme={theme} styles={styles} />
         </View>
         <View style={styles.treeHeaderRight}>
           <Text style={styles.sectionCount}>{loading || !changes ? "…" : formatCopyFrom(copy, "fileCountLabel", [files.length])}</Text>
@@ -140,7 +142,6 @@ export function ChangedTree({
           styles={styles}
         >
           <View style={Platform.OS === "web" ? { overflowAnchor: "none" } as unknown as ViewStyle : undefined}>
-          {error ? <Text style={styles.warningText}>{error}</Text> : null}
           {window.before ? <View style={{ height: window.before }} /> : null}
           {rows.slice(window.start, window.end).map((row) => row.kind === "directory" ? (
             <DirectoryRow

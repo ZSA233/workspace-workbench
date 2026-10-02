@@ -7,10 +7,11 @@ import {
   mkdirSync,
   readdirSync,
   statSync,
+  realpathSync,
 } from "node:fs";
 import { dirname, join, resolve, delimiter, basename } from "node:path";
 import { homedir } from "node:os";
-import { type Config } from "./config.ts";
+import { repositoryPath, type Config } from "./config.ts";
 import {
   atomicJson,
   canonical,
@@ -172,7 +173,17 @@ export class Runtime {
   file(workspace: Json) {
     return join(this.root, hash(workspace.id) + ".json");
   }
+  miseDataRoot() {
+    const configured = this.config.toolchain?.miseDataRoot;
+    if (configured !== undefined && (typeof configured !== 'string' || !configured.trim()))
+      throw new WorkbenchError('config_invalid', 'Invalid miseDataRoot');
+    const path = configured ? this.path(configured) : join(this.root, 'mise');
+    if (configured && (this.config.repositories.some(repo => inside(path, repositoryPath(this.config, repo), true)) || inside(path, this.config.treesRoot, true)))
+      throw new WorkbenchError('config_invalid', 'mise data must be outside source and workspace trees');
+    return path;
+  }
   cacheRoot(workspace: Json) {
+    if (this.config.cacheScope === "project") return join(this.config.cacheRoot, "shared");
     return join(this.config.cacheRoot, "workspaces", workspace.id === "main" ? "main" : hash(workspace.id).slice(0, 16));
   }
   load(workspace: Json): Json {
@@ -185,7 +196,7 @@ export class Runtime {
   cache(workspace: Json, tools: string[], create = false) {
     const vars: Record<string, string> = {};
     if (this.manager === "mise" && this.mode !== "system") {
-      const path = join(this.root, "mise");
+      const path = this.miseDataRoot();
       if (create) {
         try { mkdirSync(path, { recursive: true, mode: 0o700 }); accessSync(path, constants.W_OK); }
         catch { throw new WorkbenchError("runtime_cache_unavailable", `mise data directory is not writable: ${path}`); }
@@ -194,7 +205,7 @@ export class Runtime {
     }
     if (!this.config.cacheEnabled) return vars;
     const paths = Object.assign(
-      {},
+      { UV_CACHE_DIR: "uv" },
       this.manager === "mise" && this.mode !== "system"
         ? { MISE_CACHE_DIR: "mise" }
         : {},
@@ -208,12 +219,28 @@ export class Runtime {
         vars[name] = path;
       } catch { throw new WorkbenchError("runtime_cache_unavailable", `runtime cache directory is not writable: ${path}`); }
     }
+    if (this.config.cacheScope === 'project' && tools.includes('go')) {
+      vars.WORKBENCH_GO_BUILD_CACHE_ROOT = join(this.cacheRoot(workspace),'go-build');
+      vars.WORKBENCH_GO_MOD_CACHE_ROOT = join(this.cacheRoot(workspace),'go-mod');
+      const declared = [...new Set(workspace.repositories.map((repo:Json) => this.requirements[repo.id]?.go).filter(Boolean))];
+      const version = declared.length === 1 ? declared[0] : 'mixed';
+      vars.GOCACHE = join(vars.WORKBENCH_GO_BUILD_CACHE_ROOT,`go${version}`,`${process.platform}-${process.arch}`);
+      vars.GOMODCACHE = vars.WORKBENCH_GO_MOD_CACHE_ROOT;
+      if(create) mkdirSync(vars.GOCACHE,{recursive:true,mode:0o700});
+    }
     return vars;
   }
   environment(workspace: Json, tools: string[], create = false) {
     const env = { ...process.env };
     for (const name of ["MISE_DATA_DIR", "MISE_CACHE_DIR"]) if (!env[name]?.trim()) delete env[name];
     return { ...env, ...this.cache(workspace, tools, create) };
+  }
+  executionVariables(entry: Json, requested: Json): Record<string, string> {
+    if (!requested.go || !this.ready(entry, requested)) return {};
+    const root = entry.goRoot || dirname(dirname(this.entryExecutable(entry, 'go')));
+    const platform = process.platform === 'win32' ? 'windows' : process.platform;
+    const arch = process.arch === 'x64' ? 'amd64' : process.arch === 'ia32' ? '386' : process.arch;
+    return { GOROOT: root, GOTOOLDIR: entry.goToolDir || join(root, 'pkg', 'tool', `${platform}_${arch}`) };
   }
   entryExecutable(entry: Json, tool: string) {
     return (
@@ -304,7 +331,7 @@ export class Runtime {
       managerAvailable: !!managerPath,
       managerPath,
       cache: {
-        scope: "workspace",
+        scope: this.config.cacheScope || "workspace",
         root: this.cacheRoot(workspace),
         enabled: this.config.cacheEnabled,
       },
@@ -321,10 +348,12 @@ export class Runtime {
       },
     };
   }
-  candidates(tool: string) {
+  candidates(tool: string, version?: string) {
     const home = homedir(),
       dirs = [
         ...this.runtimePaths,
+        ...(version ? [join(this.miseDataRoot(), "installs", tool, version, "bin"),
+          join(home, ".local/share/mise/installs", tool, version, "bin")] : []),
         ...(process.env.PATH || "").split(delimiter),
         "/opt/homebrew/bin",
         "/usr/local/bin",
@@ -338,7 +367,7 @@ export class Runtime {
       join(home, ".nvm/versions/node"),
       join(home, ".gvm/gos"),
       join(home, ".local/share/mise/installs", tool),
-      join(this.root, "mise/installs", tool),
+      join(this.miseDataRoot(), "installs", tool),
     ])
       try {
         dirs.push(...readdirSync(root).map((name) => join(root, name, "bin")));
@@ -404,7 +433,7 @@ export class Runtime {
           resolved === version || resolved.startsWith(version + ".");
         let found = false;
         if (this.mode !== "mise")
-          for (const path of this.candidates(tool)) {
+          for (const path of this.candidates(tool, String(version))) {
             if (
               !executable(path) ||
               this.shim(path) ||
@@ -414,8 +443,9 @@ export class Runtime {
             const resolved = await this.version(workspace, tool, path);
             if (!matches(resolved)) continue;
             entry.resolved[tool] = resolved;
-            entry.paths[tool] = dirname(path);
-            entry.executables[tool] = path;
+            const installedPath = realpathSync(path);
+            entry.paths[tool] = dirname(installedPath);
+            entry.executables[tool] = installedPath;
             entry.sources[tool] = this.managed(path) ? "mise" : "system";
             found = true;
             break;
@@ -460,6 +490,16 @@ export class Runtime {
         entry.paths[tool] = root;
         entry.executables[tool] = path;
         entry.sources[tool] = "mise";
+      }
+      if (requested.go) {
+        const env = this.environment(workspace, ['go'], true);
+        delete env.GOROOT; delete env.GOTOOLDIR; delete env.GOENV;
+        const metadata = await command(this.entryExecutable(entry, 'go'), ['env', 'GOROOT', 'GOTOOLDIR'],
+          { cwd: this.root, env: { ...env, GOTOOLCHAIN: 'local' }, timeout: 10000, signal: this.signal });
+        const [root, toolDir] = metadata.stdout.trim().split('\n');
+        if (metadata.code === 0 && root?.startsWith('/') && toolDir?.startsWith('/')) {
+          entry.goRoot = root; entry.goToolDir = toolDir;
+        }
       }
     } catch (error) {
       entry.status = "prepare_failed";

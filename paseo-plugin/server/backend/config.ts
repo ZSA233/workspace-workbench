@@ -163,6 +163,7 @@ export function loadConfig(file: string) {
     agentEnabled: raw.agent?.provider === "paseo",
     toolchain: raw.toolchain ? object(raw.toolchain) : null,
     cacheEnabled: cache.enabled !== false,
+    cacheScope: cache.scope === "project" ? "project" : "workspace",
     cacheRoot: path(cache.root, join(stateRoot, "cache")),
     timing,
     gitTimeout: timing.gitTimeoutMs,

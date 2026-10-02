@@ -167,3 +167,46 @@ Git watcher/reconciliation 可能向上发现外层仓库并重复扫描；用
 无头浏览器验收可运行 `npm --prefix paseo-plugin run test:plugin-ui`；首次使用先执行
 `npm --prefix paseo-plugin exec -- playwright install chromium`。测试会启动隔离的
 真实 Paseo 页面，验证自动刷新与崩溃恢复，并在 `.local/verification/ui/` 保存截图。
+
+## Session tools and project caches
+
+Repository `mise.toml` (or `.mise.toml`) is the primary declaration for supported
+Go, Node and Python numeric versions. Repositories without a manifest use legacy `toolchain.repositories` declarations. Other mise tools are reported as unmanaged; Workbench does
+not execute project TOML environment directives. A conflicting declaration is
+reported with its source instead of selecting two versions independently.
+
+Ordinary Agent creation, interactive session opening, Workbench child sessions and
+local CLI execution share this resolver. Ready tools and cache paths are startup
+defaults. User environment overrides remain effective. Missing tools use the
+existing durable preparation operation; they do not block ordinary Agent creation.
+Preparation success and actual executable version are separate checks. A pending
+or failed preparation does not prove that a bare command uses the required version.
+Project build/test entry points must verify that version before execution.
+
+These defaults do not grant exclusive Workspace access. An ordinary session can
+operate in multiple Workspaces. Shell directory changes do not reconfigure an
+already running process: use the project's standard mise or command entry point
+when tool requirements differ. Workbench execution/review scopes still protect
+the specific delegated operation. No global shell configuration is changed.
+
+Opt in to cache sharing with `"cache": { "scope": "project" }`. The default remains
+`workspace`. Project caches share dependency data and compatible compiler entries;
+source files, build outputs, logs and running state remain in their original scopes.
+Optional `toolchain.miseDataRoot` selects an existing shared mise installation directory outside source/worktrees; the historical private installation default remains compatible. Historical caches are neither moved nor removed. Docker builder caches are separate
+from host compiler caches.
+
+Package caches include uv even when the selected task only declares another
+tool. New Codex sessions receive access to the verified cache directory through
+the host's existing writable-root option. Source directories and mise's installed
+tool directory are not added. Explicit read-only/full-access presets, planning
+state, network policy and caller roots remain unchanged. Caller-provided descriptor
+files or cache overrides do not authorize additional paths.
+
+The internal `workspace.environment` response and `WORKBENCH_ENVIRONMENT_FILE`
+expose the public `workspace.workbench.environment/v1` description: configuration
+identity, declaration sources, preparation state, verified tool versions, executable
+path entries and cache variables. `prepare: false` only inspects. Consumers should
+use this description or inherited variables, never private runtime records or
+storage layout. The descriptor is not an authorization token and contains no
+secrets. It is refreshed on a new session/open operation; existing processes retain
+their own environment.

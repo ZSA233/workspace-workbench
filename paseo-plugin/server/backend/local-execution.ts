@@ -1,3 +1,5 @@
+import { resolveRuntimeDeclarations } from './runtime-declarations.ts';
+import { Runtime } from './runtime.ts';
 import { runtimeIdentity } from "./identity.ts";
 import { spawn } from "node:child_process";
 import { delimiter } from "node:path";
@@ -28,27 +30,42 @@ export async function executeLocal(
       "recover additions before local execution",
     );
   await runtimeIdentity(repository, service.config);
-  const vars: NodeJS.ProcessEnv = service.runtime
-    ? { ...service.runtime.environment(workspace, [], true), GOTOOLCHAIN: "local" }
+  const resolved = await resolveRuntimeDeclarations(service.config,{...workspace,repositories:[repository]});
+  const runtime = new Runtime(resolved.config);
+  const needed = runtime.requirements[repository.id] || {};
+  const entry = runtime.load(workspace)[repository.id];
+  if (Object.keys(needed).length && (!entry || !runtime.ready(entry, needed))) {
+    const task = await service.preparations.request({
+      action: "start", workspaceId, repositories: [repository.id],
+      requestId: `local:${workspaceId}:${repository.id}:${resolved.identity}`,
+    });
+    const finished = await service.preparations.wait(task.operationId, 120000);
+    if (finished.state !== "ready") throw new WorkbenchError(
+      ["failed", "interrupted"].includes(finished.state) ? "toolchain_prepare_failed" : "operation_pending",
+      "Runtime preparation incomplete", { operationId: task.operationId, state: finished.state },
+    );
+  }
+  const vars: NodeJS.ProcessEnv = runtime
+    ? { ...runtime.environment(workspace, [], true), GOTOOLCHAIN: "local" }
     : { ...process.env, GOTOOLCHAIN: "local" };
-  if (service.runtime) {
-    const requested = Object.hasOwn(service.runtime.requirements, repository.id)
-        ? service.runtime.requirements[repository.id]
+  if (runtime) {
+    const requested = Object.hasOwn(runtime.requirements, repository.id)
+        ? runtime.requirements[repository.id]
         : {},
-      saved = service.runtime.load(workspace)[repository.id] || {};
+      saved = runtime.load(workspace)[repository.id] || {};
     if (
       Object.keys(requested).length &&
-      (saved.status !== "ready" || !service.runtime.ready(saved, requested))
+      (saved.status !== "ready" || !runtime.ready(saved, requested))
     )
       throw new WorkbenchError(
         "toolchain_not_ready",
         "prepare this repository's runtimes first",
       );
     for (const [tool, version] of Object.entries(requested)) {
-      const actual = await service.runtime.version(
+      const actual = await runtime.version(
         workspace,
         tool,
-        service.runtime.entryExecutable(saved, tool),
+        runtime.entryExecutable(saved, tool),
       );
       if (
         actual !== saved.resolved?.[tool] ||
@@ -59,9 +76,9 @@ export async function executeLocal(
           "runtime executable version changed; prepare again",
         );
     }
-    Object.assign(vars, service.runtime.cache(workspace, Object.keys(requested), true));
+    Object.assign(vars, runtime.cache(workspace, Object.keys(requested), true), runtime.executionVariables(saved, requested));
     vars.PATH = [
-      ...service.runtime.bins(saved, requested),
+      ...runtime.bins(saved, requested),
       process.env.PATH || "",
     ].join(delimiter);
   }

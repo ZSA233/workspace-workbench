@@ -1,3 +1,5 @@
+import { sessionEnvironment } from './session-environment.ts';
+import { resolveRuntimeDeclarations } from './runtime-declarations.ts';
 import { PrepareTasks } from "./prepare-tasks.ts";
 import { EventLoopMetrics } from "../event-loop-metrics.ts";
 import { gitDiagnostics, withMutationGit } from "./git.ts";
@@ -33,7 +35,7 @@ export class Service {
   startedAt = Date.now();
   eventLoop = new EventLoopMetrics();
   version: string;
-  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts"]);
+  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts"]);
   constructor(config: Config, version = "0.1.3") {
     this.config = config;
     this.version = version;
@@ -67,6 +69,7 @@ export class Service {
       refreshProtocol: 1,
       refreshControls: this.observation.refresh.controlHealth(),
       prepareProtocol: 1,
+      environmentProtocol: 1,
       basicSummaryProtocol: 1,
       fileStatistics: this.observation.statistics.health(),
       project: {
@@ -138,6 +141,7 @@ export class Service {
         return this.workspaces.linkedCandidates();
       case "linked.workspace.preview":
         return this.workspaces.previewGitlink(params);
+      case "workspace.environment": return sessionEnvironment(this,params);
       case "workspace.runtime": {
         const w = this.workspaces.get(String(params.workspaceId || ""));
         if (!w.managed)
@@ -158,13 +162,8 @@ export class Service {
         const repositories = [];
         for (const repo of w.repositories)
           repositories.push(await runtimeIdentity(repo, this.config));
-        const toolchain = this.runtime?.summary(w) || null;
-        if (toolchain && toolchain.status !== "ready")
-          throw new WorkbenchError(
-            "toolchain_not_ready",
-            "prepare runtimes before execution",
-            toolchain,
-          );
+        const resolved = await resolveRuntimeDeclarations(this.config,w);
+        const toolchain = this.runtime ? new Runtime(resolved.config).summary(w) : null;
         return {
           schemaVersion: protocol,
           workspaceId: w.id,

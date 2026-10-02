@@ -1,3 +1,4 @@
+import { ObservationIndicator } from './observation-indicator';
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
@@ -126,6 +127,7 @@ export function CommitGraph({
   error,
   selectedCommit,
   onCommit,
+  lastSuccessfulAt,
   onGraphBase,
   onGraphMore,
   graphIdentity,
@@ -149,6 +151,7 @@ export function CommitGraph({
   graph: GraphResult | null;
   loading: boolean;
   error: string | null;
+  lastSuccessfulAt?: string | null;
   selectedCommit: string;
   onCommit: (sha: string) => void;
   onGraphBase: () => void;
@@ -212,7 +215,7 @@ export function CommitGraph({
             theme={theme}
             styles={styles}
           />
-          <InlineRefresh visible={refreshing} theme={theme} styles={styles} />
+          <ObservationIndicator lastSuccessfulAt={lastSuccessfulAt} hasContent={Boolean(graph)} error={error} loading={loading} refreshing={refreshing} theme={theme} styles={styles} />
         </View>
         <View style={styles.graphHeaderActions}>
           {!selectedCommit ? (
@@ -240,8 +243,6 @@ export function CommitGraph({
             if (historyGate.current?.allow(identity, graph?.loadedCount || 0, contentOffset.y, layoutMeasurement.height, contentSize.height, loadingMore, Boolean(hasOlder && graph?.historyMode === "full"))) onGraphMore();
           }}
         >
-          {error ? <Text style={styles.warningText}>{error}</Text> : null}
-          {loading ? <Text style={styles.emptyText}>{copy.text_fcabadb2a7}</Text> : null}
           {rows.length || showWorktree ? (
             <View style={[styles.graphSurface, { minHeight: graphHeight }]}>
               <View style={styles.graphRows}>

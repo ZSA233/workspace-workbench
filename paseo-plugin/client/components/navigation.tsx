@@ -79,6 +79,7 @@ export function LayoutMenu({
   onSwitchProject,
   onOpenStorage,
   onOpenRuntimeSettings,
+  runtimeNotice,
   onOpenReviewSettings,
   selectedWorkspace,
   onAddRepositories,
@@ -96,6 +97,7 @@ export function LayoutMenu({
   onSwitchProject?: () => void;
   onOpenStorage?: () => void;
   onOpenRuntimeSettings?: () => void;
+  runtimeNotice?: ReactNode;
   onOpenReviewSettings?: () => void;
   selectedWorkspace?: WorkspaceSummary;
   onAddRepositories?: () => void;
@@ -125,6 +127,7 @@ export function LayoutMenu({
     {onCreate ? <LayoutMenuItem label={localizedCopy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
     {onSwitchProject ? <LayoutMenuItem label={localizedCopy.switchProject} onPress={onSwitchProject} styles={styles} /> : null}
     {onOpenStorage ? <LayoutMenuItem label={localizedCopy.storageMenu} onPress={onOpenStorage} styles={styles} /> : null}
+    {runtimeNotice}
     {onOpenRuntimeSettings ? <LayoutMenuItem label={localizedCopy.runtimeSettingsMenu} onPress={onOpenRuntimeSettings} styles={styles} /> : null}
     {onOpenReviewSettings ? <LayoutMenuItem label={localizedCopy.reviewSettingsMenu} onPress={onOpenReviewSettings} styles={styles} /> : null}
     <LayoutMenuItem label={localizedCopy.text_5f6a1bf190} onPress={onCollapseAll} styles={styles} />

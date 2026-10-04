@@ -822,7 +822,7 @@ test("permanent deletion removes read-only nested module-cache directories insid
   let readOnlyModuleDir = "";
   try {
     const workspace = await service.handle("workspace.create", { name: "readonly-module-cache", repositories: ["one"] });
-    readOnlyModuleDir = join(workspace.treePath, "build/halh-go-mod-cache/go1.26.8/cloud.google.com/go/compute/metadata@v0.9.0");
+    readOnlyModuleDir = join(workspace.treePath, "build/server-go-mod-cache/go1.26.8/cloud.google.com/go/compute/metadata@v0.9.0");
     mkdirSync(readOnlyModuleDir, { recursive: true });
     const changes = join(readOnlyModuleDir, "CHANGES.md");
     writeFileSync(changes, "read-only module cache entry\n");

@@ -24,13 +24,13 @@ function fixture() {
   }
   writeFileSync(join(child, "README"), "pinned\n");
   git(child, "add", "README"); git(child, "commit", "-qm", "initial");
-  git(outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q", child, "halh");
+  git(outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q", child, "server");
   // The submodule checkout has its own Git config. Do not rely on a developer
   // or CI runner's global identity when later scenarios create child commits.
-  git(join(outer, "halh"), "config", "user.name", "Fixture");
-  git(join(outer, "halh"), "config", "user.email", "fixture@example.invalid");
+  git(join(outer, "server"), "config", "user.name", "Fixture");
+  git(join(outer, "server"), "config", "user.email", "fixture@example.invalid");
   git(outer, "commit", "-qam", "initial");
-  const pinned = git(outer, "rev-parse", "HEAD:halh");
+  const pinned = git(outer, "rev-parse", "HEAD:server");
   const configPath = join(root, "project.json");
   writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, sourceRoot: root,
     stateRoot: join(root, "state"), workspaceRoot: join(root, "workspaces"),
@@ -85,9 +85,9 @@ test("selected Gitlink root appears as one live workspace and creates matching n
     await f.service.handle("linked.workspaces.save", { revision: candidates.revision, repositories: [f.outer] });
     const live = f.service.workspaces.list().find(row => row.kind === "linked-live");
     assert.ok(live);
-    assert.equal(f.service.workspaces.identify(join(f.outer, "halh")).workspaceId, live.id);
+    assert.equal(f.service.workspaces.identify(join(f.outer, "server")).workspaceId, live.id);
     const liveDetail = await f.service.handle("workspace.detail", { workspaceId: live.id });
-    assert.deepEqual(liveDetail.gitlinks.map((link: { path: string }) => link.path), ["halh"]);
+    assert.deepEqual(liveDetail.gitlinks.map((link: { path: string }) => link.path), ["server"]);
     assert.equal(liveDetail.gitlinks[0].committedSha, f.pinned);
     assert.equal(liveDetail.gitlinks[0].indexSha, f.pinned);
     assert.equal(liveDetail.gitlinks[0].checkoutSha, f.pinned);
@@ -95,11 +95,11 @@ test("selected Gitlink root appears as one live workspace and creates matching n
     assert.equal(sourcePreview.links[0].pinnedSha, f.pinned);
 
     // The source child may move ahead; a new Workspace still starts at the outer pin.
-    writeFileSync(join(f.outer, "halh", "README"), "source changed\n");
-    git(join(f.outer, "halh"), "commit", "-qam", "source-change");
+    writeFileSync(join(f.outer, "server", "README"), "source changed\n");
+    git(join(f.outer, "server"), "commit", "-qam", "source-change");
     const request = { sourceWorkspaceId: live.id, name: "example", branchName: "feature/example" };
     const created = await f.service.handle("workspace.create", request);
-    const childPath = join(created.treePath, "halh");
+    const childPath = join(created.treePath, "server");
     assert.equal(git(created.treePath, "branch", "--show-current"), "feature/example");
     assert.equal(git(childPath, "branch", "--show-current"), "feature/example");
     assert.equal(git(childPath, "rev-parse", "HEAD"), f.pinned);
@@ -108,12 +108,12 @@ test("selected Gitlink root appears as one live workspace and creates matching n
     const childHead = git(childPath, "rev-parse", "HEAD");
     assert.equal(f.service.workspaces.identify(childPath).workspaceId, created.id);
     assert.equal((await f.service.handle("workspace.create", request)).id, created.id);
-    await assert.rejects(f.service.handle("workspace.addRepositories", { workspaceId: created.id, repositories: ["halh"] }), /flat additions are unavailable/);
+    await assert.rejects(f.service.handle("workspace.addRepositories", { workspaceId: created.id, repositories: ["server"] }), /flat additions are unavailable/);
 
     const detail = await f.service.handle("workspace.detail", { workspaceId: created.id });
     assert.equal(detail.gitlinks[0].checkoutSha, childHead);
     assert.equal(detail.repositories.length, 2);
-    const observedChild = detail.repositories.find((row: { repoPath: string }) => row.repoPath === "halh");
+    const observedChild = detail.repositories.find((row: { repoPath: string }) => row.repoPath === "server");
     assert.equal(observedChild.branch, "feature/example");
     assert.equal(observedChild.registeredBranch, "feature/example");
     assert.equal(observedChild.refState, "attached");
@@ -122,8 +122,8 @@ test("selected Gitlink root appears as one live workspace and creates matching n
     assert.equal(preview.repositories, 2);
     await f.service.handle("workspace.cleanup", { workspaceId: created.id, confirm: true });
     assert.equal(existsSync(created.treePath), false);
-    assert.equal(git(join(f.outer, "halh"), "rev-parse", "refs/heads/feature/example"), childHead);
-    git(join(f.outer, "halh"), "cat-file", "-e", `${childHead}^{commit}`);
+    assert.equal(git(join(f.outer, "server"), "rev-parse", "refs/heads/feature/example"), childHead);
+    git(join(f.outer, "server"), "cat-file", "-e", `${childHead}^{commit}`);
     const permanent = await f.service.handle("workspace.delete", { workspaceId: created.id, confirm: true });
     assert.equal(permanent.deleted, true);
     assert.deepEqual(permanent.branchesPreserved, ["feature/example", "feature/example"]);
@@ -137,9 +137,9 @@ test("uninitialized child remains visible but blocks nested Workspace creation",
     await f.service.handle("linked.workspaces.save", { revision: candidates.revision, repositories: [f.outer] });
     const live = f.service.workspaces.list().find(row => row.kind === "linked-live");
     assert.ok(live);
-    rmSync(join(f.outer, "halh"), { recursive: true, force: true });
+    rmSync(join(f.outer, "server"), { recursive: true, force: true });
     const detail = await f.service.handle("workspace.detail", { workspaceId: live.id });
-    assert.equal(detail.repositories.find((row: { repoPath: string }) => row.repoPath === "halh").status, "missing");
+    assert.equal(detail.repositories.find((row: { repoPath: string }) => row.repoPath === "server").status, "missing");
     const preview = await f.service.handle("linked.workspace.preview", { sourceWorkspaceId: live.id });
     assert.equal(preview.links[0].issue, "repository_missing");
     await assert.rejects(f.service.handle("workspace.create", { sourceWorkspaceId: live.id, name: "missing" }), /checkout unavailable/);
@@ -152,7 +152,7 @@ test("Gitlink discovery uses index entries even without a .gitmodules file", asy
     git(f.outer, "rm", "-q", ".gitmodules");
     git(f.outer, "commit", "-qm", "remove module metadata");
     const candidates = await f.service.handle("linked.workspaces.list");
-    assert.deepEqual(candidates.repositories.find((row: { path: string }) => row.path === f.outer)?.links.map((link: { path: string }) => link.path), ["halh"]);
+    assert.deepEqual(candidates.repositories.find((row: { path: string }) => row.path === f.outer)?.links.map((link: { path: string }) => link.path), ["server"]);
   } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -166,16 +166,16 @@ test("nested Gitlink paths retain their relative layout and clean up from childr
     git(frontend, "config", "user.email", "fixture@example.invalid");
     writeFileSync(join(frontend, "README"), "frontend\n");
     git(frontend, "add", "README"); git(frontend, "commit", "-qm", "initial");
-    git(f.outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q", frontend, "h5/saba_manage");
+    git(f.outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q", frontend, "client/admin");
     git(f.outer, "commit", "-qam", "add nested child");
     const candidates = await f.service.handle("linked.workspaces.list");
     await f.service.handle("linked.workspaces.save", { revision: candidates.revision, repositories: [f.outer] });
     const live = f.service.workspaces.list().find(row => row.kind === "linked-live");
     assert.ok(live);
     const created = await f.service.handle("workspace.create", { sourceWorkspaceId: live.id, name: "nested", branchName: "feature/nested" });
-    assert.deepEqual(created.repositories.map((repo: { repoPath: string }) => repo.repoPath), [".", "h5/saba_manage", "halh"]);
-    assert.equal(git(join(created.treePath, "h5", "saba_manage"), "branch", "--show-current"), "feature/nested");
-    assert.equal(git(join(created.treePath, "halh"), "branch", "--show-current"), "feature/nested");
+    assert.deepEqual(created.repositories.map((repo: { repoPath: string }) => repo.repoPath), [".", "client/admin", "server"]);
+    assert.equal(git(join(created.treePath, "client", "admin"), "branch", "--show-current"), "feature/nested");
+    assert.equal(git(join(created.treePath, "server"), "branch", "--show-current"), "feature/nested");
     await f.service.handle("workspace.remove", { workspaceId: created.id });
     await f.service.handle("workspace.cleanup", { workspaceId: created.id, confirm: true });
     assert.equal(existsSync(created.treePath), false);
@@ -189,14 +189,14 @@ test("Gitlink cleanup preserves child edits and branch collisions do not create 
     await f.service.handle("linked.workspaces.save", { revision: candidates.revision, repositories: [f.outer] });
     const live = f.service.workspaces.list().find(row => row.kind === "linked-live");
     assert.ok(live);
-    git(join(f.outer, "halh"), "branch", "feature/collision");
+    git(join(f.outer, "server"), "branch", "feature/collision");
     await assert.rejects(f.service.handle("workspace.create", { sourceWorkspaceId: live.id, name: "collision", branchName: "feature/collision" }), /branch already exists/);
     assert.equal(existsSync(join(f.root, "workspaces", "trees", "collision")), false);
     const created = await f.service.handle("workspace.create", { sourceWorkspaceId: live.id, name: "dirty", branchName: "feature/dirty" });
-    writeFileSync(join(created.treePath, "halh", "README"), "user edit\n");
+    writeFileSync(join(created.treePath, "server", "README"), "user edit\n");
     await f.service.handle("workspace.remove", { workspaceId: created.id });
     await assert.rejects(f.service.handle("workspace.cleanup", { workspaceId: created.id, confirm: true }), /user changes/);
-    assert.equal(readFileSync(join(created.treePath, "halh", "README"), "utf8"), "user edit\n");
+    assert.equal(readFileSync(join(created.treePath, "server", "README"), "utf8"), "user edit\n");
   } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -208,7 +208,7 @@ test("permanent Gitlink deletion requires explicit confirmation before discardin
     const live = f.service.workspaces.list().find(row => row.kind === "linked-live");
     assert.ok(live);
     const created = await f.service.handle("workspace.create", { sourceWorkspaceId: live.id, name: "dirty-delete", branchName: "feature/dirty-delete" });
-    writeFileSync(join(created.treePath, "halh", "README"), "discard after confirmation\n");
+    writeFileSync(join(created.treePath, "server", "README"), "discard after confirmation\n");
     await f.service.handle("workspace.remove", { workspaceId: created.id });
     const preview = await f.service.handle("workspace.delete", { workspaceId: created.id, confirm: false });
     assert.equal(preview.canDelete, true);
@@ -218,7 +218,7 @@ test("permanent Gitlink deletion requires explicit confirmation before discardin
     const deleted = await f.service.handle("workspace.delete", { workspaceId: created.id, confirm: true, confirmDataLoss: true });
     assert.equal(deleted.deleted, true);
     assert.equal(existsSync(created.treePath), false);
-    assert.equal(git(join(f.outer, "halh"), "show-ref", "--verify", "refs/heads/feature/dirty-delete").length > 0, true);
+    assert.equal(git(join(f.outer, "server"), "show-ref", "--verify", "refs/heads/feature/dirty-delete").length > 0, true);
   } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -229,23 +229,23 @@ test("outer pointers distinguish child edits, checkout drift, staged updates and
     await f.service.handle("linked.workspaces.save", { revision: choice.revision, repositories: [f.outer] });
     const live = f.service.workspaces.list().find(row => row.kind === "linked-live");
     assert.ok(live);
-    writeFileSync(join(f.outer, "halh", "README"), "uncommitted\n");
+    writeFileSync(join(f.outer, "server", "README"), "uncommitted\n");
     const dirty = await f.service.handle("workspace.detail", { workspaceId: live.id, force: true });
     assert.equal(dirty.repositories.find((row: { repoPath: string }) => row.repoPath === ".").dirty, false);
-    assert.equal(dirty.repositories.find((row: { repoPath: string }) => row.repoPath === "halh").dirty, true);
+    assert.equal(dirty.repositories.find((row: { repoPath: string }) => row.repoPath === "server").dirty, true);
     assert.equal(dirty.gitlinks[0].checkoutSha, f.pinned);
     const initialOuterSha = git(f.outer, "rev-parse", "HEAD");
     const rootIdentity = await runtimeIdentity(live.repositories.find((repo: { role: string }) => repo.role === "gitlink-root"), f.service.config, false);
     const childIdentity = await runtimeIdentity(live.repositories.find((repo: { role: string }) => repo.role === "gitlink-child"), f.service.config, false);
     assert.deepEqual(rootIdentity.dirtyPaths, []);
     assert.deepEqual(childIdentity.dirtyPaths, ["README"]);
-    git(join(f.outer, "halh"), "commit", "-qam", "child-change");
-    const childHead = git(join(f.outer, "halh"), "rev-parse", "HEAD");
+    git(join(f.outer, "server"), "commit", "-qam", "child-change");
+    const childHead = git(join(f.outer, "server"), "rev-parse", "HEAD");
     const drift = await detailUntil(f.service, live.id, detail => detail.gitlinks[0].checkoutSha === childHead);
     assert.equal(drift.gitlinks[0].committedSha, f.pinned);
     assert.equal(drift.gitlinks[0].indexSha, f.pinned);
     assert.equal(drift.gitlinks[0].checkoutSha, childHead);
-    git(f.outer, "add", "halh");
+    git(f.outer, "add", "server");
     const staged = await detailUntil(f.service, live.id, detail => detail.gitlinks[0].indexSha === childHead);
     assert.equal(staged.gitlinks[0].committedSha, f.pinned);
     assert.equal(staged.gitlinks[0].indexSha, childHead);
@@ -266,10 +266,10 @@ test("explicit child override creates visible initial drift and still permits sa
     await f.service.handle("linked.workspaces.save", { revision: choice.revision, repositories: [f.outer] });
     const live = f.service.workspaces.list().find(row => row.kind === "linked-live");
     assert.ok(live);
-    writeFileSync(join(f.outer, "halh", "README"), "ahead\n");
-    git(join(f.outer, "halh"), "commit", "-qam", "ahead");
-    const ahead = git(join(f.outer, "halh"), "rev-parse", "HEAD");
-    const created = await f.service.handle("workspace.create", { sourceWorkspaceId: live.id, name: "override", branchName: "feature/override", baseRefs: { halh: ahead } });
+    writeFileSync(join(f.outer, "server", "README"), "ahead\n");
+    git(join(f.outer, "server"), "commit", "-qam", "ahead");
+    const ahead = git(join(f.outer, "server"), "rev-parse", "HEAD");
+    const created = await f.service.handle("workspace.create", { sourceWorkspaceId: live.id, name: "override", branchName: "feature/override", baseRefs: { server: ahead } });
     const detail = await f.service.handle("workspace.detail", { workspaceId: created.id });
     assert.equal(detail.gitlinks[0].committedSha, f.pinned);
     assert.equal(detail.gitlinks[0].checkoutSha, ahead);
@@ -289,7 +289,7 @@ test("partial nested creation reuses the frozen record and completes without ano
     assert.ok(live);
     let inject = true;
     Git.prototype.run = async function(args: string[], check = true) {
-      if (inject && this.path === join(f.outer, "halh") && args[0] === "worktree" && args[1] === "add") {
+      if (inject && this.path === join(f.outer, "server") && args[0] === "worktree" && args[1] === "add") {
         inject = false;
         throw new WorkbenchError("git_failed", "injected child failure");
       }
@@ -305,6 +305,6 @@ test("partial nested creation reuses the frozen record and completes without ano
     await f.service.handle("linked.workspaces.save", { revision: selection.revision, repositories: [] });
     const recovered = await f.service.handle("workspace.create", request);
     assert.equal(recovered.state, "active");
-    assert.equal(git(join(recovered.treePath, "halh"), "branch", "--show-current"), "feature/recover");
+    assert.equal(git(join(recovered.treePath, "server"), "branch", "--show-current"), "feature/recover");
   } finally { Git.prototype.run = original; await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
 });

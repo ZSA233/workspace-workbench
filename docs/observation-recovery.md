@@ -41,7 +41,7 @@ acknowledged or rendered by the client. No file contents or credentials are logg
 - That UI run also encountered two control deadline failures and two later missing
   task responses. It recovered automatically; the original scheduling delay is
   not fully attributed. This is evidence of recovery, not absence of timeouts.
-- Screenshot project's `guild-ops-report-notifications-20260923` / `halh` was sampled
+- Screenshot project's `representative-workspace` / `server` was sampled
   through an isolated backend with copied records and separate state. Twenty
   read-only requests: acceptance P95 102 ms, first full result 607 ms, cache hits
   0–2 ms. First metadata read 55 ms; graph region 285 ms, summary 113 ms, changes

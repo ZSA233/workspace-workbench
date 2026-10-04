@@ -5,7 +5,7 @@ import { selectedChangeSummary } from "../client/repository-metrics.ts";
 import type { ChangesResult, RepositorySummary } from "../client/model.ts";
 
 const repository = {
-  repoPath: "halh",
+  repoPath: "server",
   status: "dirty",
   head: "head-1",
   baseSha: "base-1",
@@ -14,7 +14,7 @@ const repository = {
 } as unknown as RepositorySummary;
 const changes = {
   workspaceId: "workspace-1",
-  repoPath: "halh",
+  repoPath: "server",
   scope: "branch",
   head: "head-1",
   baseSha: "base-1",

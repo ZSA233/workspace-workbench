@@ -153,13 +153,13 @@ test("Gitlink workflow preview resolves the selected outer Workspace and preserv
     if (input.method === "workspace.list") return { ok: true, result: { capabilities: { create: true, agent: true } } };
     if (input.method === "workspace.detail") return { ok: true, result: { workspace: { sourceRoot: root }, repositories: [
       { id: "@root", repoPath: ".", sourcePath: join(root, "outer"), worktreePath: join(root, "outer") },
-      { id: "halh", repoPath: "halh", sourcePath: join(root, "outer", "halh"), worktreePath: join(root, "outer", "halh") },
+      { id: "server", repoPath: "server", sourcePath: join(root, "outer", "server"), worktreePath: join(root, "outer", "server") },
     ] } };
     throw new Error(`unexpected method ${input.method}`);
   };
   try {
     const request = workflowRequest.parse({ requestId: "gitlink", name: "nested", sourceWorkspaceId: "linked-fixture",
-      branchName: "feature/nested", rootBaseRef: "main", baseRefs: { halh: "pin-sha" }, handoff: { goal: "Implement fixture" } });
+      branchName: "feature/nested", rootBaseRef: "main", baseRefs: { server: "pin-sha" }, handoff: { goal: "Implement fixture" } });
     const result = await withProject({ projectConfig: config }, () => orchestrate("preview", request, "parent", { paseo, query }));
     assert.equal((result as { ok?: boolean }).ok, true);
     assert.equal(calls.find(call => call.method === "workspace.detail")?.params?.workspaceId, "linked-fixture");

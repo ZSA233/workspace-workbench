@@ -312,6 +312,9 @@ test('failed forced graph check cannot be hidden by same-token cache during reco
   Git.prototype.graph=async function(...args){reads++;if(fail){throw new WorkbenchError('git_timeout','injected timeout');}return original.apply(this,args);};
   try{
     const input={workspaceId:'main',repoPath:'one',scope:'working',historyMode:'full'};
+    // Initial watcher registration advances the source token. Complete it before
+    // testing recovery with an unchanged version, independent of machine speed.
+    await f.service.observation.scheduler.register(input.workspaceId, join(f.root, input.repoPath));
     await finish(f.service,{...input,requestId:'baseline',force:true});
     fail=true;const failed=await finish(f.service,{...input,requestId:'failure',force:true});
     assert.equal(failed.result.outcome,'partial-failure');assert.equal(failed.result.regions.graph.state,'failed');

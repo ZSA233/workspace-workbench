@@ -33,7 +33,7 @@ project, workspace, repository and node count.
 - Hermes before: calls `[1,1,1,0]`, all active entries stuck running, no timer.
 - Hermes after: each active query completes two polls, all running flags clear.
 - Type checking and all 355 tests passed, including native runtime execution.
-- A real read-only refresh of `recharge-overview/halh` returned a ready graph
+- A real read-only refresh of `example-workspace/server` returned a ready graph
   containing 31 nodes after about 1.1 seconds of tracked reading. This was not a
   cold-cache benchmark or an Android UI measurement.
 - An earlier diagnostic read also hit a control-request timeout. That transient

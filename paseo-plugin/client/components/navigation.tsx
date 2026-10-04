@@ -4,7 +4,7 @@ type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { FlatList, Icon, ScrollView, TextInput } from "../native-components";
 import { useEffect, useState, type ReactNode } from "react";
-import { BackHandler,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
+import { ActivityIndicator,BackHandler,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { formatCopyFrom } from "../../shared/copy";
 
 import {
@@ -399,7 +399,8 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
         </View>
         {status && status !== "active" ? <Text numberOfLines={1} style={[styles.workspaceOptionState, { color: statusTone }]}>{status}</Text> : null}
       </Pressable>
-      {!isMainWorkspace(workspace) ? <View style={styles.workspaceOptionActions}>
+      {!isMainWorkspace(workspace) ? <View accessibilityState={{ busy }} style={styles.workspaceOptionActions}>
+        {busy ? <ActivityIndicator size="small" color={theme.colors.foregroundMuted} /> : null}
         {onInspect ? <Pressable accessibilityLabel={localizedCopy.workspaceDeleteImpact} accessibilityRole="button" disabled={busy} onPress={() => onInspect(workspace)} style={styles.workspaceOptionAction}><Text style={styles.workspaceOptionActionText}>i</Text></Pressable> : null}
         {pending && onRestore ? <Pressable accessibilityLabel={localizedCopy.workspaceRestore} accessibilityRole="button" disabled={busy} onPress={() => onRestore(workspace)} style={styles.workspaceOptionAction}><Text style={[styles.workspaceOptionActionText, { color: observerAccent(theme) }]}>↩</Text></Pressable> : null}
         {!removed && !pending && onRemove ? <Pressable accessibilityLabel={localizedCopy.workspaceDelete} accessibilityRole="button" disabled={busy} onPress={() => onRemove(workspace)} style={styles.workspaceOptionAction}><Icon name="CircleX" size={15} color={observerAccent(theme)} /></Pressable> : null}

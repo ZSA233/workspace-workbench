@@ -88,7 +88,7 @@ errors are not treated as fixed by these tests.
 
 Final six-repository UI sample: `.local/verification/switch-cold/run-yszvVR`
 (frozen build `e16f6304443adb30`). It reads the real
-`runtime-observability-map-20260928` worktrees with independent records/state and
+`representative-workspace` worktrees with independent records/state and
 management disabled. Each cold trial stops its verified owned backend, removes
 only its derived cache after exit, and starts a fresh backend. OS caches remain
 untouched. Timing starts at workspace selection; completion requires both the
@@ -105,7 +105,7 @@ repositories. Cold observations must postdate the measured click.
 The run had no page errors and asserts that browsing never invokes
 `workspace.reviewRuntime`. Graph/diff/statistics completion is not included in
 these basic-state timings. Earlier failed and intermediate runs remain alongside
-this report; independent direct Git sampling also observed a real halh status
+this report; independent direct Git sampling also observed a real server status
 command exceed five seconds, so this result does not imply all filesystem/Git
 latency has disappeared.
 

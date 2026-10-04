@@ -21,7 +21,7 @@ test("workspace branch labels keep Gitlink branches exact and derive managed pre
     kind: "managed",
     repositories: [
       { id: "compose", branch: "obs/demo/compose" },
-      { id: "h5/saba_manage", branch: "obs/demo/h5/saba_manage" },
+      { id: "client/admin", branch: "obs/demo/client/admin" },
     ],
   }), "obs/demo");
   assert.equal(workspaceBranchLabel({ id: "legacy", repositories: [{ id: "one", branch: "feature/one" }] }), "legacy");

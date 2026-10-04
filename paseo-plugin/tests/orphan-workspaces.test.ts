@@ -151,14 +151,14 @@ test("an invalid legacy record and extra metadata remain visible and are preserv
 test("nested repository paths can be adopted and cleanly removed without deleting unrelated paths", async () => {
   const f = fixture();
   try {
-    const source = join(f.root, "h5", "saba_manage"), target = join(f.tree, "h5", "saba_manage");
+    const source = join(f.root, "client", "admin"), target = join(f.tree, "client", "admin");
     mkdirSync(source, { recursive: true });
     git(source, "init", "-q"); git(source, "config", "user.name", "Fixture"); git(source, "config", "user.email", "fixture@example.invalid");
-    writeFileSync(join(source, "README"), "h5\n"); git(source, "add", "README"); git(source, "commit", "-qm", "initial");
-    mkdirSync(join(f.tree, "h5")); git(source, "worktree", "add", "-q", "--detach", target, "HEAD");
+    writeFileSync(join(source, "README"), "client\n"); git(source, "add", "README"); git(source, "commit", "-qm", "initial");
+    mkdirSync(join(f.tree, "client")); git(source, "worktree", "add", "-q", "--detach", target, "HEAD");
     const configPath = f.service.config.configPath;
     const config = JSON.parse(readFileSync(configPath, "utf8"));
-    config.repositories.push({ id: "h5/saba_manage", path: "h5/saba_manage", enabled: true });
+    config.repositories.push({ id: "client/admin", path: "client/admin", enabled: true });
     writeFileSync(configPath, JSON.stringify(config));
     f.service.workspaces.config = loadConfig(configPath);
     const preview = await f.service.handle("workspace.orphan.preview", { workspaceId: "lost" });

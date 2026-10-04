@@ -30,7 +30,7 @@ try {
   let pluginReady=false;for(let n=0;n<120;n++){try{if((await rpc('observer.health')).ok){pluginReady=true;break;}}catch{}await sleep(500);}assert.ok(pluginReady,'isolated plugin never became ready');
   const workspaceId='verify-current-repository';
   const workspaces=JSON.parse(await readFile(join(fixture.root,'workspaces/records',`${workspaceId}.json`),'utf8'));
-  const repository=workspaces.repositories.find(r=>r.repoPath==='halh')||workspaces.repositories[0];
+  const repository=workspaces.repositories.find(r=>r.repoPath===process.env.WORKBENCH_REFRESH_REPOSITORY)||workspaces.repositories[0];
   const proof=join(repository.worktreePath,'workbench-refresh-ui.txt');
   const git=args=>exec('git',['-C',repository.worktreePath,...args],{timeout:60000,maxBuffer:1024*1024});
   await writeFile(proof,`baseline ${Date.now()}\n`);await git(['add','workbench-refresh-ui.txt']);await git(['commit','-qm',`UI baseline ${Date.now()}`]);

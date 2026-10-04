@@ -235,7 +235,7 @@ try {
   await page.getByText('Main workspace',{exact:true}).first().click();
   await page.getByText('outer',{exact:true}).last().click();
   await page.getByText('Child pointers',{exact:true}).waitFor();
-  await page.getByText('halh',{exact:true}).last().click();
+  await page.getByText('server',{exact:true}).last().click();
   await page.getByText(/Reached the start of history/).first().waitFor({timeout:10000});
   await screenshot('09-gitlink-workspace.png');
   report.checks.push('real Gitlink workspace appeared as one selectable workspace; its pointer selected the child repository');

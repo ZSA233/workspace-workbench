@@ -24,7 +24,7 @@ const config = loadConfig(fixture.config), groups = {}, stageSamples = [], repor
 let service = new Service(config, '0.4.10');
 const workspaceId = 'verify-current-repository';
 try { service.workspaces.get(workspaceId); } catch { await service.handle('workspace.create', { name: workspaceId, repositories: fixture.repositories.map(r=>r.path), baseRefs: fixture.baseRefs }); }
-const record = service.workspaces.get(workspaceId), repository = record.repositories.find(r => r.repoPath === 'halh') || record.repositories[0];
+const record = service.workspaces.get(workspaceId), repository = record.repositories.find(r => r.repoPath === process.env.WORKBENCH_REFRESH_REPOSITORY) || record.repositories[0];
 const input = { workspaceId, repoPath: repository.repoPath, historyMode: 'full', maxCommits: 50, scope: 'working' };
 const proof = join(repository.worktreePath, 'workbench-refresh-proof.txt');
 const git = args => exec('git', ['-C', repository.worktreePath, ...args], { timeout: 60000, maxBuffer: 1024*1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });

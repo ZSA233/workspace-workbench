@@ -67,7 +67,7 @@ for (const project of ["a", "b"]) {
   git(linked, ["init", "-q"]);
   git(linked, ["config", "user.name", "Workbench verification"]);
   git(linked, ["config", "user.email", "verification@example.invalid"]);
-  git(linked, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", join(path, "one"), "halh"]);
+  git(linked, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", join(path, "one"), "server"]);
   git(linked, ["commit", "-qam", "initial pointers"]);
   const orphan = join(path, "workspaces", "trees", "legacy");
   mkdirSync(orphan, { recursive: true });
@@ -327,7 +327,7 @@ try {
   writeFileSync(join(dirtyRepo, ".cache", "ignored.bin"), "ignored\n");
   writeFileSync(join(dirtyRepo, "untracked.txt"), "discard only after confirmation\n");
   writeFileSync(join(dirtyTree, "extra.txt"), "workspace-level extra\n");
-  const readOnlyModuleDir = join(dirtyTree, "build/halh-go-mod-cache/go1.26.8/cloud.google.com/go/compute/metadata@v0.9.0");
+  const readOnlyModuleDir = join(dirtyTree, "build/server-go-mod-cache/go1.26.8/cloud.google.com/go/compute/metadata@v0.9.0");
   mkdirSync(readOnlyModuleDir, { recursive: true });
   const readOnlyModuleFile = join(readOnlyModuleDir, "CHANGES.md");
   writeFileSync(readOnlyModuleFile, "read-only module cache entry\n");

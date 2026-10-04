@@ -65,7 +65,7 @@ NUL 未跟踪文件改为二进制分类，这是对旧文本计数错误的显�
 
 ## 边界与交付
 
-- 没有修改 Paseo 或 YUVA；合并只将本分支 fast-forward 到主 checkout，未跟踪 uv.lock
+- 没有修改 Paseo 或业务项目；合并只将本分支 fast-forward 到主 checkout，未跟踪 uv.lock
   未修改；历史 Workspace、记录、会话和审核历史保留。
 - 未发布或创建 tag；合并后的日常插件通过正式 reload 更新，真实场景优先使用隔离 daemon。
 - 宿主 SDK 不支持原子的模式条件 create/send，因此最后一次检查之后的宿主模式变化仍是

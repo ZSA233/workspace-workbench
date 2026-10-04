@@ -487,42 +487,48 @@ test("cache preserves stale data across transient refresh failures", async () =>
   }
 });
 
+// Watchdog only detects a deadlock. Cache/Git ordering is asserted with gates,
+// not elapsed-time thresholds that include worker startup and CI scheduling.
+async function boundedCacheRead<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("cached read waited for a blocked dependency")), 10000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 test("slow fingerprints do not block cached data and changed fingerprints refresh once", async () => {
   const f = fixture({ limits: { cacheTtlSeconds: 0.5 } });
-  const cache = new ObservationCache(f.config);
+  const cache = new ObservationCache(f.config, () => 0);
   let refreshes = 0;
-  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  let releaseFingerprint!: (value: string) => void;
+  const fingerprint = new Promise<string>(resolve => { releaseFingerprint = resolve; });
   try {
     await cache.read("slow-fingerprint", "old", async () => ({
       value: "last-good",
       observation: { state: "ready", observedAt: "2026-01-01T00:00:00Z" },
     }));
-    const started = Date.now();
-    const cached = await cache.read(
-      "slow-fingerprint",
-      async () => {
-        await wait(200);
-        return "new";
-      },
+    const published = new Promise<void>(resolve => { cache.onProduced = () => resolve(); });
+    const cached = await boundedCacheRead(cache.read(
+      "slow-fingerprint", () => fingerprint,
       async () => {
         refreshes++;
-        return {
-          value: "new-value",
-          observation: { state: "ready", observedAt: "2026-01-02T00:00:00Z" },
-        };
+        return { value: "new-value", observation: { state: "ready", observedAt: "2026-01-02T00:00:00Z" } };
       },
-    );
-    assert.ok(Date.now() - started < 100);
+    ));
     assert.equal(cached.value, "last-good");
-    await wait(260);
+    assert.equal(refreshes, 0, "cached content must return before the fingerprint is released");
+    releaseFingerprint("new");
+    await boundedCacheRead(published);
     assert.equal(refreshes, 1);
-    assert.equal(
-      (await cache.read("slow-fingerprint", async () => "new", async () => {
-        throw new Error("unexpected second refresh");
-      })).value,
-      "new-value",
-    );
+    assert.equal((await cache.read("slow-fingerprint", "new", async () => {
+      refreshes++;
+      throw new Error("unexpected second refresh");
+    })).value, "new-value");
+    assert.equal(refreshes, 1);
   } finally {
+    releaseFingerprint("new");
     await cache.close();
     rmSync(f.root, { recursive: true, force: true });
   }
@@ -532,7 +538,8 @@ test("persisted workspace detail is shown before a new scheduler registers every
   const f = fixture();
   let service = new Service(f.config);
   const originalRun = Git.prototype.run;
-  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  let releaseGit!: () => void;
+  const gitGate = new Promise<void>(resolve => { releaseGit = resolve; });
   try {
     const first = await service.handle("workspace.detail", { workspaceId: "main" });
     assert.equal(first.observation.state, "ready");
@@ -540,16 +547,17 @@ test("persisted workspace detail is shown before a new scheduler registers every
 
     service = new Service(f.config);
     Git.prototype.run = async function (args, check = true) {
-      await wait(300);
+      await gitGate;
       return originalRun.call(this, args, check);
     };
-    const started = Date.now();
-    const cached = await service.handle("workspace.detail", { workspaceId: "main" });
-    assert.ok(Date.now() - started < 200, "a persisted detail must not wait for watcher/Git registration");
+    // Any implementation awaiting registration now deadlocks until the watchdog
+    // fails; machine load cannot turn a correct non-blocking read into a failure.
+    const cached = await boundedCacheRead(service.handle("workspace.detail", { workspaceId: "main" }));
     assert.equal(cached.observation.state, "ready");
     assert.equal(cached.repositories.length, first.repositories.length);
   } finally {
     Git.prototype.run = originalRun;
+    releaseGit();
     await service.close();
     rmSync(f.root, { recursive: true, force: true });
   }

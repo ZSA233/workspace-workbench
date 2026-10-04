@@ -1,39 +1,39 @@
-import { runtimeEnvironment, cacheExecutionConfig, publishSessionEnvironment } from './session-environment.ts';
-import { withWorkspaceScope } from "./workspace-scope.ts";
-import type { BundleRef } from "../shared/handoff-materials.ts";
-import { assertBundleReady } from "./handoff-bundles.ts";
+import type { PaseoAgent,PaseoApi } from "@getpaseo/client";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { delimiter, isAbsolute, resolve } from "node:path";
-import { currentProject } from "./projects.ts";
-import { digest, readState, writeState } from "./orchestration-state.ts";
-import { childExecutionConfig, assertCoordinatorExecution, assertInitialWorkerMode, actualPlanningState, ExecutionPolicyError } from "./execution-policy.ts";
+import { resolve } from "node:path";
 import { copy } from "../shared/copy.ts";
-import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
-import type { PluginServerContext } from "@getpaseo/plugin/server";
+import type { BundleRef } from "../shared/handoff-materials.ts";
+import { actualPlanningState,assertCoordinatorExecution,assertInitialWorkerMode,childExecutionConfig,ExecutionPolicyError } from "./execution-policy.ts";
+import { assertBundleReady } from "./handoff-bundles.ts";
+import { digest,readState,writeState } from "./orchestration-state.ts";
+import { currentProject } from "./projects.ts";
+import { cacheExecutionConfig,publishSessionEnvironment,runtimeEnvironment } from './session-environment.ts';
+import { withWorkspaceScope } from "./workspace-scope.ts";
 
-import { queryObserver } from "./observer.ts";
-import { getAgentBinding, putAgentBinding, type AgentBinding } from "./agent-store.ts";
-import { configuredExecutionModel, readReviewSession, recordExecutionHandoff } from "./agent-review.ts";
-import { resolveAgentRelationship } from "./agent-session.ts";
-import { getWorkbenchCopy } from "../shared/copy.ts";
 import type { AgentRelationship } from "../shared/agent-session.ts";
-import { mcpGatewayConfig } from "./mcp-gateway.ts";
-import { artifactSnapshotContent, resolveArtifactReference, resolvedArtifactImageAttachments, type ResolvedWorkbenchArtifact } from "./artifacts.ts";
 import {
-  agentDelegate,
-  agentStatusQuery,
-  type AgentDelegateInput,
+agentDelegate,
+agentStatusQuery,
+type AgentDelegateInput,
 } from "../shared/agent.ts";
+import { getWorkbenchCopy } from "../shared/copy.ts";
 import {
-  workspaceBindingQuery,
-  workspaceDelegate,
-  type Handoff,
-  type WorkspaceBinding,
-  type WorkspaceBindingResponse,
-  type WorkspaceDelegateInput,
-  type WorkspaceDelegateResponse,
+workspaceBindingQuery,
+workspaceDelegate,
+type Handoff,
+type WorkspaceBinding,
+type WorkspaceBindingResponse,
+type WorkspaceDelegateInput,
+type WorkspaceDelegateResponse,
 } from "../shared/handoff.ts";
+import { configuredExecutionModel,readReviewSession,recordExecutionHandoff } from "./agent-review.ts";
+import { resolveAgentRelationship } from "./agent-session.ts";
+import { getAgentBinding,putAgentBinding,type AgentBinding } from "./agent-store.ts";
+import { artifactSnapshotContent,resolveArtifactReference,resolvedArtifactImageAttachments,type ResolvedWorkbenchArtifact } from "./artifacts.ts";
+import { mcpGatewayConfig } from "./mcp-gateway.ts";
+import { queryObserver } from "./observer.ts";
 
 type RuntimeResult = {
   workspaceId: string;

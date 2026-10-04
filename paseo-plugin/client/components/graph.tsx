@@ -1,19 +1,20 @@
-import { ObservationIndicator } from './observation-indicator';
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { ScrollView } from "../native-components";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
-import { createHistoryLoadGate } from "../graph/pagination";
-import { ActivityIndicator,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
+import { memo,useCallback,useMemo,useRef,useState } from "react";
+import { ActivityIndicator,Platform,Pressable,Text,View } from "react-native";
 import { formatCopyFrom } from "../../shared/copy";
+import { createHistoryLoadGate } from "../graph/pagination";
+import { ScrollView } from "../native-components";
 import { IconButton } from "./icon-button";
+import { ObservationIndicator } from './observation-indicator';
 
 import { GraphCanvas } from "../graph/canvas";
+import { commitReferenceNames,formatCommitTime } from "../graph/commit-details";
 import { GRAPH_LANE_WIDTH,GRAPH_ROW_HEIGHT } from "../graph/constants";
 import { graphLaneColor } from "../graph/palette";
-import { commitReferenceNames, formatCommitTime } from "../graph/commit-details";
+import { useWorkbenchCopy,useWorkbenchLocale } from "../i18n";
 import {
 layoutGraph,
 type ChangeScope,
@@ -23,24 +24,12 @@ type RepositorySummary,
 type SectionLayoutPreference
 } from "../model";
 import { observerAccent } from "../theme";
-import { useWorkbenchCopy, useWorkbenchLocale } from "../i18n";
-import { ChangeCounts,InlineRefresh,MiniTag,ScopeButton,SectionDisclosureButton,SectionViewport,fileCountLabel,makeStyles,repositoryCurrentRefDetail,repositoryRefMismatch } from "./ui";
+import { ChangeCounts,MiniTag,ScopeButton,SectionDisclosureButton,SectionViewport,fileCountLabel,makeStyles,repositoryCurrentRefDetail,repositoryRefMismatch } from "./ui";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
-type ObserverPanelContentProps = PanelProps & {
-  hostWorkspaceId: string;
-  paseoWorkspace: { directory: string; name: string } | null;
-};
-type ChangeTreeMode = "tree" | "files";
 
-const PREFERENCE_SCOPE_FALLBACK = "global";
 
-// React Native's shared cursor type only exposes `auto` and `pointer`, while
-// the web renderer forwards the full CSS cursor value. Keep the native style
-// portable and add the vertical resize affordance only where it is supported.
-const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
-  ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
-  : null;
+
 
 type GraphReferenceTag = { label: string; color: string };
 
@@ -140,8 +129,8 @@ export function CommitGraph({
   sectionLayout,
   availableHeight,
   onSectionToggle,
-  onHeightCommit,
-  onSectionDragState,
+
+
   onOpenLayoutMenu,
   graphPlatform,
   refreshing,
@@ -166,8 +155,8 @@ export function CommitGraph({
   sectionLayout: SectionLayoutPreference;
   availableHeight: number;
   onSectionToggle: (collapsed: boolean) => void;
-  onHeightCommit: (height: number | null) => void;
-  onSectionDragState: (dragging: boolean) => void;
+
+
   onOpenLayoutMenu: () => void;
   graphPlatform: PanelProps["layout"]["platform"];
   refreshing: boolean;
@@ -193,15 +182,7 @@ export function CommitGraph({
   const showWorktree = Boolean(repository.dirty || workingFileCount > 0);
   const graphHeight = (rows.length + (showWorktree ? 1 : 0)) * GRAPH_ROW_HEIGHT;
   const branchScopeAvailable = repository.branchScopeAvailable !== false;
-  const graphScope = selectedCommit
-    ? copy.graphCommitChanges
-    : graph?.historyMode === "full"
-      ? copy.text_80a8716fca
-      : changeScope === "working"
-        ? copy.graphHeadWorktree
-        : branchScopeAvailable
-          ? copy.graphBaseHead
-          : copy.graphDetached;
+
   const hasOlder = Boolean(graph?.hasOlder && (graphViewLimit(graph) < 200 || graph?.historyMode === "branch"));
   return (
     <View style={styles.graphSection}>
@@ -231,10 +212,10 @@ export function CommitGraph({
       {!sectionLayout.collapsed ? (
         <SectionViewport
           id="graph"
-          layout={sectionLayout}
+
           availableHeight={availableHeight}
-          onDragStateChange={onSectionDragState}
-          onHeightCommit={onHeightCommit}
+
+
           theme={theme}
           styles={styles}
           onScroll={(event) => {

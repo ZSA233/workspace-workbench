@@ -1,70 +1,70 @@
-import { reviewLifecycleEnabled } from "./server/review/policy";
-import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { defineRpc } from "@getpaseo/plugin";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
-import { HostConnection } from "./server/host-connection";
-import { RpcMetrics } from "./server/rpc-metrics";
-import { sessionOperation, coordinatorReview } from "./shared/session-tools";
-import { handleSessionOperation } from "./server/session-tools";
-import { handoffMaterials } from "./shared/handoff-materials";
 import { handleHandoffMaterials } from "./server/handoff-access";
-import { workspaceAddRepositories, workspaceCreate, workspaceOperationStatus, workspacePreview } from "./shared/workspace-operations";
-import { handleWorkspaceAddRepositories, handleWorkspaceCreate, handleWorkspaceOperationStatus, handleWorkspacePreview } from "./server/workspace-operations";
+import { HostConnection } from "./server/host-connection";
+import { reviewLifecycleEnabled } from "./server/review/policy";
+import { RpcMetrics } from "./server/rpc-metrics";
+import { handleSessionOperation } from "./server/session-tools";
+import { handleWorkspaceAddRepositories,handleWorkspaceCreate,handleWorkspaceOperationStatus,handleWorkspacePreview } from "./server/workspace-operations";
+import { handoffMaterials } from "./shared/handoff-materials";
+import { coordinatorReview,sessionOperation } from "./shared/session-tools";
+import { workspaceAddRepositories,workspaceCreate,workspaceOperationStatus,workspacePreview } from "./shared/workspace-operations";
 
-import { handleAgentDelegate, handleAgentStatus, handleWorkspaceBinding, handleWorkspaceDelegate } from "./server/agent-provider";
-import { closeObserverBridge, handleObserver, observerQuery } from "./server/observer";
-import { agentDelegate, agentStatusQuery } from "./shared/agent";
-import { workspaceBindingQuery, workspaceDelegate, workspaceHandoffPreview } from "./shared/handoff";
-import { observerSettings } from "./shared/settings";
-import { projectsQuery } from "./shared/projects";
-import { projectBackendStart, projectBackendStatus, projectRuntimeSettingsGet, projectRuntimeSettingsUpdate, projectSetupSave, projectSetupScan, projectStorageQuery } from "./shared/setup";
-import { registeredProjects, withProject } from "./server/projects";
+import { registerAgentIntegration } from "./server/agent-integration";
+import { handleAgentStatus,handleWorkspaceBinding } from "./server/agent-provider";
+import {
+handleCoordinatorReview,
+handleExecutionReportRpc,
+handleReviewerReadRpc,
+handleReviewerResultRpc,
+handleReviewModels,
+handleReviewPreview,
+handleReviewSessionControl,
+handleReviewSessionEvents,
+handleReviewSessionList,
+handleReviewSessionQuery,
+handleReviewSessionStart,
+handleReviewSettingsGet,
+handleReviewSettingsUpdate,
+registerReviewLifecycle,
+} from "./server/agent-review";
+import { handleAgentSessionProviders,handleAgentSessionSettingsGet,handleAgentSessionSettingsUpdate } from "./server/agent-session";
+import { listArtifacts,registerArtifact } from "./server/artifacts";
 import { closeBackends } from "./server/backend-manager";
 import { handleClientDiagnostic } from "./server/client-diagnostics";
-import { diagnosticsQuery, mcpStatusQuery } from "./shared/diagnostics";
-import { handleDiagnostics, handleMcpStatus } from "./server/diagnostics";
-import { handleProjectBackendStart, handleProjectBackendStatus, handleProjectRuntimeSettingsGet, handleProjectRuntimeSettingsUpdate, handleProjectSetupSave, handleProjectSetupScan, handleProjectStorage } from "./server/setup";
-import { registerAgentIntegration } from "./server/agent-integration";
-import { orchestrate } from "./server/orchestrator";
-import { clientDiagnostic } from "./shared/client-diagnostics";
+import { handleDiagnostics,handleMcpStatus } from "./server/diagnostics";
+import { defaultMcpGatewayEntry,McpGatewayManager,setMcpGateway } from "./server/mcp-gateway";
+import { closeObserverBridge,handleObserver,observerQuery } from "./server/observer";
 import { digest } from "./server/orchestration-state";
-import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpdate } from "./shared/agent-session";
-import { handleAgentSessionProviders, handleAgentSessionSettingsGet, handleAgentSessionSettingsUpdate } from "./server/agent-session";
-import { defaultMcpGatewayEntry, McpGatewayManager, setMcpGateway } from "./server/mcp-gateway";
-import { artifactList, artifactRegister } from "./shared/artifacts";
-import { listArtifacts, registerArtifact } from "./server/artifacts";
+import { orchestrate } from "./server/orchestrator";
+import { registeredProjects,withProject } from "./server/projects";
+import { handleProjectBackendStart,handleProjectBackendStatus,handleProjectRuntimeSettingsGet,handleProjectRuntimeSettingsUpdate,handleProjectSetupSave,handleProjectSetupScan,handleProjectStorage } from "./server/setup";
 import { handleWorkspaceLifecycle } from "./server/workspace-lifecycle";
-import { workspaceLifecycle } from "./shared/workspace-lifecycle";
+import { agentDelegate,agentStatusQuery } from "./shared/agent";
 import {
-  executionReport,
-  reviewModels,
-  reviewerRead,
-  reviewerResult,
-  reviewSessionControl,
-  reviewSessionEvents,
-  reviewSessionList,
-  reviewSessionQuery,
-  reviewSessionStart,
-  reviewPreview,
-  reviewSettingsGet,
-  reviewSettingsUpdate,
+executionReport,
+reviewerRead,
+reviewerResult,
+reviewModels,
+reviewPreview,
+reviewSessionControl,
+reviewSessionEvents,
+reviewSessionList,
+reviewSessionQuery,
+reviewSessionStart,
+reviewSettingsGet,
+reviewSettingsUpdate,
 } from "./shared/agent-review";
-import {
-  handleExecutionReportRpc,
-  handleCoordinatorReview,
-  handleReviewModels,
-  handleReviewPreview,
-  handleReviewSessionControl,
-  handleReviewSessionEvents,
-  handleReviewSessionList,
-  handleReviewSessionQuery,
-  handleReviewSessionStart,
-  handleReviewSettingsGet,
-  handleReviewSettingsUpdate,
-  handleReviewerReadRpc,
-  handleReviewerResultRpc,
-  registerReviewLifecycle,
-} from "./server/agent-review";
+import { agentSessionProviders,agentSessionSettingsGet,agentSessionSettingsUpdate } from "./shared/agent-session";
+import { artifactList,artifactRegister } from "./shared/artifacts";
+import { clientDiagnostic } from "./shared/client-diagnostics";
+import { diagnosticsQuery,mcpStatusQuery } from "./shared/diagnostics";
+import { workspaceBindingQuery,workspaceDelegate,workspaceHandoffPreview } from "./shared/handoff";
+import { projectsQuery } from "./shared/projects";
+import { observerSettings } from "./shared/settings";
+import { projectBackendStart,projectBackendStatus,projectRuntimeSettingsGet,projectRuntimeSettingsUpdate,projectSetupSave,projectSetupScan,projectStorageQuery } from "./shared/setup";
+import { workspaceLifecycle } from "./shared/workspace-lifecycle";
 
 export default function contribute(server: PluginServerContext) {
   const host = new HostConnection();

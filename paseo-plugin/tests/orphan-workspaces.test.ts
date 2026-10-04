@@ -121,14 +121,14 @@ test("partial branch switch resumes from persisted adoption plan without duplica
     assert.equal(resumed.state, "active");
     assert.equal(git(join(f.tree, "alpha"), "branch", "--show-current"), "recovered/lost/alpha");
     assert.equal(git(join(f.tree, "beta"), "branch", "--show-current"), "recovered/lost/beta");
-    assert.ok(readFileSync(f.service.workspaces.recordPath("lost"), "utf8").includes('"origin": "adopted"'));
+    assert.ok(readFileSync(f.service.workspaces.records.recordPath("lost"), "utf8").includes('"origin": "adopted"'));
   } finally { Git.prototype.run = original; await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 
 test("an invalid legacy record and extra metadata remain visible and are preserved during adoption", async () => {
   const f = fixture();
   try {
-    const recordPath = f.service.workspaces.recordPath("lost");
+    const recordPath = f.service.workspaces.records.recordPath("lost");
     writeFileSync(recordPath, "{legacy record}");
     mkdirSync(join(f.tree, ".workspace"));
     writeFileSync(join(f.tree, ".workspace", "notes.txt"), "keep me");

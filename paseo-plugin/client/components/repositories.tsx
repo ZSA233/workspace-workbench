@@ -1,11 +1,12 @@
-import { ObservationIndicator } from './observation-indicator';
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { memo,useEffect,useState } from "react";
-import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
+import { Pressable,Text,View } from "react-native";
+import { ObservationIndicator } from './observation-indicator';
 
+import { useWorkbenchCopy } from "../i18n";
 import {
 isTransientIssueCode,
 sectionRemainingHeight,
@@ -21,24 +22,14 @@ type RepositorySummary,
 type WorkspaceSummary
 } from "../model";
 import { selectedChangeSummary } from "../repository-metrics";
-import { ChangeCounts,InlineRefresh,SectionDisclosureButton,SectionViewport,fileCountLabel,issueDetail,issueLabel,makeStyles,repositoryBranchLabel,statusColor,visibleIssues } from "./ui";
-import { useWorkbenchCopy } from "../i18n";
+import { ChangeCounts,fileCountLabel,issueDetail,issueLabel,makeStyles,repositoryBranchLabel,SectionDisclosureButton,SectionViewport,statusColor,visibleIssues } from "./ui";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
-type ObserverPanelContentProps = PanelProps & {
-  hostWorkspaceId: string;
-  paseoWorkspace: { directory: string; name: string } | null;
-};
+
 type ChangeTreeMode = "tree" | "files";
 
-const PREFERENCE_SCOPE_FALLBACK = "global";
 
-// React Native's shared cursor type only exposes `auto` and `pointer`, while
-// the web renderer forwards the full CSS cursor value. Keep the native style
-// portable and add the vertical resize affordance only where it is supported.
-const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
-  ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
-  : null;
+
 
 import { CommitGraph } from "./graph";
 
@@ -81,8 +72,8 @@ export const WorkspaceView = memo(function WorkspaceView({
   availableHeight,
   sectionDragging,
   onSectionToggle,
-  onSectionHeightCommit,
-  onSectionDragState,
+
+
   onOpenLayoutMenu,
   onPrepareToolchain,
   preparingToolchain,
@@ -130,8 +121,8 @@ export const WorkspaceView = memo(function WorkspaceView({
   availableHeight: number;
   sectionDragging: boolean;
   onSectionToggle: (id: ObserverSectionId, collapsed: boolean) => void;
-  onSectionHeightCommit: (id: ObserverSectionId, height: number | null) => void;
-  onSectionDragState: (dragging: boolean) => void;
+
+
   onOpenLayoutMenu: () => void;
   onPrepareToolchain?: () => void;
   preparingToolchain?: boolean;
@@ -209,10 +200,10 @@ export const WorkspaceView = memo(function WorkspaceView({
         {!sectionLayout.repositories.collapsed ? (
           <SectionViewport
             id="repositories"
-            layout={sectionLayout.repositories}
+
             availableHeight={availableHeight}
-            onDragStateChange={onSectionDragState}
-            onHeightCommit={(height) => onSectionHeightCommit("repositories", height)}
+
+
             theme={theme}
             styles={styles}
           >
@@ -287,9 +278,9 @@ export const WorkspaceView = memo(function WorkspaceView({
             onToggleDetails={onToggleRepositoryDetails}
             sectionLayout={sectionLayout.graph}
             availableHeight={availableHeight}
-            onSectionDragState={onSectionDragState}
+
             onSectionToggle={(collapsed) => onSectionToggle("graph", collapsed)}
-            onHeightCommit={(height) => onSectionHeightCommit("graph", height)}
+
             onOpenLayoutMenu={onOpenLayoutMenu}
             graphPlatform={graphPlatform}
             refreshing={graphRefreshing}
@@ -317,7 +308,7 @@ export const WorkspaceView = memo(function WorkspaceView({
             sectionLayout={sectionLayout.changes}
             availableHeight={changesAvailableHeight}
             onSectionToggle={(collapsed) => onSectionToggle("changes", collapsed)}
-            onHeightCommit={(height) => onSectionHeightCommit("changes", height)}
+
             onOpenLayoutMenu={onOpenLayoutMenu}
             theme={theme}
             styles={styles}

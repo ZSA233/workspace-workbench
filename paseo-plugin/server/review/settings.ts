@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { reviewGlobalPatchSchema, reviewModelOverrideSchema, reviewPreferencePatchSchema, reviewPreferencesSchema, type ReviewModelOverride, type ReviewPreferencePatch, type ReviewPreferences } from "../../shared/agent-review.ts";
+import { dirname,join } from "node:path";
+import { reviewGlobalPatchSchema,reviewModelOverrideSchema,reviewPreferencePatchSchema,reviewPreferencesSchema,type ReviewModelOverride,type ReviewPreferencePatch,type ReviewPreferences } from "../../shared/agent-review.ts";
 import type { ReviewInfrastructure } from './infrastructure.ts';
 import { reviewLifecycleEnabled } from './policy.ts';
 import type { StoredGlobalSettings } from './types.ts';
@@ -35,18 +35,13 @@ export class ReviewSettings {
             const projects = value.projects && typeof value.projects === "object" ? value.projects : {};
             const agentSession = value.agentSession && typeof value.agentSession === "object" ? value.agentSession : undefined;
             return { version: 1, defaults: reviewGlobalPatchSchema.parse(defaults), projects: Object.fromEntries(Object.entries(projects).flatMap(([key, item]) => {
-                    const parsed = this.zModelOverride().safeParse(item);
+                    const parsed = reviewModelOverrideSchema.safeParse(item);
                     return parsed.success ? [[key, parsed.data]] : [];
                 })), ...(agentSession ? { agentSession } : {}) };
         }
         catch {
             return { version: 1, defaults: {}, projects: {} };
         }
-    }
-    zModelOverride() {
-        // Kept local to avoid a settings file ever accepting arbitrary provider
-        // configuration or credentials.
-        return reviewModelOverrideSchema;
     }
     atomicJson(path: string, value: unknown): void {
         this.deps.files.mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -77,7 +72,7 @@ export class ReviewSettings {
         const globalFile = this.readGlobalSettings();
         const projectPath = this.deps.projects.currentProject()?.configPath || "";
         const global = reviewGlobalPatchSchema.parse(globalFile.defaults);
-        const models = this.zModelOverride().parse(globalFile.projects[projectPath] || {});
+        const models = reviewModelOverrideSchema.parse(globalFile.projects[projectPath] || {});
         const effective = reviewPreferencesSchema.parse({
             ...global,
             ...project,
@@ -118,7 +113,7 @@ export class ReviewSettings {
             if (!projectPath)
                 throw new Error("project_context_required");
             const current = file.projects[projectPath] || {};
-            const next = { ...current, ...this.zModelOverride().parse(patch) };
+            const next = { ...current, ...reviewModelOverrideSchema.parse(patch) };
             for (const field of resetFields)
                 delete (next as Record<string, unknown>)[field];
             if (Object.keys(next).length)

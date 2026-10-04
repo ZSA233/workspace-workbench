@@ -19,7 +19,7 @@ function withoutRetention(value: ContentResponse): ObserverResponse {
 export function retainObservationContent(previous: unknown, incoming: unknown): unknown {
     if (!isResponse(incoming))
         return incoming;
-    const next = withoutRetention(incoming), prior = isResponse(previous) ? displayedObservation(previous) : undefined;
+    const next = withoutRetention(incoming), prior = incoming.retainedContent || (isResponse(previous) ? displayedObservation(previous) : undefined);
     const state = responseObservationState(next), classification = classifyObservationResponse(next);
     if (classification === 'ready') {
         const before = (prior?.result as any)?.observation?.readStartedAt || 0;

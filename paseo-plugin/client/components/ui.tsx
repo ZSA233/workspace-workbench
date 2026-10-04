@@ -1,42 +1,31 @@
-import { compactRefLabel } from "../repository-reference";
-export { compactRefLabel, repositoryBranchLabel, repositoryCurrentRefDetail, repositoryRefMismatch } from "../repository-reference";
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
+import { createContext,useContext,useEffect,useRef,useState,type ReactNode } from "react";
+import { ActivityIndicator,PanResponder,Platform,Pressable,StyleSheet,Text,View,type ScrollViewProps,type ViewStyle } from "react-native";
+import { copy,formatCopyFrom,type WorkbenchCopy } from "../../shared/copy";
 import { Icon,ScrollView } from "../native-components";
-import { createContext,useContext,useEffect,useMemo,useRef,useState,type ReactNode } from "react";
-import { ActivityIndicator,PanResponder,Platform,Pressable,StyleSheet,Text,View,type ViewStyle,type ScrollViewProps } from "react-native";
-import { copy, formatCopyFrom, type WorkbenchCopy } from "../../shared/copy";
+import { compactRefLabel } from "../repository-reference";
+export { compactRefLabel,repositoryBranchLabel,repositoryCurrentRefDetail,repositoryRefMismatch } from "../repository-reference";
 
 import { type ObserverResponse } from "../../shared/observer";
 import { GRAPH_ROW_HEIGHT } from "../graph/constants";
+import { useWorkbenchCopy } from "../i18n";
 import {
 MIN_SECTION_HEIGHT,
-clampSectionHeight,
 formatChangeCount,
 isTransientIssueCode,
 issueDisplayLabel,
-mergePartialDetail,
 sectionAutoMaxHeight,
-type DetailResult,
 type Issue,
 type ObserverSectionId,
-type RepositorySummary,
-type SectionLayoutPreference,
 type WorkspaceSummary
 } from "../model";
 import { observerAccent } from "../theme";
-import { useWorkbenchCopy } from "../i18n";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
-type ObserverPanelContentProps = PanelProps & {
-  hostWorkspaceId: string;
-  paseoWorkspace: { directory: string; name: string } | null;
-};
-type ChangeTreeMode = "tree" | "files";
 
-const PREFERENCE_SCOPE_FALLBACK = "global";
 
 // React Native's shared cursor type only exposes `auto` and `pointer`, while
 // the web renderer forwards the full CSS cursor value. Keep the native style
@@ -163,7 +152,6 @@ export function workspaceMeta(workspace: WorkspaceSummary, strings: WorkbenchCop
 }
 
 
-
 export function repositoryCountLabel(count: number, strings: WorkbenchCopy = copy): string {
   return formatCopyFrom(strings, "repoCountLabel", [count]);
 }
@@ -287,11 +275,11 @@ export function SectionViewport({
   windowed = false,
   onScroll,
   id,
-  layout,
+
   availableHeight,
   resizable = true,
-  onDragStateChange,
-  onHeightCommit,
+
+
   theme,
   styles,
   children,
@@ -299,11 +287,11 @@ export function SectionViewport({
   windowed?: boolean;
   onScroll?: ScrollViewProps["onScroll"];
   id: ObserverSectionId;
-  layout: SectionLayoutPreference;
+
   availableHeight: number;
   resizable?: boolean;
-  onDragStateChange?: (dragging: boolean) => void;
-  onHeightCommit: (height: number | null) => void;
+
+
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
   children: ReactNode;

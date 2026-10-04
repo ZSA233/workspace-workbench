@@ -15,7 +15,7 @@ function fixture(){
  const tree=join(workspaces.config.treesRoot,'saved');
  fs.mkdirSync(join(root,'one'),{recursive:true});fs.mkdirSync(join(tree,'one'),{recursive:true});
  const record={schemaVersion:1,id:'saved',displayName:'Saved workspace',treePath:tree,sourceRoot:root,kind:'managed',managed:true,state:'active',repositories:[{id:'one',repoPath:'one',sourcePath:join(root,'one'),worktreePath:join(tree,'one'),branch:'saved'}],history:{unknown:'preserved'}};
- fs.writeFileSync(workspaces.recordPath('saved'),JSON.stringify(record));
+ fs.writeFileSync(workspaces.records.recordPath('saved'),JSON.stringify(record));
  return {root,tree,workspaces};
 }
 
@@ -43,8 +43,8 @@ test('displayed records do not authorize symlink escapes or weaken fresh operati
   const rows=await f.workspaces.roster();
   assert.equal(rows.find(w=>w.id==='saved')?.displayName,'Saved workspace');
   assert.throws(()=>f.workspaces.get('saved'),(e:any)=>e.code==='record_invalid');
-  const raw=JSON.parse(fs.readFileSync(f.workspaces.recordPath('saved'),'utf8'));
-  raw.treePath=outside;fs.writeFileSync(f.workspaces.recordPath('saved'),JSON.stringify(raw));
+  const raw=JSON.parse(fs.readFileSync(f.workspaces.records.recordPath('saved'),'utf8'));
+  raw.treePath=outside;fs.writeFileSync(f.workspaces.records.recordPath('saved'),JSON.stringify(raw));
   assert.equal((await f.workspaces.roster()).find(w=>w.id==='saved')?.state,'record_invalid');
  }finally{await f.workspaces.observationRecords.close();fs.rmSync(f.root,{recursive:true,force:true});fs.rmSync(outside,{recursive:true,force:true});}
 });
@@ -69,7 +69,7 @@ test('in-root configured aliases retain display identity while operation validat
  try{
   fs.symlinkSync(join(f.root,'one'),join(f.root,'alias'),'dir');
   f.workspaces.config.repositories[0].path='alias';
-  const path=f.workspaces.recordPath('saved'),record=JSON.parse(fs.readFileSync(path,'utf8'));
+  const path=f.workspaces.records.recordPath('saved'),record=JSON.parse(fs.readFileSync(path,'utf8'));
   record.repositories[0].repoPath='alias';fs.writeFileSync(path,JSON.stringify(record));
   assert.equal(f.workspaces.get('saved').id,'saved');
   assert.equal((await f.workspaces.roster()).find(w=>w.id==='saved')?.state,'active');

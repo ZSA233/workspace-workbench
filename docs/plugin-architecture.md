@@ -59,7 +59,8 @@ it or call through it:
 - `workspace-records.ts`: record encoding, preservation and identity checks.
 - `workspace-catalog.ts`: selections and bounded discovery.
 - `workspace-directory.ts`: authoritative roster assembly and lookup.
-- `workspace-creation.ts`: journaled creation, adoption and scope changes.
+- `workspace-creation.ts`: journaled creation and adoption.
+- `workspace-scope.ts`: scope additions and their separate retry journal.
 - `workspace-activity-guard.ts`: active-operation checks.
 - `workspace-removal.ts`: logical removal and restoration.
 - `workspace-deletion.ts`: deletion boundaries, recovery and physical cleanup.

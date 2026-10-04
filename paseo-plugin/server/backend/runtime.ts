@@ -1,33 +1,31 @@
+import {
+accessSync,
+constants,
+mkdirSync,
+readdirSync,
+realpathSync,
+statSync
+} from "node:fs";
+import { homedir } from "node:os";
+import { basename,delimiter,dirname,join,resolve } from "node:path";
+import { repositoryPath,type Config } from "./config.ts";
 import { writeOperation } from "./operation-storage.ts";
+import { command } from "./process.ts";
 import { withRuntimeInstall } from "./runtime-install-lock.ts";
 import {
-  accessSync,
-  constants,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  statSync,
-  realpathSync,
-} from "node:fs";
-import { dirname, join, resolve, delimiter, basename } from "node:path";
-import { homedir } from "node:os";
-import { repositoryPath, type Config } from "./config.ts";
-import {
-  atomicJson,
-  canonical,
-  hash,
-  inside,
-  issue,
-  optionalJson,
-  stable,
-  WorkbenchError,
-  type Json,
+canonical,
+hash,
+inside,
+issue,
+optionalJson,
+stable,
+WorkbenchError,
+type Json
 } from "./storage.ts";
-import { command } from "./process.ts";
 
-import { runtimeTools as adapters } from './runtime-tools.ts';
-import { runtimeCacheLayout, runtimeCacheRoot } from './runtime-layout.ts';
+import { runtimeCacheLayout,runtimeCacheRoot } from './runtime-layout.ts';
 import { summarizeRuntime } from './runtime-summary.ts';
+import { runtimeTools as adapters } from './runtime-tools.ts';
 export function executable(path: string): boolean {
   try {
     accessSync(path, constants.X_OK);

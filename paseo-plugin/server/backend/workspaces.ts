@@ -1,3 +1,4 @@
+import { WorkspaceScope } from './workspace-scope.ts';
 import type { Config } from './config.ts';
 import { ObservationRecords } from './observation-records.ts';
 import { SerialQueue } from './storage.ts';
@@ -22,6 +23,7 @@ export class Workspaces {
     readonly directory: WorkspaceDirectory;
     readonly activity: WorkspaceActivity;
     readonly creation: WorkspaceCreation;
+    readonly scope: WorkspaceScope;
     readonly removal: WorkspaceRemoval;
     readonly deletion: WorkspaceDeletion;
     constructor(config: Config, infrastructure = workspaceInfrastructure) {
@@ -32,12 +34,12 @@ export class Workspaces {
         this.catalog = new WorkspaceCatalog({ ...infrastructure, config: () => this.config, onDiscoveryChanged: () => this.onDiscoveryChanged?.(), records: this.records, onOrphanScanChanged: () => this.onOrphanScanChanged?.() });
         this.directory = new WorkspaceDirectory({ ...infrastructure, config: () => this.config, catalog: this.catalog, records: this.records });
         this.activity = new WorkspaceActivity({ ...infrastructure, preparationActive: id => this.preparationActive(id), config: () => this.config });
-        this.creation = new WorkspaceCreation({ ...infrastructure, records: this.records, config: () => this.config, catalog: this.catalog, directory: this.directory, activity: this.activity });
+        this.creation = new WorkspaceCreation({ ...infrastructure, records: this.records, config: () => this.config, catalog: this.catalog, directory: this.directory });
+        this.scope = new WorkspaceScope({ creation: this.creation, records: this.records, directory: this.directory, activity: this.activity });
         this.removal = new WorkspaceRemoval({ ...infrastructure, directory: this.directory, records: this.records });
         this.deletion = new WorkspaceDeletion({ ...infrastructure, config: () => this.config, records: this.records, activity: this.activity, directory: this.directory });
     }
     capabilities = (...args: Parameters<WorkspaceDirectory["capabilities"]>) => this.directory.capabilities(...args);
-    linkedId = (...args: Parameters<WorkspaceCatalog["linkedId"]>) => this.catalog.linkedId(...args);
     linkedCandidates = (...args: Parameters<WorkspaceCatalog["linkedCandidates"]>) => this.catalog.linkedCandidates(...args);
     saveLinkedSelection = (...args: Parameters<WorkspaceCatalog["saveLinkedSelection"]>) => this.catalog.saveLinkedSelection(...args);
     refreshLinked = (...args: Parameters<WorkspaceCatalog["refreshLinked"]>) => this.catalog.refreshLinked(...args);
@@ -45,29 +47,20 @@ export class Workspaces {
     mainCandidates = (...args: Parameters<WorkspaceCatalog["mainCandidates"]>) => this.catalog.mainCandidates(...args);
     discoverySnapshot = (...args: Parameters<WorkspaceCatalog["discoverySnapshot"]>) => this.catalog.discoverySnapshot(...args);
     saveMainSelection = (...args: Parameters<WorkspaceCatalog["saveMainSelection"]>) => this.catalog.saveMainSelection(...args);
-    sourceRecord = (...args: Parameters<WorkspaceRecords["sourceRecord"]>) => this.records.sourceRecord(...args);
-    recordPath = (...args: Parameters<WorkspaceRecords["recordPath"]>) => this.records.recordPath(...args);
     orphanSnapshot = (...args: Parameters<WorkspaceCatalog["orphanSnapshot"]>) => this.catalog.orphanSnapshot(...args);
     invalidateOrphanScan = (...args: Parameters<WorkspaceCatalog["invalidateOrphanScan"]>) => this.catalog.invalidateOrphanScan(...args);
     orphanCandidates = (...args: Parameters<WorkspaceCatalog["orphanCandidates"]>) => this.catalog.orphanCandidates(...args);
     observationSupplementSnapshot = (...args: Parameters<WorkspaceCatalog["observationSupplementSnapshot"]>) => this.catalog.observationSupplementSnapshot(...args);
     orphanPreview = (...args: Parameters<WorkspaceCatalog["orphanPreview"]>) => this.catalog.orphanPreview(...args);
     adoptOrphan = (...args: Parameters<WorkspaceCreation["adoptOrphan"]>) => this.creation.adoptOrphan(...args);
-    read = (...args: Parameters<WorkspaceRecords["read"]>) => this.records.read(...args);
     recordReadHealth = (...args: Parameters<WorkspaceDirectory["recordReadHealth"]>) => this.directory.recordReadHealth(...args);
     roster = (...args: Parameters<WorkspaceDirectory["roster"]>) => this.directory.roster(...args);
     list = (...args: Parameters<WorkspaceDirectory["list"]>) => this.directory.list(...args);
     get = (...args: Parameters<WorkspaceDirectory["get"]>) => this.directory.get(...args);
-    save = (...args: Parameters<WorkspaceRecords["save"]>) => this.records.save(...args);
-    matches = (...args: Parameters<WorkspaceRecords["matches"]>) => this.records.matches(...args);
     repository = (...args: Parameters<WorkspaceRecords["repository"]>) => this.records.repository(...args);
-    select = (...args: Parameters<WorkspaceRecords["select"]>) => this.records.select(...args);
-    assertIdle = (...args: Parameters<WorkspaceActivity["assertIdle"]>) => this.activity.assertIdle(...args);
-    plan = (...args: Parameters<WorkspaceCreation["plan"]>) => this.creation.plan(...args);
-    materialize = (...args: Parameters<WorkspaceCreation["materialize"]>) => this.creation.materialize(...args);
     create = (...args: Parameters<WorkspaceCreation["create"]>) => this.creation.create(...args);
     operationStatus = (...args: Parameters<WorkspaceDirectory["operationStatus"]>) => this.directory.operationStatus(...args);
-    add = (...args: Parameters<WorkspaceCreation["add"]>) => this.creation.add(...args);
+    add = (...args: Parameters<WorkspaceScope["add"]>) => this.scope.add(...args);
     impact = (...args: Parameters<WorkspaceDeletion["impact"]>) => this.deletion.impact(...args);
     remove = (...args: Parameters<WorkspaceRemoval["remove"]>) => this.removal.remove(...args);
     restore = (...args: Parameters<WorkspaceRemoval["restore"]>) => this.removal.restore(...args);

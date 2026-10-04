@@ -5,7 +5,7 @@ type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { useQuery,useQueryClient } from "@tanstack/react-query";
 import { useCallback,useEffect,useMemo,useRef,useState } from "react";
-import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,View,type ViewStyle } from "react-native";
+import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,View } from "react-native";
 import { type WorkbenchCopy,type WorkbenchLocale } from "../shared/copy";
 import { copyText,Modal,ScrollView,TextInput,useToast } from "./native-components";
 import { observationQueryOptions } from './observation-content.ts';
@@ -53,7 +53,7 @@ type ObserverPanelContentProps = PanelProps & {
   paseoWorkspace: { directory: string; name: string } | null;
 };
 type ChangeTreeMode = "tree" | "files";
-const noSectionDragState = () => {};
+
 
 function comparablePath(value: string): string {
   const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "") || "/";
@@ -75,12 +75,7 @@ function reportNativeRenderError(phase: string, error: unknown): void {
   });
 }
 
-// React Native's shared cursor type only exposes `auto` and `pointer`, while
-// the web renderer forwards the full CSS cursor value. Keep the native style
-// portable and add the vertical resize affordance only where it is supported.
-const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
-  ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
-  : null;
+
 
 import { CreateWorkspace } from "./components/create-workspace";
 import { IconButton } from "./components/icon-button";
@@ -348,7 +343,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [addRepositoriesOpen, setAddRepositoriesOpen] = useState(false);
 
 
-
   useEffect(() => {
     setSelectedRepoPath("");
     setSelectedCommit("");
@@ -600,7 +594,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     animateSectionLayout();
     preferences.updateSection(id, { collapsed });
   }, [animateSectionLayout, preferences.updateSection]);
-  const noHeightCommit = useCallback((_id: "repositories" | "graph" | "changes", _height: number | null) => {}, []);
+
   const collapseAll = useCallback(() => { animateSectionLayout(); preferences.setAllSectionsCollapsed(true); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.setAllSectionsCollapsed]);
   const expandAll = useCallback(() => { animateSectionLayout(); preferences.setAllSectionsCollapsed(false); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.setAllSectionsCollapsed]);
   const resetLayout = useCallback(() => { animateSectionLayout(); preferences.resetLayout(); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.resetLayout]);
@@ -859,8 +853,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               sectionDragging={sectionDragging}
               onContentLayout={onWorkspaceContentLayout}
               onSectionToggle={onSectionToggle}
-              onSectionHeightCommit={noHeightCommit}
-              onSectionDragState={noSectionDragState}
+
+
               onOpenLayoutMenu={openLayoutMenu}
               onPrepareToolchain={!selectedWorkspaceIsMain ? prepareSelectedToolchain : undefined}
               preparingToolchain={preparingToolchain}

@@ -1,3 +1,4 @@
+import { displayedObservation } from './observation-content.ts';
 import { repositoryQueryKeys, type RefreshInput, type RefreshResult } from './repository-refresh-client.ts';
 import type { QueryClient } from '@tanstack/react-query';
 import type { ObserverResponse } from '../shared/observer.ts';
@@ -9,12 +10,13 @@ export async function publishLifecycle(client: QueryClient, project: string, res
     const key = ['workspace-workbench', project, 'workspace-list'];
     await client.cancelQueries({ queryKey: key, exact: true });
     client.setQueryData<ObserverResponse>(key, previous => {
-        if (!previous?.ok)
-            return previous;
-        const list = previous.result as ListResult;
+        const content=displayedObservation(previous);
+        if (!content?.ok) return previous;
+        const list = content.result as ListResult;
         const workspaces = response.action === 'delete' ? list.workspaces.filter(w => w.id !== response.workspaceId)
             : list.workspaces.map(w => w.id === response.workspaceId && response.state ? { ...w, state: response.state, ...(['active', 'removed'].includes(response.state) ? { deletion: undefined } : {}) } : w);
-        return { ...previous, result: { ...list, workspaces } };
+        const updated={...content,result:{...list,workspaces}};
+        return previous && (!previous.ok || previous!==content) ? {...previous,retainedContent:updated}:updated;
     });
 }
 function mergeRepository(previous: any, incoming: any, readStartedAt: number) {

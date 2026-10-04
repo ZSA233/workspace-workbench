@@ -1,10 +1,10 @@
-import { classifyObservationResponse, observationMetadata } from "./observation-response.ts";
-import { displayedObservation } from "./observation-content.ts";
-import { OBSERVATION_POLICY } from '../shared/observation-policy.ts';
 import { useRef } from "react";
+import { OBSERVATION_POLICY } from '../shared/observation-policy.ts';
+import { displayedObservation } from "./observation-content.ts";
+import { classifyObservationResponse,observationMetadata } from "./observation-response.ts";
 
-import type { ObserverResponse } from "../shared/observer.ts";
 import { DEFAULT_OBSERVATION_TIMING } from "../shared/observation-timing.ts";
+import type { ObserverResponse } from "../shared/observer.ts";
 import { responseObservationState } from "./model.ts";
 
 const STALE_FAILURE_LIMIT = DEFAULT_OBSERVATION_TIMING.staleFailureLimit;

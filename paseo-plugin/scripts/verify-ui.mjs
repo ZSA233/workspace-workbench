@@ -290,7 +290,10 @@ try {
   report.manualRefreshLatency={samplesMs:manualMs,p95Ms:percentile95(manualMs),actionabilityMs:manualActionabilityMs};
   assert.ok(report.manualRefreshLatency.p95Ms<=5000,JSON.stringify(report.manualRefreshLatency));
   report.checks.push('20 actual manual refreshes displayed the latest HEAD, commit and file list within P95 <= 5s');
-  await page.setViewportSize({width:390,height:844});await screenshot('12-narrow-web-layout.png');
+  await page.setViewportSize({width:390,height:844});
+  await page.getByText('Main workspace',{exact:true}).first().waitFor({timeout:10000});
+  await page.getByText('manual-refresh-proof-19',{exact:false}).first().waitFor({timeout:10000});
+  await screenshot('12-narrow-web-layout.png');
   await page.setViewportSize({width:1600,height:1050});
   report.checks.push('390px web layout rendered without replacing the selected Workspace; this is not native-device evidence');
   report.largeFixture = await createDiffPerformanceFixture(join(ui.project, 'one'));

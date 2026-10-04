@@ -2,30 +2,19 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { ActivityIndicator,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
-import { copy, formatCopyFrom, type WorkbenchCopy } from "../../shared/copy";
+import { ActivityIndicator,Pressable,Text,View } from "react-native";
+import { copy,formatCopyFrom,type WorkbenchCopy } from "../../shared/copy";
 
 import {
 type WorkspaceBindingResponse
 } from "../../shared/handoff";
-import { InlineRefresh,makeStyles } from "./ui";
 import { useWorkbenchCopy } from "../i18n";
+import { InlineRefresh,makeStyles } from "./ui";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
-type ObserverPanelContentProps = PanelProps & {
-  hostWorkspaceId: string;
-  paseoWorkspace: { directory: string; name: string } | null;
-};
-type ChangeTreeMode = "tree" | "files";
 
-const PREFERENCE_SCOPE_FALLBACK = "global";
 
-// React Native's shared cursor type only exposes `auto` and `pointer`, while
-// the web renderer forwards the full CSS cursor value. Keep the native style
-// portable and add the vertical resize affordance only where it is supported.
-const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
-  ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
-  : null;
+
 
 export function executionStatusLabel(status: string | undefined | null, strings: WorkbenchCopy = copy): string {
   const labels: Record<string, string> = {

@@ -1,10 +1,10 @@
-import type { PluginAgentPanelProps, PluginWorkspacePanelProps, PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { Text, View } from "react-native";
-import { createElement, useEffect, useState, type ComponentType, type ReactNode } from "react";
-import type { WorkbenchSurfaceProps } from "./surface-context";
-import { reportNativeDiagnostic } from "./native-diagnostics";
-import { CLIENT_GENERATION } from "./initialization";
+import type { PluginAgentPanelProps,PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
+import { createElement,useEffect,useState,type ComponentType } from "react";
+import { Text,View } from "react-native";
 import { copy } from "../shared/copy";
+import { CLIENT_GENERATION } from "./initialization";
+import { reportNativeDiagnostic } from "./native-diagnostics";
+import type { WorkbenchSurfaceProps } from "./surface-context";
 
 type PanelProps = PluginAgentPanelProps | PluginWorkspacePanelProps;
 type DeferredProps = { name: string; loader: () => Promise<Record<string, unknown>>; exportName: string; props: object };

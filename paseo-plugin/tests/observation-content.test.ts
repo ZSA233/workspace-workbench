@@ -32,3 +32,13 @@ test('aggregate completion replaces pending protocol state even without a leaf r
  value={ok:true,result:{regions:{graph:{state:'ready',result:{commits:['new']}}},observation:{state:'ready'}}};await read();
  assert.deepEqual(client.getQueryData(key),value);assert.equal((client.getQueryData<ObserverResponse>(key)!.result as any).observation.readTask,undefined);client.clear();
 });
+test('confirmed removal updates retained roster rows even while the last list request failed',async()=>{
+ const {publishLifecycle}=await import('../client/observation-publication.ts');
+ const client=new QueryClient(),key=['workspace-workbench','p','workspace-list'];
+ let value:ObserverResponse={ok:true,result:{workspaces:[{id:'a',state:'active'},{id:'b',state:'active'}],observation:{state:'ready'}}};
+ const read=()=>client.fetchQuery({queryKey:key,queryFn:async()=>value,...observationQueryOptions,staleTime:0});
+ await read();value={ok:false,error:{code:'observer_timeout',message:'timeout'}};await read();
+ await publishLifecycle(client,'p',{ok:true,workspaceId:'a',action:'remove',state:'removed',activeTasks:[]});
+ const data=client.getQueryData<ObserverResponse>(key)!;
+ assert.equal(data.ok,false);assert.equal((displayedObservation(data)!.result as any).workspaces[0].state,'removed');assert.equal((displayedObservation(data)!.result as any).workspaces[1].state,'active');client.clear();
+});

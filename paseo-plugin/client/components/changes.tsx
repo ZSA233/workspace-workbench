@@ -1,16 +1,16 @@
-import { ObservationIndicator } from './observation-indicator';
-import { changeRowOffsets, changeListWindow } from "../change-list-window.ts";
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { Icon } from "../native-components";
 import { useEffect,useMemo,useState } from "react";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { formatCopyFrom } from "../../shared/copy";
-import { IconButton } from "./icon-button";
-import { observerAccent } from "../theme";
+import { changeListWindow,changeRowOffsets } from "../change-list-window.ts";
 import { useWorkbenchCopy } from "../i18n";
+import { Icon } from "../native-components";
+import { observerAccent } from "../theme";
+import { IconButton } from "./icon-button";
+import { ObservationIndicator } from './observation-indicator';
 
 import {
 ancestorPaths,
@@ -22,23 +22,14 @@ type FileChange,
 type SectionLayoutPreference,
 type TreeRow
 } from "../model";
-import { ChangeCounts,fileColor,InlineRefresh,issueLabel,makeStyles,MiniTag,SectionDisclosureButton,SectionViewport,SmallToggle,visibleIssues } from "./ui";
+import { ChangeCounts,fileColor,issueLabel,makeStyles,MiniTag,SectionDisclosureButton,SectionViewport,visibleIssues } from "./ui";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
-type ObserverPanelContentProps = PanelProps & {
-  hostWorkspaceId: string;
-  paseoWorkspace: { directory: string; name: string } | null;
-};
+
 type ChangeTreeMode = "tree" | "files";
 
-const PREFERENCE_SCOPE_FALLBACK = "global";
 
-// React Native's shared cursor type only exposes `auto` and `pointer`, while
-// the web renderer forwards the full CSS cursor value. Keep the native style
-// portable and add the vertical resize affordance only where it is supported.
-const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
-  ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
-  : null;
+
 
 export function ChangedTree({
   changes,
@@ -57,7 +48,7 @@ export function ChangedTree({
   sectionLayout,
   availableHeight,
   onSectionToggle,
-  onHeightCommit,
+
   onOpenLayoutMenu,
   theme,
   styles,
@@ -78,7 +69,7 @@ export function ChangedTree({
   sectionLayout: SectionLayoutPreference;
   availableHeight: number;
   onSectionToggle: (collapsed: boolean) => void;
-  onHeightCommit: (height: number | null) => void;
+
   onOpenLayoutMenu: () => void;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
@@ -134,10 +125,10 @@ export function ChangedTree({
           id="changes"
           windowed={windowed}
           onScroll={event => setScrollTop(event.nativeEvent.contentOffset.y)}
-          layout={sectionLayout}
+
           availableHeight={availableHeight}
           resizable={false}
-          onHeightCommit={onHeightCommit}
+
           theme={theme}
           styles={styles}
         >

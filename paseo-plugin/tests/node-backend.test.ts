@@ -765,7 +765,7 @@ test("permanent deletion falls back to the managed tree when Git identity is una
     const deleted = await service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true, confirmDataLoss: true });
     assert.equal(deleted.deleted, true);
     assert.equal(existsSync(workspace.treePath), false);
-    assert.equal(existsSync(service.workspaces.recordPath(workspace.id)), false);
+    assert.equal(existsSync(service.workspaces.records.recordPath(workspace.id)), false);
     assert.equal(git(repo.sourcePath, ["show-ref", "--verify", "--hash", `refs/heads/${repo.branch}`]), commit);
   } finally {
     await service.close();
@@ -786,7 +786,7 @@ test("partial permanent deletion retains the record and can be retried", async (
       return original.call(this, args, check);
     };
     await assert.rejects(service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true, confirmDataLoss: true }), /injected second repository failure/);
-    assert.equal(existsSync(service.workspaces.recordPath(workspace.id)), true);
+    assert.equal(existsSync(service.workspaces.records.recordPath(workspace.id)), true);
     assert.equal(existsSync(workspace.repositories.find((repo: { id: string }) => repo.id === "one").worktreePath), false);
     assert.equal(existsSync(workspace.repositories.find((repo: { id: string }) => repo.id === "two").worktreePath), true);
     assert.equal(service.workspaces.get(workspace.id).permanentDeletion.status, "in_progress");
@@ -794,7 +794,7 @@ test("partial permanent deletion retains the record and can be retried", async (
     failSecondRepository = false;
     const deleted = await service.handle("workspace.delete", { workspaceId: workspace.id, confirm: true, confirmDataLoss: true });
     assert.equal(deleted.deleted, true);
-    assert.equal(existsSync(service.workspaces.recordPath(workspace.id)), false);
+    assert.equal(existsSync(service.workspaces.records.recordPath(workspace.id)), false);
     assert.equal(existsSync(workspace.treePath), false);
   } finally {
     Git.prototype.run = original;

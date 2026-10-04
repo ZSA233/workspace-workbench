@@ -2,38 +2,29 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { FlatList, Icon, ScrollView, TextInput } from "../native-components";
-import { useEffect, useState, type ReactNode } from "react";
-import { ActivityIndicator,BackHandler,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
+import { useEffect,useState,type ReactNode } from "react";
+import { ActivityIndicator,BackHandler,Platform,Pressable,Text,View } from "react-native";
 import { formatCopyFrom } from "../../shared/copy";
+import { FlatList,Icon,ScrollView,TextInput } from "../native-components";
 
+import { useWorkbenchCopy } from "../i18n";
 import {
 countWorkspaceFilter,
 formatCompactRelativeAge,
 matchesWorkspaceSearch,
-type WorkspaceSummary,
 type WorkspaceFilter,
+type WorkspaceSummary,
 } from "../model";
 import { observerAccent } from "../theme";
-import { useWorkbenchCopy } from "../i18n";
 import { InlineRefresh,LayoutMenuItem,isMainWorkspace,makeStyles,repositoryCountLabel,workspaceDisplayName,workspaceMeta } from "./ui";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
-type ObserverPanelContentProps = PanelProps & {
-  hostWorkspaceId: string;
-  paseoWorkspace: { directory: string; name: string } | null;
-};
-type ChangeTreeMode = "tree" | "files";
+
+
 const WORKSPACE_OPTION_HEIGHT = 42;
 
-const PREFERENCE_SCOPE_FALLBACK = "global";
 
-// React Native's shared cursor type only exposes `auto` and `pointer`, while
-// the web renderer forwards the full CSS cursor value. Keep the native style
-// portable and add the vertical resize affordance only where it is supported.
-const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
-  ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
-  : null;
+
 
 export function PanelHeader({
   onOpenLayoutMenu,

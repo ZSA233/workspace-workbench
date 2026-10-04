@@ -1,33 +1,22 @@
-import { ObservationIndicator } from './observation-indicator';
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { TextInput } from "../native-components";
 import { useState } from "react";
-import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
+import { Pressable,Text,View } from "react-native";
+import { useWorkbenchCopy } from "../i18n";
 import {
 type ReviewResult,
 type WorkspaceSummary
 } from "../model";
-import { ChangeCounts,InlineRefresh,StatusPill,makeStyles,relationLabel,repositoryCountLabel,statusColor,workspaceSignals } from "./ui";
-import { useWorkbenchCopy } from "../i18n";
+import { TextInput } from "../native-components";
+import { ObservationIndicator } from './observation-indicator';
+import { ChangeCounts,StatusPill,makeStyles,relationLabel,repositoryCountLabel,statusColor,workspaceSignals } from "./ui";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
-type ObserverPanelContentProps = PanelProps & {
-  hostWorkspaceId: string;
-  paseoWorkspace: { directory: string; name: string } | null;
-};
-type ChangeTreeMode = "tree" | "files";
 
-const PREFERENCE_SCOPE_FALLBACK = "global";
 
-// React Native's shared cursor type only exposes `auto` and `pointer`, while
-// the web renderer forwards the full CSS cursor value. Keep the native style
-// portable and add the vertical resize affordance only where it is supported.
-const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
-  ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
-  : null;
+
 
 export function ReviewView({
   workspaces,

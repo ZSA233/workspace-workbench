@@ -20,7 +20,7 @@ test('persistent preparation deduplicates, protects its workspace and retains un
   const request={action:'start',workspaceId:workspace.id,repositories:['one'],requestId:'request-one'};
   const first=await service.handle('workspace.prepare.task',request);
   assert.ok(['queued','running'].includes(first.state));assert.equal(first.config,undefined);
-  assert.throws(()=>service.workspaces.assertIdle(workspace.id),/preparation is active/);
+  assert.throws(()=>service.workspaces.activity.assertIdle(workspace.id),/preparation is active/);
   const second=await service.handle('workspace.prepare.task',request);assert.equal(first.operationId,second.operationId);
   let status=second;
   for(let i=0;i<100 && ['queued','running'].includes(status.state);i++){await sleep(20);status=await service.handle('workspace.prepare.task',{action:'status',operationId:first.operationId});}

@@ -1,3 +1,4 @@
+import { environmentBindingDiagnostics } from './session-environment.ts';
 import { readerGeneration } from "./reader-identity.ts";
 import { DIFF_READ_BUILD, DIFF_READ_PROTOCOL } from "../shared/diff-read.ts";
 import { readDiagnosticEvents } from "./diagnostics-runtime.mjs";
@@ -24,6 +25,7 @@ export async function handleDiagnostics(input: z.input<typeof diagnosticsQuery.i
     pluginGeneration: readerGeneration,
     gateway,
     rpcMetrics: metrics.snapshot(),
+    environmentBindings: environmentBindingDiagnostics(),
     clientEvents: clientDiagnosticsSnapshot().slice(-(input.limit || 200)),
     events,
   };

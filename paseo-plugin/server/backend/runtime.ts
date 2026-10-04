@@ -25,34 +25,9 @@ import {
 } from "./storage.ts";
 import { command } from "./process.ts";
 
-const adapters: Record<
-  string,
-  {
-    names: string[];
-    args: string[];
-    pattern: RegExp;
-    cache: Record<string, string>;
-  }
-> = {
-  node: {
-    names: ["node"],
-    args: ["--version"],
-    pattern: /\bv(\d+\.\d+(?:\.\d+)?)/,
-    cache: { NPM_CONFIG_CACHE: "npm" },
-  },
-  python: {
-    names: ["python", "python3"],
-    args: ["--version"],
-    pattern: /\bPython\s+(\d+\.\d+(?:\.\d+)?)/,
-    cache: { PIP_CACHE_DIR: "pip" },
-  },
-  go: {
-    names: ["go"],
-    args: ["version"],
-    pattern: /\bgo(\d+\.\d+(?:\.\d+)?)/,
-    cache: { GOCACHE: "go-build", GOMODCACHE: "go-mod" },
-  },
-};
+import { runtimeTools as adapters } from './runtime-tools.ts';
+import { runtimeCacheLayout, runtimeCacheRoot } from './runtime-layout.ts';
+import { summarizeRuntime } from './runtime-summary.ts';
 export function executable(path: string): boolean {
   try {
     accessSync(path, constants.X_OK);
@@ -182,10 +157,7 @@ export class Runtime {
       throw new WorkbenchError('config_invalid', 'mise data must be outside source and workspace trees');
     return path;
   }
-  cacheRoot(workspace: Json) {
-    if (this.config.cacheScope === "project") return join(this.config.cacheRoot, "shared");
-    return join(this.config.cacheRoot, "workspaces", workspace.id === "main" ? "main" : hash(workspace.id).slice(0, 16));
-  }
+  cacheRoot(workspace: Json) { return runtimeCacheRoot(this.config, workspace); }
   load(workspace: Json): Json {
     try {
       return optionalJson(this.file(workspace));
@@ -204,29 +176,13 @@ export class Runtime {
       vars.MISE_DATA_DIR = path;
     }
     if (!this.config.cacheEnabled) return vars;
-    const paths = Object.assign(
-      { UV_CACHE_DIR: "uv" },
-      this.manager === "mise" && this.mode !== "system"
-        ? { MISE_CACHE_DIR: "mise" }
-        : {},
-      ...tools.map((tool) => adapters[tool]?.cache || {}),
-    );
-    for (const [name, part] of Object.entries(paths)) {
-      const path = join(this.cacheRoot(workspace), String(part));
+    const layout = runtimeCacheLayout(this.config, workspace, tools, this.requirements);
+    for (const [name, path] of Object.entries(layout)) {
+      if (name === 'MISE_DATA_DIR') continue;
       try {
-        if (create) mkdirSync(path, { recursive: true, mode: 0o700 });
-        if (create) accessSync(path, constants.W_OK);
+        if (create) { mkdirSync(path, { recursive: true, mode: 0o700 }); accessSync(path, constants.W_OK); }
         vars[name] = path;
-      } catch { throw new WorkbenchError("runtime_cache_unavailable", `runtime cache directory is not writable: ${path}`); }
-    }
-    if (this.config.cacheScope === 'project' && tools.includes('go')) {
-      vars.WORKBENCH_GO_BUILD_CACHE_ROOT = join(this.cacheRoot(workspace),'go-build');
-      vars.WORKBENCH_GO_MOD_CACHE_ROOT = join(this.cacheRoot(workspace),'go-mod');
-      const declared = [...new Set(workspace.repositories.map((repo:Json) => this.requirements[repo.id]?.go).filter(Boolean))];
-      const version = declared.length === 1 ? declared[0] : 'mixed';
-      vars.GOCACHE = join(vars.WORKBENCH_GO_BUILD_CACHE_ROOT,`go${version}`,`${process.platform}-${process.arch}`);
-      vars.GOMODCACHE = vars.WORKBENCH_GO_MOD_CACHE_ROOT;
-      if(create) mkdirSync(vars.GOCACHE,{recursive:true,mode:0o700});
+      } catch { throw new WorkbenchError('runtime_cache_unavailable', `runtime cache directory is not writable: ${path}`); }
     }
     return vars;
   }
@@ -268,85 +224,14 @@ export class Runtime {
     ];
   }
   summary(workspace: Json): Json {
-    if (!workspace.managed)
-      return {
-        manager: this.manager,
-        mode: this.mode,
-        status: "not_applicable",
-        requirements: {},
-        preparedRepositories: {},
-        issues: [],
-      };
-    const saved = this.load(workspace),
-      repositories: Json = Object.create(null),
-      requirements: Json = {},
-      tools = new Set<string>(),
-      bins = new Set<string>();
-    for (const repo of workspace.repositories) {
-      const requested = Object.hasOwn(this.requirements, repo.id)
-          ? this.requirements[repo.id]
-          : {},
-        previous = Object.hasOwn(saved, repo.id) ? saved[repo.id] : {},
-        matches = stable(previous.requested) === stable(requested),
-        ready = this.ready(previous, requested);
-      let status = matches
-        ? previous.status || "needs_prepare"
-        : "needs_prepare";
-      if (status === "ready" && !ready) status = "needs_prepare";
-      if (!Object.keys(requested).length) status = "not_applicable";
-      const paths =
-        status === "ready" && ready ? this.bins(previous, requested) : [];
-      paths.forEach((path) => bins.add(path));
-      repositories[repo.id] = {
-        status,
-        tools: Object.keys(requested),
-        issues: matches ? previous.issues || [] : [],
-        sources: matches ? previous.sources || {} : {},
-        binPaths: paths,
-      };
-      for (const [tool, version] of Object.entries(requested)) {
-        if (this.signal?.aborted) throw new WorkbenchError("operation_interrupted", "Runtime preparation interrupted");
-        tools.add(tool);
-        const r = (requirements[tool] ||= { requested: [], resolved: [] });
-        r.requested.push(version);
-        if (matches && previous.resolved?.[tool])
-          r.resolved.push(previous.resolved[tool]);
-      }
-    }
-    const entries = Object.values(repositories) as Json[],
-      states = entries.map((entry) => entry.status);
-    const status = states.every((state) =>
-      ["ready", "not_applicable"].includes(state),
-    )
-      ? "ready"
-      : states.includes("ready")
-        ? "partial"
-        : states.includes("prepare_failed")
-          ? "prepare_failed"
-          : "needs_prepare";
-    const managerPath = this.mode !== "system" ? this.managerPath() : null;
-    return {
-      manager: this.manager,
-      mode: this.mode,
-      managerAvailable: !!managerPath,
-      managerPath,
-      cache: {
-        scope: this.config.cacheScope || "workspace",
-        root: this.cacheRoot(workspace),
-        enabled: this.config.cacheEnabled,
-      },
-      requirements,
-      preparedRepositories: Object.fromEntries(Object.entries(repositories)),
-      issues: entries.flatMap((entry) => entry.issues),
-      status,
-      environment: {
-        pathEntries: status === "ready" ? [...bins] : [],
-        variables: {
-          ...this.cache(workspace, [...tools]),
-          ...(status === "ready" ? { GOTOOLCHAIN: "local" } : {}),
-        },
-      },
-    };
+    const saved = this.load(workspace);
+    const ready = Object.fromEntries(workspace.repositories.map((repo: Json) =>
+      [repo.id, this.ready(saved[repo.id] || {}, this.requirements[repo.id] || {})]));
+    const tools = [...new Set<string>(workspace.repositories.flatMap((repo: Json) => Object.keys(this.requirements[repo.id] || {})))];
+    return summarizeRuntime(workspace, this.requirements, saved, ready,
+      { manager: this.manager, mode: this.mode, managerPath: this.mode !== 'system' ? this.managerPath() : null,
+        cache: {scope: this.config.cacheScope || 'workspace', root: this.cacheRoot(workspace), enabled: this.config.cacheEnabled},
+        variables: this.cache(workspace, tools) });
   }
   candidates(tool: string, version?: string) {
     const home = homedir(),

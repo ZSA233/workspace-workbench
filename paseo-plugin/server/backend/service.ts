@@ -1,3 +1,4 @@
+import { RuntimeReadQueue } from './runtime-read-queue.ts';
 import { sessionEnvironment } from './session-environment.ts';
 import { resolveRuntimeDeclarations } from './runtime-declarations.ts';
 import { PrepareTasks } from "./prepare-tasks.ts";
@@ -30,6 +31,7 @@ export class Service {
   workspaces: Workspaces;
   runtime: Runtime | null;
   preparations: PrepareTasks;
+  environmentReads = new RuntimeReadQueue();
   cache: ObservationCache;
   observation: Observation;
   startedAt = Date.now();
@@ -63,6 +65,7 @@ export class Service {
       buildId: this.build,
       generation: this.observation.diffTasks.generation,
       eventLoop: this.eventLoop.snapshot(),
+      environmentReads: this.environmentReads.health(),
       git: gitDiagnostics(),
       recordReads: this.workspaces.observationRecords.health(),
       diffRead: this.observation.diffTasks.health(),
@@ -141,7 +144,11 @@ export class Service {
         return this.workspaces.linkedCandidates();
       case "linked.workspace.preview":
         return this.workspaces.previewGitlink(params);
-      case "workspace.environment": return sessionEnvironment(this,params);
+      case "workspace.environment": {
+        const deadline = Math.min(Date.now() + (Number(params.observationBudgetMs) || 2000), Number(params.environmentDeadline) || Infinity);
+        const {environmentDeadline,observationBudgetMs,...identity} = params;
+        return this.environmentReads.read(stable({config:this.config,params:identity}),deadline,signal,owned => sessionEnvironment(this,{...params,environmentDeadline:deadline},owned));
+      }
       case "workspace.runtime": {
         const w = this.workspaces.get(String(params.workspaceId || ""));
         if (!w.managed)
@@ -272,6 +279,7 @@ export class Service {
   }
   async close() {
     this.eventLoop.close();
+    await this.environmentReads.close();
     await this.preparations.close();
     await this.workspaces.observationRecords.close();
     await this.observation.refresh.close();

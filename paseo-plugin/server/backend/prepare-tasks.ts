@@ -93,6 +93,8 @@ export class PrepareTasks {
             return this.snapshot(existing);
         }
         const workspace = await this.workspaces.observationRecords.request('get', { workspaceId: String(params.workspaceId || '') });
+        if (workspace.state !== 'active')
+            throw new WorkbenchError('workspace_state_invalid', 'Workspace is not active');
         if (!workspace.managed)
             throw new WorkbenchError('workspace_not_managed', 'Workspace is not managed');
         const requested = params.repositories || (params.repositoryId ? [params.repositoryId] : workspace.repositories.map((r: Json) => r.id));

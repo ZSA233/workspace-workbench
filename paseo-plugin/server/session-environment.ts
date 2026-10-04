@@ -3,6 +3,9 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import { queryObserver } from './observer.ts';
 import { withProject, type ProjectRoute } from './projects.ts';
 
+const bindingCounters = {legacySnapshots:0,timeouts:0};
+export function environmentBindingDiagnostics(){return {...bindingCounters};}
+
 const allowed = new Set(['GOCACHE', 'GOMODCACHE', 'NPM_CONFIG_CACHE', 'PIP_CACHE_DIR', 'UV_CACHE_DIR', 'MISE_DATA_DIR',
   'MISE_CACHE_DIR', 'GOROOT', 'GOTOOLDIR', 'GOTOOLCHAIN', 'WORKBENCH_ENVIRONMENT_FILE', 'WORKBENCH_GO_BUILD_CACHE_ROOT',
   'WORKBENCH_GO_MOD_CACHE_ROOT']);
@@ -40,6 +43,7 @@ export async function cacheExecutionConfig<T extends {provider: string; cwd?: st
 
 /** Retain user overrides, refresh only values still equal to the previous injection. */
 export function sessionOverrides(explicit: Record<string, string>, previous: any, current: any) {
+  if (!previous?.snapshotId) return explicit;
   if (previous?.schemaVersion !== 'workspace.workbench.environment/v1' || previous.projectId !== current?.projectId) return explicit;
   const result = { ...explicit };
   for (const [key, value] of Object.entries(previous.environment?.variables || {})) {
@@ -67,16 +71,19 @@ async function previousEnvironment(explicit: Record<string, string>) {
 export async function bindSessionRuntime<T extends {provider:string;cwd:string;providerOptions?:any}>(project: ProjectRoute, config:T, explicit: Record<string, string> = {}) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const fallback = {config,env:explicit};
+  const deadline = Date.now() + 1900;
   const binding = (async () => {
   try {
     const location = relative(await realpath(project.treesRoot), await realpath(config.cwd));
     if (location.startsWith('..') || isAbsolute(location)) return fallback;
     const previous = await previousEnvironment(explicit);
-    const response = await withProject({ projectConfig: project.configPath }, () => queryObserver({ method: 'workspace.environment', params: { cwd:config.cwd } }));
+    if(previous && !previous.snapshotId)bindingCounters.legacySnapshots++;
+    if (Date.now() >= deadline) return fallback;
+    const response = await withProject({ projectConfig: project.configPath }, () => queryObserver({ method: 'workspace.environment', params: { cwd:config.cwd, environmentDeadline:deadline } }));
     return response.ok ? {config:await cacheExecutionConfig(config,response.result),env:runtimeEnvironment(response.result, sessionOverrides(explicit, previous, response.result))} : fallback;
   } catch { return fallback; }
   })();
-  return Promise.race([binding,new Promise<typeof fallback>(resolve => {timer=setTimeout(()=>resolve(fallback),2_000);})]).finally(()=>clearTimeout(timer));
+  return Promise.race([binding,new Promise<typeof fallback>(resolve => {timer=setTimeout(()=>{bindingCounters.timeouts++;resolve(fallback);},2_000);})]).finally(()=>clearTimeout(timer));
 }
 
 export async function bindSessionEnvironment(project: ProjectRoute, cwd: string, explicit: Record<string, string> = {}) {

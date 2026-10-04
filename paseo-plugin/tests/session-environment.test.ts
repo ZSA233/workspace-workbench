@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {writeFileSync,rmSync,mkdtempSync,mkdirSync,realpathSync} from 'node:fs';
+import {writeFileSync,readFileSync,statSync,rmSync,mkdtempSync,mkdirSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync} from 'node:child_process';
@@ -30,12 +30,19 @@ test('project declarations override legacy versions and project caches survive w
   assert.equal(ea.state,'preparing');assert.ok(ea.environment.variables.WORKBENCH_ENVIRONMENT_FILE);
   assert.equal(runtimeEnvironment(ea,{GOCACHE:'/explicit'}).GOCACHE,'/explicit');
   writeFileSync(join(a.repositories[0].worktreePath,'mise.toml'),'[tools]\ngo="1.27.2"\n');
+  const before=readFileSync(ea.environment.variables.WORKBENCH_ENVIRONMENT_FILE,'utf8');
   const changed=await s.handle('workspace.environment',{workspaceId:a.id,prepare:false});assert.notEqual(changed.configIdentity,ea.configIdentity);
+  assert.notEqual(changed.snapshotId,ea.snapshotId);
+  assert.notEqual(changed.environment.variables.WORKBENCH_ENVIRONMENT_FILE,ea.environment.variables.WORKBENCH_ENVIRONMENT_FILE);
+  assert.equal(readFileSync(ea.environment.variables.WORKBENCH_ENVIRONMENT_FILE,'utf8'),before);
+  const path=changed.environment.variables.WORKBENCH_ENVIRONMENT_FILE,mtime=statSync(path).mtimeMs;
+  const again=await s.handle('workspace.environment',{workspaceId:a.id,prepare:false});assert.equal(again.snapshotId,changed.snapshotId);assert.equal(statSync(path).mtimeMs,mtime);
+  const inherited=runtimeEnvironment(ea);assert.equal(runtimeEnvironment(changed,sessionOverrides(inherited,JSON.parse(before),changed)).GOCACHE,changed.environment.variables.GOCACHE);
  }finally{await s.close();rmSync(f.root,{recursive:true,force:true});}
 });
 
 test('resume refreshes injected defaults and retains caller overrides', () => {
- const old={schemaVersion:'workspace.workbench.environment/v1',projectId:'sample',environment:{pathEntries:['/tools/old'],variables:{GOCACHE:'/cache/old'}}};
+ const old={snapshotId:'old-snapshot',schemaVersion:'workspace.workbench.environment/v1',projectId:'sample',environment:{pathEntries:['/tools/old'],variables:{GOCACHE:'/cache/old'}}};
  const current={...old,environment:{pathEntries:['/tools/new'],variables:{GOCACHE:'/cache/new'}}};
  const inherited=runtimeEnvironment(old,{PIP_CACHE_DIR:'/caller/pip'});
  const updated=runtimeEnvironment(current,sessionOverrides(inherited,old,current));
@@ -129,4 +136,10 @@ test('single repository environment ignores unrelated declarations and mixed ver
 test('legacy mixed-version summary falls back to directory-aware shims', () => {
  const value={toolchain:{requirements:{go:{requested:['1.26','1.27']}},environment:{pathEntries:['/older/bin','/newer/bin'],variables:{MISE_DATA_DIR:'/shared/mise'}}}};
  const env=runtimeEnvironment(value);assert.ok(env.PATH.startsWith('/shared/mise/shims:'));assert.ok(!env.PATH.includes('/older/bin'));assert.ok(!env.PATH.includes('/newer/bin'));
+});
+
+
+test('legacy mutable descriptions preserve unknown caller values',()=>{
+ const previous={schemaVersion:'workspace.workbench.environment/v1',projectId:'sample',environment:{variables:{GOCACHE:'/same'}}};
+ assert.deepEqual(sessionOverrides({GOCACHE:'/same'},previous,previous),{GOCACHE:'/same'});
 });

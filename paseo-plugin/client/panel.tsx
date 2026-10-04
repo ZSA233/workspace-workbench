@@ -1,10 +1,16 @@
+import {useWorkspaceCatalog} from "./use-workspace-catalog";
+import {useWorkspaceHandoff,appendAssetReference} from "./use-workspace-handoff";
+import {useReviewSession} from "./use-review-session";
+import { useWorkbenchSettings } from "./use-workbench-settings";
+import { hydrateRepositorySummaries } from "./observation-publication";
+import { useWorkspaceActions } from './use-workspace-actions';
 import { observationMeta } from './observation-coordinator';
-import { hydrateRepositorySummaries, refreshRegionFeedback } from "./repository-refresh-client";
+import { refreshRegionFeedback } from "./repository-refresh-client";
 import { usePreparationTask } from "./use-preparation-task";
 import { useWorkspaceSummaries } from "./use-workspace-summaries";
 import { useRepositoryRefresh } from "./use-repository-refresh";
 import { clientDiagnostic } from "../shared/client-diagnostics";
-import { observationQueryOptions } from '../shared/observation-policy.ts';
+import { observationQueryOptions } from './observation-content.ts';
 import { useObservationRefresh } from "./use-observation-refresh";
 import { useObservationVersions, refreshObservations } from "./use-observation-versions";
 import {
@@ -39,8 +45,7 @@ import {
   DEFAULT_OBSERVATION_TIMING,
   observationTimingFromWire,
 } from "../shared/observation-timing";
-import { workspaceLifecycle, type WorkspaceLifecycleResponse } from "../shared/workspace-lifecycle";
-import { isMainWorkspace,isRecoverableObserverFailure,makeStyles,mergeDetailResponse,queryErrorMessage,queryFailureForDisplay,resultOf,TabButton,workspaceIdFromProps } from "./components/ui";
+import { isMainWorkspace,isRecoverableObserverFailure,makeStyles,queryErrorMessage,queryFailureForDisplay,resultOf,TabButton,workspaceIdFromProps } from "./components/ui";
 import { openFileReview } from "./file-review-store";
 import {
 defaultTreeMode,
@@ -76,67 +81,7 @@ type ObserverPanelContentProps = PanelProps & {
   paseoWorkspace: { directory: string; name: string } | null;
 };
 type ChangeTreeMode = "tree" | "files";
-type MainRepositorySelection = {
-  revision: number;
-  sourceRoot: string;
-  scan?: { incomplete: boolean; reason?: "directory_limit" | "entry_limit" | "time_limit" | "cancelled"; scannedDirectories: number };
-  repositories: Array<{ id: string; name: string; path: string; configured: boolean; exists: boolean; missing: boolean; selected: boolean }>;
-};
-type LinkedWorkspaceSelection = {
-  revision: number;
-  scan?: { incomplete: boolean };
-  repositories: Array<{ path: string; name: string; selected: boolean; missing?: boolean; links?: Array<{ path: string }> }>;
-};
-type OrphanPreview = {
-  id: string; treePath: string; eligible: boolean; fingerprint: string;
-  repositories: Array<{ id: string; repoPath: string; sourcePath: string; configured?: boolean; worktreePath: string; head: string; branch: string | null; dirty: boolean; dirtyPaths: string[] }>;
-  issues: Array<{ code: string; message: string; path?: string }>;
-  warnings?: Array<{ code: string; message: string; path?: string }>;
-  plannedBranches?: Record<string, string>;
-  resume?: boolean;
-};
-
 const noSectionDragState = () => {};
-
-function nonEmptyLines(value: string): string[] {
-  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-}
-
-function referenceKind(path: string): "file" | "document" | "prototype" | "image" | "pdf" {
-  const lower = path.toLowerCase();
-  if (/\.(png|jpe?g|webp|gif)$/.test(lower)) return "image";
-  if (lower.endsWith(".pdf")) return "pdf";
-  if (/\.(md|markdown|txt|json|html?)$/.test(lower)) return "document";
-  return "file";
-}
-
-function reviewPacketFromEditor(input: { understanding: string; plan: string; acceptance: string; references: string; instructions: string }): ReviewPacket {
-  const acceptanceCriteria = nonEmptyLines(input.acceptance).map((text, index) => ({ id: `AC-${index + 1}`, text, required: true }));
-  const references = nonEmptyLines(input.references).map((value, index) => {
-    if (value.startsWith("asset:")) {
-      const assetId = value.slice("asset:".length).trim();
-      return { id: `REF-${index + 1}`, kind: "image" as const, title: assetId || `Asset ${index + 1}`, assetId, required: true };
-    }
-    const separator = value.indexOf(":");
-    const hasRepositoryPrefix = separator > 0 && !value.startsWith("./") && !value.startsWith("../") && !value.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(value);
-    const repositoryId = hasRepositoryPrefix ? value.slice(0, separator).trim() : undefined;
-    const path = hasRepositoryPrefix ? value.slice(separator + 1).trim() : value;
-    return { id: `REF-${index + 1}`, kind: referenceKind(path), title: path, required: true, ...(repositoryId ? { repositoryId } : {}), path };
-  }).filter((reference) => Boolean(reference.assetId || ("path" in reference && reference.path)));
-  return {
-    requirementUnderstanding: input.understanding.trim(),
-    plan: nonEmptyLines(input.plan),
-    acceptanceCriteria,
-    references,
-    instructions: input.instructions.trim(),
-  };
-}
-
-function appendAssetReference(current: string, assetId: string): string {
-  const line = `asset:${assetId}`;
-  if (nonEmptyLines(current).some((value) => value === line)) return current;
-  return current.trim() ? `${current.trim()}\n${line}` : line;
-}
 
 function comparablePath(value: string): string {
   const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "") || "/";
@@ -318,26 +263,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const [storageMenuOpen, setStorageMenuOpen] = useState(false);
   const [runtimeSettingsOpen, setRuntimeSettingsOpen] = useState(false);
-  const [reviewSettingsOpen, setReviewSettingsOpen] = useState(false);
-  const [reviewSettingsScope, setReviewSettingsScope] = useState<"project" | "global">("project");
-  const [reviewMode, setReviewMode] = useState<"off" | "manual" | "automatic">("off");
-  const [autoFix, setAutoFix] = useState(false);
-  const [maxRounds, setMaxRounds] = useState("3");
-  const [reviewerTimeoutMinutes, setReviewerTimeoutMinutes] = useState("15");
-  const [repairTimeoutMinutes, setRepairTimeoutMinutes] = useState("30");
-  const [reviewerRole, setReviewerRole] = useState("");
-  const [reviewInstructions, setReviewInstructions] = useState("");
-  const [reviewerSession, setReviewerSession] = useState<"reuse" | "new_per_round">("reuse");
-  const [reviewerTarget, setReviewerTarget] = useState<"coordinator" | "independent">("independent");
-  const [executionModel, setExecutionModel] = useState("");
-  const [reviewerModel, setReviewerModel] = useState("");
-  const reviewDirtyFields = useRef(new Set<string>());
-  const sessionDirtyFields = useRef(new Set<string>());
-  const [sessionDefaultRelationship, setSessionDefaultRelationship] = useState<AgentRelationship>("independent");
-  const [sessionPermissionMode, setSessionPermissionMode] = useState<AgentPermissionMode>("inherit");
-  const [sessionProviderRelationships, setSessionProviderRelationships] = useState<Record<string, AgentRelationship>>({});
-  const markReviewField = useCallback((field: string) => { reviewDirtyFields.current.add(field); }, []);
-  const markSessionField = useCallback((field: string) => { sessionDirtyFields.current.add(field); }, []);
   const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setStorageMenuOpen(false); setRuntimeSettingsOpen(false); setLayoutMenuOpen(true); }, []);
   const openStorageMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setRuntimeSettingsOpen(false); setStorageMenuOpen(true); }, []);
   const openRuntimeSettings = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setStorageMenuOpen(false); setReviewSettingsOpen(false); setRuntimeSettingsOpen(true); }, []);
@@ -431,12 +356,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     [backendQuery.data?.timing],
   );
 
-  const rawBindingRpc = useRpc(workspaceBindingQuery);
-  const bindingRpc = (input: Parameters<typeof rawBindingRpc>[0]) => rawBindingRpc({ ...input, projectConfig });
-  const rawDelegateRpc = useRpc(workspaceDelegate);
-  const delegateRpc = (input: Parameters<typeof rawDelegateRpc>[0]) => rawDelegateRpc({ ...input, projectConfig });
-  const artifactListRpc = useRpc(artifactList);
-  const lifecycleRpc = useRpc(workspaceLifecycle);
   const toast = useToast();
   const selectedWorkspaceId = preferences.selectedWorkspaceId;
   const [selectionResolved, setSelectionResolved] = useState(false);
@@ -464,41 +383,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [repositoryDetailsOpen, setRepositoryDetailsOpen] = useState(false);
   const [reviewIds, setReviewIds] = useState<string[]>([]);
   const [targetOverrides, setTargetOverrides] = useState<Record<string, string>>({});
-  const [handoffGoal, setHandoffGoal] = useState("");
-  const [handoffRelationship, setHandoffRelationship] = useState<"default" | AgentRelationship>("default");
-  const [handoffPacketOpen, setHandoffPacketOpen] = useState(false);
-  const [handoffPreviewOpen, setHandoffPreviewOpen] = useState(false);
-  const previewHandoffRpc = useRpc(workspaceHandoffPreview);
-  const handoffPreviewEpoch = useRef(0);
-  const [materialPreview, setMaterialPreview] = useState<{ ok: boolean; signature: string; materials?: { ready: boolean; sourceCount: number; blockers: string[]; warnings: string[]; conversation: { state: string } } | null } | null>(null);
-  const [handoffUnderstanding, setHandoffUnderstanding] = useState("");
-  const [handoffPlan, setHandoffPlan] = useState("");
-  const [handoffAcceptance, setHandoffAcceptance] = useState("");
-  const [handoffReferences, setHandoffReferences] = useState("");
-  const [handoffReviewInstructions, setHandoffReviewInstructions] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const [workerStartMode, setWorkerStartMode] = useState<"adaptive" | "plan-first">("adaptive");
   const [addRepositoriesOpen, setAddRepositoriesOpen] = useState(false);
-  const [mainRepositoriesOpen, setMainRepositoriesOpen] = useState(false);
-  const [mainRepositoryFilter, setMainRepositoryFilter] = useState("");
-  const [mainRepositoryDraft, setMainRepositoryDraft] = useState<string[]>([]);
-  const [savingMainRepositories, setSavingMainRepositories] = useState(false);
-  const [linkedWorkspacesOpen, setLinkedWorkspacesOpen] = useState(false);
-  const [linkedWorkspaceFilter, setLinkedWorkspaceFilter] = useState("");
-  const [linkedWorkspaceDraft, setLinkedWorkspaceDraft] = useState<string[]>([]);
-  const [savingLinkedWorkspaces, setSavingLinkedWorkspaces] = useState(false);
-  const [orphanId, setOrphanId] = useState("");
-  const [orphanBranches, setOrphanBranches] = useState<Record<string, string>>({});
-  const [adoptingOrphan, setAdoptingOrphan] = useState(false);
-  const [orphanError, setOrphanError] = useState("");
   const newlyCreatedWorkspace = useRef<string | null>(null);
-  const [delegating, setDelegating] = useState(false);
-  const [lifecycleWorkspaceId, setLifecycleWorkspaceId] = useState("");
-  const [lifecycleWorkspace, setLifecycleWorkspace] = useState<WorkspaceSummary | null>(null);
-  const [lifecycleMode, setLifecycleMode] = useState<"inspect" | "permanent">("inspect");
-  const [lifecycleResponse, setLifecycleResponse] = useState<WorkspaceLifecycleResponse | null>(null);
-  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
-  const [lifecycleBusyWorkspaceId, setLifecycleBusyWorkspaceId] = useState("");
+
 
 
   useEffect(() => { setSelectionResolved(false); }, [preferenceScopeKey]);
@@ -507,16 +395,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     setSelectedCommit("");
     setSelectedFile("");
     setReviewSessionId("");
-    setHandoffGoal("");
-    setHandoffRelationship("default");
-    setHandoffPacketOpen(false);
-    setHandoffPreviewOpen(false);
-    handoffPreviewEpoch.current++; setMaterialPreview(null);
-    setHandoffUnderstanding("");
-    setHandoffPlan("");
-    setHandoffAcceptance("");
-    setHandoffReferences("");
-    setHandoffReviewInstructions("");
     scopeRepositoryIdentity.current = "";
   }, [preferenceScopeKey, selectedWorkspaceId]);
 
@@ -533,13 +411,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const listFailure = !listResult && listState.failed ? localizedCopy.workspaceListUnavailable : queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
   reportNativeDiagnostic("project-panel-list-state", {projectConfig,...queryDiagnosticDetails(listQuery.data, listQuery.error, listQuery, listState)});
   const listReady = Boolean(listResult);
-  const orphanPreviewQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "orphan-preview", orphanId],
-    queryFn: () => rpc({ method: "workspace.orphan.preview", params: { workspaceId: orphanId } }),
-    enabled: Boolean(projectConfig && backendReady && orphanId), retry: false, staleTime: 0, refetchOnWindowFocus: false,
-  });
-  const orphanPreview = resultOf<OrphanPreview>(orphanPreviewQuery.data);
-  useEffect(() => { setOrphanBranches(orphanPreview?.plannedBranches || {}); setOrphanError(""); }, [orphanId, orphanPreview?.fingerprint]);
+  const {mainRepositoriesOpen, setMainRepositoriesOpen, mainRepositoryFilter, setMainRepositoryFilter, mainRepositoryDraft, setMainRepositoryDraft, savingMainRepositories, linkedWorkspacesOpen, setLinkedWorkspacesOpen, linkedWorkspaceFilter, setLinkedWorkspaceFilter, linkedWorkspaceDraft, setLinkedWorkspaceDraft, savingLinkedWorkspaces, orphanId, setOrphanId, orphanBranches, setOrphanBranches, adoptingOrphan, orphanError, orphanPreviewQuery, orphanPreview, mainRepositoriesQuery, mainRepositories, linkedWorkspacesQuery, linkedWorkspaces, saveMainRepositories, saveLinkedWorkspaces, adoptSelectedOrphan}=useWorkspaceCatalog({projectConfig,backendReady,rpc,localizedCopy,refreshArea,onAdopted:id=>{newlyCreatedWorkspace.current=id;selectWorkspace(id);}});
   const observationVersionsEnabled = backendReady && foreground;
   const observationIssue = useObservationVersions(projectConfig, tab === "review" ? [selectedWorkspaceId, ...reviewIds] : [selectedWorkspaceId], observationVersionsEnabled);
 
@@ -554,26 +426,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     () => observedWorkspaces.filter((workspace) => workspace.state !== "removed"),
     [observedWorkspaces],
   );
-  const mainRepositoriesQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "main-repositories"],
-    queryFn: () => rpc({ method: "main.repositories.list", params: {} }),
-    enabled: Boolean(projectConfig && backendReady && mainRepositoriesOpen),
-    retry: false,
-    staleTime: 0,
-  });
-  const mainRepositories = resultOf<MainRepositorySelection>(mainRepositoriesQuery.data);
-  useEffect(() => {
-    if (mainRepositories) setMainRepositoryDraft(mainRepositories.repositories.filter(repo => repo.selected).map(repo => repo.path));
-  }, [mainRepositories?.revision]);
-  const linkedWorkspacesQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "linked-workspaces"],
-    queryFn: () => rpc({ method: "linked.workspaces.list", params: {} }),
-    enabled: Boolean(projectConfig && backendReady && linkedWorkspacesOpen), retry: false, staleTime: 0,
-  });
-  const linkedWorkspaces = resultOf<LinkedWorkspaceSelection>(linkedWorkspacesQuery.data);
-  useEffect(() => {
-    if (linkedWorkspaces) setLinkedWorkspaceDraft(linkedWorkspaces.repositories.filter(item => item.selected).map(item => item.path));
-  }, [linkedWorkspaces?.revision]);
   const historyWorkspaces = useMemo(
     () => observedWorkspaces.filter((workspace) => workspace.state === "removed"),
     [observedWorkspaces],
@@ -675,51 +527,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [selectedWorkspace?.kind, tab, reviewTab]);
   const selectedWorkspaceUnavailable = selectedWorkspace?.state === "create_failed" || selectedWorkspace?.state === "record_invalid";
   const selectedWorkspaceBlocksTasks = selectedWorkspaceUnavailable || selectedWorkspace?.state === "deletion_pending" || selectedWorkspace?.state === "removed";
-  const agentId = "agentId" in props ? props.agentId : undefined;
-  const parentAgentId = agentId || null;
-  const rawAgentContextRpc = useRpc(agentContextQuery);
-  const agentContextRpc = (input: Parameters<typeof rawAgentContextRpc>[0]) => rawAgentContextRpc(input);
-  const agentContextQueryState = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "agent-context", parentAgentId],
-    queryFn: () => agentContextRpc({ projectConfig, agentId: parentAgentId! }),
-    enabled: foreground && Boolean(parentAgentId && listReady),
-    refetchInterval: foreground ? 60_000 : false,
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: false,
-    retry: false,
-    staleTime: 5_000,
-  });
-  const agentContext = agentContextQueryState.data as AgentContextResponse | undefined;
-  const agentContextAvailable = Boolean(agentContext?.ok && agentContext.available);
-  const agentContextState: "ready" | "loading" | "unavailable" | "missing" = !parentAgentId
-    ? "missing"
-    : agentContextQueryState.isPending
-      ? "loading"
-      : agentContextAvailable
-        ? "ready"
-        : "unavailable";
-  const bindingQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "execution-binding", selectedWorkspaceId],
-    queryFn: () => bindingRpc({ workspaceId: selectedWorkspaceId }),
-    enabled: foreground && Boolean(selectedWorkspaceId && listReady && !selectedWorkspaceIsMain && listResult?.capabilities?.agent),
-    refetchInterval: foreground ? 60_000 : false,
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: false,
-    retry: false,
-    staleTime: 1_000,
-  });
-  const binding = (bindingQuery.data?.binding || null) as WorkspaceBindingResponse["binding"];
-  const savedHandoff = bindingQuery.data?.handoff || null;
-  const artifactListQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "handoff-artifacts"],
-    queryFn: () => artifactListRpc({ projectConfig }),
-    enabled: Boolean(projectConfig && handoffPacketOpen),
-    refetchOnWindowFocus: false,
-    retry: false,
-    staleTime: 5_000,
-  });
-  const boundAgent = (bindingQuery.data?.agent || null) as WorkspaceBindingResponse["agent"];
-  const bindingFailure = bindingQuery.data?.error?.message || queryErrorMessage(bindingQuery.error, localizedCopy);
+  const agentId="agentId" in props ? props.agentId:undefined;
+  const {handoffGoal, setHandoffGoal, handoffRelationship, setHandoffRelationship, handoffPacketOpen, setHandoffPacketOpen, handoffPreviewOpen, setHandoffPreviewOpen, materialPreview, handoffUnderstanding, setHandoffUnderstanding, handoffPlan, setHandoffPlan, handoffAcceptance, setHandoffAcceptance, handoffReferences, setHandoffReferences, handoffReviewInstructions, setHandoffReviewInstructions, workerStartMode, setWorkerStartMode, delegating, parentAgentId, agentContextAvailable, agentContextState, bindingQuery, binding, boundAgent, bindingFailure, draftHandoff, draftPacket, handoffAssetOptions, delegateSelectedWorkspace, submitSelectedWorkspace}=useWorkspaceHandoff({projectConfig,selectedWorkspaceId,foreground,listReady,selectedWorkspaceIsMain,selectedWorkspaceBlocksTasks,agentCapability:!!listResult?.capabilities?.agent,agentId,locale,localizedCopy});
   const identifyQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "identify", workspaceDirectory],
     queryFn: () => rpc({ method: "workspace.identify", params: { directory: workspaceDirectory } }),
@@ -793,7 +602,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   });
   const detailState = useLastSuccessfulResponse(`workspace-detail:${projectConfig}:${selectedWorkspaceId}`, detailQuery.data, {
     error: detailQuery.error,
-    mergePartial: mergeDetailResponse,
     staleAfterMs: observationTiming.staleWindowsMs.detail,
   });
   const detail = resultOf<DetailResult>(detailState.response);
@@ -816,28 +624,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const selectorWorkspace = selectedWorkspace && displayDetail
     ? { ...selectedWorkspace, ...displayDetail.workspace }
     : selectedWorkspace;
-  const saveMainRepositories = useCallback(async () => {
-    if (!mainRepositories || savingMainRepositories) return;
-    setSavingMainRepositories(true);
-    try {
-      const response = await rpc({ method: "main.repositories.save", params: { revision: mainRepositories.revision, repositories: mainRepositoryDraft } });
-      if (!response.ok) throw new Error(response.error?.message || localizedCopy.mainRepositorySaveFailed);
-      await Promise.allSettled([refreshArea("workspace-list"), refreshArea("workspace-detail"), mainRepositoriesQuery.refetch()]);
-      setMainRepositoriesOpen(false);
-    } catch (error) { toast.error(error instanceof Error ? error.message : localizedCopy.mainRepositorySaveFailed); }
-    finally { setSavingMainRepositories(false); }
-  }, [detailQuery.refetch, listQuery.refetch, localizedCopy.mainRepositorySaveFailed, mainRepositories, mainRepositoriesQuery.refetch, mainRepositoryDraft, rpc, savingMainRepositories, toast]);
-  const saveLinkedWorkspaces = useCallback(async () => {
-    if (!linkedWorkspaces || savingLinkedWorkspaces) return;
-    setSavingLinkedWorkspaces(true);
-    try {
-      const response = await rpc({ method: "linked.workspaces.save", params: { revision: linkedWorkspaces.revision, repositories: linkedWorkspaceDraft } });
-      if (!response.ok) throw new Error(response.error?.message || localizedCopy.linkedWorkspaceSaveFailed);
-      await Promise.allSettled([refreshArea("workspace-list"), linkedWorkspacesQuery.refetch()]);
-      setLinkedWorkspacesOpen(false);
-    } catch (error) { toast.error(error instanceof Error ? error.message : localizedCopy.linkedWorkspaceSaveFailed); }
-    finally { setSavingLinkedWorkspaces(false); }
-  }, [linkedWorkspaces, savingLinkedWorkspaces, linkedWorkspaceDraft, rpc, localizedCopy.linkedWorkspaceSaveFailed, listQuery.refetch, linkedWorkspacesQuery.refetch, toast]);
   const selectedRepository = displayDetail?.workspace.id === selectedWorkspaceId
     ? displayDetail.repositories.find((repository) => repository.repoPath === selectedRepoPath)
     : undefined;
@@ -946,203 +732,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const reviewState = useLastSuccessfulResponse(`review:${projectConfig}:${reviewIds.join("|")}:${JSON.stringify(targetOverrides)}`, reviewQuery.data, { error: reviewQuery.error, staleAfterMs: observationTiming.staleWindowsMs.review });
   const review = resultOf<ReviewResult>(reviewState.response);
   const reviewFailure = queryFailureForDisplay(reviewState, reviewQuery.data, reviewQuery.error, localizedCopy);
-  const reviewSessionRpc = useRpc(reviewSessionQuery);
-  const reviewSessionListRpc = useRpc(reviewSessionList);
-  const reviewStartRpc = useRpc(reviewSessionStart);
-  const reviewControlRpc = useRpc(reviewSessionControl);
-  const reviewSettingsGetRpc = useRpc(reviewSettingsGet);
-  const reviewSettingsUpdateRpc = useRpc(reviewSettingsUpdate);
-  const reviewModelsRpc = useRpc(reviewModels);
-  const agentSessionSettingsGetRpc = useRpc(agentSessionSettingsGet);
-  const agentSessionSettingsUpdateRpc = useRpc(agentSessionSettingsUpdate);
-  const agentSessionProvidersRpc = useRpc(agentSessionProviders);
-  const agentReviewQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "agent-review", selectedWorkspaceId, reviewSessionId],
-    queryFn: () => reviewSessionRpc({ projectConfig, workspaceId: selectedWorkspaceId, ...(reviewSessionId ? { sessionId: reviewSessionId } : {}) }),
-    enabled: foreground && Boolean(selectedWorkspaceId && backendReady && listReady), refetchInterval: false, refetchOnWindowFocus: false, retry: false,
-  });
-  const agentReviewHistoryQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "agent-review-history", selectedWorkspaceId],
-    queryFn: () => reviewSessionListRpc({ projectConfig, workspaceId: selectedWorkspaceId }),
-    enabled: foreground && Boolean(selectedWorkspaceId && backendReady && listReady), refetchInterval: false, refetchOnWindowFocus: false, retry: false,
-  });
-  const reviewSettingsQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "agent-review-settings"],
-    queryFn: () => reviewSettingsGetRpc({ projectConfig }),
-    enabled: Boolean(projectConfig), refetchOnWindowFocus: false, retry: false,
-  });
-  const agentSessionSettingsQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "agent-session-settings"],
-    queryFn: () => agentSessionSettingsGetRpc({ projectConfig }),
-    enabled: Boolean(projectConfig), refetchOnWindowFocus: false, retry: false,
-  });
-  const agentSessionProvidersQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "agent-session-providers"],
-    queryFn: () => agentSessionProvidersRpc({ projectConfig }),
-    enabled: Boolean(projectConfig), staleTime: 5 * 60_000, refetchOnWindowFocus: false, retry: false,
-  });
-  const reviewModelsQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "agent-review-models", selectedWorkspaceId],
-    queryFn: () => reviewModelsRpc({ projectConfig, workspaceId: selectedWorkspaceId }),
-    enabled: Boolean(foreground && reviewSettingsOpen && projectConfig && backendReady && selectedWorkspaceId && listReady), staleTime: 5 * 60_000, refetchOnWindowFocus: false, retry: false,
-  });
-  const agentReview = (agentReviewQuery.data?.session || null) as ReviewSession | null;
-  const reviewPreferences = reviewSettingsQuery.data?.effective;
-  const agentSessionPreferences = agentSessionSettingsQuery.data?.effective;
-  const syncReviewEditor = useCallback(() => {
-    if (reviewPreferences) {
-      reviewDirtyFields.current.clear();
-      setReviewMode(reviewPreferences.mode);
-      setAutoFix(reviewPreferences.autoFix);
-      setMaxRounds(String(reviewPreferences.maxRounds));
-      setReviewerTimeoutMinutes(String(Math.max(1, Math.round(reviewPreferences.reviewerTimeoutMs / 60_000))));
-      setRepairTimeoutMinutes(String(Math.max(1, Math.round(reviewPreferences.repairTimeoutMs / 60_000))));
-      const builtInRole = reviewPreferences.reviewerRole === "Code reviewer" || reviewPreferences.reviewerRole === "代码审核者";
-      const builtInInstructions = reviewPreferences.instructions === "Check requirement fit, correctness, regressions and tests; keep the implementation simple."
-        || reviewPreferences.instructions === "检查需求是否满足、实现是否正确、是否引入回归、测试是否充分；保持实现简单。";
-      setReviewerRole(builtInRole ? localizedCopy.reviewDefaultRole : reviewPreferences.reviewerRole);
-      setReviewInstructions(builtInInstructions ? localizedCopy.reviewDefaultInstructions : reviewPreferences.instructions);
-      setReviewerSession(reviewPreferences.reviewerSession);
-      setReviewerTarget(reviewPreferences.reviewerTarget);
-      setExecutionModel(reviewPreferences.executionModel || "");
-      setReviewerModel(reviewPreferences.reviewerModel || "");
-    }
-    if (agentSessionPreferences) {
-      sessionDirtyFields.current.clear();
-      const sessionPatch = reviewSettingsScope === "project"
-        ? agentSessionSettingsQuery.data?.project
-        : agentSessionSettingsQuery.data?.global;
-      setSessionDefaultRelationship(sessionPatch?.defaultRelationship || agentSessionPreferences.defaultRelationship);
-      setSessionPermissionMode(sessionPatch?.permissionMode || agentSessionPreferences.permissionMode);
-      setSessionProviderRelationships(sessionPatch?.providerRelationships || {});
-    }
-  }, [agentSessionPreferences, agentSessionSettingsQuery.data?.global, agentSessionSettingsQuery.data?.project, localizedCopy, reviewPreferences, reviewSettingsScope]);
-  useEffect(() => { syncReviewEditor(); }, [syncReviewEditor]);
-  const saveReviewSettings = useCallback(async () => {
-    try {
-      const dirty = reviewDirtyFields.current;
-      const shared: ReviewPreferencePatch = {};
-      if (dirty.has("mode")) shared.mode = reviewMode;
-      if (dirty.has("autoFix")) shared.autoFix = autoFix;
-      if (dirty.has("maxRounds")) shared.maxRounds = Number(maxRounds) || 3;
-      if (dirty.has("reviewerTimeoutMs")) shared.reviewerTimeoutMs = Math.max(1, Number(reviewerTimeoutMinutes) || 15) * 60_000;
-      if (dirty.has("repairTimeoutMs")) shared.repairTimeoutMs = Math.max(1, Number(repairTimeoutMinutes) || 30) * 60_000;
-      if (dirty.has("reviewerRole")) shared.reviewerRole = reviewerRole.trim() || localizedCopy.reviewDefaultRole;
-      if (dirty.has("instructions")) shared.instructions = reviewInstructions;
-      if (dirty.has("reviewerSession")) shared.reviewerSession = reviewerSession;
-      if (dirty.has("reviewerTarget")) shared.reviewerTarget = reviewerTarget;
-      const models: ReviewModelOverride = {};
-      const modelReset: string[] = [];
-      if (dirty.has("executionModel")) executionModel.trim() ? models.executionModel = executionModel.trim() : modelReset.push("executionModel");
-      if (dirty.has("reviewerModel")) reviewerModel.trim() ? models.reviewerModel = reviewerModel.trim() : modelReset.push("reviewerModel");
-      const sessionPatch: AgentSessionPatch = {};
-      if (sessionDirtyFields.current.has("defaultRelationship")) sessionPatch.defaultRelationship = sessionDefaultRelationship;
-      if (sessionDirtyFields.current.has("permissionMode")) sessionPatch.permissionMode = sessionPermissionMode;
-      if (sessionDirtyFields.current.has("providerRelationships")) sessionPatch.providerRelationships = sessionProviderRelationships;
-      if (reviewSettingsScope === "project") {
-        if (Object.keys(shared).length) await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: shared, resetFields: [] });
-        if (Object.keys(models).length || modelReset.length) await reviewSettingsUpdateRpc({ projectConfig, scope: "project-model", patch: models, resetFields: modelReset });
-      } else if (Object.keys(shared).length || Object.keys(models).length || modelReset.length) {
-        await reviewSettingsUpdateRpc({ projectConfig, scope: "global", patch: { ...shared, ...models }, resetFields: modelReset });
-      }
-      if (Object.keys(sessionPatch).length) await agentSessionSettingsUpdateRpc({ projectConfig, scope: reviewSettingsScope, patch: sessionPatch, resetFields: [] });
-      reviewDirtyFields.current.clear();
-      sessionDirtyFields.current.clear();
-      setReviewSettingsOpen(false);
-      await reviewSettingsQuery.refetch();
-      await agentSessionSettingsQuery.refetch();
-      await agentReviewQuery.refetch();
-    } catch (error) {
-      toast.error(localizedReviewError(error instanceof Error ? { code: error.message } : null, localizedCopy, localizedCopy.reviewSettingsSaveFailed));
-    }
-  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, autoFix, executionModel, localizedCopy, maxRounds, projectConfig, repairTimeoutMinutes, reviewInstructions, reviewerModel, reviewerRole, reviewerSession, reviewerTarget, reviewerTimeoutMinutes, reviewMode, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, sessionDefaultRelationship, sessionPermissionMode, sessionProviderRelationships, toast]);
-  const closeReviewSettings = useCallback(() => {
-    syncReviewEditor();
-    setReviewSettingsOpen(false);
-  }, [syncReviewEditor]);
-  const openReviewSettings = useCallback(() => {
-    setLayoutMenuOpen(false);
-    setStorageMenuOpen(false);
-    setRuntimeSettingsOpen(false);
-    syncReviewEditor();
-    setReviewSettingsOpen(true);
-  }, [syncReviewEditor]);
-  const resetReviewField = useCallback((field: string) => {
-    const modelField = field === "executionModel" || field === "reviewerModel";
-    void reviewSettingsUpdateRpc({ projectConfig, scope: reviewSettingsScope === "global" ? "global" : modelField ? "project-model" : "project", patch: {}, resetFields: [field] }).then(() => {
-      reviewDirtyFields.current.clear();
-      return reviewSettingsQuery.refetch();
-    }).catch((error) => toast.error(localizedReviewError(error instanceof Error ? { code: error.message } : null, localizedCopy, localizedCopy.reviewSettingsSaveFailed)));
-  }, [localizedCopy, projectConfig, reviewSettingsQuery, reviewSettingsScope, reviewSettingsUpdateRpc, toast]);
-  const resetAllProjectReviewOverrides = useCallback(async () => {
-    try {
-      await reviewSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["mode", "autoFix", "maxRounds", "reviewerRole", "instructions", "reviewerSession", "reviewerTarget", "reviewerTimeoutMs", "repairTimeoutMs"] });
-      await reviewSettingsUpdateRpc({ projectConfig, scope: "project-model", patch: {}, resetFields: ["executionModel", "reviewerModel"] });
-      await agentSessionSettingsUpdateRpc({ projectConfig, scope: "project", patch: {}, resetFields: ["defaultRelationship", "permissionMode", "providerRelationships"] });
-      reviewDirtyFields.current.clear();
-      sessionDirtyFields.current.clear();
-      await reviewSettingsQuery.refetch();
-      await agentReviewQuery.refetch();
-      await agentSessionSettingsQuery.refetch();
-    } catch (error) {
-      toast.error(localizedReviewError(error instanceof Error ? { code: error.message } : null, localizedCopy, localizedCopy.reviewSettingsSaveFailed));
-    }
-  }, [agentReviewQuery, agentSessionSettingsQuery, agentSessionSettingsUpdateRpc, localizedCopy, projectConfig, reviewSettingsQuery, reviewSettingsUpdateRpc, toast]);
-  const reviewSources = reviewSettingsQuery.data?.sources || {};
-  const reviewProject = reviewSettingsQuery.data?.project || {};
-  const reviewGlobal = reviewSettingsQuery.data?.global || {};
-  const reviewProjectModels = reviewSettingsQuery.data?.models || {};
-  const sessionSources = agentSessionSettingsQuery.data?.sources;
-  const sessionProviders = useMemo(() => {
-    const values = new Set((agentSessionProvidersQuery.data?.providers || []).map((item) => item.provider));
-    const current = boundAgent?.provider?.split("/")[0];
-    if (current) values.add(current);
-    return [...values].sort();
-  }, [agentSessionProvidersQuery.data?.providers, boundAgent?.provider]);
-  const sourceLabel = (field: string) => {
-    const source = reviewSources[field];
-    return source === "project" || source === "project-model" ? localizedCopy.reviewSourceProject : source === "global" || source === "global-model" ? localizedCopy.reviewSourceGlobal : localizedCopy.reviewSourceDefault;
-  };
-  const hasReviewOverride = (field: string) => {
-    const source = reviewSettingsScope === "project"
-      ? field === "executionModel" || field === "reviewerModel" ? reviewProjectModels : reviewProject
-      : reviewGlobal;
-    return Object.prototype.hasOwnProperty.call(source, field);
-  };
-  const sessionSourceLabel = (field: string) => {
-    if (field === "defaultRelationship") {
-      const source = sessionSources?.defaultRelationship;
-      return source === "project" ? localizedCopy.reviewSourceProject : source === "global" ? localizedCopy.reviewSourceGlobal : localizedCopy.reviewSourceDefaultShort;
-    }
-    if (field === "permissionMode") {
-      const source = sessionSources?.permissionMode;
-      return source === "project" ? localizedCopy.reviewSourceProject : source === "global" ? localizedCopy.reviewSourceGlobal : localizedCopy.reviewSourceDefaultShort;
-    }
-    const source = sessionSources?.providerRelationships?.[field];
-    return source === "project" ? localizedCopy.reviewSourceProject : source === "global" ? localizedCopy.reviewSourceGlobal : localizedCopy.reviewSourceDefaultShort;
-  };
-  const sessionPermissionLabel = (mode: AgentPermissionMode) => mode === "inherit"
-    ? localizedCopy.agentSessionPermissionInherit
-    : mode === "auto"
-      ? localizedCopy.agentSessionPermissionAuto
-      : mode === "auto-review"
-        ? localizedCopy.agentSessionPermissionAutoReview
-        : localizedCopy.agentSessionPermissionFullAccess;
-  const startAgentReview = useCallback(() => {
-    if (!selectedWorkspaceId) return;
-    void reviewStartRpc({ projectConfig, workspaceId: selectedWorkspaceId, executionAgentId: selectedWorkspaceIsMain ? undefined : boundAgent?.id, locale, ...(selectedWorkspaceIsMain && mainReviewInstructions.trim() ? { instructions: mainReviewInstructions.trim() } : {}) }).then((result) => {
-      if (!result.ok) toast.error(localizedReviewError(result.error, localizedCopy));
-      else setReviewSessionId("");
-      return agentReviewQuery.refetch();
-    }).catch(() => toast.error(localizedCopy.reviewErrorGeneric));
-  }, [agentReviewQuery, boundAgent?.id, locale, localizedCopy, mainReviewInstructions, projectConfig, reviewStartRpc, selectedWorkspaceId, selectedWorkspaceIsMain, toast]);
-  const controlAgentReview = useCallback((action: "stop" | "resume" | "review" | "repair" | "independent") => {
-    if (!selectedWorkspaceId || !agentReview) return;
-    void reviewControlRpc({ projectConfig, workspaceId: selectedWorkspaceId, sessionId: agentReview.id, action }).then((result) => {
-      if (!result.ok) toast.error(localizedReviewError(result.error, localizedCopy));
-      return agentReviewQuery.refetch();
-    }).catch(() => toast.error(localizedCopy.reviewErrorGeneric));
-  }, [agentReview, agentReviewQuery, localizedCopy, projectConfig, reviewControlRpc, selectedWorkspaceId, toast]);
+  const onReviewStarted=useCallback(()=>setReviewSessionId(""),[]);
+  const {agentReviewQuery,agentReviewHistoryQuery,agentReview,startAgentReview,controlAgentReview}=useReviewSession({projectConfig,selectedWorkspaceId,reviewSessionId,foreground,backendReady,listReady,selectedWorkspaceIsMain,boundAgentId:boundAgent?.id,locale,mainReviewInstructions,localizedCopy,onStarted:onReviewStarted});
+  const closeSettingsPeers=useCallback(()=>{setLayoutMenuOpen(false);setStorageMenuOpen(false);setRuntimeSettingsOpen(false);},[]);
+  const {reviewSettingsOpen, setReviewSettingsOpen, reviewSettingsScope, setReviewSettingsScope, reviewMode, setReviewMode, autoFix, setAutoFix, maxRounds, setMaxRounds, reviewerTimeoutMinutes, setReviewerTimeoutMinutes, repairTimeoutMinutes, setRepairTimeoutMinutes, reviewerRole, setReviewerRole, reviewInstructions, setReviewInstructions, reviewerSession, setReviewerSession, reviewerTarget, setReviewerTarget, executionModel, setExecutionModel, reviewerModel, setReviewerModel, reviewDirtyFields, sessionDefaultRelationship, setSessionDefaultRelationship, sessionPermissionMode, setSessionPermissionMode, sessionProviderRelationships, setSessionProviderRelationships, markReviewField, markSessionField, reviewModelsQuery, saveReviewSettings, closeReviewSettings, openReviewSettings, resetReviewField, resetAllProjectReviewOverrides, sessionProviders, sourceLabel, hasReviewOverride, sessionSourceLabel, sessionPermissionLabel}=useWorkbenchSettings({projectConfig,selectedWorkspaceId,foreground,backendReady,listReady,localizedCopy,boundAgentProvider:boundAgent?.provider,refreshAgentReview:agentReviewQuery.refetch,closeOtherMenus:closeSettingsPeers});
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const observationAreas: ObservationArea[] = [
     { label: localizedCopy.observationAreaList, snapshot: listState, fetching: listQuery.isFetching },
@@ -1244,227 +837,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       ? theme.colors.statusWarning
       : theme.colors.foregroundMuted;
 
-  function buildSelectedHandoff(): Handoff | null {
-    const goal = handoffGoal.trim();
-    if (!selectedWorkspaceId || (!savedHandoff && !goal && !binding?.agentId)) return null;
-    if (savedHandoff) return savedHandoff;
-    return {
-      version: "workspace.workbench.handoff/v1",
-      goal: goal || localizedCopy.text_36cdf2a07a,
-      decisions: [],
-      inScope: [],
-      outOfScope: [],
-      steps: [],
-      acceptance: [],
-      constraints: [],
-      ambiguities: [],
-      reviewPacket: reviewPacketFromEditor({
-        understanding: handoffUnderstanding,
-        plan: handoffPlan,
-        acceptance: handoffAcceptance,
-        references: handoffReferences,
-        instructions: handoffReviewInstructions,
-      }),
-      startMode: workerStartMode,
-      reviewLocale: locale,
-      ...(handoffRelationship === "default" ? {} : { relationship: handoffRelationship }),
-      policy: { placementGuard: true },
-      expected: { branchByRepository: {}, baseByRepository: {} },
-    };
-  }
-
-  async function delegateSelectedWorkspace(): Promise<void> {
-    if (selectedWorkspaceBlocksTasks) {
-      toast.show(localizedCopy.workspaceDeleteQueued, { variant: "warning" });
-      return;
-    }
-    if (selectedWorkspaceIsMain) {
-      toast.show(localizedCopy.text_bb57803d41, { variant: "warning" });
-      return;
-    }
-    if (!selectedWorkspaceId || !parentAgentId) {
-      toast.show(localizedCopy.text_d7dd46e5e3, { variant: "warning" });
-      return;
-    }
-    if (!buildSelectedHandoff()) {
-      toast.show(localizedCopy.text_afa9beb681, { variant: "warning" });
-      return;
-    }
-    setHandoffPreviewOpen(true);
-    setMaterialPreview(null);
-    const epoch = ++handoffPreviewEpoch.current;
-    const handoff = buildSelectedHandoff()!;
-    try {
-      const response = await previewHandoffRpc({ projectConfig, workspaceId: selectedWorkspaceId, parentAgentId, handoff }) as Omit<NonNullable<typeof materialPreview>, "signature">;
-      if (epoch === handoffPreviewEpoch.current) setMaterialPreview({ ...response, signature: JSON.stringify(handoff) });
-    } catch { if (epoch === handoffPreviewEpoch.current) toast.error(localizedCopy.handoffMaterialsUnavailable); }
-  }
-
-  async function submitSelectedWorkspace(): Promise<void> {
-    const handoff = buildSelectedHandoff();
-    if (!handoff || !selectedWorkspaceId || !parentAgentId) return;
-    if (!materialPreview?.ok || materialPreview.materials?.ready === false || materialPreview.signature !== JSON.stringify(handoff)) return;
-    setDelegating(true);
-    try {
-      const result: WorkspaceDelegateResponse = await delegateRpc({
-        workspaceId: selectedWorkspaceId,
-        parentAgentId,
-        handoff,
-      });
-      if (result.ok) {
-        const actionLabel = result.action === "created"
-          ? localizedCopy.text_a2eb60ef6c
-          : result.action === "already-running"
-            ? localizedCopy.text_0561f1d18e
-            : result.action === "reused"
-              ? localizedCopy.text_050246dd54
-              : localizedCopy.text_962c002fa2;
-        toast.show(actionLabel, { variant: "success" });
-        setHandoffPreviewOpen(false);
-      } else {
-        toast.show(result.error ? localizedReviewError(result.error, localizedCopy) : localizedCopy.text_b4f57a0af8, { variant: result.action === "blocked" ? "warning" : "error" });
-      }
-      await bindingQuery.refetch().catch(() => undefined);
-    } catch (error) {
-      toast.show(error instanceof Error ? error.message : localizedCopy.text_341baadc12, { variant: "error" });
-    } finally {
-      setDelegating(false);
-    }
-  }
-
-  const closeLifecycle = useCallback(() => {
-    if (lifecycleBusyWorkspaceId) return;
-    setLifecycleWorkspaceId("");
-    setLifecycleWorkspace(null);
-    setLifecycleResponse(null);
-    setLifecycleError(null);
-  }, [lifecycleBusyWorkspaceId]);
-
-  const inspectWorkspaceLifecycle = useCallback((workspace: WorkspaceSummary, mode: "inspect" | "permanent" = "inspect") => {
-    setLifecycleWorkspace(workspace);
-    setLifecycleWorkspaceId(workspace.id);
-    setLifecycleMode(mode);
-    setLifecycleResponse(null);
-    setLifecycleError(null);
-    setLifecycleBusyWorkspaceId(workspace.id);
-    void lifecycleRpc({ projectConfig, workspaceId: workspace.id, action: "inspect" })
-      .then((result) => {
-        setLifecycleResponse(result);
-        if (!result.ok) setLifecycleError(result.error?.message || localizedCopy.workspaceDeleteUnavailable);
-      })
-      .catch((error) => setLifecycleError(error instanceof Error ? error.message : localizedCopy.workspaceDeleteUnavailable))
-      .finally(() => { setLifecycleBusyWorkspaceId(""); });
-  }, [lifecycleRpc, localizedCopy.workspaceDeleteUnavailable, projectConfig]);
-
-  const publishLifecycleResult = useCallback(async (result: WorkspaceLifecycleResponse) => {
-    if (!result.ok) return;
-    const key = ["workspace-workbench", projectConfig, "workspace-list"];
-    // A read started before the mutation must not republish the old roster.
-    await queryClient.cancelQueries({ queryKey: key, exact: true });
-    queryClient.setQueryData<ObserverResponse>(key, (previous) => {
-      const list = resultOf<ListResult>(previous);
-      if (!previous || !list) return previous;
-      const workspaces = result.action === "delete"
-        ? list.workspaces.filter((workspace) => workspace.id !== result.workspaceId)
-        : list.workspaces.map((workspace) => workspace.id === result.workspaceId && result.state
-          ? { ...workspace, state: result.state, ...(result.state === "active" || result.state === "removed" ? { deletion: undefined } : {}) }
-          : workspace);
-      return { ...previous, result: { ...list, workspaces } };
-    });
-    // Reconcile metadata separately; its availability does not undo a confirmed mutation.
-    void listQuery.refetch({ cancelRefetch: false }).catch(() => undefined);
-  }, [queryClient, projectConfig, listQuery.refetch]);
-
-  const removeWorkspace = useCallback(async (workspace: WorkspaceSummary): Promise<void> => {
-    setLifecycleWorkspace(workspace);
-    setLifecycleMode("inspect");
-    setLifecycleResponse(null);
-    setLifecycleBusyWorkspaceId(workspace.id);
-    setLifecycleError(null);
-    try {
-      const result = await lifecycleRpc({ projectConfig, workspaceId: workspace.id, action: "remove" });
-      setLifecycleResponse(result);
-      if (!result.ok) {
-        const message = result.error?.message || localizedCopy.workspaceDeleteFailed;
-        setLifecycleError(message);
-        setLifecycleWorkspaceId(workspace.id);
-        setLifecycleMode("inspect");
-        toast.error(message);
-        return;
-      }
-      await publishLifecycleResult(result);
-      if (result.pending) {
-        setLifecycleWorkspaceId(workspace.id);
-        setLifecycleMode("inspect");
-        toast.show(localizedCopy.workspaceDeleteQueued, { variant: "warning" });
-      } else {
-        if (selectedWorkspaceId === workspace.id) preferences.selectWorkspace("main");
-        setLifecycleWorkspaceId("");
-        toast.show(localizedCopy.workspaceDeleteSuccess, { variant: "success" });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : localizedCopy.workspaceDeleteFailed;
-      setLifecycleError(message);
-      setLifecycleWorkspaceId(workspace.id);
-      toast.error(message);
-    } finally {
-      setLifecycleBusyWorkspaceId("");
-    }
-  }, [lifecycleRpc, publishLifecycleResult, localizedCopy, preferences, projectConfig, selectedWorkspaceId, toast]);
-
-  const restoreWorkspace = useCallback(async (workspace: WorkspaceSummary): Promise<void> => {
-    setLifecycleWorkspace(workspace);
-    setLifecycleMode("inspect");
-    setLifecycleResponse(null);
-    setLifecycleError(null);
-    setLifecycleBusyWorkspaceId(workspace.id);
-    try {
-      const result = await lifecycleRpc({ projectConfig, workspaceId: workspace.id, action: "restore" });
-      if (!result.ok) {
-        const message = result.error?.message || localizedCopy.workspaceDeleteFailed;
-        setLifecycleError(message);
-        setLifecycleWorkspaceId(workspace.id);
-        toast.error(message);
-        return;
-      }
-      await publishLifecycleResult(result);
-      setLifecycleWorkspaceId("");
-      toast.show(localizedCopy.workspaceRestoreSuccess, { variant: "success" });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : localizedCopy.workspaceDeleteFailed;
-      setLifecycleError(message);
-      setLifecycleWorkspaceId(workspace.id);
-      toast.error(message);
-    } finally {
-      setLifecycleBusyWorkspaceId("");
-    }
-  }, [lifecycleRpc, publishLifecycleResult, localizedCopy, projectConfig, toast]);
-
-  const permanentDeleteWorkspace = useCallback(async (confirmDataLoss: boolean): Promise<void> => {
-    if (!lifecycleWorkspaceId) return;
-    setLifecycleBusyWorkspaceId(lifecycleWorkspaceId);
-    setLifecycleError(null);
-    try {
-      const result = await lifecycleRpc({ projectConfig, workspaceId: lifecycleWorkspaceId, action: "delete", confirm: true, confirmDataLoss });
-      setLifecycleResponse(result);
-      if (!result.ok) {
-        const message = result.error?.message || localizedCopy.workspaceDeleteFailed;
-        setLifecycleError(message);
-        toast.error(message);
-        return;
-      }
-      await publishLifecycleResult(result);
-      if (selectedWorkspaceId === lifecycleWorkspaceId) preferences.selectWorkspace("main");
-      setLifecycleWorkspaceId("");
-      toast.show(localizedCopy.workspacePermanentDeleteSuccess, { variant: "success" });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : localizedCopy.workspaceDeleteFailed;
-      setLifecycleError(message);
-      toast.error(message);
-    } finally {
-      setLifecycleBusyWorkspaceId("");
-    }
-  }, [lifecycleRpc, lifecycleWorkspaceId, publishLifecycleResult, localizedCopy, preferences, projectConfig, selectedWorkspaceId, toast]);
+  const {lifecycleWorkspaceId,lifecycleWorkspace,lifecycleMode,lifecycleResponse,lifecycleError,lifecycleBusyWorkspaceIds,
+    closeLifecycle,inspectWorkspaceLifecycle,removeWorkspace,restoreWorkspace,permanentDeleteWorkspace} =
+    useWorkspaceActions(projectConfig,selectedWorkspaceId,preferences.selectWorkspace,() => listQuery.refetch({cancelRefetch:false}),localizedCopy);
 
   const openWorkspaceTask = useCallback((task: WorkspaceTask) => {
     if (task.kind === "agent" && task.id && props.navigation) {
@@ -1580,28 +955,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const expandAll = useCallback(() => { animateSectionLayout(); preferences.setAllSectionsCollapsed(false); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.setAllSectionsCollapsed]);
   const resetLayout = useCallback(() => { animateSectionLayout(); preferences.resetLayout(); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.resetLayout]);
   const BodyContainer = tab === "review" || allocation.outerScroll ? ScrollView : View;
-  const draftHandoff = buildSelectedHandoff();
-  const adoptSelectedOrphan = async () => {
-    if (!orphanPreview?.eligible || adoptingOrphan) return;
-    setAdoptingOrphan(true); setOrphanError("");
-    try {
-      const response = await rpc({ method: "workspace.orphan.adopt", params: {
-        workspaceId: orphanPreview.id, fingerprint: orphanPreview.fingerprint, branches: orphanBranches,
-      } });
-      if (!response.ok) throw new Error(response.error?.message || localizedCopy.orphanCannotAdopt);
-      const adoptedId = orphanPreview.id;
-      await refreshArea("workspace-list");
-      newlyCreatedWorkspace.current = adoptedId;
-      selectWorkspace(adoptedId);
-      setOrphanId("");
-    } catch (error) { setOrphanError(error instanceof Error ? error.message : String(error)); }
-    finally { setAdoptingOrphan(false); }
-  };
-  const draftPacket = draftHandoff?.reviewPacket || null;
-  const handoffAssetOptions = useMemo(
-    () => (artifactListQuery.data?.artifacts || []).filter((artifact) => artifact.kind === "image" || artifact.mimeType.startsWith("image/")),
-    [artifactListQuery.data?.artifacts],
-  );
   return (
     <View
       ref={activity.ref}
@@ -1764,7 +1117,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         onRestoreWorkspace={listResult?.capabilities?.restore ? (workspace) => { cancelWorkspaceActivityScan(false); void restoreWorkspace(workspace); } : undefined}
         onPermanentDeleteWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { cancelWorkspaceActivityScan(); inspectWorkspaceLifecycle(workspace, "permanent"); } : undefined}
         onInspectWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { cancelWorkspaceActivityScan(); inspectWorkspaceLifecycle(workspace); } : undefined}
-        lifecycleBusyWorkspaceId={lifecycleBusyWorkspaceId}
+        lifecycleBusyWorkspaceIds={lifecycleBusyWorkspaceIds}
         theme={theme}
         styles={styles}
       />
@@ -1934,7 +1287,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         workspace={observedWorkspaces.find((workspace) => workspace.id === lifecycleWorkspaceId) || (lifecycleWorkspace?.id === lifecycleWorkspaceId ? lifecycleWorkspace : undefined)}
         mode={lifecycleMode}
         response={lifecycleResponse}
-        busy={Boolean(lifecycleBusyWorkspaceId)}
+        busy={lifecycleBusyWorkspaceIds.includes(lifecycleWorkspaceId)}
         error={lifecycleError}
         onClose={closeLifecycle}
         onRemove={() => {

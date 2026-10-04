@@ -2,7 +2,7 @@ import { uncertainControlFailure } from "../shared/task-state.ts";
 import { useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ObserverResponse } from '../shared/observer.ts';
-import { observationQueryOptions } from '../shared/observation-policy.ts';
+import { observationQueryOptions } from './observation-content.ts';
 type Rpc = (input: any) => Promise<ObserverResponse>;
 export function usePreparationTask(project: string, workspaceId: string, enabled: boolean, rpc: Rpc) {
     const client = useQueryClient();

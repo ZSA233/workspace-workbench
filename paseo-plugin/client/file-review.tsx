@@ -2,7 +2,7 @@ import { clientDiagnostic } from "../shared/client-diagnostics.ts";
 import { createDiffReadClient, type DiffRpc } from "./diff-read-client.ts";
 import { DIFF_READ_PROTOCOL, DIFF_READ_BUILD } from "../shared/diff-read.ts";
 import { observationMeta } from "./observation-coordinator.ts";
-import { observationQueryOptions } from '../shared/observation-policy.ts';
+import { observationQueryOptions } from './observation-content.ts';
 import { useObservationVersions, observationRefreshDiagnostics } from "./use-observation-versions";
 import { usePanelForeground } from "./foreground-activity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

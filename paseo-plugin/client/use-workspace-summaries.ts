@@ -1,8 +1,9 @@
+import { publishRefresh, publishSummaryFailure } from './observation-publication.ts';
 import { useRepositoryRefresh } from "./use-repository-refresh";
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
-import { observationQueryOptions } from '../shared/observation-policy.ts';
-import { createRepositoryRefreshClient, publishRefresh, repositoryQueryKeys, type RefreshInput, type RefreshRpc } from './repository-refresh-client.ts';
+import { observationQueryOptions } from './observation-content.ts';
+import { createRepositoryRefreshClient, repositoryQueryKeys, type RefreshInput, type RefreshRpc } from './repository-refresh-client.ts';
 /** All roster members subscribe independently; the existing coordinator polls tasks. */
 export function useWorkspaceSummaries(project: string, workspaceId: string, paths: string[], selected: string, enabled: boolean, rpc: RefreshRpc, content: {
     historyMode: string;
@@ -24,12 +25,8 @@ export function useWorkspaceSummaries(project: string, workspaceId: string, path
             if (query.data?.result)
                 publishRefresh(client, project, inputs[index], query.data.result as any);
             const error = query.data?.error || (query.data?.result as any)?.regions?.summary?.error;
-            if (error)
-                client.setQueryData<any>(['workspace-workbench', project, 'workspace-detail', workspaceId], (old: any) => {
-                    if (!old?.ok)
-                        return old;
-                    return { ...old, result: { ...old.result, repositories: old.result.repositories.map((repo: any) => repo.repoPath !== inputs[index].repoPath ? repo : { ...repo, observationPending: false, observationStale: true, issues: [...(repo.issues || []).filter((v: any) => v.source !== 'basic-observation'), { ...error, source: 'basic-observation' }] }) } };
-                });
+            if (error) publishSummaryFailure(client,project,inputs[index],query.data,error);
+
         });
     }, [identity, JSON.stringify(queries.map(query => [query.dataUpdatedAt, query.errorUpdatedAt]))]);
     useEffect(() => {

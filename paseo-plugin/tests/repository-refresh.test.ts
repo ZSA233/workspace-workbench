@@ -1,3 +1,4 @@
+import { publishRefresh } from '../client/observation-publication.ts';
 import { WorkbenchError } from '../server/backend/storage.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,7 +10,7 @@ import { Service } from '../server/backend/service.ts';
 import { loadConfig } from '../server/backend/config.ts';
 import { Git } from '../server/backend/git.ts';
 import { QueryClient } from '@tanstack/react-query';
-import { createRepositoryRefreshClient, publishRefresh, repositoryQueryKeys } from '../client/repository-refresh-client.ts';
+import { createRepositoryRefreshClient, repositoryQueryKeys } from '../client/repository-refresh-client.ts';
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 const git = (p: string, ...args: string[]) => execFileSync('git', ['-C', p, ...args], { encoding: 'utf8' }).trim();
 function fixture() {
@@ -245,7 +246,7 @@ test('an older summary repairs placeholders from the newest cached leaf, never i
 });
 
 test('a partial follow-up keeps the known dirty state and late rosters hydrate from leaf data', async () => {
-  const {hydrateRepositorySummaries}=await import('../client/repository-refresh-client.ts');
+  const {hydrateRepositorySummaries}=await import('../client/observation-publication.ts');
   const client=new QueryClient(),input={workspaceId:'w',repoPath:'one',scope:'working',historyMode:'branch',maxCommits:50};
   const key=['workspace-workbench','p','workspace-detail','w'];
   const ready={repoPath:'one',branch:'main',head:'a',status:'clean',dirty:false,observationPending:false,issues:[]};

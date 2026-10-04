@@ -1,11 +1,12 @@
+import { publishRefresh } from './observation-publication.ts';
 import { useRpc } from "@getpaseo/plugin/client";
 import { Platform } from "react-native";
 import { clientDiagnostic } from "../shared/client-diagnostics";
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { observationQueryOptions } from '../shared/observation-policy.ts';
+import { observationQueryOptions } from './observation-content.ts';
 import { observationMeta } from './observation-coordinator.ts';
-import { createRepositoryRefreshClient, publishRefresh, repositoryQueryKeys, type RefreshInput, type RefreshResult, type RefreshRpc } from './repository-refresh-client.ts';
+import { createRepositoryRefreshClient, repositoryQueryKeys, type RefreshInput, type RefreshResult, type RefreshRpc } from './repository-refresh-client.ts';
 
 /** Query payloads stay in QueryClient; the shared coordinator owns job polling. */
 export function useRepositoryRefresh(project: string, input: RefreshInput, enabled: boolean, rpc: RefreshRpc, prefetch = false) {

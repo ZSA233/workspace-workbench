@@ -65,13 +65,6 @@ export function isRecoverableObserverFailure(response: ObserverResponse | undefi
   return Boolean(error);
 }
 
-export function mergeDetailResponse(previous: ObserverResponse, next: ObserverResponse): ObserverResponse {
-  const previousResult = resultOf<DetailResult>(previous);
-  const nextResult = resultOf<DetailResult>(next);
-  if (!previousResult || !nextResult) return previous;
-  return { ...next, result: mergePartialDetail(previousResult, nextResult) };
-}
-
 export function workspaceIdFromProps(props: PanelProps): string {
   return typeof props.workspaceId === "string" ? props.workspaceId : "";
 }

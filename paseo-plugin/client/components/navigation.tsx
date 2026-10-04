@@ -184,7 +184,7 @@ export function WorkspaceSelector({
   onRestoreWorkspace,
   onPermanentDeleteWorkspace,
   onInspectWorkspace,
-  lifecycleBusyWorkspaceId,
+  lifecycleBusyWorkspaceIds,
   onOpenLayoutMenu,
   latestCommitProgress,
   statusControl,
@@ -213,7 +213,7 @@ export function WorkspaceSelector({
   onRestoreWorkspace?: (workspace: WorkspaceSummary) => void;
   onPermanentDeleteWorkspace?: (workspace: WorkspaceSummary) => void;
   onInspectWorkspace?: (workspace: WorkspaceSummary) => void;
-  lifecycleBusyWorkspaceId?: string;
+  lifecycleBusyWorkspaceIds?: readonly string[];
   onOpenLayoutMenu?: () => void;
   latestCommitProgress?: { completed: number; total: number } | null;
   statusControl?: ReactNode;
@@ -310,7 +310,7 @@ export function WorkspaceSelector({
                 onRestore={onRestoreWorkspace}
                 onPermanentDelete={onPermanentDeleteWorkspace}
                 onInspect={onInspectWorkspace}
-                busy={lifecycleBusyWorkspaceId === workspace.id}
+                busy={Boolean(lifecycleBusyWorkspaceIds?.includes(workspace.id))}
               />
             )}
             showsVerticalScrollIndicator={visibleWorkspaces.length > 7}

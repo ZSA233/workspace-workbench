@@ -84,6 +84,7 @@ import { ProjectRuntimeMenu } from "./components/project-runtime";
 import { ProjectSetup } from "./components/project-setup";
 import { ProjectStorageMenu } from "./components/project-storage";
 import { SectionAllocationContext,stableScrollbarStyle } from "./components/ui";
+import { WorkspaceBatchPanel } from "./components/workspace-batch";
 import { WorkspaceDeletionPanel } from "./components/workspace-deletion";
 import { chooseProject,useProjectMemory } from "./project-memory";
 import { useSectionSizing } from "./use-section-sizing";
@@ -354,7 +355,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const workspaceDirectory = paseoWorkspace?.directory || "";
   const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab("workspace");},[]);
   const onWorkspaceSelectionLost=useCallback(()=>{setSelectedRepoPath("");setSelectedCommit("");setSelectedFile("");scopeRepositoryIdentity.current="";},[]);
-  const {selectionResolved, selectorOpen, activityScanProgress, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, cancelWorkspaceActivityScan, openWorkspaceSelector, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
+  const {selectionResolved, selectorOpen, activityScanProgress, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, stopWorkspaceActivityScan, closeWorkspaceSelector, openWorkspaceSelector, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
   const {mainRepositoriesOpen, setMainRepositoriesOpen, mainRepositoryFilter, setMainRepositoryFilter, mainRepositoryDraft, setMainRepositoryDraft, savingMainRepositories, linkedWorkspacesOpen, setLinkedWorkspacesOpen, linkedWorkspaceFilter, setLinkedWorkspaceFilter, linkedWorkspaceDraft, setLinkedWorkspaceDraft, savingLinkedWorkspaces, orphanId, setOrphanId, orphanBranches, setOrphanBranches, adoptingOrphan, orphanError, orphanPreviewQuery, orphanPreview, mainRepositoriesQuery, mainRepositories, linkedWorkspacesQuery, linkedWorkspaces, saveMainRepositories, saveLinkedWorkspaces, adoptSelectedOrphan}=useWorkspaceCatalog({projectConfig,backendReady,rpc,localizedCopy,refreshArea,onAdopted:selectCreatedWorkspace});
   const observationVersionsEnabled = backendReady && foreground;
   const observationIssue = useObservationVersions(projectConfig, tab === "review" ? [selectedWorkspaceId, ...reviewIds] : [selectedWorkspaceId], observationVersionsEnabled);
@@ -546,7 +547,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       ? theme.colors.statusWarning
       : theme.colors.foregroundMuted;
 
-  const {lifecycleWorkspaceId,lifecycleWorkspace,lifecycleMode,lifecycleResponse,lifecycleError,lifecycleBusyWorkspaceIds,
+  const {batch, batchState, lifecycleWorkspaceId,lifecycleWorkspace,lifecycleMode,lifecycleResponse,lifecycleError,lifecycleBusyWorkspaceIds,
     closeLifecycle,inspectWorkspaceLifecycle,removeWorkspace,restoreWorkspace,permanentDeleteWorkspace} =
     useWorkspaceActions(projectConfig,selectedWorkspaceId,preferences.selectWorkspace,() => listQuery.refetch({cancelRefetch:false}),localizedCopy);
 
@@ -743,7 +744,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         </Modal.Content>
       </Modal> : null}
       <WorkspaceSelector
-        onOpenLayoutMenu={() => { if (selectorOpen) cancelWorkspaceActivityScan(); openLayoutMenu(); }}
+        onOpenLayoutMenu={() => { if (selectorOpen) closeWorkspaceSelector(); openLayoutMenu(); }}
         statusControl={<IconButton label={observationLabel} icon={observationIcon}
           busy={observationRefreshing}
           color={observationColor}
@@ -768,12 +769,16 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         } : undefined}
         onOpen={openWorkspaceSelector}
         onFilter={setWorkspaceFilter}
-        onSelect={(id) => { cancelWorkspaceActivityScan(); selectWorkspace(id); }}
-        onOpenOrphan={(id) => { cancelWorkspaceActivityScan(); setOrphanId(id); }}
-        onRemoveWorkspace={listResult?.capabilities?.remove ? (workspace) => { cancelWorkspaceActivityScan(false); void removeWorkspace(workspace); } : undefined}
-        onRestoreWorkspace={listResult?.capabilities?.restore ? (workspace) => { cancelWorkspaceActivityScan(false); void restoreWorkspace(workspace); } : undefined}
-        onPermanentDeleteWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { cancelWorkspaceActivityScan(); inspectWorkspaceLifecycle(workspace, "permanent"); } : undefined}
-        onInspectWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { cancelWorkspaceActivityScan(); inspectWorkspaceLifecycle(workspace); } : undefined}
+        onSelect={(id) => { closeWorkspaceSelector(); selectWorkspace(id); }}
+        onOpenOrphan={(id) => { closeWorkspaceSelector(); setOrphanId(id); }}
+        onBatch={(targets, action) => { stopWorkspaceActivityScan(); void batch.preview(targets, action); }}
+        batchBusy={batchState.phase === "running" || batchState.phase === "preview"}
+        batchAvailable={batchState.phase !== "idle"}
+        onBatchResults={batch.open}
+        onRemoveWorkspace={listResult?.capabilities?.remove ? (workspace) => { stopWorkspaceActivityScan(); void removeWorkspace(workspace); } : undefined}
+        onRestoreWorkspace={listResult?.capabilities?.restore ? (workspace) => { stopWorkspaceActivityScan(); void restoreWorkspace(workspace); } : undefined}
+        onPermanentDeleteWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { stopWorkspaceActivityScan(); inspectWorkspaceLifecycle(workspace, "permanent"); } : undefined}
+        onInspectWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { stopWorkspaceActivityScan(); inspectWorkspaceLifecycle(workspace); } : undefined}
         lifecycleBusyWorkspaceIds={lifecycleBusyWorkspaceIds}
         theme={theme}
         styles={styles}
@@ -939,6 +944,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         styles={styles}
         onSaved={() => { void Promise.allSettled([refreshArea("workspace-list"), refreshArea("workspace-detail"), storageQuery.refetch()]); }}
       />
+      <WorkspaceBatchPanel state={batchState} controller={batch} styles={styles} />
       <WorkspaceDeletionPanel
         open={Boolean(lifecycleWorkspaceId)}
         workspace={observedWorkspaces.find((workspace) => workspace.id === lifecycleWorkspaceId) || (lifecycleWorkspace?.id === lifecycleWorkspaceId ? lifecycleWorkspace : undefined)}

@@ -40,3 +40,10 @@ test('opening inspection after an uncertain write never removes the reconciliati
  const inspect=c.actions.inspect(workspace('a'));c.tasks.get('a')!.resolve(response('a','inspect'));await inspect;
  await c.actions.remove(workspace('a'));assert.equal(c.calls(),2);assert.equal(c.actions.snapshot().records.get('a')?.phase,'uncertain');
 });
+test('a different requested action cannot falsely reconcile an unresolved earlier write', async () => {
+ const c=setup(),write=c.actions.remove(workspace('a'));c.tasks.get('a')!.reject(Error('RPC timed out'));await write;
+ // The original removal is uncertain; seeing the old active record is not proof
+ // that a newly requested restore has run or that the pending removal finished.
+ const result=await c.actions.execute(workspace('a'),'restore');
+ assert.equal(c.calls(),1);assert.equal(result.phase,'uncertain');assert.equal(c.published.length,0);
+});

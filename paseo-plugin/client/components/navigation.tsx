@@ -2,11 +2,13 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { useEffect,useState,type ReactNode } from "react";
+import { useEffect,useState,useRef,useLayoutEffect,type ReactNode } from "react";
 import { ActivityIndicator,BackHandler,Platform,Pressable,Text,View } from "react-native";
 import { formatCopyFrom } from "../../shared/copy";
 import { FlatList,Icon,ScrollView,TextInput } from "../native-components";
 
+import { anchoredOffset } from '../graph/continuity';
+import { batchEligible, type BatchAction } from '../workspace-batch';
 import { useWorkbenchCopy } from "../i18n";
 import {
 countWorkspaceFilter,
@@ -176,6 +178,7 @@ export function WorkspaceSelector({
   onPermanentDeleteWorkspace,
   onInspectWorkspace,
   lifecycleBusyWorkspaceIds,
+  onBatch, batchBusy = false, batchAvailable = false, onBatchResults,
   onOpenLayoutMenu,
   latestCommitProgress,
   statusControl,
@@ -205,6 +208,8 @@ export function WorkspaceSelector({
   onPermanentDeleteWorkspace?: (workspace: WorkspaceSummary) => void;
   onInspectWorkspace?: (workspace: WorkspaceSummary) => void;
   lifecycleBusyWorkspaceIds?: readonly string[];
+  onBatch?: (targets: WorkspaceSummary[], action: BatchAction) => void;
+  batchBusy?: boolean; batchAvailable?: boolean; onBatchResults?: () => void;
   onOpenLayoutMenu?: () => void;
   latestCommitProgress?: { completed: number; total: number } | null;
   statusControl?: ReactNode;
@@ -213,8 +218,30 @@ export function WorkspaceSelector({
 }) {
   const localizedCopy = useWorkbenchCopy();
   const [search, setSearch] = useState("");
+  const [batchMode, setBatchMode] = useState(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  useLayoutEffect(() => { setChecked(new Set()); }, [search, filter, batchMode]);
+  useEffect(() => { if (!open) { setBatchMode(false); setChecked(new Set()); } }, [open]);
+  const listRef = useRef<import('react-native').FlatList<WorkspaceSummary>>(null);
+  const scrollY = useRef(0);
+  const previousRows = useRef<string[]>([]);
+  const previousScope = useRef('');
   useEffect(() => { if (!open) setSearch(""); }, [open]);
   const searchedWorkspaces = visibleWorkspaces.filter((workspace) => matchesWorkspaceSearch(workspace, search));
+  const selectable = searchedWorkspaces.filter(workspace => batchEligible(workspace, filter === 'history' ? 'delete' : 'remove') && !lifecycleBusyWorkspaceIds?.includes(workspace.id));
+  const selectedTargets = selectable.filter(workspace => checked.has(workspace.id));
+  const selectedCount = searchedWorkspaces.filter(workspace => checked.has(workspace.id)).length;
+  const toggleChecked = (id: string) => setChecked(prior => { const next = new Set(prior); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  const scope = `${filter}:${search}`;
+  const rowIdentity = JSON.stringify(searchedWorkspaces.map(workspace => workspace.id));
+  useLayoutEffect(() => {
+    const ids: string[] = JSON.parse(rowIdentity), old = previousRows.current;
+    if (previousScope.current === scope && old.length && open) {
+      const offset = anchoredOffset(old, ids, scrollY.current, WORKSPACE_OPTION_HEIGHT);
+      if (offset !== scrollY.current) { scrollY.current = offset; listRef.current?.scrollToOffset({ offset, animated: false }); }
+    } else if (previousScope.current !== scope) { scrollY.current = 0; listRef.current?.scrollToOffset({ offset: 0, animated: false }); }
+    previousRows.current = ids; previousScope.current = scope;
+  }, [rowIdentity, scope, open]);
   const attention = countWorkspaceFilter(workspaces, "attention");
   const filters: { id: WorkspaceFilter; label: string; count: number }[] = [
     { id: "all", label: localizedCopy.text_778fc8f994, count: workspaces.length },
@@ -277,11 +304,25 @@ export function WorkspaceSelector({
             {search ? <Pressable accessibilityLabel={localizedCopy.workspaceSearchClear} accessibilityRole="button" onPress={() => setSearch("")} style={{ paddingHorizontal: 7, paddingVertical: 5 }}><Text style={styles.workspaceOptionActionText}>×</Text></Pressable> : null}
           </View>
           {latestCommitProgress && latestCommitProgress.total > latestCommitProgress.completed ? <Text style={[styles.selectorListLabel, { marginTop: 5 }]}>{formatCopyFrom(localizedCopy, "workspaceActivityProgress", [latestCommitProgress.completed, latestCommitProgress.total])}</Text> : null}
+          {onBatch ? <View style={[styles.filterRow, { flexWrap: 'wrap', marginTop: 6 }]}>
+            <Pressable accessibilityRole="button" onPress={() => setBatchMode(value => !value)} style={styles.filterButton}><Text style={styles.filterButtonText}>{batchMode ? localizedCopy.batchExit : localizedCopy.batchManage}</Text></Pressable>
+            {batchAvailable ? <Pressable accessibilityRole="button" onPress={onBatchResults} style={styles.filterButton}><Text style={styles.filterButtonText}>{localizedCopy.batchResults}</Text></Pressable> : null}
+            {batchMode ? <>
+              <Pressable accessibilityRole="button" disabled={batchBusy} onPress={() => setChecked(selectedTargets.length === selectable.length ? new Set() : new Set(selectable.map(workspace => workspace.id)))} style={styles.filterButton}><Text style={styles.filterButtonText}>{selectedTargets.length > 0 && selectedTargets.length === selectable.length ? localizedCopy.batchClear : localizedCopy.batchSelectAll}</Text></Pressable>
+              <Text style={styles.filterButtonText}>{localizedCopy.batchSelected} {selectedCount}</Text>
+              {(filter === 'history' ? (['restore', 'delete'] as const) : (['remove'] as const)).filter(action => action === 'remove' ? !!onRemoveWorkspace : action === 'restore' ? !!onRestoreWorkspace : !!onPermanentDeleteWorkspace).map(action => <Pressable key={action} accessibilityRole="button" disabled={batchBusy || !selectedTargets.length} onPress={() => { onBatch(selectedTargets, action); }} style={[styles.filterButton, (batchBusy || !selectedTargets.length) && { opacity: 0.45 }]}><Text style={styles.filterButtonText}>{action === 'remove' ? localizedCopy.batchRemove : action === 'restore' ? localizedCopy.batchRestore : localizedCopy.batchDelete}</Text></Pressable>)}
+            </> : null}
+          </View> : null}
           <View style={styles.selectorListHeader}>
             <Text style={styles.selectorListLabel}>{localizedCopy.text_205b4561ed}</Text>
             {ready ? <Text style={styles.selectorListCount}>{search ? `${searchedWorkspaces.length}${localizedCopy.text_42099b4af0}${visibleWorkspaces.length}` : `${visibleWorkspaces.length}${localizedCopy.text_42099b4af0}${workspaceTotal}`}</Text> : null}
           </View>
           <FlatList
+            testID="workbench-workspace-list"
+            ref={listRef}
+            onScroll={event => { scrollY.current = event.nativeEvent.contentOffset.y; }}
+            scrollEventThrottle={16}
+            extraData={[batchMode, checked, batchBusy, lifecycleBusyWorkspaceIds]}
             data={searchedWorkspaces}
             getItemLayout={(_, index) => ({ length: WORKSPACE_OPTION_HEIGHT, offset: WORKSPACE_OPTION_HEIGHT * index, index })}
             keyExtractor={(workspace) => workspace.id}
@@ -292,7 +333,10 @@ export function WorkspaceSelector({
             removeClippedSubviews
             renderItem={({ item: workspace }) => (
               <WorkspaceOption
-                onSelect={onSelect}
+                onSelect={batchMode ? toggleChecked : onSelect}
+                checkbox={batchMode}
+                checked={checked.has(workspace.id)}
+                selectionDisabled={batchMode && (batchBusy || !selectable.some(item => item.id === workspace.id))}
                 selected={workspace.id === selectedWorkspaceId}
                 styles={styles}
                 theme={theme}
@@ -325,7 +369,7 @@ export function WorkspaceSelector({
   );
 }
 
-function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, onPermanentDelete, onInspect, busy, theme, styles }: {
+function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, onPermanentDelete, onInspect, busy, checkbox = false, checked = false, selectionDisabled = false, theme, styles }: {
   workspace: WorkspaceSummary;
   selected: boolean;
   onSelect: (id: string) => void;
@@ -334,6 +378,7 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
   onPermanentDelete?: (workspace: WorkspaceSummary) => void;
   onInspect?: (workspace: WorkspaceSummary) => void;
   busy: boolean;
+  checkbox?: boolean; checked?: boolean; selectionDisabled?: boolean;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
@@ -376,13 +421,15 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
   ].filter(Boolean);
   const meta = [repositoryCountLabel(workspace.repositoryCount, localizedCopy), ...workspaceDates].join(" · ");
   return (
-    <View style={[styles.workspaceOption, selected && styles.workspaceOptionActive]}>
+    <View testID={`workspace-option-${workspace.id}`} style={[styles.workspaceOption, selected && styles.workspaceOptionActive]}>
       <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ selected }}
+        accessibilityRole={checkbox ? "checkbox" : "button"}
+        accessibilityState={checkbox ? { checked, disabled: selectionDisabled } : { selected }}
+        disabled={selectionDisabled}
         onPress={() => onSelect(workspace.id)}
         style={{ alignItems: "center", flex: 1, flexDirection: "row", gap: 7, minWidth: 0 }}
       >
+        {checkbox ? <Text style={styles.workspaceOptionActionText}>{checked ? "☑" : "☐"}</Text> : null}
         <View style={[styles.workspaceStatusDot, { backgroundColor: statusTone }]} />
         <View style={styles.workspaceOptionCopy}>
           <Text numberOfLines={1} style={styles.workspaceOptionTitle}>{workspaceDisplayName(workspace, localizedCopy)}</Text>
@@ -390,7 +437,7 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
         </View>
         {status && status !== "active" ? <Text numberOfLines={1} style={[styles.workspaceOptionState, { color: statusTone }]}>{status}</Text> : null}
       </Pressable>
-      {!isMainWorkspace(workspace) ? <View accessibilityState={{ busy }} style={styles.workspaceOptionActions}>
+      {!checkbox && !isMainWorkspace(workspace) ? <View accessibilityState={{ busy }} style={styles.workspaceOptionActions}>
         {busy ? <ActivityIndicator size="small" color={theme.colors.foregroundMuted} /> : null}
         {onInspect ? <Pressable accessibilityLabel={localizedCopy.workspaceDeleteImpact} accessibilityRole="button" disabled={busy} onPress={() => onInspect(workspace)} style={styles.workspaceOptionAction}><Text style={styles.workspaceOptionActionText}>i</Text></Pressable> : null}
         {pending && onRestore ? <Pressable accessibilityLabel={localizedCopy.workspaceRestore} accessibilityRole="button" disabled={busy} onPress={() => onRestore(workspace)} style={styles.workspaceOptionAction}><Text style={[styles.workspaceOptionActionText, { color: observerAccent(theme) }]}>↩</Text></Pressable> : null}

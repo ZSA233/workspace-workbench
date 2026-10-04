@@ -29,11 +29,11 @@ export function createWorkspaceActions(deps: Dependencies) {
         const complete = action === 'delete' ? !target : target?.state === (action === 'restore' ? 'active' : 'removed');
         return complete ? { ok: true, workspaceId: id, action, state: target?.state, activeTasks: [] } : null;
     };
-    async function perform(target: WorkspaceSummary, action: WorkspaceLifecycleInput['action'], confirmDataLoss = false) {
+    async function perform(target: WorkspaceSummary, action: WorkspaceLifecycleInput['action'], confirmDataLoss = false, quiet = false) {
         if (flights.has(target.id))
             return flights.get(target.id);
         const prior = records.get(target.id), actionIntent = intent;
-        const reveal = () => { if (intent === actionIntent) {
+        const reveal = () => { if (!quiet && intent === actionIntent) {
             selected = target.id;
             emit();
         } };
@@ -85,28 +85,28 @@ export function createWorkspaceActions(deps: Dependencies) {
                         selected = '';
                         emit();
                     }
-                    deps.notify(response);
+                    if (!quiet) deps.notify(response);
                 }
             }
             catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
-                const retry = uncertain(message);
+                const retry = uncertain(message) || pendingWrites.has(target.id);
                 update(target.id, { phase: retry ? 'uncertain' : 'failed', error: message, response: { ok: false, workspaceId: target.id, action, activeTasks: [], error: { code: retry ? 'request_uncertain_retry_same_identity' : 'workspace_operation_failed', message } } });
                 reveal();
                 if (retry && action !== 'inspect') {
                     try {
-                        const known = await reconcile(target.id, action);
+                        const known = await reconcile(target.id, pendingWrites.get(target.id) || action);
                         if (known) {
                             await deps.publish(known);
                             pendingWrites.delete(target.id);
                             update(target.id, { phase: 'complete', response: known, error: null });
-                            if (['remove', 'delete'].includes(action) && deps.selection() === target.id)
+                            if (['remove', 'delete'].includes(known.action) && deps.selection() === target.id)
                                 deps.select('main');
                             if (selected === target.id) {
                                 selected = '';
                                 emit();
                             }
-                            deps.notify(known);
+                            if (!quiet) deps.notify(known);
                         }
                     }
                     catch { }
@@ -123,6 +123,10 @@ export function createWorkspaceActions(deps: Dependencies) {
         }
     }
     return {
+        execute: async (target: WorkspaceSummary, action: WorkspaceLifecycleInput['action'], confirmDataLoss = false) => {
+            await perform(target, action, confirmDataLoss, true);
+            return records.get(target.id)!;
+        },
         snapshot: () => snapshot,
         subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
         close() { if (records.get(selected)?.phase !== 'running') {

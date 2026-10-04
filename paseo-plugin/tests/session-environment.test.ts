@@ -157,3 +157,15 @@ test('explicit overrides equal to old defaults retain ownership across version c
   assert.equal(readFileSync(env.WORKBENCH_ENVIRONMENT_FILE,'utf8'),text);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test('reserved repository identities cannot hide a missing prepared executable',async()=>{
+ const {hash}=await import('../server/backend/storage.ts');
+ const f=fixture({repositories:[{id:'__proto__',path:'one'}],toolchain:{mode:'system',repositories:JSON.parse('{"__proto__":{"node":"22"}}')}}),s=new Service(f.config);
+ try{
+  const workspace=await s.handle('workspace.create',{name:'reserved',repositories:['__proto__']});
+  mkdirSync(join(f.config.stateRoot,'toolchains'),{recursive:true});
+  writeFileSync(join(f.config.stateRoot,'toolchains',hash(workspace.id)+'.json'),JSON.stringify({['__proto__']:{status:'ready',requested:{node:'22'},resolved:{node:'22'},executables:{node:join(f.root,'missing-node')}}}));
+  const observed=await s.handle('workspace.environment',{workspaceId:workspace.id,prepare:false});
+  assert.equal(observed.toolchain.preparedRepositories['__proto__'].status,'needs_prepare');assert.equal(observed.versions.node,undefined);
+ }finally{await s.close();rmSync(f.root,{recursive:true,force:true});}
+});

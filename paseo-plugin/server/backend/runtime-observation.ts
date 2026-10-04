@@ -26,9 +26,9 @@ export async function observeRuntime(config:Config,workspace:Json,createCaches:b
   check(signal);
   let saved:Json={};
   try {saved=JSON.parse(await readFile(join(config.stateRoot,'toolchains',hash(workspace.id)+'.json'),{encoding:'utf8',signal}));}catch(error){if(signal.aborted)throw error;}
-  const ready:Record<string,boolean>={};
+  const ready:Record<string,boolean>=Object.create(null);
   for(const repo of workspace.repositories){
-    const required=requirements[repo.id] || {},entry=saved[repo.id] || {};
+    const required=requirements[repo.id] || {},entry=Object.hasOwn(saved,repo.id) ? saved[repo.id] : {};
     ready[repo.id]=stable(entry.requested) === stable(required);
     for(const tool of Object.keys(required)){
       const path=toolExecutable(entry,tool);
@@ -52,7 +52,7 @@ export async function observeRuntime(config:Config,workspace:Json,createCaches:b
   for(const [tool,requirement] of Object.entries(toolchain.requirements) as [string,Json][]){
     if(new Set(requirement.requested).size > 1)continue;
     for(const repo of workspace.repositories){
-      const entry=saved[repo.id],required=requirements[repo.id] || {};
+      const entry=Object.hasOwn(saved,repo.id) ? saved[repo.id] : undefined,required=requirements[repo.id] || {};
       if(entry?.status !== 'ready' || !ready[repo.id] || !required[tool])continue;
       const path=await canonicalAsync(toolExecutable(entry,tool));bins.add(dirname(path));versions[tool]=entry.resolved[tool];
       if(tool === 'go'){

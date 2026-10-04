@@ -8,7 +8,7 @@ export function summarizeRuntime(workspace: Json, requestedByRepo: Json, saved: 
   if (!workspace.managed) return {manager:policy.manager,mode:policy.mode,status:'not_applicable',requirements:{},preparedRepositories:{},issues:[]};
   const repositories: Json = Object.create(null), requirements: Json = Object.create(null), bins = new Set<string>();
   for (const repo of workspace.repositories) {
-    const requested = requestedByRepo[repo.id] || {}, previous = saved[repo.id] || {};
+    const requested = requestedByRepo[repo.id] || {}, previous = Object.hasOwn(saved,repo.id) ? saved[repo.id] : {};
     const matches = stable(previous.requested) === stable(requested), ready = readyByRepo[repo.id];
     let status = matches ? previous.status || 'needs_prepare' : 'needs_prepare';
     if (status === 'ready' && !ready) status = 'needs_prepare';

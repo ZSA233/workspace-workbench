@@ -247,7 +247,6 @@ export function CommitGraph({
                     selected={row.node.sha === selectedCommit}
                     hovered={row.node.sha === hoveredCommit}
                     onCommit={onCommit}
-                    onGraphBase={onGraphBase}
                     onHoverCommit={onHoverCommit}
                     onHoverClear={onHoverClear}
                     railWidth={railWidth}
@@ -260,7 +259,11 @@ export function CommitGraph({
             </View>
           ) : null}
           {graph && !loading && !error && !rows.length ? <Text style={styles.emptyText}>{copy.text_a07cd6a10e}</Text> : null}
-          {graph?.historyMode === "full" && hasOlder ? (
+          {graph?.historyMode === "branch" ? (
+            <Pressable accessibilityRole="button" disabled={loadingMore} onPress={onGraphBase} style={[styles.historyButton, loadingMore && styles.historyButtonDisabled]}>
+              <Text style={styles.historyButtonText}>{copy.text_80a8716fca}</Text>
+            </Pressable>
+          ) : graph?.historyMode === "full" && hasOlder ? (
             <Pressable accessibilityRole="button" disabled={loadingMore} onPress={onGraphMore} style={[styles.historyButton, loadingMore && styles.historyButtonDisabled]}>
               {loadingMore ? <ActivityIndicator color={observerAccent(theme)} size="small" /> : null}
               <Text style={styles.historyButtonText}>{loadingMore ? copy.text_76c6f5f575 : formatCopyFrom(copy, "historyScroll", [graph.loadedCount || rows.filter((row) => !row.node.isBase).length])}</Text>
@@ -349,7 +352,6 @@ export const GraphCommitRow = memo(function GraphCommitRow({
   selected,
   hovered,
   onCommit,
-  onGraphBase,
   onHoverCommit,
   onHoverClear,
   railWidth,
@@ -360,7 +362,6 @@ export const GraphCommitRow = memo(function GraphCommitRow({
   selected: boolean;
   hovered: boolean;
   onCommit: (sha: string) => void;
-  onGraphBase: () => void;
   onHoverCommit?: (sha: string) => void;
   onHoverClear?: (sha: string) => void;
   railWidth: number;
@@ -377,8 +378,7 @@ export const GraphCommitRow = memo(function GraphCommitRow({
       onHoverOut={() => onHoverClear?.(row.node.sha)}
       onPress={() => {
         onHoverClear?.(row.node.sha);
-        if (row.node.isBase) onGraphBase();
-        else onCommit(row.node.sha);
+        onCommit(row.node.sha);
       }}
       style={[styles.graphRow, hovered && styles.graphRowHover, selected && styles.graphRowActive]}
     >
@@ -386,7 +386,7 @@ export const GraphCommitRow = memo(function GraphCommitRow({
       <View style={styles.graphRowCopy}>
         <Text numberOfLines={1} style={styles.graphSubject}>
           <Text style={styles.graphSha}>{row.node.shortSha}</Text>
-          {row.node.isBase ? `  ${copy.graphBaseLabel}` : `  ${row.node.subject}`}
+          {`  ${row.node.subject || (row.node.isBase ? copy.graphBaseLabel : row.node.shortSha)}`}
         </Text>
         {tags.map((tag, index) => <MiniTag key={`${tag.label}-${index}`} label={tag.label} color={tag.color} styles={styles} />)}
       </View>

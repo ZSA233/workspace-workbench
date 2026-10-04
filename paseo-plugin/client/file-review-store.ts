@@ -26,6 +26,18 @@ type FileReviewOpenRequest = {
 type FileReviewOpener = (request: FileReviewOpenRequest) => void;
 
 const selectionsByHostWorkspace = new Map<string, FileReviewSelection[]>();
+export type FileReviewPosition = { offset: number; hunk: number };
+const positionsByHostWorkspace = new Map<string, Map<string, { split: FileReviewPosition; unified: FileReviewPosition }>>();
+
+/** View state has the same lifetime and identity as its file tab. */
+export function getFileReviewPosition(hostWorkspaceId: string, key: string, mode: 'split' | 'unified'): FileReviewPosition {
+  if (!(selectionsByHostWorkspace.get(hostWorkspaceId) || []).some(selection => selectionKey(selection) === key)) return { offset: 0, hunk: 0 };
+  let positions = positionsByHostWorkspace.get(hostWorkspaceId);
+  if (!positions) { positions = new Map(); positionsByHostWorkspace.set(hostWorkspaceId, positions); }
+  let entry = positions.get(key);
+  if (!entry) { entry = { split: { offset: 0, hunk: 0 }, unified: { offset: 0, hunk: 0 } }; positions.set(key, entry); }
+  return entry[mode];
+}
 const activeKeysByHostWorkspace = new Map<string, string>();
 const listeners = new Set<() => void>();
 const emptySelections: FileReviewSelection[] = [];
@@ -68,6 +80,9 @@ export function closeFileReview(hostWorkspaceId: string, closingKey: string): vo
   const closingIndex = current.findIndex((item) => selectionKey(item) === closingKey);
   const next = current.filter((item) => selectionKey(item) !== closingKey);
   if (next.length === current.length) return;
+  const positions = positionsByHostWorkspace.get(hostWorkspaceId);
+  positions?.delete(closingKey);
+  if (!positions?.size) positionsByHostWorkspace.delete(hostWorkspaceId);
   if (next.length) selectionsByHostWorkspace.set(hostWorkspaceId, next);
   else selectionsByHostWorkspace.delete(hostWorkspaceId);
   const activeKey = activeKeysByHostWorkspace.get(hostWorkspaceId);
@@ -94,6 +109,7 @@ export function getActiveFileReviewKey(hostWorkspaceId: string): string {
 }
 
 export function clearFileReviews(hostWorkspaceId: string): void {
+  positionsByHostWorkspace.delete(hostWorkspaceId);
   if (!selectionsByHostWorkspace.has(hostWorkspaceId)) return;
   selectionsByHostWorkspace.delete(hostWorkspaceId);
   activeKeysByHostWorkspace.delete(hostWorkspaceId);

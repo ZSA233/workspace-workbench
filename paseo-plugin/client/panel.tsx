@@ -4,7 +4,7 @@ type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { useQuery,useQueryClient } from "@tanstack/react-query";
-import { useCallback,useEffect,useMemo,useRef,useState } from "react";
+import { useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState } from "react";
 import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,View } from "react-native";
 import { type WorkbenchCopy,type WorkbenchLocale } from "../shared/copy";
 import { copyText,Modal,ScrollView,TextInput,useToast } from "./native-components";
@@ -373,7 +373,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const {handoffGoal, setHandoffGoal, handoffRelationship, setHandoffRelationship, handoffPacketOpen, setHandoffPacketOpen, handoffPreviewOpen, setHandoffPreviewOpen, materialPreview, handoffUnderstanding, setHandoffUnderstanding, handoffPlan, setHandoffPlan, handoffAcceptance, setHandoffAcceptance, handoffReferences, setHandoffReferences, handoffReviewInstructions, setHandoffReviewInstructions, workerStartMode, setWorkerStartMode, delegating, parentAgentId, agentContextAvailable, agentContextState, bindingQuery, binding, boundAgent, bindingFailure, draftHandoff, draftPacket, handoffAssetOptions, delegateSelectedWorkspace, submitSelectedWorkspace}=useWorkspaceHandoff({projectConfig,selectedWorkspaceId,foreground,listReady,selectedWorkspaceIsMain,selectedWorkspaceBlocksTasks,agentCapability:!!listResult?.capabilities?.agent,agentId,locale,localizedCopy});
   const refreshCapable = backendQuery.data?.readCapabilities?.refreshProtocol === 1;
   const basicCapable = backendQuery.data?.readCapabilities?.basicSummaryProtocol === 1;
-  const {detailQuery, detailState, detail, detailFailure, detailUnavailable, displayDetail, selectorWorkspace, selectedRepository, graphQuery, graphState, graph, graphFailure, changesScope, changesQuery, changesState, changes, changesFailure, selectedRefresh, basicSummaries, graphFeedback, changesFeedback}=useRepositoryObservation({projectConfig,selectedWorkspaceId,selectedWorkspace,selectedRepoPath,selectedCommit,changeScope,graphView,foreground,tab,backendReady,listReady,refreshCapable,basicCapable,selectedWorkspaceUnavailable,rpc,localizedCopy,observationTiming});
+  const {detailQuery, detailState, detail, detailFailure, detailUnavailable, displayDetail, selectorWorkspace, selectedRepository, graphQuery, graphState, graph, graphFailure, changesScope, changesQuery, changesState, changes, changesFailure, selectedRefresh, basicSummaries, graphFeedback, changesFeedback, graphBusy, retryGraph}=useRepositoryObservation({projectConfig,selectedWorkspaceId,selectedWorkspace,selectedRepoPath,selectedCommit,changeScope,graphView,foreground,tab,backendReady,listReady,refreshCapable,basicCapable,selectedWorkspaceUnavailable,rpc,localizedCopy,observationTiming});
   const environmentQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "environment", selectedWorkspaceId],
     queryFn: () => rpc({ method: "workspace.environment", params: { workspaceId: selectedWorkspaceId, prepare: false } }),
@@ -393,7 +393,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [changeTreeMode, changes]);
 
   const repositoryIdentity = `${selectedWorkspaceId}:${selectedRepoPath}`;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (selectedRepository?.observationPending) return;
     if (!selectedRepository || !selectedRepoPath || scopeRepositoryIdentity.current === repositoryIdentity) return;
     scopeRepositoryIdentity.current = repositoryIdentity;
@@ -589,7 +589,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     animateSectionLayout();
     setRepositoryDetailsOpen((current) => !current);
   }, [animateSectionLayout]);
-  const {onCommit,onGraphBase,onGraphMore,onOpenChangedFile,onRepo}=useFileView({projectConfig,hostWorkspaceId,agentId,selectedWorkspace,selectedRepository,selectedRepoPath,selectedCommit,changesScope,graphView,setGraphView,graphQuery,graphLoadedCount:graph?.loadedCount || 50,animateSectionLayout,setSelectedCommit,setSelectedFile,setSelectedRepoPath,setRepositoryDetailsOpen});
+  const {onCommit,onGraphBase,onGraphMore,onOpenChangedFile,onRepo}=useFileView({projectConfig,hostWorkspaceId,agentId,selectedWorkspace,selectedRepository,selectedRepoPath,selectedCommit,changesScope,graphView,setGraphView,graphBusy,retryGraph,graphLoadedCount:graph?.loadedCount || 50,animateSectionLayout,setSelectedCommit,setSelectedFile,setSelectedRepoPath,setRepositoryDetailsOpen});
   const onSectionToggle = useCallback((id: "repositories" | "graph" | "changes", collapsed: boolean) => {
     animateSectionLayout();
     preferences.updateSection(id, { collapsed });
@@ -844,7 +844,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               onGraphBase={onGraphBase}
               onGraphMore={onGraphMore}
               graphIdentity={`${hostWorkspaceId}:${selectedWorkspaceId}:${selectedRepoPath}`}
-              graphLoadingMore={graphQuery.isFetching && Boolean(graph) && (graph?.loadedCount || 0) < graphView.maxCommits}
+              graphLoadingMore={graphBusy && Boolean(graph)}
               onScope={setChangeScope}
               onFile={onOpenChangedFile}
               onRepo={onRepo}

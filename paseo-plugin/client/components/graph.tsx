@@ -2,9 +2,10 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { memo,useCallback,useMemo,useRef,useState } from "react";
-import { ActivityIndicator,Platform,Pressable,Text,View } from "react-native";
+import { memo,useCallback,useLayoutEffect,useMemo,useRef,useState } from "react";
+import { ActivityIndicator,Platform,Pressable,Text,View,type ViewStyle } from "react-native";
 import { formatCopyFrom } from "../../shared/copy";
+import { uniqueCommits } from '../graph/continuity';
 import { createHistoryLoadGate } from "../graph/pagination";
 import { ScrollView } from "../native-components";
 import { IconButton } from "./icon-button";
@@ -168,7 +169,10 @@ export function CommitGraph({
   const [hoveredCommit, setHoveredCommit] = useState("");
   const historyGate = useRef<ReturnType<typeof createHistoryLoadGate> | null>(null);
   if (historyGate.current === null) historyGate.current = createHistoryLoadGate();
-  const rows = useMemo(() => layoutGraph(graph?.nodes || []), [graph?.nodes]);
+  const historyOffset = useRef(0);
+  const historyIdentity = `${graphIdentity}:${repository.head}:${graph?.historyMode}`;
+  useLayoutEffect(() => { historyGate.current?.reset(historyIdentity, historyOffset.current); }, [historyIdentity]);
+  const rows = useMemo(() => layoutGraph(uniqueCommits(graph?.nodes || [])), [graph?.nodes]);
   const selectedRow = useMemo(() => selectedCommit ? rows.find((row) => row.node.sha === selectedCommit) || null : null, [rows, selectedCommit]);
   const onHoverCommit = useCallback((sha: string) => {
     if (Platform.OS === "web") setHoveredCommit(sha);
@@ -180,10 +184,14 @@ export function CommitGraph({
   const railWidth = laneCount * GRAPH_LANE_WIDTH + 8;
   const workingFileCount = Math.max((repository.workingChanges?.files ?? repository.dirtyPaths?.length ?? 0), repository.dirtyPaths?.length || 0);
   const showWorktree = Boolean(repository.dirty || workingFileCount > 0);
+  const scrollAnchor = useMemo(() => ({ identity: graphIdentity, keys: [...(showWorktree ? ['WORKTREE'] : []), ...rows.map(row => row.node.sha)], rowHeight: GRAPH_ROW_HEIGHT }), [graphIdentity, rows, showWorktree]);
   const graphHeight = (rows.length + (showWorktree ? 1 : 0)) * GRAPH_ROW_HEIGHT;
   const branchScopeAvailable = repository.branchScopeAvailable !== false;
 
   const hasOlder = Boolean(graph?.hasOlder && (graphViewLimit(graph) < 200 || graph?.historyMode === "branch"));
+  useLayoutEffect(() => {
+    if (historyGate.current?.resume(historyIdentity, graph?.loadedCount || 0, loadingMore, Boolean(hasOlder && graph?.historyMode === 'full'))) onGraphMore();
+  }, [historyIdentity, graph?.loadedCount, loadingMore, hasOlder, graph?.historyMode, onGraphMore]);
   return (
     <View style={styles.graphSection}>
       <View style={styles.sectionHeader}>
@@ -212,6 +220,7 @@ export function CommitGraph({
       {!sectionLayout.collapsed ? (
         <SectionViewport
           id="graph"
+          scrollAnchor={scrollAnchor}
 
           availableHeight={availableHeight}
 
@@ -220,12 +229,12 @@ export function CommitGraph({
           styles={styles}
           onScroll={(event) => {
             const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-            const identity = `${graphIdentity}:${repository.head}:${graph?.historyMode}`;
-            if (historyGate.current?.allow(identity, graph?.loadedCount || 0, contentOffset.y, layoutMeasurement.height, contentSize.height, loadingMore, Boolean(hasOlder && graph?.historyMode === "full"))) onGraphMore();
+            historyOffset.current = contentOffset.y;
+            if (historyGate.current?.allow(historyIdentity, graph?.loadedCount || 0, contentOffset.y, layoutMeasurement.height, contentSize.height, loadingMore, Boolean(hasOlder && graph?.historyMode === "full"))) onGraphMore();
           }}
         >
           {rows.length || showWorktree ? (
-            <View style={[styles.graphSurface, { minHeight: graphHeight }]}>
+            <View testID="workbench-graph-content" style={[styles.graphSurface, { minHeight: graphHeight }, Platform.OS === "web" ? { overflowAnchor: "none" } as unknown as ViewStyle : undefined]}>
               <View style={styles.graphRows}>
                 {showWorktree ? (
                   <WorkingTreeRow
@@ -261,6 +270,7 @@ export function CommitGraph({
           {graph && !loading && !error && !rows.length ? <Text style={styles.emptyText}>{copy.text_a07cd6a10e}</Text> : null}
           {graph?.historyMode === "branch" ? (
             <Pressable accessibilityRole="button" disabled={loadingMore} onPress={onGraphBase} style={[styles.historyButton, loadingMore && styles.historyButtonDisabled]}>
+              <ActivityIndicator animating={loadingMore} hidesWhenStopped color={observerAccent(theme)} size="small" />
               <Text style={styles.historyButtonText}>{copy.text_80a8716fca}</Text>
             </Pressable>
           ) : graph?.historyMode === "full" && hasOlder ? (
@@ -374,6 +384,7 @@ export const GraphCommitRow = memo(function GraphCommitRow({
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ selected }}
+      testID={`workbench-commit-${row.node.sha}`}
       onHoverIn={() => onHoverCommit?.(row.node.sha)}
       onHoverOut={() => onHoverClear?.(row.node.sha)}
       onPress={() => {

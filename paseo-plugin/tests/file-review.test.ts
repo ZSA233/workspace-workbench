@@ -15,3 +15,24 @@ test('tabs isolate workspace and scope, activate new files and close to their ne
  assert.equal(getFileReviews('fixture')[0].workspaceId,'one');
  clearFileReviews('fixture');
 });
+
+import { getFileReviewPosition } from '../client/file-review-store.ts';
+test('file positions survive panel remounts but are isolated by file, scope, host and layout and removed on close', () => {
+ const a:FileReviewSelection={workspaceId:'one',repoPath:'api',path:'file.ts',scope:'working',branch:'feature',status:'M',statusLabel:'Modified'};
+ const b={...a,path:'other.ts'};
+ const request={hostWorkspaceId:'positions',panelId:'changes'};
+ for(const file of [a,b])openFileReview(file,request);
+ const key=selectionKey(a), original=getFileReviewPosition('positions',key,'split');
+ original.offset=800;original.hunk=3;
+ assert.equal(getFileReviewPosition('positions',key,'split'),original);
+ assert.equal(getFileReviewPosition('positions',selectionKey(b),'split').offset,0);
+ assert.equal(getFileReviewPosition('positions',key,'unified').offset,0);
+ assert.equal(getFileReviewPosition('other-host',key,'split').offset,0);
+ closeFileReview('positions',key);
+ openFileReview(a,request);
+ assert.equal(getFileReviewPosition('positions',key,'split').offset,0);
+ clearFileReviews('positions');
+ openFileReview(a,request);
+ assert.equal(getFileReviewPosition('positions',key,'split').hunk,0);
+ clearFileReviews('positions');
+});

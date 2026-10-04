@@ -97,7 +97,7 @@ export function Icon({ name, size = 16, color }: IconProps) {
   return isRenderable(Text) ? createElement(Text as any, { style: { color, fontSize: size, lineHeight: size } }, glyph) : null;
 }
 
-export function ScrollView(props: ScrollViewProps) {
+export function ScrollView(props: ScrollViewProps & { ref?: Ref<NativeScrollView> }) {
   // Host controls are web-oriented injections. Android/iOS must use the
   // platform renderer directly; some host implementations install DOM/event
   // effects that are not valid in a native surface.

@@ -6,7 +6,8 @@ import { isRecoverableObserverFailure, queryFailureForDisplay, resultOf } from '
 import { type ChangeScope, type ChangesResult, type DetailResult, type GraphResult, type WorkspaceSummary } from './model';
 import { reportNativeDiagnostic } from './native-diagnostics';
 import { RECOVERABLE_FAILURE_GRACE_MS, useLastSuccessfulResponse } from './observation';
-import { observationQueryOptions } from './observation-content';
+import { useQueryContinuity } from './query-continuity';
+import { displayedObservation, observationQueryOptions } from './observation-content';
 import { hydrateRepositorySummaries } from './observation-publication';
 import { queryDiagnosticDetails } from './panel/observation-display';
 import { refreshRegionFeedback } from './repository-refresh-client';
@@ -66,8 +67,9 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
     const selectedRepository = displayDetail?.workspace.id === selectedWorkspaceId
         ? displayDetail.repositories.find((repository) => repository.repoPath === selectedRepoPath)
         : undefined;
+    const graphKey = ["workspace-workbench", projectConfig, "repository-graph", selectedWorkspaceId, selectedRepoPath, graphView.historyMode, graphView.maxCommits];
     const graphQuery = useQuery({
-        queryKey: ["workspace-workbench", projectConfig, "repository-graph", selectedWorkspaceId, selectedRepoPath, graphView.historyMode, graphView.maxCommits],
+        queryKey: graphKey,
         queryFn: () => rpc({
             method: "repository.graph",
             params: {
@@ -83,7 +85,15 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
         ...observationQueryOptions,
     });
     const graphState = useLastSuccessfulResponse(`repository-graph:${projectConfig}:${selectedWorkspaceId}:${selectedRepoPath}:${graphView.historyMode}:${graphView.maxCommits}`, graphQuery.data, { error: graphQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository });
-    const graph = resultOf<GraphResult>(graphState.response);
+    const graphContent = useQueryContinuity<GraphResult>(
+        JSON.stringify([projectConfig, selectedWorkspaceId, selectedRepoPath, selectedRepository?.head, selectedRepository?.baseSha]),
+        graphKey, Array.isArray((graphState.response?.result as GraphResult)?.nodes) ? resultOf<GraphResult>(graphState.response) ?? undefined : undefined,
+        data => {
+            const cached = resultOf<GraphResult>(displayedObservation(data as ObserverResponse | undefined));
+            return Array.isArray(cached?.nodes) && cached.head === selectedRepository?.head && cached.baseSha === selectedRepository?.baseSha ? cached! : undefined;
+        },
+    );
+    const graph = graphContent.displayed ?? null;
     const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error, localizedCopy);
     reportNativeDiagnostic("project-panel-graph-state", { projectConfig, workspaceId: selectedWorkspaceId, repoPath: selectedRepoPath, nodeCount: String(graph?.nodes?.length ?? ""), ...queryDiagnosticDetails(graphQuery.data, graphQuery.error, graphQuery, graphState) });
     const changesScope: ChangeScope = selectedCommit ? "commit" : changeScope;
@@ -104,7 +114,8 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
         ...observationQueryOptions,
     });
     const changesState = useLastSuccessfulResponse(`repository-changes:${projectConfig}:${selectedWorkspaceId}:${selectedRepoPath}:${changesScope}:${selectedCommit}`, changesQuery.data, { error: changesQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository });
-    const changes = resultOf<ChangesResult>(changesState.response);
+    const changesResult = resultOf<ChangesResult>(changesState.response);
+    const changes = Array.isArray(changesResult?.files) ? changesResult : null;
     const changesFailure = queryFailureForDisplay(changesState, changesQuery.data, changesQuery.error, localizedCopy);
     const refreshInput = { workspaceId: selectedWorkspaceId, repoPath: selectedRepoPath, historyMode: graphView.historyMode, maxCommits: graphView.maxCommits, scope: changesScope, commitSha: selectedCommit || undefined };
     const refreshRpc = (params: Record<string, unknown>) => rpc({ method: 'observer.refresh', params });
@@ -112,7 +123,12 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
     const basicSummaries = useWorkspaceSummaries(projectConfig, selectedWorkspaceId, (displayDetail?.repositories || []).map(repo => repo.repoPath), selectedRepoPath, basicCapable && foreground && tab === 'workspace' && backendReady, refreshRpc, { historyMode: graphView.historyMode, maxCommits: graphView.maxCommits });
     const basicFailed = basicSummaries.failures.some(failure => failure.repoPath === selectedRepoPath);
     const graphFeedback = refreshRegionFeedback(selectedRefresh.query.data, 'graph', Boolean(graph), basicFailed);
+    const graphRegion = selectedRefresh.result?.regions?.graph;
+    const graphBusy = refreshCapable
+        ? graphRegion?.state === 'ready' ? false : selectedRefresh.query.isFetching || !graphFeedback.failed && (graphRegion ? ['queued', 'running'].includes(graphRegion.state) : selectedRefresh.pending)
+        : graphQuery.isFetching;
+    const retryGraph = refreshCapable ? selectedRefresh.refresh : () => { void graphQuery.refetch({ cancelRefetch: false }); };
     const changesFeedback = refreshRegionFeedback(selectedRefresh.query.data, 'changes', Boolean(changes), basicFailed);
     reportNativeDiagnostic("project-panel-changes-state", { projectConfig, workspaceId: selectedWorkspaceId, repoPath: selectedRepoPath, ...queryDiagnosticDetails(changesQuery.data, changesQuery.error, changesQuery, changesState) });
-    return { detailQuery, detailState, detail, detailFailure, detailUnavailable, displayDetail, selectorWorkspace, selectedRepository, graphQuery, graphState, graph, graphFailure, changesScope, changesQuery, changesState, changes, changesFailure, selectedRefresh, basicSummaries, graphFeedback, changesFeedback };
+    return { detailQuery, detailState, detail, detailFailure, detailUnavailable, displayDetail, selectorWorkspace, selectedRepository, graphQuery, graphState, graph, graphFailure, changesScope, changesQuery, changesState, changes, changesFailure, selectedRefresh, basicSummaries, graphFeedback, changesFeedback, graphBusy, retryGraph };
 }

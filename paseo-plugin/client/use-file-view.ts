@@ -4,7 +4,7 @@ import { Platform } from 'react-native';
 import { clientDiagnostic } from '../shared/client-diagnostics';
 import { openFileReview } from './file-review-store';
 import type { ChangeScope, FileChange, RepositorySummary, WorkspaceSummary } from './model';
-export function useFileView({ projectConfig, hostWorkspaceId, agentId, selectedWorkspace, selectedRepository, selectedRepoPath, selectedCommit, changesScope, graphView, setGraphView, graphQuery, graphLoadedCount, animateSectionLayout, setSelectedCommit, setSelectedFile, setSelectedRepoPath, setRepositoryDetailsOpen }: {
+export function useFileView({ projectConfig, hostWorkspaceId, agentId, selectedWorkspace, selectedRepository, selectedRepoPath, selectedCommit, changesScope, graphView, setGraphView, graphBusy, retryGraph, graphLoadedCount, animateSectionLayout, setSelectedCommit, setSelectedFile, setSelectedRepoPath, setRepositoryDetailsOpen }: {
     projectConfig: string;
     hostWorkspaceId: string;
     agentId?: string;
@@ -21,10 +21,8 @@ export function useFileView({ projectConfig, hostWorkspaceId, agentId, selectedW
         historyMode: 'branch' | 'full';
         maxCommits: number;
     }>>;
-    graphQuery: {
-        refetch: () => Promise<unknown>;
-        isFetching: boolean;
-    };
+    graphBusy: boolean;
+    retryGraph: () => void;
     graphLoadedCount: number;
     animateSectionLayout: () => void;
     setSelectedCommit: (sha: string) => void;
@@ -37,19 +35,21 @@ export function useFileView({ projectConfig, hostWorkspaceId, agentId, selectedW
         setSelectedCommit(sha);
         setSelectedFile("");
     }, []);
-    const onGraphBase = useCallback(() => setGraphView((current) => ({ ...current, historyMode: "full", maxCommits: 50 })), []);
-    const graphRefetch = graphQuery.refetch;
-    const graphFetching = graphQuery.isFetching;
+    const onGraphBase = useCallback(() => {
+        if (graphBusy) return;
+        if (graphView.historyMode === 'full') { retryGraph(); return; }
+        setGraphView(current => ({ historyMode: 'full', maxCommits: Math.max(50, current.maxCommits) }));
+    }, [graphBusy, graphView.historyMode, retryGraph, setGraphView]);
     const onGraphMore = useCallback(() => {
-        if (graphFetching)
+        if (graphBusy)
             return;
         const next = Math.min(graphLoadedCount + 50, 200);
         if (next <= graphView.maxCommits) {
-            void graphRefetch();
+            retryGraph();
             return;
         }
         setGraphView((current) => ({ ...current, maxCommits: next }));
-    }, [graphFetching, graphLoadedCount, graphRefetch, graphView.maxCommits]);
+    }, [graphBusy, graphLoadedCount, retryGraph, graphView.maxCommits, setGraphView]);
     const onOpenChangedFile = useCallback((file: FileChange) => {
         void sendFileDiagnostic({ phase: "file-read-row-click", platform: Platform.OS, details: { repositoryReady: String(Boolean(selectedRepository)), workspaceReady: String(Boolean(selectedWorkspace)), at: String(Date.now()) } }).catch(() => { });
         if (!selectedRepository || !selectedWorkspace)

@@ -5,7 +5,7 @@ import { observationMeta } from "./observation-coordinator.ts";
 import { observationQueryOptions } from './observation-content.ts';
 import { useObservationVersions, observationRefreshDiagnostics } from "./use-observation-versions";
 import { usePanelForeground } from "./foreground-activity";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type PluginAgentPanelProps,
@@ -40,6 +40,7 @@ import {
 } from "./model";
 import {
   closeFileReview,
+  getFileReviewPosition,
   selectionKey,
   setActiveFileReview,
   type FileReviewSelection,
@@ -142,6 +143,8 @@ export function FileReviewPanel(props: FilePanelProps) {
 
   const reader = useRef(createDiffReadClient()).current;
   const readKey = activeSelection ? selectionKey(activeSelection) : '';
+  const viewKey = JSON.stringify([hostWorkspaceId, readKey, mode]);
+  const viewPosition = getFileReviewPosition(hostWorkspaceId, readKey, mode);
   const readRpcRef = useRef<DiffRpc>(async () => ({ ok: false }));
   const diffRpc: DiffRpc = (method, params) => rpc({ method, params, projectConfig: activeSelection?.projectConfig });
   readRpcRef.current = diffRpc;
@@ -289,6 +292,9 @@ export function FileReviewPanel(props: FilePanelProps) {
           {diffQuery.isLoading ? <Text style={styles.emptyText}>{copy.text_a74b5d91fa}</Text> : null}
           {diff ? (
             <DiffViewer
+              key={viewKey}
+              position={viewPosition}
+              foreground={foreground}
               diff={diff}
               mode={mode}
               path={activeSelection.path}
@@ -311,6 +317,8 @@ export function FileReviewPanel(props: FilePanelProps) {
 }
 
 function DiffViewer({
+  foreground,
+  position,
   diff,
   mode,
   path,
@@ -320,6 +328,8 @@ function DiffViewer({
   theme,
   styles,
 }: {
+  foreground: boolean;
+  position: { offset: number; hunk: number };
   diff: DiffResult;
   mode: ReviewMode;
   path: string;
@@ -352,10 +362,21 @@ function DiffViewer({
   const rowHunkIndexesRef = useRef(rowHunkIndexes);
   rowHunkIndexesRef.current = rowHunkIndexes;
   const listRef = useRef<any>(null);
-  const [currentHunk, setCurrentHunk] = useState(0);
+  const [currentHunk, setCurrentHunk] = useState(Math.min(position.hunk, Math.max(0, hunkRowIndexes.length - 1)));
   const [viewportHeight, setViewportHeight] = useState(0);
-  const [scrollOffset, setScrollOffset] = useState(0);
+  const [scrollOffset, setScrollOffset] = useState(position.offset);
+  const restoredPosition = useRef(false);
+  const initialOffset = useRef({ x: 0, y: position.offset }).current;
   const [contentHeight, setContentHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    if (!foreground) { restoredPosition.current = false; return; }
+    if (restoredPosition.current || viewportHeight <= 0 || contentHeight <= 0 || !listRef.current) return;
+    const offset = Math.min(position.offset, Math.max(0, contentHeight - viewportHeight));
+    listRef.current.scrollToOffset({ offset, animated: false });
+    restoredPosition.current = true;
+    setScrollOffset(offset);
+  }, [foreground, viewportHeight, contentHeight, position]);
 
   const onListLayout = useCallback((event: any) => {
     const nextHeight = Number(event.nativeEvent?.layout?.height) || 0;
@@ -363,10 +384,8 @@ function DiffViewer({
   }, []);
 
   useEffect(() => {
-    setCurrentHunk(0);
-    setScrollOffset(0);
-    setContentHeight(0);
-  }, [diff.patch, mode]);
+    setCurrentHunk(current => Math.min(current, Math.max(0, hunkRowIndexes.length - 1)));
+  }, [hunkRowIndexes.length]);
 
   const jumpToHunk = useCallback((requestedIndex: number) => {
     if (!hunkRowIndexes.length) return;
@@ -387,6 +406,7 @@ function DiffViewer({
     const firstIndex = visibleIndexes[0];
     if (firstIndex === undefined) return;
     const nextHunk = rowHunkIndexesRef.current[firstIndex] || 0;
+    position.hunk = nextHunk;
     setCurrentHunk((previous) => previous === nextHunk ? previous : nextHunk);
   }).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 10 }).current;
@@ -460,6 +480,7 @@ function DiffViewer({
         >
           <View style={[styles.diffListViewport, mode === "split" ? styles.diffListViewportSplit : styles.diffListViewportUnified]}>
             <FlatList
+              testID="workbench-diff-lines"
               ref={listRef}
               data={rows}
               getItemLayout={(_, index) => ({
@@ -468,10 +489,14 @@ function DiffViewer({
                 offset: rowMetrics.offsets[index] || 0,
               })}
               initialNumToRender={100}
+              contentOffset={initialOffset}
               keyExtractor={(item: DiffDisplayRow) => item.key}
               onLayout={onListLayout}
               onContentSizeChange={(_, height) => setContentHeight(height)}
-              onScroll={(event: any) => setScrollOffset(Number(event.nativeEvent?.contentOffset?.y) || 0)}
+              onScroll={(event: any) => {
+                const offset = Number(event.nativeEvent?.contentOffset?.y) || 0;
+                if (restoredPosition.current && foreground && event.nativeEvent?.layoutMeasurement?.height !== 0) { position.offset = offset; setScrollOffset(offset); }
+              }}
               onScrollToIndexFailed={({ index }: { index: number }) => {
                 listRef.current?.scrollToOffset?.({ offset: Math.max(0, rowMetrics.offsets[index] || 0), animated: true });
               }}

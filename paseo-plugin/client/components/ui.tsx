@@ -2,7 +2,7 @@ import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { createContext,useContext,useEffect,useRef,useState,type ReactNode } from "react";
+import { createContext,useContext,useEffect,useLayoutEffect,useRef,useState,type ReactNode } from "react";
 import { ActivityIndicator,PanResponder,Platform,Pressable,StyleSheet,Text,View,type ScrollViewProps,type ViewStyle } from "react-native";
 import { copy,formatCopyFrom,type WorkbenchCopy } from "../../shared/copy";
 import { Icon,ScrollView } from "../native-components";
@@ -10,6 +10,7 @@ import { compactRefLabel } from "../repository-reference";
 export { compactRefLabel,repositoryBranchLabel,repositoryCurrentRefDetail,repositoryRefMismatch } from "../repository-reference";
 
 import { type ObserverResponse } from "../../shared/observer";
+import { anchoredOffset } from '../graph/continuity';
 import { GRAPH_ROW_HEIGHT } from "../graph/constants";
 import { useWorkbenchCopy } from "../i18n";
 import {
@@ -272,6 +273,7 @@ export const SectionAllocationContext = createContext<{
 } | null>(null);
 
 export function SectionViewport({
+  scrollAnchor,
   windowed = false,
   onScroll,
   id,
@@ -284,6 +286,7 @@ export function SectionViewport({
   styles,
   children,
 }: {
+  scrollAnchor?: { identity: string; keys: string[]; rowHeight: number };
   windowed?: boolean;
   onScroll?: ScrollViewProps["onScroll"];
   id: ObserverSectionId;
@@ -298,6 +301,18 @@ export function SectionViewport({
 }) {
   const copy = useWorkbenchCopy();
   const allocation = useContext(SectionAllocationContext);
+  const scrollRef = useRef<import('react-native').ScrollView>(null);
+  const scrollOffset = useRef(0);
+  const previousAnchor = useRef(scrollAnchor);
+  useLayoutEffect(() => {
+    const before = previousAnchor.current;
+    previousAnchor.current = scrollAnchor;
+    if (!scrollAnchor || !before) return;
+    const offset = before.identity === scrollAnchor.identity
+      ? anchoredOffset(before.keys, scrollAnchor.keys, scrollOffset.current, scrollAnchor.rowHeight) : 0;
+    scrollOffset.current = offset;
+    scrollRef.current?.scrollTo({ y: offset, animated: false });
+  }, [scrollAnchor]);
   const [contentHeight, setContentHeight] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const latest = useRef(allocation);
@@ -321,7 +336,8 @@ export function SectionViewport({
   return (
     <View style={[styles.sectionViewportFrame, !resizable && { minHeight: MIN_SECTION_HEIGHT }]}>
       <ScrollView
-        onScroll={onScroll}
+        ref={scrollRef}
+        onScroll={event => { scrollOffset.current = event.nativeEvent.contentOffset.y; onScroll?.(event); }}
         scrollEventThrottle={32}
         nestedScrollEnabled
         scrollEnabled={!dragging && (!allocation?.outerScroll || windowed)}
@@ -332,7 +348,7 @@ export function SectionViewport({
         }}
         contentContainerStyle={[styles.sectionViewportContent, !resizable && styles.sectionViewportContentNoResize]}
         showsVerticalScrollIndicator={contentHeight > viewportHeight + 1}
-        style={[styles.sectionViewport, boundedStyle, stableScrollbarStyle]}
+        style={[styles.sectionViewport, boundedStyle, stableScrollbarStyle, scrollAnchor && Platform.OS === "web" ? { overflowAnchor: "none" } as unknown as ViewStyle : null]}
       >
         {children}
       </ScrollView>

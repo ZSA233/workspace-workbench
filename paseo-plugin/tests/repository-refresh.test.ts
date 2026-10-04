@@ -96,12 +96,21 @@ test('persisted snapshots survive restart and are returned before delayed Git re
     await finish(f.service, { workspaceId: id, repoPath: 'one', scope: 'working', requestId: 'before' });
     await f.service.close(); next = new Service(loadConfig(f.config));
     const original = Git.prototype.run;
-    Git.prototype.run = async function(...args) { await sleep(250); return original.apply(this, args); };
+    let release!: () => void;
+    const gitGate = new Promise<void>(resolve => { release = resolve; });
+    Git.prototype.run = async function(...args) { await gitGate; return original.apply(this, args); };
     try {
-      const task = await next.handle('observer.refresh', { workspaceId: id, repoPath: 'one', scope: 'working', requestId: 'after' });
+      let task = await next.handle('observer.refresh', { workspaceId: id, repoPath: 'one', scope: 'working', requestId: 'after' });
+      // Control acceptance can precede metadata hydration, especially after a
+      // worker restart. Wait for retained data while Git stays explicitly blocked.
+      for (let i = 0; i < 100 && !task.result?.regions?.graph?.result; i++) {
+        await sleep(20);
+        task = await next.handle('observer.refresh', { action: 'status', requestId: 'after', taskId: task.taskId });
+      }
       assert.ok(task.result.regions.graph.result.nodes.length);
       assert.equal(task.result.regions.graph.state, 'queued');
-    } finally { await next.close(); next = undefined; Git.prototype.run = original; }
+      assert.ok(['queued', 'running'].includes(task.state));
+    } finally { release(); await next.close(); next = undefined; Git.prototype.run = original; }
   } finally { await next?.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 

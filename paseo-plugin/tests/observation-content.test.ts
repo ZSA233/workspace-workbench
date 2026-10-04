@@ -24,3 +24,11 @@ test('query removal discards retained data; another query cannot inherit it',asy
  await client.fetchQuery({queryKey:key,queryFn:async()=>({ok:false}),...observationQueryOptions});
  assert.equal(displayedObservation(client.getQueryData(key)),undefined);client.clear();
 });
+test('aggregate completion replaces pending protocol state even without a leaf read timestamp',async()=>{
+ const client=new QueryClient(),key=['test','refresh'];
+ let value:ObserverResponse={ok:true,result:{regions:{graph:{state:'ready',result:{commits:['old']}}},observation:{state:'ready',readStartedAt:20}}};
+ const read=()=>client.fetchQuery({queryKey:key,queryFn:async()=>value,...observationQueryOptions,staleTime:0});
+ await read();value={ok:true,result:{observation:{state:'ready',refreshing:true,readTask:{id:'new',state:'running'}}}};await read();
+ value={ok:true,result:{regions:{graph:{state:'ready',result:{commits:['new']}}},observation:{state:'ready'}}};await read();
+ assert.deepEqual(client.getQueryData(key),value);assert.equal((client.getQueryData<ObserverResponse>(key)!.result as any).observation.readTask,undefined);client.clear();
+});

@@ -1,79 +1,51 @@
-import {useWorkspaceCatalog} from "./use-workspace-catalog";
-import {useWorkspaceHandoff,appendAssetReference} from "./use-workspace-handoff";
-import {useReviewSession} from "./use-review-session";
-import { useWorkbenchSettings } from "./use-workbench-settings";
-import { hydrateRepositorySummaries } from "./observation-publication";
-import { useWorkspaceActions } from './use-workspace-actions';
-import { observationMeta } from './observation-coordinator';
-import { refreshRegionFeedback } from "./repository-refresh-client";
-import { usePreparationTask } from "./use-preparation-task";
-import { useWorkspaceSummaries } from "./use-workspace-summaries";
-import { useRepositoryRefresh } from "./use-repository-refresh";
-import { clientDiagnostic } from "../shared/client-diagnostics";
-import { observationQueryOptions } from './observation-content.ts';
-import { useObservationRefresh } from "./use-observation-refresh";
-import { useObservationVersions, refreshObservations } from "./use-observation-versions";
 import {
 useRpc,
 type PluginAgentPanelProps,
-type PluginSurfaceProps,
-type PluginWorkspacePanelProps,
+type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
-import { copyText,Modal,ScrollView,TextInput,useToast } from "./native-components";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery,useQueryClient } from "@tanstack/react-query";
 import { useCallback,useEffect,useMemo,useRef,useState } from "react";
 import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,View,type ViewStyle } from "react-native";
-import { copy, getWorkbenchCopy, localizedReviewError, type WorkbenchCopy, type WorkbenchLocale } from "../shared/copy";
+import { type WorkbenchCopy,type WorkbenchLocale } from "../shared/copy";
+import { copyText,Modal,ScrollView,TextInput,useToast } from "./native-components";
+import { observationQueryOptions } from './observation-content.ts';
+import { observationMeta } from './observation-coordinator';
+import { useFileView } from "./use-file-view";
+import { useObservationRefresh } from "./use-observation-refresh";
+import { refreshObservations,useObservationVersions } from "./use-observation-versions";
+import { usePreparationTask } from "./use-preparation-task";
+import { useRepositoryObservation } from "./use-repository-observation";
+import { useReviewSession } from "./use-review-session";
+import { useWorkbenchSettings } from "./use-workbench-settings";
+import { useWorkspaceActions } from './use-workspace-actions';
+import { useWorkspaceCatalog } from "./use-workspace-catalog";
+import { appendAssetReference,useWorkspaceHandoff } from "./use-workspace-handoff";
+import { useWorkspaceSelection } from "./use-workspace-selection";
 
+import { type AgentPermissionMode,type AgentRelationship } from "../shared/agent-session";
 import {
-  agentContextQuery,
-  workspaceBindingQuery,
-  workspaceDelegate,
-  workspaceHandoffPreview,
-  type AgentContextResponse,
-  type WorkspaceBindingResponse,
-  type WorkspaceDelegateResponse,
-} from "../shared/handoff";
-import type { Handoff } from "../shared/handoff";
-import type { ReviewPacket } from "../shared/review-packet";
-import { artifactList } from "../shared/artifacts";
-import { agentSessionProviders, agentSessionSettingsGet, agentSessionSettingsUpdate, type AgentPermissionMode, type AgentRelationship, type AgentSessionPatch } from "../shared/agent-session";
-import { observerQuery, type ObserverResponse } from "../shared/observer";
-import { projectsQuery, type ProjectInfo } from "../shared/projects";
-import { projectBackendStart, projectStorageQuery } from "../shared/setup";
-import {
-  DEFAULT_OBSERVATION_TIMING,
-  observationTimingFromWire,
+observationTimingFromWire
 } from "../shared/observation-timing";
-import { isMainWorkspace,isRecoverableObserverFailure,makeStyles,queryErrorMessage,queryFailureForDisplay,resultOf,TabButton,workspaceIdFromProps } from "./components/ui";
-import { openFileReview } from "./file-review-store";
+import { observerQuery } from "../shared/observer";
+import { projectsQuery,type ProjectInfo } from "../shared/projects";
+import { projectBackendStart,projectStorageQuery } from "../shared/setup";
+import { isMainWorkspace,makeStyles,queryFailureForDisplay,resultOf,TabButton,workspaceIdFromProps } from "./components/ui";
+import { usePanelForeground } from "./foreground-activity";
+import { useRefreshOnForeground } from "./foreground-refresh";
+import { localeFromHostProps,useWorkbenchCopy,useWorkbenchLocale,WorkbenchLocaleProvider } from "./i18n";
 import {
 defaultTreeMode,
 formatObservedTime,
-matchesWorkspaceFilter,
-  resolveWorkspaceSelection,
-  sortWorkspaces,
-  sortWorkspacesByLatestCommit,
 type ChangeScope,
-type ChangesResult,
-type DetailResult,
-  type FileChange,
-  type GraphResult,
-  type ListResult,
 type ReviewResult,
-type WorkspaceFilter,
-type WorkspaceSummary,
 type WorkspaceTask
 } from "./model";
-import { boundedRefresh, initialContentState, RECOVERABLE_FAILURE_GRACE_MS, useLastSuccessfulResponse } from "./observation";
-import { useRefreshOnForeground } from "./foreground-refresh";
-import { usePanelForeground } from "./foreground-activity";
-import { useObserverPreferences } from "./preferences";
-import { type WorkbenchSurfaceProps, useWorkbenchWorkspaceSnapshot, useWorkbenchWorkspaceSnapshotStatus } from "./surface-context";
-import { localeFromHostProps, useWorkbenchCopy, WorkbenchLocaleProvider, useWorkbenchLocale } from "./i18n";
 import { reportNativeDiagnostic } from "./native-diagnostics";
-import { queryDiagnosticDetails, observationAreaDetail, type ObservationArea } from "./panel/observation-display";
+import { useLastSuccessfulResponse } from "./observation";
+import { observationAreaDetail,type ObservationArea } from "./panel/observation-display";
 import { projectPreferenceScopeKey } from "./panel/scope";
+import { useObserverPreferences } from "./preferences";
+import { useWorkbenchWorkspaceSnapshot,useWorkbenchWorkspaceSnapshotStatus,type WorkbenchSurfaceProps } from "./surface-context";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type ObserverPanelContentProps = PanelProps & {
@@ -110,27 +82,24 @@ const verticalResizeCursorStyle: ViewStyle | null = Platform.OS === "web"
   ? ({ cursor: "ns-resize" } as unknown as ViewStyle)
   : null;
 
-import { AnchoredMenu,LayoutMenu,WorkspaceSelector } from "./components/navigation";
-import { IconButton } from "./components/icon-button";
-import { stableScrollbarStyle } from "./components/ui";
-import { SectionAllocationContext } from "./components/ui";
-import { allocateSections } from "./section-allocation";
-import { useSectionSizing } from "./use-section-sizing";
-import { chooseProject, useProjectMemory } from "./project-memory";
 import { CreateWorkspace } from "./components/create-workspace";
+import { IconButton } from "./components/icon-button";
+import { AnchoredMenu,LayoutMenu,WorkspaceSelector } from "./components/navigation";
+import { ProjectRuntimeMenu } from "./components/project-runtime";
 import { ProjectSetup } from "./components/project-setup";
 import { ProjectStorageMenu } from "./components/project-storage";
-import { ProjectRuntimeMenu } from "./components/project-runtime";
+import { SectionAllocationContext,stableScrollbarStyle } from "./components/ui";
 import { WorkspaceDeletionPanel } from "./components/workspace-deletion";
+import { chooseProject,useProjectMemory } from "./project-memory";
+import { useSectionSizing } from "./use-section-sizing";
 
 import { ExecutionBindingCard } from "./components/agent";
 
-import { WorkspaceView, ToolchainNotice } from "./components/repositories";
+import { ToolchainNotice,WorkspaceView } from "./components/repositories";
 
-import { ReviewView } from "./components/review";
 import { AgentReviewView } from "./components/agent-review";
 import { HandoffMaterialsCard } from "./components/handoff-materials";
-import { reviewModels, reviewSessionControl, reviewSessionList, reviewSessionQuery, reviewSessionStart, reviewSettingsGet, reviewSettingsUpdate, type ReviewModelOverride, type ReviewPreferencePatch, type ReviewSession } from "../shared/agent-review";
+import { ReviewView } from "./components/review";
 
 export function WorkbenchPanel(props: PanelProps) {
   const hostWorkspaceId = workspaceIdFromProps(props);
@@ -293,7 +262,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, []);
   reportNativeDiagnostic("project-panel-accessibility-ready");
   const queryClient = useQueryClient();
-  const sendFileDiagnostic = useRpc(clientDiagnostic);
   const rawRpc = useRpc(observerQuery);
   reportNativeDiagnostic("project-panel-observer-rpc-ready");
   const rpc = (input: Parameters<typeof rawRpc>[0]) => rawRpc({ ...input, projectConfig });
@@ -358,12 +326,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
 
   const toast = useToast();
   const selectedWorkspaceId = preferences.selectedWorkspaceId;
-  const [selectionResolved, setSelectionResolved] = useState(false);
-  const [selectorOpen, setSelectorOpen] = useState(false);
-  const [activityScanId, setActivityScanId] = useState("");
-  const activityScanIdRef = useRef("");
-  const [activityScanProgress, setActivityScanProgress] = useState<{ completed: number; total: number } | null>(null);
-  const [sortByLatestCommit, setSortByLatestCommit] = useState(false);
   const [selectedRepoPath, setSelectedRepoPath] = useState("");
   const refreshArea = useCallback((kind: string) => refreshObservations(queryClient, projectConfig, q =>
     q.key[2] === kind && (kind === "workspace-list" || kind === "review" ||
@@ -373,7 +335,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [reviewTab, setReviewTab] = useState<"set" | "agent">("set");
   const [reviewSessionId, setReviewSessionId] = useState("");
   const [mainReviewInstructions, setMainReviewInstructions] = useState("");
-  const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>("all");
   const [selectedCommit, setSelectedCommit] = useState("");
   const [selectedFile, setSelectedFile] = useState("");
   const [changeScope, setChangeScope] = useState<Exclude<ChangeScope, "commit">>("branch");
@@ -385,11 +346,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [targetOverrides, setTargetOverrides] = useState<Record<string, string>>({});
   const [createOpen, setCreateOpen] = useState(false);
   const [addRepositoriesOpen, setAddRepositoriesOpen] = useState(false);
-  const newlyCreatedWorkspace = useRef<string | null>(null);
 
 
 
-  useEffect(() => { setSelectionResolved(false); }, [preferenceScopeKey]);
   useEffect(() => {
     setSelectedRepoPath("");
     setSelectedCommit("");
@@ -398,125 +357,14 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     scopeRepositoryIdentity.current = "";
   }, [preferenceScopeKey, selectedWorkspaceId]);
 
-  const listQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "workspace-list"],
-    queryFn: () => rpc({ method: "workspace.list", params: { includeRemoved: true } }),
-    enabled: foreground && Boolean(projectConfig && backendReady),
-    refetchInterval: false,
-    refetchIntervalInBackground: false,
-    ...observationQueryOptions,
-  });
-  const listState = useLastSuccessfulResponse(`workspace-list:${projectConfig}`, listQuery.data, { error: listQuery.error, staleAfterMs: observationTiming.staleWindowsMs.list });
-  const listResult = resultOf<ListResult>(listState.response);
-  const listFailure = !listResult && listState.failed ? localizedCopy.workspaceListUnavailable : queryFailureForDisplay(listState, listQuery.data, listQuery.error, localizedCopy);
-  reportNativeDiagnostic("project-panel-list-state", {projectConfig,...queryDiagnosticDetails(listQuery.data, listQuery.error, listQuery, listState)});
-  const listReady = Boolean(listResult);
-  const {mainRepositoriesOpen, setMainRepositoriesOpen, mainRepositoryFilter, setMainRepositoryFilter, mainRepositoryDraft, setMainRepositoryDraft, savingMainRepositories, linkedWorkspacesOpen, setLinkedWorkspacesOpen, linkedWorkspaceFilter, setLinkedWorkspaceFilter, linkedWorkspaceDraft, setLinkedWorkspaceDraft, savingLinkedWorkspaces, orphanId, setOrphanId, orphanBranches, setOrphanBranches, adoptingOrphan, orphanError, orphanPreviewQuery, orphanPreview, mainRepositoriesQuery, mainRepositories, linkedWorkspacesQuery, linkedWorkspaces, saveMainRepositories, saveLinkedWorkspaces, adoptSelectedOrphan}=useWorkspaceCatalog({projectConfig,backendReady,rpc,localizedCopy,refreshArea,onAdopted:id=>{newlyCreatedWorkspace.current=id;selectWorkspace(id);}});
+  const workspaceDirectory = paseoWorkspace?.directory || "";
+  const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab("workspace");},[]);
+  const onWorkspaceSelectionLost=useCallback(()=>{setSelectedRepoPath("");setSelectedCommit("");setSelectedFile("");scopeRepositoryIdentity.current="";},[]);
+  const {selectionResolved, selectorOpen, activityScanProgress, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, cancelWorkspaceActivityScan, openWorkspaceSelector, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
+  const {mainRepositoriesOpen, setMainRepositoriesOpen, mainRepositoryFilter, setMainRepositoryFilter, mainRepositoryDraft, setMainRepositoryDraft, savingMainRepositories, linkedWorkspacesOpen, setLinkedWorkspacesOpen, linkedWorkspaceFilter, setLinkedWorkspaceFilter, linkedWorkspaceDraft, setLinkedWorkspaceDraft, savingLinkedWorkspaces, orphanId, setOrphanId, orphanBranches, setOrphanBranches, adoptingOrphan, orphanError, orphanPreviewQuery, orphanPreview, mainRepositoriesQuery, mainRepositories, linkedWorkspacesQuery, linkedWorkspaces, saveMainRepositories, saveLinkedWorkspaces, adoptSelectedOrphan}=useWorkspaceCatalog({projectConfig,backendReady,rpc,localizedCopy,refreshArea,onAdopted:selectCreatedWorkspace});
   const observationVersionsEnabled = backendReady && foreground;
   const observationIssue = useObservationVersions(projectConfig, tab === "review" ? [selectedWorkspaceId, ...reviewIds] : [selectedWorkspaceId], observationVersionsEnabled);
 
-  useEffect(() => { if (listReady) props.onProjectReady?.(); }, [listReady, props.onProjectReady]);
-  const listContentState = initialContentState(listReady, listState.failed);
-  const listUnavailable = listContentState === 'unavailable';
-  const observedWorkspaces = useMemo(() => {
-    const rows = listReady ? listResult?.workspaces || [] : [];
-    return sortByLatestCommit ? sortWorkspacesByLatestCommit(rows) : sortWorkspaces(rows);
-  }, [listReady, listResult?.workspaces, sortByLatestCommit]);
-  const allWorkspaces = useMemo(
-    () => observedWorkspaces.filter((workspace) => workspace.state !== "removed"),
-    [observedWorkspaces],
-  );
-  const historyWorkspaces = useMemo(
-    () => observedWorkspaces.filter((workspace) => workspace.state === "removed"),
-    [observedWorkspaces],
-  );
-  const workspacePool = workspaceFilter === "history" ? historyWorkspaces : allWorkspaces;
-  const visibleWorkspaces = useMemo(
-    () => workspacePool.filter((workspace) => matchesWorkspaceFilter(workspace, workspaceFilter)),
-    [workspacePool, workspaceFilter],
-  );
-  const cancelWorkspaceActivityScan = useCallback((closeSelector = true) => {
-    const scanId = activityScanIdRef.current;
-    activityScanIdRef.current = "";
-    if (closeSelector) setSelectorOpen(false);
-    setActivityScanId("");
-    setActivityScanProgress(null);
-    if (scanId) void rpcRef.current({ method: "workspace.activity", params: { action: "cancel", scanId } });
-  }, []);
-  const openWorkspaceSelector = useCallback(() => {
-    if (selectorOpen) {
-      cancelWorkspaceActivityScan();
-      return;
-    }
-    setSelectorOpen(true);
-    setSortByLatestCommit(false);
-    const scanId = `selector-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    activityScanIdRef.current = scanId;
-    void rpcRef.current({
-      method: "workspace.activity",
-      params: { action: "start", scanId, workspaceIds: observedWorkspaces.map((workspace) => workspace.id) },
-    }).then((response) => {
-      if (activityScanIdRef.current !== scanId) return;
-      if (!response.ok) {
-        activityScanIdRef.current = "";
-        setActivityScanId("");
-        setActivityScanProgress(null);
-        void refreshArea("workspace-list").finally(() => setSortByLatestCommit(true));
-        return;
-      }
-      const status = response.result as { state?: string; completed?: number; total?: number } | undefined;
-      setActivityScanProgress({ completed: status?.completed || 0, total: status?.total || 0 });
-      if (status?.state === "running") {
-        setActivityScanId(scanId);
-      } else {
-        activityScanIdRef.current = "";
-        setActivityScanId("");
-        setActivityScanProgress(null);
-        void refreshArea("workspace-list").finally(() => setSortByLatestCommit(true));
-      }
-    }).catch(() => {
-      if (activityScanIdRef.current !== scanId) return;
-      activityScanIdRef.current = "";
-      void rpcRef.current({ method: "workspace.activity", params: { action: "cancel", scanId } });
-      setActivityScanId("");
-      setActivityScanProgress(null);
-      setSortByLatestCommit(true);
-    });
-  }, [cancelWorkspaceActivityScan, listQuery.refetch, observedWorkspaces, selectorOpen]);
-  useEffect(() => {
-    if (!selectorOpen || !foreground || !activityScanId) return;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      const response = await rpcRef.current({ method: "workspace.activity", params: { action: "status", scanId: activityScanId } }).catch(() => null);
-      if (stopped || activityScanIdRef.current !== activityScanId) return;
-      const status = response?.ok ? response.result as { state?: string; completed?: number; total?: number } | undefined : undefined;
-      if (!status) {
-        timer = setTimeout(poll, 1_000);
-        return;
-      }
-      setActivityScanProgress({ completed: status.completed || 0, total: status.total || 0 });
-      if (status.state === "running") {
-        timer = setTimeout(poll, 750);
-        return;
-      }
-      activityScanIdRef.current = "";
-      setActivityScanId("");
-      setActivityScanProgress(null);
-      void refreshArea("workspace-list").finally(() => setSortByLatestCommit(true));
-    };
-    void poll();
-    return () => { stopped = true; if (timer) clearTimeout(timer); };
-  }, [activityScanId, foreground, listQuery.refetch, selectorOpen]);
-  useEffect(() => {
-    if (foreground || !activityScanIdRef.current) return;
-    cancelWorkspaceActivityScan();
-  }, [cancelWorkspaceActivityScan, foreground]);
-  useEffect(() => () => {
-    const scanId = activityScanIdRef.current;
-    if (scanId) void rpcRef.current({ method: "workspace.activity", params: { action: "cancel", scanId } });
-  }, []);
-  const workspaceDirectory = paseoWorkspace?.directory || "";
   // The active selection is independent from the selector's filter. Changing
   // from “all” to “dirty” must not make a clean selected workspace disappear
   // and trigger an unwanted fallback.
@@ -529,88 +377,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const selectedWorkspaceBlocksTasks = selectedWorkspaceUnavailable || selectedWorkspace?.state === "deletion_pending" || selectedWorkspace?.state === "removed";
   const agentId="agentId" in props ? props.agentId:undefined;
   const {handoffGoal, setHandoffGoal, handoffRelationship, setHandoffRelationship, handoffPacketOpen, setHandoffPacketOpen, handoffPreviewOpen, setHandoffPreviewOpen, materialPreview, handoffUnderstanding, setHandoffUnderstanding, handoffPlan, setHandoffPlan, handoffAcceptance, setHandoffAcceptance, handoffReferences, setHandoffReferences, handoffReviewInstructions, setHandoffReviewInstructions, workerStartMode, setWorkerStartMode, delegating, parentAgentId, agentContextAvailable, agentContextState, bindingQuery, binding, boundAgent, bindingFailure, draftHandoff, draftPacket, handoffAssetOptions, delegateSelectedWorkspace, submitSelectedWorkspace}=useWorkspaceHandoff({projectConfig,selectedWorkspaceId,foreground,listReady,selectedWorkspaceIsMain,selectedWorkspaceBlocksTasks,agentCapability:!!listResult?.capabilities?.agent,agentId,locale,localizedCopy});
-  const identifyQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "identify", workspaceDirectory],
-    queryFn: () => rpc({ method: "workspace.identify", params: { directory: workspaceDirectory } }),
-    enabled: Boolean(workspaceDirectory && backendReady && preferences.hydrated && !selectionResolved && listReady),
-    refetchInterval: false,
-    refetchIntervalInBackground: false,
-    retry: false,
-    staleTime: observationTiming.clientQueryStaleTimeMs,
-    refetchOnWindowFocus: false,
-  });
-  const identified = resultOf<{ matched: boolean; workspaceId: string | null }>(identifyQuery.data);
-
-  useEffect(() => {
-    if (!listReady || !preferences.hydrated || selectionResolved) return;
-    const hasSavedSelection = Boolean(
-      preferences.savedWorkspaceId &&
-        observedWorkspaces.some((workspace) => workspace.id === preferences.savedWorkspaceId && workspace.state !== "removed"),
-    );
-    const identifySettled = Boolean(identifyQuery.data || identifyQuery.error);
-    if (!hasSavedSelection && workspaceDirectory && !identifySettled) return;
-    const resolution = resolveWorkspaceSelection({
-      currentWorkspaceId: selectedWorkspaceId,
-      savedWorkspaceId: preferences.savedWorkspaceId,
-      identifiedWorkspaceId: identified?.matched ? identified.workspaceId : null,
-      workspaces: observedWorkspaces,
-    });
-    if (!resolution) return;
-    if (resolution.source === "current" || resolution.source === "saved") {
-      setSelectionResolved(true);
-      return;
-    }
-    preferences.selectWorkspace(resolution.workspaceId);
-    setSelectionResolved(true);
-  }, [
-    identifyQuery.data,
-    identifyQuery.error,
-    identified,
-    listReady,
-    observedWorkspaces,
-    preferences.hydrated,
-    preferences.savedWorkspaceId,
-    preferences.selectWorkspace,
-    selectedWorkspaceId,
-    selectionResolved,
-    workspaceDirectory,
-  ]);
-
-  useEffect(() => {
-    if (!listReady || !preferences.hydrated || !selectionResolved || !selectedWorkspaceId) return;
-    const currentSelection = observedWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId);
-    if (currentSelection && (currentSelection.state !== "removed" || workspaceFilter === "history")) { newlyCreatedWorkspace.current = null; return; }
-    // A successful create can precede the last-good roster's React update.
-    // Its absence from that older snapshot is not evidence of deletion.
-    if (newlyCreatedWorkspace.current === selectedWorkspaceId) return;
-    setSelectionResolved(false);
-    setSelectedRepoPath("");
-    setSelectedCommit("");
-    setSelectedFile("");
-    scopeRepositoryIdentity.current = "";
-  }, [listReady, observedWorkspaces, preferences.hydrated, selectedWorkspaceId, selectionResolved, workspaceFilter]);
-
   const refreshCapable = backendQuery.data?.readCapabilities?.refreshProtocol === 1;
   const basicCapable = backendQuery.data?.readCapabilities?.basicSummaryProtocol === 1;
-  const detailQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "workspace-detail", selectedWorkspaceId],
-    queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, mode: basicCapable ? "roster" : "summary", refreshToolchain: false } }),
-    enabled: foreground && Boolean(selectedWorkspaceId && selectedWorkspace && backendReady && listReady),
-    refetchInterval: false,
-    refetchIntervalInBackground: false,
-    ...observationQueryOptions,
-  });
-  const detailState = useLastSuccessfulResponse(`workspace-detail:${projectConfig}:${selectedWorkspaceId}`, detailQuery.data, {
-    error: detailQuery.error,
-    staleAfterMs: observationTiming.staleWindowsMs.detail,
-  });
-  const detail = resultOf<DetailResult>(detailState.response);
-  const detailFailure = queryFailureForDisplay(detailState, detailQuery.data, detailQuery.error, localizedCopy);
-  reportNativeDiagnostic("project-panel-detail-state", queryDiagnosticDetails(detailQuery.data, detailQuery.error, detailQuery, detailState));
-  const detailUnavailable = !detail
-    && detailState.initialFailure
-    && (!isRecoverableObserverFailure(detailQuery.data, detailQuery.error)
-      || (detailState.failureAgeMs ?? RECOVERABLE_FAILURE_GRACE_MS) >= RECOVERABLE_FAILURE_GRACE_MS);
+  const {detailQuery, detailState, detail, detailFailure, detailUnavailable, displayDetail, selectorWorkspace, selectedRepository, graphQuery, graphState, graph, graphFailure, changesScope, changesQuery, changesState, changes, changesFailure, selectedRefresh, basicSummaries, graphFeedback, changesFeedback}=useRepositoryObservation({projectConfig,selectedWorkspaceId,selectedWorkspace,selectedRepoPath,selectedCommit,changeScope,graphView,foreground,tab,backendReady,listReady,refreshCapable,basicCapable,selectedWorkspaceUnavailable,rpc,localizedCopy,observationTiming});
   const environmentQuery = useQuery({
     queryKey: ["workspace-workbench", projectConfig, "environment", selectedWorkspaceId],
     queryFn: () => rpc({ method: "workspace.environment", params: { workspaceId: selectedWorkspaceId, prepare: false } }),
@@ -618,74 +387,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     staleTime: 30_000, refetchOnWindowFocus: false, retry: false,
   });
   const menuToolchain = resultOf<any>(environmentQuery.data)?.toolchain;
-  const displayDetail = listReady && detail?.workspace.id === selectedWorkspaceId
-    ? hydrateRepositorySummaries(queryClient, projectConfig, detail)
-    : null;
-  const selectorWorkspace = selectedWorkspace && displayDetail
-    ? { ...selectedWorkspace, ...displayDetail.workspace }
-    : selectedWorkspace;
-  const selectedRepository = displayDetail?.workspace.id === selectedWorkspaceId
-    ? displayDetail.repositories.find((repository) => repository.repoPath === selectedRepoPath)
-    : undefined;
-
   useEffect(() => {
     const first = displayDetail?.workspace.id === selectedWorkspaceId ? displayDetail.repositories[0]?.repoPath || "" : "";
     if (!selectedRepository && first) setSelectedRepoPath(first);
     if (!first && selectedRepoPath) setSelectedRepoPath("");
   }, [displayDetail, selectedRepoPath, selectedRepository, selectedWorkspaceId]);
-
-  const graphQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "repository-graph", selectedWorkspaceId, selectedRepoPath, graphView.historyMode, graphView.maxCommits],
-    queryFn: () => rpc({
-      method: "repository.graph",
-      params: {
-        workspaceId: selectedWorkspaceId,
-        repoPath: selectedRepoPath,
-        historyMode: graphView.historyMode,
-        maxCommits: graphView.maxCommits,
-      },
-    }),
-    enabled: !refreshCapable && foreground && tab === "workspace" && Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && backendReady && listReady && !selectedWorkspaceUnavailable),
-    refetchInterval: false,
-    refetchIntervalInBackground: false,
-    ...observationQueryOptions,
-  });
-  const graphState = useLastSuccessfulResponse(`repository-graph:${projectConfig}:${selectedWorkspaceId}:${selectedRepoPath}:${graphView.historyMode}:${graphView.maxCommits}`, graphQuery.data, { error: graphQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository });
-  const graph = resultOf<GraphResult>(graphState.response);
-  const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error, localizedCopy);
-  reportNativeDiagnostic("project-panel-graph-state", {projectConfig,workspaceId:selectedWorkspaceId,repoPath:selectedRepoPath,nodeCount:String(graph?.nodes?.length ?? ""),...queryDiagnosticDetails(graphQuery.data, graphQuery.error, graphQuery, graphState)});
-  const changesScope: ChangeScope = selectedCommit ? "commit" : changeScope;
-  const changesQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "repository-changes", selectedWorkspaceId, selectedRepoPath, changesScope, selectedCommit],
-    queryFn: () => rpc({
-      method: "repository.changes",
-      params: {
-        workspaceId: selectedWorkspaceId,
-        repoPath: selectedRepoPath,
-        scope: changesScope,
-        commitSha: selectedCommit || undefined,
-      },
-    }),
-    enabled: !refreshCapable && foreground && tab === "workspace" && Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && backendReady && listReady && !selectedWorkspaceUnavailable),
-    refetchInterval: false,
-    refetchIntervalInBackground: false,
-    ...observationQueryOptions,
-  });
-  const changesState = useLastSuccessfulResponse(
-    `repository-changes:${projectConfig}:${selectedWorkspaceId}:${selectedRepoPath}:${changesScope}:${selectedCommit}`,
-    changesQuery.data,
-    { error: changesQuery.error, staleAfterMs: observationTiming.staleWindowsMs.repository },
-  );
-  const changes = resultOf<ChangesResult>(changesState.response);
-  const changesFailure = queryFailureForDisplay(changesState, changesQuery.data, changesQuery.error, localizedCopy);
-  const refreshInput = { workspaceId: selectedWorkspaceId, repoPath: selectedRepoPath, historyMode: graphView.historyMode, maxCommits: graphView.maxCommits, scope: changesScope, commitSha: selectedCommit || undefined };
-  const refreshRpc = (params: Record<string, unknown>) => rpc({ method: 'observer.refresh', params });
-  const selectedRefresh = useRepositoryRefresh(projectConfig, refreshInput, refreshCapable && foreground && tab === 'workspace' && !!selectedRepoPath && !!selectedWorkspaceId && backendReady && (!basicCapable || !!selectedRepository && !selectedRepository.observationPending && typeof selectedRepository.dirty === 'boolean'), refreshRpc);
-  const basicSummaries = useWorkspaceSummaries(projectConfig, selectedWorkspaceId, (displayDetail?.repositories || []).map(repo => repo.repoPath), selectedRepoPath, basicCapable && foreground && tab === 'workspace' && backendReady, refreshRpc, {historyMode: graphView.historyMode, maxCommits: graphView.maxCommits});
-  const basicFailed = basicSummaries.failures.some(failure => failure.repoPath === selectedRepoPath);
-  const graphFeedback = refreshRegionFeedback(selectedRefresh.query.data, 'graph', Boolean(graph), basicFailed);
-  const changesFeedback = refreshRegionFeedback(selectedRefresh.query.data, 'changes', Boolean(changes), basicFailed);
-  reportNativeDiagnostic("project-panel-changes-state", {projectConfig,workspaceId:selectedWorkspaceId,repoPath:selectedRepoPath,...queryDiagnosticDetails(changesQuery.data, changesQuery.error, changesQuery, changesState)});
 
   useEffect(() => {
     if (changeTreeMode !== null || !changes) return;
@@ -854,15 +560,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     }
   }, [closeLifecycle, props.navigation]);
 
-  function selectWorkspace(id: string): void {
-    if (newlyCreatedWorkspace.current !== id) newlyCreatedWorkspace.current = null;
-    preferences.selectWorkspace(id);
-    setSelectionResolved(true);
-    setSelectedRepoPath("");
-    setSelectorOpen(false);
-    setTab("workspace");
-  }
-
   function toggleReview(id: string): void {
     setReviewIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   }
@@ -898,54 +595,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     animateSectionLayout();
     setRepositoryDetailsOpen((current) => !current);
   }, [animateSectionLayout]);
-  const onCommit = useCallback((sha: string) => {
-    setSelectedCommit(sha);
-    setSelectedFile("");
-  }, []);
-  const onGraphBase = useCallback(() => setGraphView((current) => ({ ...current, historyMode: "full", maxCommits: 50 })), []);
-  const graphRefetch = graphQuery.refetch;
-  const graphFetching = graphQuery.isFetching;
-  const graphLoadedCount = graph?.loadedCount || 50;
-  const onGraphMore = useCallback(() => {
-    if (graphFetching) return;
-    const next = Math.min(graphLoadedCount + 50, 200);
-    if (next <= graphView.maxCommits) { void graphRefetch(); return; }
-    setGraphView((current) => ({ ...current, maxCommits: next }));
-  }, [graphFetching, graphLoadedCount, graphRefetch, graphView.maxCommits]);
-  const onOpenChangedFile = useCallback((file: FileChange) => {
-    void sendFileDiagnostic({ phase: "file-read-row-click", platform: Platform.OS, details: { repositoryReady: String(Boolean(selectedRepository)), workspaceReady: String(Boolean(selectedWorkspace)), at: String(Date.now()) } }).catch(() => {});
-    if (!selectedRepository || !selectedWorkspace) return;
-    setSelectedFile(file.path);
-    openFileReview(
-      {
-        projectConfig,
-        workspaceId: selectedWorkspace.id,
-        repoPath: selectedRepository.repoPath,
-        path: file.path,
-        oldPath: file.oldPath,
-        scope: changesScope,
-        commitSha: selectedCommit || undefined,
-        branch: selectedRepository.branch,
-        baseSha: selectedRepository.baseSha,
-        head: selectedRepository.head,
-        status: file.status,
-        statusLabel: file.statusLabel,
-      },
-      {
-        hostWorkspaceId,
-        directory: selectedWorkspace.treePath || selectedWorkspace.sourceRoot,
-        panelId: agentId ? "workspace-workbench-file-agent" : "workspace-workbench-file",
-        agentId,
-      },
-    );
-  }, [agentId, changesScope, hostWorkspaceId, projectConfig, selectedCommit, selectedRepository, selectedWorkspace, sendFileDiagnostic]);
-  const onRepo = useCallback((repoPath: string) => {
-    animateSectionLayout();
-    const changingRepository = selectedRepoPath !== repoPath;
-    setSelectedRepoPath(repoPath);
-    setSelectedFile("");
-    setRepositoryDetailsOpen(changingRepository ? true : (current) => !current);
-  }, [animateSectionLayout, selectedRepoPath]);
+  const {onCommit,onGraphBase,onGraphMore,onOpenChangedFile,onRepo}=useFileView({projectConfig,hostWorkspaceId,agentId,selectedWorkspace,selectedRepository,selectedRepoPath,selectedCommit,changesScope,graphView,setGraphView,graphQuery,graphLoadedCount:graph?.loadedCount || 50,animateSectionLayout,setSelectedCommit,setSelectedFile,setSelectedRepoPath,setRepositoryDetailsOpen});
   const onSectionToggle = useCallback((id: "repositories" | "graph" | "changes", collapsed: boolean) => {
     animateSectionLayout();
     preferences.updateSection(id, { collapsed });
@@ -1040,7 +690,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           </View>
         </Modal.Content>
       </Modal> : null}
-      {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} linkedSources={allWorkspaces.filter(workspace => workspace.kind === "linked-live")} preferredSourceId={selectedWorkspace?.kind === "linked-live" ? selectedWorkspace.id : ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await refreshArea("workspace-list"); newlyCreatedWorkspace.current = id; selectWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
+      {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} linkedSources={allWorkspaces.filter(workspace => workspace.kind === "linked-live")} preferredSourceId={selectedWorkspace?.kind === "linked-live" ? selectedWorkspace.id : ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await refreshArea("workspace-list"); selectCreatedWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
       {handoffPacketOpen ? <Modal open onOpenChange={(open) => { if (!open) setHandoffPacketOpen(false); }} title={localizedCopy.handoffPacket}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
           <Text style={styles.layoutMenuHint}>{localizedCopy.handoffPacketHint}</Text>

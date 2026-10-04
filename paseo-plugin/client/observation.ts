@@ -101,7 +101,7 @@ export function persistentObservationFailure(count: number, failureAgeMs: number
   return count >= STALE_FAILURE_LIMIT && (failureAgeMs ?? 0) >= windowMs;
 }
 
-function observedAt(response: ObserverResponse): string {
+function observedAt(response: ObserverResponse): string | null {
   const result = response.result;
   if (result && typeof result === "object") {
     const value = (result as { observedAt?: unknown }).observedAt;
@@ -112,7 +112,7 @@ function observedAt(response: ObserverResponse): string {
     const success = nested?.lastSuccessfulAt;
     if (typeof success === "string" && success) return success;
   }
-  return new Date().toISOString();
+  return null;
 }
 
 function markFailure(entry: SnapshotEntry): void {
@@ -137,9 +137,11 @@ export function useLastSuccessfulResponse(
   if(response && responseId === undefined){responseId=++identities.current.next;identities.current.values.set(response,responseId);}
   let entry = cache.current.get(key);
   if (!entry) {
+    const retained=displayedObservation(response);
+    const priorSuccess=retained && classifyObservationResponse(retained)==="ready" ? observedAt(retained):null;
     entry = {
-      lastObservedAt: null,
-      lastSuccessfulAt: null,
+      lastObservedAt: priorSuccess,
+      lastSuccessfulAt: priorSuccess,
       failureCount: 0,
       firstFailureAt: null,
       refreshing: false,

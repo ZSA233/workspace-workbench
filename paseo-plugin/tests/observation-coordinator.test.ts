@@ -258,3 +258,14 @@ test('recovery backoff does not slow polling of the already accepted task',async
   s.coordinator.subscribe(['w']);await s.time.advance(5000);assert.equal(calls,1);
   await s.time.advance(250);assert.equal(calls,2);s.coordinator.close();
 });
+
+test('session-backed panels refresh through the shared version clock without their own polling',async()=>{
+ const time=new FakeClock();let revision='one',reads=0;
+ const query:QueryView={id:'binding',key:['workspace-workbench','p','execution-binding','w'],eventOnly:true,active:true,fetching:false,updatedAt:time.now(),data:{ok:true},fetch:async()=>{reads++;query.data={ok:true};query.updatedAt=time.now();},validate:()=>{}};
+ const coordinator=createObservationCoordinator('p',{queries:()=>[query],read:async()=>({ok:true,result:{instanceId:'backend',revision:1,sessionRevision:revision}}),issue:()=>{}},time);
+ const stop=coordinator.subscribe(['w']);await time.advance(0);const initial=reads;
+ await time.advance(60_000);assert.equal(reads,initial);
+ revision='two';await time.advance(15_000);assert.equal(reads,initial+1);
+ stop();revision='three';await time.advance(60_000);assert.equal(reads,initial+1);
+ coordinator.subscribe(['w']);await time.advance(0);assert.equal(reads,initial+2);coordinator.close();
+});

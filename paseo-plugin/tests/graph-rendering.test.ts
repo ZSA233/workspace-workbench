@@ -100,13 +100,14 @@ test("commit selection keeps the dirty worktree visible and lets it restore the 
 
 test("repository rows stay flat until selection opens the animated details drawer", () => {
   const rows = readFileSync(new URL("../client/components/repositories.tsx", import.meta.url), "utf8");
+  const fileView = readFileSync(new URL('../client/use-file-view.ts', import.meta.url), 'utf8');
   const panel = readFileSync(new URL("../client/panel.tsx", import.meta.url), "utf8");
   const graph = readFileSync(new URL("../client/components/graph.tsx", import.meta.url), "utf8");
   assert.ok(rows.includes("repositoryDot"));
   assert.ok(rows.includes("repositoryBranch"));
   assert.ok(!rows.includes("{metaStatus}"));
-  assert.ok(panel.includes("const changingRepository = selectedRepoPath !== repoPath;"));
-  assert.ok(panel.includes("setRepositoryDetailsOpen(changingRepository ? true : (current) => !current);"));
+  assert.ok(fileView.includes("const changingRepository = selectedRepoPath !== repoPath;"));
+  assert.ok(fileView.includes("setRepositoryDetailsOpen(changingRepository ? true : (current) => !current);"));
   assert.ok(panel.includes("animateSectionLayout();\n    setRepositoryDetailsOpen"));
   assert.ok(graph.includes("repositoryCurrentRefDetail(repository, copy)"));
 });

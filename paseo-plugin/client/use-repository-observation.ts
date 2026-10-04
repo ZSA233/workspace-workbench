@@ -10,6 +10,7 @@ import { useQueryContinuity } from './query-continuity';
 import { displayedObservation, observationQueryOptions } from './observation-content';
 import { hydrateRepositorySummaries } from './observation-publication';
 import { queryDiagnosticDetails } from './panel/observation-display';
+import { repositoryObservationActive } from './repository-observation-policy';
 import { refreshRegionFeedback } from './repository-refresh-client';
 import { useRepositoryRefresh } from './use-repository-refresh';
 import { useWorkspaceSummaries } from './use-workspace-summaries';
@@ -67,6 +68,10 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
     const selectedRepository = displayDetail?.workspace.id === selectedWorkspaceId
         ? displayDetail.repositories.find((repository) => repository.repoPath === selectedRepoPath)
         : undefined;
+    const repositoryActive = repositoryObservationActive({
+        foreground, tab, backendReady, listReady, workspaceUnavailable: selectedWorkspaceUnavailable,
+        workspaceId: selectedWorkspaceId, repoPath: selectedRepoPath, repository: selectedRepository,
+    });
     const graphKey = ["workspace-workbench", projectConfig, "repository-graph", selectedWorkspaceId, selectedRepoPath, graphView.historyMode, graphView.maxCommits];
     const graphQuery = useQuery({
         queryKey: graphKey,
@@ -79,7 +84,7 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
                 maxCommits: graphView.maxCommits,
             },
         }),
-        enabled: !refreshCapable && foreground && tab === "workspace" && Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && backendReady && listReady && !selectedWorkspaceUnavailable),
+        enabled: !refreshCapable && repositoryActive,
         refetchInterval: false,
         refetchIntervalInBackground: false,
         ...observationQueryOptions,
@@ -95,7 +100,7 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
     );
     const graph = graphContent.displayed ?? null;
     const graphFailure = queryFailureForDisplay(graphState, graphQuery.data, graphQuery.error, localizedCopy);
-    reportNativeDiagnostic("project-panel-graph-state", { projectConfig, workspaceId: selectedWorkspaceId, repoPath: selectedRepoPath, nodeCount: String(graph?.nodes?.length ?? ""), ...queryDiagnosticDetails(graphQuery.data, graphQuery.error, graphQuery, graphState) });
+    reportNativeDiagnostic("project-panel-graph-state", { projectConfig, workspaceId: selectedWorkspaceId, repoPath: selectedRepoPath, nodeCount: String(graph?.nodes?.length ?? ""), repositoryActive: String(repositoryActive), summaryPending: String(selectedRepository?.observationPending === true), ...queryDiagnosticDetails(graphQuery.data, graphQuery.error, graphQuery, graphState) });
     const changesScope: ChangeScope = selectedCommit ? "commit" : changeScope;
     const changesQuery = useQuery({
         queryKey: ["workspace-workbench", projectConfig, "repository-changes", selectedWorkspaceId, selectedRepoPath, changesScope, selectedCommit],
@@ -108,7 +113,7 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
                 commitSha: selectedCommit || undefined,
             },
         }),
-        enabled: !refreshCapable && foreground && tab === "workspace" && Boolean(selectedWorkspaceId && selectedRepoPath && selectedRepository && backendReady && listReady && !selectedWorkspaceUnavailable),
+        enabled: !refreshCapable && repositoryActive,
         refetchInterval: false,
         refetchIntervalInBackground: false,
         ...observationQueryOptions,
@@ -119,7 +124,7 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
     const changesFailure = queryFailureForDisplay(changesState, changesQuery.data, changesQuery.error, localizedCopy);
     const refreshInput = { workspaceId: selectedWorkspaceId, repoPath: selectedRepoPath, historyMode: graphView.historyMode, maxCommits: graphView.maxCommits, scope: changesScope, commitSha: selectedCommit || undefined };
     const refreshRpc = (params: Record<string, unknown>) => rpc({ method: 'observer.refresh', params });
-    const selectedRefresh = useRepositoryRefresh(projectConfig, refreshInput, refreshCapable && foreground && tab === 'workspace' && !!selectedRepoPath && !!selectedWorkspaceId && backendReady && (!basicCapable || !!selectedRepository && !selectedRepository.observationPending && typeof selectedRepository.dirty === 'boolean'), refreshRpc);
+    const selectedRefresh = useRepositoryRefresh(projectConfig, refreshInput, refreshCapable && repositoryActive, refreshRpc);
     const basicSummaries = useWorkspaceSummaries(projectConfig, selectedWorkspaceId, (displayDetail?.repositories || []).map(repo => repo.repoPath), selectedRepoPath, basicCapable && foreground && tab === 'workspace' && backendReady, refreshRpc, { historyMode: graphView.historyMode, maxCommits: graphView.maxCommits });
     const basicFailed = basicSummaries.failures.some(failure => failure.repoPath === selectedRepoPath);
     const graphFeedback = refreshRegionFeedback(selectedRefresh.query.data, 'graph', Boolean(graph), basicFailed);

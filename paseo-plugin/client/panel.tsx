@@ -393,12 +393,18 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [changeTreeMode, changes]);
 
   const repositoryIdentity = `${selectedWorkspaceId}:${selectedRepoPath}`;
+  // Selection defaults are applied before any read finishes. Later summary
+  // completion may refine the default scope, but must not clear a user's commit.
+  useLayoutEffect(() => {
+    setSelectedCommit("");
+    setSelectedFile("");
+    setGraphView({ historyMode: selectedWorkspaceIsMain ? "full" : "branch", maxCommits: 50 });
+    setChangeScope(selectedWorkspaceIsMain ? "working" : "branch");
+  }, [repositoryIdentity, selectedWorkspaceIsMain]);
   useLayoutEffect(() => {
     if (selectedRepository?.observationPending) return;
     if (!selectedRepository || !selectedRepoPath || scopeRepositoryIdentity.current === repositoryIdentity) return;
     scopeRepositoryIdentity.current = repositoryIdentity;
-    setSelectedCommit("");
-    setSelectedFile("");
     setChangeScope(
       selectedRepository.branchScopeAvailable === false
         ? "working"
@@ -406,8 +412,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           ? "working"
           : "branch",
     );
-    setGraphView({ historyMode: isMainWorkspace(selectedWorkspace) ? "full" : "branch", maxCommits: 50 });
-  }, [repositoryIdentity, selectedRepoPath, selectedRepository, selectedWorkspace]);
+  }, [repositoryIdentity, selectedRepoPath, selectedRepository]);
+  const chooseScope = useCallback((scope: Exclude<ChangeScope, "commit">) => {
+    scopeRepositoryIdentity.current = repositoryIdentity;
+    setChangeScope(scope);
+  }, [repositoryIdentity]);
 
   useEffect(() => {
     setRepositoryDetailsOpen(false);
@@ -590,6 +599,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     setRepositoryDetailsOpen((current) => !current);
   }, [animateSectionLayout]);
   const {onCommit,onGraphBase,onGraphMore,onOpenChangedFile,onRepo}=useFileView({projectConfig,hostWorkspaceId,agentId,selectedWorkspace,selectedRepository,selectedRepoPath,selectedCommit,changesScope,graphView,setGraphView,graphBusy,retryGraph,graphLoadedCount:graph?.loadedCount || 50,animateSectionLayout,setSelectedCommit,setSelectedFile,setSelectedRepoPath,setRepositoryDetailsOpen});
+  const chooseCommit = useCallback((sha: string) => {
+    scopeRepositoryIdentity.current = repositoryIdentity;
+    onCommit(sha);
+  }, [repositoryIdentity, onCommit]);
   const onSectionToggle = useCallback((id: "repositories" | "graph" | "changes", collapsed: boolean) => {
     animateSectionLayout();
     preferences.updateSection(id, { collapsed });
@@ -840,12 +853,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               selectedRepository={selectedRepository}
               repositoryDetailsOpen={repositoryDetailsOpen}
               onToggleRepositoryDetails={onToggleRepositoryDetails}
-              onCommit={onCommit}
+              onCommit={chooseCommit}
               onGraphBase={onGraphBase}
               onGraphMore={onGraphMore}
               graphIdentity={`${hostWorkspaceId}:${selectedWorkspaceId}:${selectedRepoPath}`}
               graphLoadingMore={graphBusy && Boolean(graph)}
-              onScope={setChangeScope}
+              onScope={chooseScope}
               onFile={onOpenChangedFile}
               onRepo={onRepo}
               sectionLayout={preferences.sectionLayout}

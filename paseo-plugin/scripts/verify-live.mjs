@@ -90,6 +90,7 @@ for (const project of ["a", "b"]) {
       repositories: ["one", "two", "three"].map((id) => ({ id, path: id })),
       management: { enabled: true },
       limits: { cacheTtlSeconds: 0.5 },
+      ...(process.env.WORKBENCH_LIVE_ENVIRONMENT === "1" ? {cache:{scope:"project"},toolchain:{mode:"system",runtimePaths:[process.execPath],repositories:{one:{node:process.version.slice(1)}}}} : {}),
       ...(preparationFixture && project === "a" ? {toolchain:{mode:"mise",managerPath:preparationFixture.manager,repositories:{one:{go:"1.99"}}}} : {}),
     }),
   );
@@ -486,6 +487,38 @@ try {
     assert.equal(response.result.cache.refreshing, true, JSON.stringify(response));
   }
   report.checks.push("actual public Graph/Changes RPC keeps ready semantics during stale cache refresh");
+  if (process.env.WORKBENCH_LIVE_ENVIRONMENT === "1") {
+    const created=[];
+    for(const name of ["environment-one","environment-two"]){
+      const response=await rpc(configs[0],"workspace.create",{name,repositories:["one"]});assert.equal(response.ok,true);created.push(response.result);
+      const task=await rpc(configs[0],"workspace.prepare.task",{action:"start",workspaceId:response.result.id,repositories:["one"],requestId:`prepare-${name}`});assert.equal(task.ok,true);
+      await wait(async()=>{const result=await rpc(configs[0],"workspace.prepare.task",{action:"status",operationId:task.result.operationId});if(["failed","interrupted"].includes(result.result?.state))throw Error("environment_preparation_failed");return result.result?.state==="ready";},30000);
+    }
+    const cwd=created[0].repositories[0].worktreePath,other=created[1].repositories[0].worktreePath;
+    const proof=join(cwd,"environment-proof.json");
+    const probe=`const fs=require('node:fs'),cp=require('node:child_process');
+const inspect="JSON.stringify({version:process.version,executable:process.execPath,cwd:process.cwd(),cache:process.env.NPM_CONFIG_CACHE,descriptor:process.env.WORKBENCH_ENVIRONMENT_FILE})";
+const collect=cwd=>JSON.parse(cp.execFileSync('node',['-p',inspect],{cwd,encoding:'utf8'}));
+fs.writeFileSync(${JSON.stringify(proof)},JSON.stringify({first:collect(process.cwd()),second:collect(${JSON.stringify(other)})}));`;
+    writeFileSync(join(cwd,"environment-probe.cjs"),probe);
+    const catalog=await client.listProviderModels("codex",{cwd});
+    const model=process.env.WORKBENCH_LIVE_MODEL || catalog.models.find(item=>item.isDefault && item.isSelectable!==false)?.id || catalog.models.find(item=>item.isSelectable!==false)?.id;
+    if(!model)throw Error("live_environment_model_unavailable");
+    const agent=await client.createAgent({config:{provider:"codex",model,cwd,modeId:"auto",featureValues:{plan_mode:false}},initialPrompt:"Run `node environment-probe.cjs` once in this working directory. This isolated read-only runtime probe writes its own JSON evidence file. Do not edit the script or change environment variables. Report success or the exact error; do not repair the environment."});
+    try {
+      await wait(()=>existsSync(proof),180000);
+      const evidence=JSON.parse(readFileSync(proof,"utf8"));
+      assert.equal(evidence.first.version,process.version);assert.equal(evidence.second.version,process.version);
+      assert.equal(evidence.first.cache,evidence.second.cache);assert.ok(evidence.first.cache);
+      assert.equal(realpathSync(evidence.second.cwd),realpathSync(other));
+      const snapshot=JSON.parse(readFileSync(evidence.first.descriptor,"utf8"));
+      assert.ok(snapshot.snapshotId);assert.ok(snapshot.binding.defaultKeys.includes("NPM_CONFIG_CACHE"));
+      const timeline=await client.fetchAgentTimeline(agent.id,{limit:100});
+      assert.ok(timeline.entries.some(entry=>entry.item.type==="tool_call" && JSON.stringify(entry.item).includes("environment-probe.cjs")));
+      report.environmentEvidence={agentId:agent.id,model,...evidence,snapshotId:snapshot.snapshotId};
+      report.checks.push("actual Agent shell used the prepared Node and one project cache across two Workspace directories, with an immutable injection receipt");
+    }finally{await client.archiveAgent(agent.id).catch(()=>{});}
+  }
   if (process.env.WORKBENCH_LIVE_AGENTS === "1") {
     const cwd = resolve(configs[0], "..");
     // Original sources are deliberately untracked: only the frozen bundle

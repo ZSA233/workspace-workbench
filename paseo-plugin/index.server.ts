@@ -1,3 +1,4 @@
+import { reviewLifecycleEnabled } from "./server/review/policy";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
@@ -62,9 +63,8 @@ import {
   handleReviewSettingsUpdate,
   handleReviewerReadRpc,
   handleReviewerResultRpc,
-  reviewLifecycleEnabled,
   registerReviewLifecycle,
-} from "./server/review/index";
+} from "./server/agent-review";
 
 export default function contribute(server: PluginServerContext) {
   const host = new HostConnection();

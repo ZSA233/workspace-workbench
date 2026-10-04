@@ -8,7 +8,7 @@ import {loadConfig} from '../server/backend/config.ts';
 import {Service} from '../server/backend/service.ts';
 import {resolveRuntimeDeclarations} from '../server/backend/runtime-declarations.ts';
 import {runtimeEnvironment,cacheExecutionConfig} from '../server/session-environment.ts';
-import {sessionOverrides} from '../server/session-environment.ts';
+import {sessionOverrides,publishSessionEnvironment} from '../server/session-environment.ts';
 import {symlinkSync} from 'node:fs';
 import {registerAgentIntegration} from '../server/agent-integration.ts';
 import {closeBackends} from '../server/backend-manager.ts';
@@ -37,12 +37,12 @@ test('project declarations override legacy versions and project caches survive w
   assert.equal(readFileSync(ea.environment.variables.WORKBENCH_ENVIRONMENT_FILE,'utf8'),before);
   const path=changed.environment.variables.WORKBENCH_ENVIRONMENT_FILE,mtime=statSync(path).mtimeMs;
   const again=await s.handle('workspace.environment',{workspaceId:a.id,prepare:false});assert.equal(again.snapshotId,changed.snapshotId);assert.equal(statSync(path).mtimeMs,mtime);
-  const inherited=runtimeEnvironment(ea);assert.equal(runtimeEnvironment(changed,sessionOverrides(inherited,JSON.parse(before),changed)).GOCACHE,changed.environment.variables.GOCACHE);
+  const inherited=await publishSessionEnvironment(f.config.stateRoot,ea);const bound=JSON.parse(readFileSync(inherited.WORKBENCH_ENVIRONMENT_FILE,"utf8"));assert.equal(runtimeEnvironment(changed,sessionOverrides(inherited,bound,changed)).GOCACHE,changed.environment.variables.GOCACHE);
  }finally{await s.close();rmSync(f.root,{recursive:true,force:true});}
 });
 
 test('resume refreshes injected defaults and retains caller overrides', () => {
- const old={snapshotId:'old-snapshot',schemaVersion:'workspace.workbench.environment/v1',projectId:'sample',environment:{pathEntries:['/tools/old'],variables:{GOCACHE:'/cache/old'}}};
+ const old={snapshotId:'old-snapshot',schemaVersion:'workspace.workbench.environment/v1',projectId:'sample',binding:{defaultKeys:['GOCACHE'],defaultPath:'/tools/old:'+(process.env.PATH || '')},environment:{pathEntries:['/tools/old'],variables:{GOCACHE:'/cache/old'}}};
  const current={...old,environment:{pathEntries:['/tools/new'],variables:{GOCACHE:'/cache/new'}}};
  const inherited=runtimeEnvironment(old,{PIP_CACHE_DIR:'/caller/pip'});
  const updated=runtimeEnvironment(current,sessionOverrides(inherited,old,current));
@@ -142,4 +142,18 @@ test('legacy mixed-version summary falls back to directory-aware shims', () => {
 test('legacy mutable descriptions preserve unknown caller values',()=>{
  const previous={schemaVersion:'workspace.workbench.environment/v1',projectId:'sample',environment:{variables:{GOCACHE:'/same'}}};
  assert.deepEqual(sessionOverrides({GOCACHE:'/same'},previous,previous),{GOCACHE:'/same'});
+});
+
+test('explicit overrides equal to old defaults retain ownership across version changes',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'wb-binding-ownership-'));
+ try {
+  const value={schemaVersion:'workspace.workbench.environment/v1',snapshotId:'source',projectId:'example',environment:{pathEntries:[],variables:{GOCACHE:'/cache/old',GOMODCACHE:'/modules/old'}}};
+  const env=await publishSessionEnvironment(root,value,{GOCACHE:'/cache/old',PRIVATE_TOKEN:'must-not-be-persisted'});
+  const text=readFileSync(env.WORKBENCH_ENVIRONMENT_FILE,'utf8'),saved=JSON.parse(text);
+  assert.ok(!text.includes('must-not-be-persisted'));assert.ok(!text.includes('PRIVATE_TOKEN'));
+  const next={...value,environment:{pathEntries:[],variables:{GOCACHE:'/cache/new',GOMODCACHE:'/modules/new'}}};
+  const actual=runtimeEnvironment(next,sessionOverrides(env,saved,next));
+  assert.equal(actual.GOCACHE,'/cache/old');assert.equal(actual.GOMODCACHE,'/modules/new');
+  assert.equal(readFileSync(env.WORKBENCH_ENVIRONMENT_FILE,'utf8'),text);
+ }finally{rmSync(root,{recursive:true,force:true});}
 });

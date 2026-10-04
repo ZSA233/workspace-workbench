@@ -1,0 +1,11 @@
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import * as files from 'node:fs';
+import { promisify } from 'node:util';
+import * as sessions from '../agent-review-store.ts';
+import { getAgentBinding } from '../agent-store.ts';
+import { queryObserver } from '../observer.ts';
+import * as state from '../orchestration-state.ts';
+import * as projects from '../projects.ts';
+export const reviewInfrastructure = { storage: { ...sessions, ...state, getAgentBinding }, files, projects, backend: { queryObserver }, identity: { randomUUID }, clock: { millis: () => Date.now(), now: () => new Date().toISOString() }, git: { exec: promisify(execFile) } };
+export type ReviewInfrastructure = typeof reviewInfrastructure;

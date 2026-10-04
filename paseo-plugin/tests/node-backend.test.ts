@@ -596,7 +596,11 @@ test("observation cache closes new work and releases retained entries", async ()
 
 test("repository graph and changes keep ready state during stale branch refresh", async () => {
   const f = fixture({ limits: { cacheTtlSeconds: 0.5 } });
-  const service = new Service(f.config);
+  const {ObservationScheduler}=await import('../server/backend/observation-scheduler.ts');
+  let cacheTime=Date.now();
+  // The test controls invalidation explicitly; native watcher timing is covered separately.
+  const scheduler=new ObservationScheduler({subscribe:async()=>({unsubscribe:async()=>{}})});
+  const service = new Service(f.config,undefined,{scheduler,cacheClock:()=>cacheTime});
   try {
     const workspace = await service.handle("workspace.create", {
       name: "branch-refresh",
@@ -620,7 +624,7 @@ test("repository graph and changes keep ready state during stale branch refresh"
     const changes = await service.handle("repository.changes", changesParams);
     assert.equal(graph.observation.state, "ready");
     assert.equal(changes.observation.state, "ready");
-    await new Promise((r) => setTimeout(r, 550));
+    cacheTime+=550;
 
     // TTL is not invalidation. Explicitly invalidate the same cached snapshots.
     assert.equal((await service.handle("repository.graph", graphParams)).cache.refreshing, false);
@@ -634,7 +638,9 @@ test("repository graph and changes keep ready state during stale branch refresh"
     assert.equal(staleChanges.observation.cacheState, "refreshing");
     assert.equal(staleChanges.cache.refreshing, true);
 
-    await new Promise((r) => setTimeout(r, 100));
+    const deadline=Date.now()+5000;
+    while(service.cache.status().refreshing && Date.now()<deadline)await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(service.cache.status().refreshing,0,'background producers did not complete');
     assert.equal((await service.handle("repository.graph", graphParams)).observation.state, "ready");
     assert.equal((await service.handle("repository.changes", changesParams)).observation.state, "ready");
   } finally {

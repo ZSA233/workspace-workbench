@@ -1,4 +1,4 @@
-import { runtimeEnvironment, cacheExecutionConfig } from './session-environment.ts';
+import { runtimeEnvironment, cacheExecutionConfig, publishSessionEnvironment } from './session-environment.ts';
 import { withWorkspaceScope } from "./workspace-scope.ts";
 import type { BundleRef } from "../shared/handoff-materials.ts";
 import { assertBundleReady } from "./handoff-bundles.ts";
@@ -418,7 +418,7 @@ async function delegateAgent(
     const gateway = project ? await mcpGatewayConfig(project.configPath, reportToken, restrictedWorker ? "execution-report" : "worker", input.workspaceId, { waitForReady: false }) : null;
     const sessionDefaults = (await (context.query || queryObserver)({method:'workspace.environment',params:{workspaceId:input.workspaceId,cwd:runtime.treePath,...(input.runtimeRepositories?.length ? {repositories:input.runtimeRepositories} : {})}})).result || runtime;
     const workerEnv: Record<string, string> = {
-      ...runtimeEnvironment(sessionDefaults),
+      ...(project ? await publishSessionEnvironment(project.stateRoot,sessionDefaults) : runtimeEnvironment(sessionDefaults)),
       WORKBENCH_WORKER_WORKSPACE: input.workspaceId,
       ...(project ? { WORKBENCH_PROJECT_CONFIG: project.configPath } : {}),
       ...(gateway ? {

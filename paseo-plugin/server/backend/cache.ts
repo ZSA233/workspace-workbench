@@ -40,7 +40,9 @@ export class ObservationCache {
   onProduced?: (scope?: CachePublication) => void;
   config: Config;
   path: string;
-  constructor(config: Config) {
+  private clock:()=>number;
+  constructor(config: Config, clock:()=>number = Date.now) {
+    this.clock=clock;
     this.config = config;
     this.path = join(config.stateRoot, "observer-node-cache.json");
     try {
@@ -75,7 +77,7 @@ export class ObservationCache {
       observation.issues = [...(observation.issues || []), { code: failureCode }];
     }
     const observationState = observation.state || "ready";
-    const ageMs = Math.max(0, Date.now() - entry.time);
+    const ageMs = Math.max(0, this.clock() - entry.time);
     const observedAt = observation.observedAt;
     const cacheState = refreshing
       ? "refreshing"
@@ -153,7 +155,7 @@ export class ObservationCache {
           // observation is produced.  A slow fingerprint must never delay an
           // existing cached snapshot (or the first useful response).
           fingerprint: typeof fingerprint === "string" ? fingerprint : "pending",
-          time: Date.now(),
+          time: this.clock(),
           bytes: Buffer.byteLength(JSON.stringify(value)),
         };
         if (generation === this.generation && (!scope?.workspaceId || workspaceGeneration === this.workspaceEpoch(scope.workspaceId))) {
@@ -242,7 +244,7 @@ export class ObservationCache {
   publish(key: string, fingerprint: string, value: Json, scope?: CachePublication, expectedEpoch = this.generation): void {
     if (this.closed || expectedEpoch !== this.generation) return;
     this.failures.delete(key);
-    this.entries.set(key, { value, fingerprint, time: Date.now(), bytes: Buffer.byteLength(JSON.stringify(value)) });
+    this.entries.set(key, { value, fingerprint, time: this.clock(), bytes: Buffer.byteLength(JSON.stringify(value)) });
     this.trim(); this.onProduced?.(scope);
   }
   peek(key: string, fingerprint: string): Json | undefined {
@@ -259,7 +261,7 @@ export class ObservationCache {
     const healthy = !this.failures.has(key) && (!entry?.value.observation?.state || entry.value.observation.state === 'ready');
     // Partial entries retain the TTL cooldown, but cannot become immortal just
     // because the source token is unchanged (including persisted snapshots).
-    if (entry && fingerprintMatches && (versioned && healthy || Date.now() - entry.time <= this.config.cacheTtl)) {
+    if (entry && fingerprintMatches && (versioned && healthy || this.clock() - entry.time <= this.config.cacheTtl)) {
       this.entries.delete(key);
       this.entries.set(key, entry);
       if (typeof fingerprint !== "string")

@@ -66,9 +66,9 @@ test('a blocked directory scan cannot block initial or subsequent workspace reco
   const config = loadConfig(path), gate = new Int32Array(new SharedArrayBuffer(8));
   const source = `
     import {workerData} from 'node:worker_threads';
-    import {Workspaces} from ${JSON.stringify(new URL('../server/backend/workspaces.ts',import.meta.url).href)};
-    const original = Workspaces.prototype.orphanSnapshot;
-    Workspaces.prototype.orphanSnapshot = async function(...args) {
+    import {WorkspaceCatalog} from ${JSON.stringify(new URL('../server/backend/workspace-catalog.ts',import.meta.url).href)};
+    const original = WorkspaceCatalog.prototype.orphanSnapshot;
+    WorkspaceCatalog.prototype.orphanSnapshot = async function(...args) {
       const gate = new Int32Array(workerData);
       Atomics.store(gate,0,1); Atomics.wait(gate,1,0,10000);
       return original.apply(this,args);
@@ -105,11 +105,11 @@ test('failed scan publication does not automatically restart discovery', async (
   const config=loadConfig(path), calls=new Int32Array(new SharedArrayBuffer(4));
   const source=`
     import {workerData} from 'node:worker_threads';
-    import {Workspaces} from ${JSON.stringify(new URL('../server/backend/workspaces.ts',import.meta.url).href)};
-    Workspaces.prototype.orphanSnapshot=async function() {
+    import {WorkspaceCatalog} from ${JSON.stringify(new URL('../server/backend/workspace-catalog.ts',import.meta.url).href)};
+    WorkspaceCatalog.prototype.orphanSnapshot=async function() {
       Atomics.add(new Int32Array(workerData),0,1);
       this.orphanScan={state:'failed',candidates:[],scannedDirectories:0,reason:'injected_failure'};
-      this.onOrphanScanChanged?.();
+      this.deps.onOrphanScanChanged?.();
       return this.orphanScan;
     };
     await import(${JSON.stringify(new URL('../server/backend/observation-records-worker.ts',import.meta.url).href)});

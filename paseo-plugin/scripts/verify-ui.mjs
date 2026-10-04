@@ -266,6 +266,33 @@ try {
   // Interactive latency evidence on a fixed large fixture in this isolated host.
   await page.getByText('Workspace', { exact: true }).first().click();
   await page.getByText('one', { exact: true }).filter({ visible: true }).first().click();
+  // Measure actual pointer-to-visible completion, separately from locator actionability.
+  if(!await page.getByText(/current ref:/i).count())await page.getByText('one',{exact:true}).filter({visible:true}).first().click();
+  await page.getByText(/current ref:/i).waitFor();
+  const manualMs=[],manualActionabilityMs=[];let previousProof;
+  for(let index=0;index<20;index++){
+    const message=`manual-refresh-proof-${index}`,filename=`refresh-proof-${index}.txt`;
+    if(previousProof)unlinkSync(previousProof);
+    previousProof=join(ui.project,'one',filename);writeFileSync(previousProof,`fresh ${index}\n`);
+    appendFileSync(join(ui.project,'one','README'),`manual ${index}\n`);
+    await exec('git',['-C',join(ui.project,'one'),'add','README']);
+    await exec('git',['-C',join(ui.project,'one'),'commit','-qm',message]);
+    const head=(await exec('git',['-C',join(ui.project,'one'),'rev-parse','HEAD'])).stdout.trim();
+    await page.getByRole('button',{name:/^(Observation status|Refreshing|Refresh temporarily failed|Observation may be stale|Observation unavailable)$/}).first().click();
+    const button=page.getByRole('button',{name:'Refresh now',exact:true});
+    const locating=Date.now();await button.click({trial:true});manualActionabilityMs.push(Date.now()-locating);
+    await page.evaluate(()=>{document.addEventListener('pointerdown',()=>{window.__workbenchRefreshAt=performance.now();},{once:true,capture:true});});
+    await button.click();
+    await Promise.all([page.getByText(message,{exact:false}).first().waitFor({timeout:10000}),page.getByText(filename,{exact:true}).first().waitFor({timeout:10000}),page.getByText(new RegExp(head)).first().waitFor({timeout:10000})]);
+    manualMs.push(await page.evaluate(()=>performance.now()-window.__workbenchRefreshAt));
+  }
+  if(previousProof)unlinkSync(previousProof);
+  report.manualRefreshLatency={samplesMs:manualMs,p95Ms:percentile95(manualMs),actionabilityMs:manualActionabilityMs};
+  assert.ok(report.manualRefreshLatency.p95Ms<=5000,JSON.stringify(report.manualRefreshLatency));
+  report.checks.push('20 actual manual refreshes displayed the latest HEAD, commit and file list within P95 <= 5s');
+  await page.setViewportSize({width:390,height:844});await screenshot('12-narrow-web-layout.png');
+  await page.setViewportSize({width:1600,height:1050});
+  report.checks.push('390px web layout rendered without replacing the selected Workspace; this is not native-device evidence');
   report.largeFixture = await createDiffPerformanceFixture(join(ui.project, 'one'));
   await page.getByText(/diff-performance/).filter({ visible: true }).first().waitFor({ timeout: 30000 });
   const actionabilityMs = [];

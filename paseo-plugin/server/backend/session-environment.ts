@@ -26,7 +26,7 @@ export async function sessionEnvironment(service: Service, params: Json, signal:
       .map(id => workspace.repositories.find((repo: Json) => repo.id === id))
     : workspace.repositories.filter((repo: Json) => contains(cwd, repo.worktreePath || repo.sourcePath));
   const scoped = { ...workspace, repositories: selected.length ? selected : workspace.repositories };
-  const resolved = await resolveRuntimeDeclarations(service.config, scoped);
+  const resolved = await resolveRuntimeDeclarations(service.config, scoped, signal);
   const observed = await observeRuntime(resolved.config, scoped, params.prepare !== false, signal);
   const { toolchain } = observed;
   let preparation;

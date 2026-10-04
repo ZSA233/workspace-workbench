@@ -1,7 +1,8 @@
-import { delimiter, isAbsolute, relative, join } from 'node:path';
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat,readFile,realpath } from 'node:fs/promises';
+import { delimiter,isAbsolute,join,relative } from 'node:path';
+import { publishEnvironmentSnapshot } from './backend/environment-snapshots.ts';
 import { queryObserver } from './observer.ts';
-import { withProject, type ProjectRoute } from './projects.ts';
+import { withProject,type ProjectRoute } from './projects.ts';
 
 const bindingCounters = {legacySnapshots:0,timeouts:0};
 export function environmentBindingDiagnostics(){return {...bindingCounters};}
@@ -43,18 +44,32 @@ export async function cacheExecutionConfig<T extends {provider: string; cwd?: st
 
 /** Retain user overrides, refresh only values still equal to the previous injection. */
 export function sessionOverrides(explicit: Record<string, string>, previous: any, current: any) {
-  if (!previous?.snapshotId) return explicit;
+  if (!previous?.snapshotId || !Array.isArray(previous.binding?.defaultKeys)) return explicit;
   if (previous?.schemaVersion !== 'workspace.workbench.environment/v1' || previous.projectId !== current?.projectId) return explicit;
   const result = { ...explicit };
-  for (const [key, value] of Object.entries(previous.environment?.variables || {})) {
-    if (allowed.has(key) && result[key] === value) delete result[key];
+  for (const key of previous.binding.defaultKeys) {
+    if (allowed.has(key) && result[key] === previous.environment?.variables?.[key]) delete result[key];
   }
-  const prefix = (previous.environment?.pathEntries || []).join(delimiter) + delimiter;
-  if (prefix !== delimiter && result.PATH?.startsWith(prefix)) {
-    const rest = result.PATH.slice(prefix.length);
-    if (rest === (process.env.PATH || '')) delete result.PATH;
-  }
+  if (previous.binding.defaultPath && result.PATH === previous.binding.defaultPath) delete result.PATH;
   return result;
+}
+
+/** Persist the actual default/override ownership without storing unrelated session secrets. */
+export async function publishSessionEnvironment(stateRoot:string,value:any,overrides:Record<string,string>={}) {
+  const env=runtimeEnvironment(value,overrides);
+  // An unrecognized explicit descriptor remains caller-owned.
+  if(!value?.snapshotId || value.schemaVersion!=='workspace.workbench.environment/v1' || Object.hasOwn(overrides,'WORKBENCH_ENVIRONMENT_FILE'))return env;
+  const variables=Object.fromEntries(Object.entries(env).filter(([key])=>allowed.has(key) && key!=='WORKBENCH_ENVIRONMENT_FILE'));
+  const defaultKeys=[...Object.keys(variables).filter(key=>!Object.hasOwn(overrides,key)),'WORKBENCH_ENVIRONMENT_FILE'].sort();
+  const snapshot=await publishEnvironmentSnapshot(stateRoot,{
+    schemaVersion:value.schemaVersion,projectId:value.projectId,workspaceId:value.workspaceId,cwd:value.cwd,
+    configIdentity:value.configIdentity,preparedIdentity:value.preparedIdentity,declarations:value.declarations,
+    versions:value.versions,cache:value.cache,toolchain:value.toolchain,
+    environment:{pathEntries:value.environment?.pathEntries || [],variables},
+    binding:{sourceSnapshotId:value.snapshotId,defaultKeys,defaultPath:Object.hasOwn(overrides,'PATH')?null:env.PATH || null,
+      overrideKeys:Object.keys(overrides).filter(key=>allowed.has(key) || key==='PATH').sort()}
+  });
+  return {...env,WORKBENCH_ENVIRONMENT_FILE:snapshot.environment.variables.WORKBENCH_ENVIRONMENT_FILE};
 }
 
 async function previousEnvironment(explicit: Record<string, string>) {
@@ -77,10 +92,10 @@ export async function bindSessionRuntime<T extends {provider:string;cwd:string;p
     const location = relative(await realpath(project.treesRoot), await realpath(config.cwd));
     if (location.startsWith('..') || isAbsolute(location)) return fallback;
     const previous = await previousEnvironment(explicit);
-    if(previous && !previous.snapshotId)bindingCounters.legacySnapshots++;
+    if(previous && !Array.isArray(previous.binding?.defaultKeys))bindingCounters.legacySnapshots++;
     if (Date.now() >= deadline) return fallback;
     const response = await withProject({ projectConfig: project.configPath }, () => queryObserver({ method: 'workspace.environment', params: { cwd:config.cwd, environmentDeadline:deadline } }));
-    return response.ok ? {config:await cacheExecutionConfig(config,response.result),env:runtimeEnvironment(response.result, sessionOverrides(explicit, previous, response.result))} : fallback;
+    return response.ok ? {config:await cacheExecutionConfig(config,response.result),env:await publishSessionEnvironment(project.stateRoot,response.result,sessionOverrides(explicit, previous, response.result))} : fallback;
   } catch { return fallback; }
   })();
   return Promise.race([binding,new Promise<typeof fallback>(resolve => {timer=setTimeout(()=>{bindingCounters.timeouts++;resolve(fallback);},2_000);})]).finally(()=>clearTimeout(timer));

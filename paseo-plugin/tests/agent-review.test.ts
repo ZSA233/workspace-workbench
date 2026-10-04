@@ -921,7 +921,7 @@ test('model discovery reads roster metadata without building a review snapshot',
     fixture.context.query=async input=>{methods.push(input.method);assert.notEqual(input.method,'workspace.reviewRuntime');return query(input);};
     const result=await handleReviewModels({projectConfig:fixture.config,workspaceId:'managed-fixture'},fixture.context);
     assert.equal(result.ok,true);assert.deepEqual(methods,['workspace.detail']);
-    const panel=readFileSync(new URL('../client/panel.tsx',import.meta.url),'utf8');
+    const panel=readFileSync(new URL('../client/use-workbench-settings.ts',import.meta.url),'utf8');
     assert.ok(panel.includes('enabled: Boolean(foreground && reviewSettingsOpen && projectConfig && backendReady && selectedWorkspaceId && listReady)'));
   });
 });

@@ -1,5 +1,7 @@
+import {DiffToolbar} from './components/diff-toolbar';
+import {useDiffReading,type DiffReading} from './use-diff-reading';
+import type {ReactNode} from 'react';
 import { comparisonKey } from '../shared/comparison';
-import { highlightReplacements, measuredDiffRows } from './diff-layout';
 import { useDisplaySettings } from './use-display-settings';
 import { clientDiagnostic } from "../shared/client-diagnostics.ts";
 import { createDiffReadClient, type DiffRpc } from "./diff-read-client.ts";
@@ -8,14 +10,14 @@ import { observationMeta } from "./observation-coordinator.ts";
 import { observationQueryOptions } from './observation-content.ts';
 import { useObservationVersions, observationRefreshDiagnostics } from "./use-observation-versions";
 import { usePanelForeground } from "./foreground-activity";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type PluginAgentPanelProps,
   type PluginWorkspacePanelProps,
   useRpc,
 } from "@getpaseo/plugin/client";
-import { FlatList, Icon, ScrollView } from "./native-components";
+import { FlatList, ScrollView } from "./native-components";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { copy, formatCopyFrom, type WorkbenchCopy } from "../shared/copy";
@@ -26,20 +28,15 @@ import {
   observationTimingFromWire,
 } from "../shared/observation-timing";
 import {
-  buildDiffDisplayRows,
-  buildDiffOverviewMarkers,
   DIFF_HUNK_ROW_HEIGHT,
   DIFF_LINE_ROW_HEIGHT,
-  diffDisplayRowMetrics,
   type DiffHunk,
   type DiffLine,
   type DiffDisplayRow,
   type DiffOverviewMarker,
   type DiffResult,
-  formatDiffReferences,
   isTransientIssueCode,
   issueDisplayLabel,
-  parseUnifiedPatch,
 } from "./model";
 import {
   closeFileReview,
@@ -51,7 +48,6 @@ import {
   useFileReviews,
 } from "./file-review-store";
 import { useLastSuccessfulResponse } from "./observation";
-import { IconButton } from "./components/icon-button";
 import { useReviewModePreference } from "./review-preferences";
 import type { ReviewMode } from "./review-mode";
 import { editorCodeFontFamily, HighlightedCode } from "./syntax";
@@ -81,20 +77,6 @@ function responseErrorLabel(
   }
   if (error) return hasSnapshot ? null : strings.text_a7fc5b37a4;
   return null;
-}
-
-function statusColor(status: string, theme: FilePanelProps["theme"]): string {
-  if (status === "A") return theme.colors.statusSuccess;
-  if (status === "D") return theme.colors.statusDanger;
-  if (status === "R") return observerAccent(theme);
-  return theme.colors.statusWarning;
-}
-
-function scopeLabel(scope: FileReviewSelection["scope"], strings: WorkbenchCopy = copy): string {
-  if (scope === "compare") return "比较";
-  if (scope === "working") return strings.text_c580606e1c;
-  if (scope === "commit") return strings.text_09cbc97ae2;
-  return strings.text_d1d2ccdd33;
 }
 
 export function FileReviewPanel(props: FilePanelProps) {
@@ -214,259 +196,70 @@ export function FileReviewPanel(props: FilePanelProps) {
   }
 
   return (
-    <View ref={activity.ref} style={styles.screen} accessibilityLabel={copy.changesTitle} onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
-      <View style={styles.header}>
-        <View style={styles.headerCopy}>
-          <Text numberOfLines={1} style={styles.title}>{copy.text_01970ba582}</Text>
-        </View>
-        <View style={styles.headerActions}>
-          <Pressable accessibilityRole="button" accessibilityLabel="代码字号" onPress={()=>display.update({fontSize:({12:14,14:16,16:18,18:12} as Record<number,number>)[display.fontSize]||14})}><Text style={styles.metaText}>{display.fontSize}px</Text></Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="自动换行" onPress={()=>display.update({wrap:!display.wrap})}><Text style={styles.metaText}>{display.wrap?'换行 ✓':'换行'}</Text></Pressable>
-          {diffQuery.data?.ok === false && (diffQuery.data.error?.details as { terminal?: boolean })?.terminal ? <IconButton label={`${diffQuery.data.error?.message || copy.observationDegraded} · ${copy.refreshNow}`} icon="CircleAlert" color={theme.colors.statusWarning} onPress={() => { reader.retry(readKey); void diffQuery.refetch({ cancelRefetch: false }); }} /> : null}
-          <IconButton
-            label={mode === "split" ? copy.switchToUnified : copy.switchToSplit}
-            icon={mode === "split" ? "Columns2" : "Rows3"}
-            active={!narrow && mode === "split"}
-            color={narrow ? theme.colors.foregroundMuted : observerAccent(theme)}
-            onPress={() => { if (!narrow) setMode(mode === "split" ? "unified" : "split"); }}
-          />
-          <View accessibilityLabel={copy.readOnlyBadge} style={styles.readOnlyBadge}>
-            <Icon name="Lock" size={13} color={theme.colors.foregroundMuted} />
-          </View>
-        </View>
-      </View>
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.tabs}
-        style={styles.tabsScroll}
-      >
-        {selections.map((selection) => {
-          const key = selectionKey(selection);
-          const active = key === (activeSelection ? selectionKey(activeSelection) : "");
-          return (
-            <View
-              key={key}
-              style={[styles.fileTab, active && styles.fileTabActive]}
-              {...(layout.platform === "web"
-                ? ({
-                    onAuxClick: (event: { button?: number; preventDefault?: () => void }) => {
-                      if (event.button === 1) {
-                        event.preventDefault?.();
-                        close(selection);
-                      }
-                    },
-                  } as Record<string, unknown>)
-                : {})}
-            >
-              <Pressable
-                accessibilityRole="tab"
-                accessibilityState={{ selected: active }}
-                onPress={() => setActiveFileReview(hostWorkspaceId, key)}
-                style={styles.fileTabButton}
-              >
-                <Text style={[styles.fileTabStatus, { color: statusColor(selection.status, theme) }]}>
-                  {selection.status || "M"}
-                </Text>
-                {active && diffState.stale ? <Text style={styles.fileTabStale}>·</Text> : null}
-                <Text numberOfLines={1} style={styles.fileTabText}>
-                  {selection.path.split("/").at(-1) || selection.path}
-                </Text>
-              </Pressable>
-              <Pressable accessibilityRole="button" onPress={() => close(selection)} style={styles.closeTab}>
-                <Text style={styles.closeTabText}>×</Text>
-              </Pressable>
-            </View>
-          );
-        })}
-        {!selections.length ? <Text style={styles.emptyText}>{copy.text_336884b48e}</Text> : null}
-      </ScrollView>
-
-      {activeSelection ? (
-        <View style={styles.body}>
-          <View style={styles.fileHeader}>
-            <View style={styles.fileHeaderCopy}>
-              <Text numberOfLines={1} style={styles.filePath}>{activeSelection.path}</Text>
-              <Text style={styles.metaText} numberOfLines={1}>
-                {activeSelection.branch || copy.graphDetached} · {scopeLabel(activeSelection.scope, copy)} · {activeSelection.statusLabel}
-              </Text>
-            </View>
-          </View>
+    <View testID="workbench-diff-panel" ref={activity.ref} style={styles.screen} accessibilityLabel={copy.changesTitle} onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
+      <DiffReadingSurface key={viewKey} diff={diff} mode={mode} wrap={display.wrap} fontSize={display.fontSize} position={viewPosition} foreground={foreground}
+        renderToolbar={reading=><DiffToolbar selections={selections} activeKey={readKey} onSelect={key=>setActiveFileReview(hostWorkspaceId,key)} onClose={close}
+          selection={activeSelection} diff={diff} reading={reading} width={panelWidth} theme={theme} mode={mode} narrow={narrow} onMode={()=>setMode(mode==='split'?'unified':'split')}
+          fontSize={display.fontSize} wrap={display.wrap} onDisplay={display.update} stale={diffState.stale}
+          retry={diffQuery.data?.ok===false&&(diffQuery.data.error?.details as {terminal?:boolean})?.terminal?()=>{reader.retry(readKey);void diffQuery.refetch({cancelRefetch:false});}:undefined}/>}>
+        {reading=>activeSelection?<View style={styles.body}>
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           {!capable && backendStatusQuery.data?.state === "ready" ? <Text style={styles.metaText}>{copy.diffCompatibility}</Text> : null}
           {readTask && !diff ? <Text style={styles.emptyText}>{readTask.state === 'queued' ? copy.diffQueued : copy.text_a74b5d91fa}</Text> : null}
           {error ? <Pressable accessibilityRole="button" onPress={() => { reader.retry(readKey); void diffQuery.refetch({ cancelRefetch: false }); }}><Text style={styles.metaText}>{copy.refreshNow}</Text></Pressable> : null}
           {diffQuery.isLoading ? <Text style={styles.emptyText}>{copy.text_a74b5d91fa}</Text> : null}
-          {diff ? (
-            <DiffViewer
-              key={viewKey}
-              wrap={display.wrap}
-              fontSize={display.fontSize}
-              position={viewPosition}
-              foreground={foreground}
-              diff={diff}
-              mode={mode}
-              path={activeSelection.path}
-              selection={activeSelection}
-              compact={narrow}
-              platform={layout.platform}
-              theme={theme}
-              styles={styles}
-            />
-          ) : null}
-        </View>
-      ) : (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>{copy.text_982b60ebcc}</Text>
-          <Text style={styles.emptyText}>{copy.text_5720774925}</Text>
-        </View>
-      )}
+          {diff?<DiffViewer reading={reading} wrap={display.wrap} position={viewPosition} foreground={foreground} diff={diff} mode={mode} path={activeSelection.path} platform={layout.platform} theme={theme} styles={styles}/>:null}
+        </View>:<View style={styles.emptyState}><Text style={styles.emptyTitle}>{copy.text_982b60ebcc}</Text><Text style={styles.emptyText}>{copy.text_5720774925}</Text></View>}
+      </DiffReadingSurface>
     </View>
   );
 }
 
+function DiffReadingSurface({renderToolbar,children,...input}:Parameters<typeof useDiffReading>[0]&{renderToolbar(reading:DiffReading):ReactNode;children(reading:DiffReading):ReactNode}){
+ const reading=useDiffReading(input);
+ return <>{renderToolbar(reading)}{children(reading)}</>;
+}
+
 function DiffViewer({
-  wrap, fontSize,
+  reading,
+  wrap,
   foreground,
   position,
   diff,
   mode,
   path,
-  selection,
-  compact,
   platform,
   theme,
   styles,
 }: {
-  wrap: boolean; fontSize: number;
+  reading:DiffReading;
+  wrap: boolean;
   foreground: boolean;
   position: { offset: number; hunk: number };
   diff: DiffResult;
   mode: ReviewMode;
   path: string;
-  selection: FileReviewSelection;
-  compact: boolean;
   platform: FilePanelProps["layout"]["platform"];
   theme: FilePanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
   reportNativeDiagnostic("file-review-diff-render", { entry: "DiffViewer" });
   const copy = useWorkbenchCopy();
-  const parsed = useMemo(() => highlightReplacements(parseUnifiedPatch(diff.patch)), [diff.patch]);
-  const rows = useMemo(() => buildDiffDisplayRows(parsed, mode), [mode, parsed]);
-  const [measured, setMeasured] = useState<Record<string,number>>({});
-  const [width,setWidth] = useState(0);
-  const rowMetrics = useMemo(() => measuredDiffRows(rows,fontSize,wrap?measured:{}),[rows,wrap,fontSize,measured]);
-  useEffect(()=>{setMeasured({});},[wrap,fontSize,width]);
-  const references = useMemo(() => selection.comparison ? { from: `${selection.comparison.fromRef} · ${selection.comparison.leftSha.slice(0,8)}`, to: `${selection.comparison.toRef} · ${selection.comparison.toSha.slice(0,8)}` } : formatDiffReferences({
-    scope: selection.scope === "compare" ? "branch" : selection.scope,
-    baseSha: diff.baseSha || selection.baseSha,
-    head: diff.head || selection.head,
-    commitSha: selection.commitSha,
-    branch: selection.branch,
-  }), [diff, selection]);
-  const overviewMarkers = useMemo(() => buildDiffOverviewMarkers(rows), [rows]);
-  const hunkRowIndexes = useMemo(
-    () => rows.flatMap((item, index) => (item.kind === "hunk" ? [index] : [])),
-    [rows],
-  );
-  const rowHunkIndexes = useMemo(() => {
-    return rows.map((item) => item.hunkIndex);
-  }, [rows]);
-  const rowHunkIndexesRef = useRef(rowHunkIndexes);
-  rowHunkIndexesRef.current = rowHunkIndexes;
-  const listRef = useRef<any>(null);
-  const copyRoot = useRef<any>(null);
-  useEffect(()=>{
-    if(Platform.OS!=='web') return;
-    const document=(globalThis as any).document;if(!document)return;
-    const copy=(event:any)=>{
-      const selection=document.getSelection();if(!selection?.rangeCount||selection.isCollapsed||!copyRoot.current?.contains(selection.anchorNode))return;
-      const anchor=selection.anchorNode?.nodeType===1?selection.anchorNode:selection.anchorNode?.parentElement;
-      const side=anchor?.closest('[data-testid^="diff-code-"]')?.getAttribute('data-testid');if(!side)return;
-      const range=selection.getRangeAt(0),parts:string[]=[];
-      for(const node of copyRoot.current.querySelectorAll('[data-testid^="diff-code-"]')){
-        if(node.getAttribute('data-testid')!==side||!range.intersectsNode(node))continue;
-        const part=document.createRange();part.selectNodeContents(node);
-        if(range.compareBoundaryPoints(0,part)>0)part.setStart(range.startContainer,range.startOffset);
-        if(range.compareBoundaryPoints(2,part)<0)part.setEnd(range.endContainer,range.endOffset);
-        parts.push(part.toString());
-      }
-      if(parts.length&&event.clipboardData){event.clipboardData.setData('text/plain',parts.join('\n'));event.preventDefault();}
-    };
-    document.addEventListener('copy',copy);return()=>document.removeEventListener('copy',copy);
-  },[]);
-  const [currentHunk, setCurrentHunk] = useState(Math.min(position.hunk, Math.max(0, hunkRowIndexes.length - 1)));
-  const [referenceDetails,setReferenceDetails]=useState(false);
-  const [viewportHeight, setViewportHeight] = useState(0);
-  const [scrollOffset, setScrollOffset] = useState(position.offset);
-  const restoredPosition = useRef(false);
-  const initialOffset = useRef({ x: 0, y: position.offset }).current;
-  const [contentHeight, setContentHeight] = useState(0);
-  const layoutAnchor=useRef({identity:`${wrap}:${fontSize}:${width}`,metrics:rowMetrics});
-  useLayoutEffect(()=>{
-    const identity=`${wrap}:${fontSize}:${width}`,previous=layoutAnchor.current;
-    if(identity!==previous.identity){
-      const index=Math.max(0,previous.metrics.offsets.findIndex((offset,i)=>offset+previous.metrics.lengths[i]>position.offset));
-      const offset=rowMetrics.offsets[index]||0;position.offset=offset;listRef.current?.scrollToOffset({offset,animated:false});setScrollOffset(offset);
-    }
-    layoutAnchor.current={identity,metrics:rowMetrics};
-  },[wrap,fontSize,width,rowMetrics,position]);
-
-  useLayoutEffect(() => {
-    if (!foreground) { restoredPosition.current = false; return; }
-    if (restoredPosition.current || viewportHeight <= 0 || contentHeight <= 0 || !listRef.current) return;
-    const offset = Math.min(position.offset, Math.max(0, contentHeight - viewportHeight));
-    listRef.current.scrollToOffset({ offset, animated: false });
-    restoredPosition.current = true;
-    setScrollOffset(offset);
-  }, [foreground, viewportHeight, contentHeight, position]);
-
-  const onListLayout = useCallback((event: any) => {
-    const nextHeight = Number(event.nativeEvent?.layout?.height) || 0;
-    setViewportHeight((previous) => previous === nextHeight ? previous : nextHeight);
-  }, []);
-
-  useEffect(() => {
-    setCurrentHunk(current => Math.min(current, Math.max(0, hunkRowIndexes.length - 1)));
-  }, [hunkRowIndexes.length]);
-
-  const jumpToHunk = useCallback((requestedIndex: number) => {
-    if (!hunkRowIndexes.length) return;
-    const nextIndex = (requestedIndex + hunkRowIndexes.length) % hunkRowIndexes.length;
-    setCurrentHunk(nextIndex);
-    listRef.current?.scrollToIndex?.({
-      index: hunkRowIndexes[nextIndex],
-      animated: true,
-      viewPosition: 0.08,
-    });
-  }, [hunkRowIndexes]);
-
-  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ index: number | null }> }) => {
-    const visibleIndexes = viewableItems
-      .map((item) => item.index)
-      .filter((index): index is number => typeof index === "number")
-      .sort((left, right) => left - right);
-    const firstIndex = visibleIndexes[0];
-    if (firstIndex === undefined) return;
-    const nextHunk = rowHunkIndexesRef.current[firstIndex] || 0;
-    position.hunk = nextHunk;
-    setCurrentHunk((previous) => previous === nextHunk ? previous : nextHunk);
-  }).current;
-  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 10 }).current;
+  const {parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,listRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,onViewableItemsChanged,viewabilityConfig}=reading;
 
   if (diff.binary) {
     return (
       <View style={styles.binaryState}>
+        {diff.truncated?<Text style={styles.warningText}>{copy.text_1d3d755616}</Text>:null}
         <Text style={styles.binaryTitle}>{copy.text_a1a0e61a02}</Text>
         <Text style={styles.emptyText}>{copy.text_8476fa5fe9}</Text>
       </View>
     );
   }
-  if (!diff.patch && !parsed.hunks.length) {
+  if (!parsed.hunks.length) {
     return (
       <View style={styles.binaryState}>
+        {diff.truncated?<Text style={styles.warningText}>{copy.text_1d3d755616}</Text>:null}
         <Text style={styles.binaryTitle}>{copy.text_fd707df26d}</Text>
         <Text style={styles.emptyText}>{copy.text_81f977c1ab}</Text>
       </View>
@@ -475,48 +268,6 @@ function DiffViewer({
   return (
     <View ref={copyRoot} style={styles.diffShell}>
       {diff.truncated ? <Text style={styles.warningText}>{copy.text_1d3d755616}</Text> : null}
-      {parsed.prelude.length ? (
-        <View style={styles.preludeBar}>
-          <Text numberOfLines={1} style={styles.preludeText}>{parsed.prelude.join(" · ")}</Text>
-        </View>
-      ) : null}
-      <View style={[styles.diffToolbar, compact && styles.diffToolbarCompact]}>
-        <Pressable onPress={()=>setReferenceDetails(value=>!value)} accessibilityRole="button"
-          accessibilityLabel={`${references.from} → ${references.to}`}
-          style={[styles.diffRefGroup, compact && styles.diffRefGroupCompact]}
-        >
-          <Text numberOfLines={1} style={styles.diffRefValue}>{references.from}</Text>
-          <Text style={styles.diffRefArrow}>→</Text>
-          <Text numberOfLines={1} style={styles.diffRefValue}>{references.to}</Text>
-        </Pressable>
-        <View style={[styles.diffToolbarActions, compact && styles.diffToolbarActionsCompact]}>
-          {!compact ? <Text style={styles.diffLegendAdded}>{copy.text_dd4a011844}</Text> : null}
-          {!compact ? <Text style={styles.diffLegendModified}>{copy.text_e103af637d}</Text> : null}
-          {!compact ? <Text style={styles.diffLegendRemoved}>{copy.text_2e359e4f5a}</Text> : null}
-          {hunkRowIndexes.length ? (
-            <View style={styles.hunkNavigator}>
-              <Pressable
-                accessibilityLabel={copy.text_0d310558b7}
-                accessibilityRole="button"
-                onPress={() => jumpToHunk(currentHunk - 1)}
-                style={styles.hunkButton}
-              >
-                <Text style={styles.hunkButtonText}>‹</Text>
-              </Pressable>
-              <Text style={styles.hunkCount}>{currentHunk + 1} {copy.text_42099b4af0}{hunkRowIndexes.length}</Text>
-              <Pressable
-                accessibilityLabel={copy.text_d8b1574142}
-                accessibilityRole="button"
-                onPress={() => jumpToHunk(currentHunk + 1)}
-                style={styles.hunkButton}
-              >
-                <Text style={styles.hunkButtonText}>›</Text>
-              </Pressable>
-            </View>
-          ) : null}
-        </View>
-      </View>
-      {referenceDetails?<Text selectable style={styles.metaText}>{selection.comparison ? `${selection.comparison.fromRef}: ${selection.comparison.fromSha}\n${selection.comparison.toRef}: ${selection.comparison.toSha}\n实际起点: ${selection.comparison.leftSha}` : `${diff.baseSha||selection.baseSha||""} → ${diff.head||selection.head||""}`}</Text>:null}
       <View style={styles.diffViewport} onLayout={event=>setWidth(event.nativeEvent.layout.width)}>
         <ScrollView
           horizontal
@@ -828,48 +579,13 @@ function makeStyles(theme: FilePanelProps["theme"], fontSize=14, wrap=false) {
   const accent = observerAccent(theme);
   return StyleSheet.create({
     screen: { backgroundColor: theme.colors.surface0, flex: 1 },
-    header: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 42, paddingHorizontal: 12, paddingVertical: 5 },
-    headerCopy: { flex: 1, minWidth: 0 },
-    title: { color: theme.colors.foreground, flexShrink: 1, fontSize: 13, fontWeight: "700" },
-    headerActions: { alignItems: "center", flexDirection: "row", gap: 1, marginLeft: 6 },
-    readOnlyBadge: { alignItems: "center", borderColor: theme.colors.border, borderRadius: 4, borderWidth: 1, height: 24, justifyContent: "center", marginLeft: 1, width: 24 },
-    readOnlyIcon: { color: theme.colors.foregroundMuted, fontSize: 8, fontWeight: "700" },
-    tabsScroll: { flexGrow: 0, flexShrink: 0, height: 34 },
-    tabs: { alignItems: "center", borderBottomColor: theme.colors.border, borderBottomWidth: 1, minHeight: 34, paddingHorizontal: 10, gap: 4 },
-    fileTab: { alignItems: "center", borderColor: "transparent", borderRadius: 6, borderWidth: 1, flexDirection: "row", maxWidth: 230 },
-    fileTabActive: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.border },
-    fileTabButton: { alignItems: "center", flexDirection: "row", gap: 5, minWidth: 0, paddingHorizontal: 8, paddingVertical: 6 },
-    fileTabStatus: { fontSize: 12, fontWeight: "800" },
-    fileTabStale: { color: theme.colors.statusWarning, fontSize: 14, fontWeight: "800" },
-    fileTabText: { color: theme.colors.foreground, fontSize: 12, maxWidth: 155 },
-    closeTab: { paddingHorizontal: 7, paddingVertical: 6 },
-    closeTabText: { color: theme.colors.foregroundMuted, fontSize: 15, lineHeight: 15 },
     body: { flex: 1, minHeight: 0 },
-    fileHeader: { alignItems: "center", backgroundColor: theme.colors.surface1, borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", paddingHorizontal: 12, paddingVertical: 7 },
-    fileHeaderCopy: { flex: 1, minWidth: 0 },
-    filePath: { color: theme.colors.foreground, fontSize: 12, fontWeight: "700" },
     metaText: { color: theme.colors.foregroundMuted, fontSize: 10, marginTop: 2 },
     errorText: { color: theme.colors.statusDanger, fontSize: 11, paddingHorizontal: 12, paddingTop: 6 },
-    staleText: { color: theme.colors.foregroundMuted, fontSize: 10, paddingHorizontal: 12, paddingTop: 5 },
     emptyState: { alignItems: "center", flex: 1, justifyContent: "center", padding: 12 },
     emptyTitle: { color: theme.colors.foreground, fontSize: 13, fontWeight: "700" },
     emptyText: { color: theme.colors.foregroundMuted, fontSize: 11, lineHeight: 16, marginTop: 4 },
     diffShell: { backgroundColor: theme.colors.surface0, flex: 1, minHeight: 0 },
-    diffToolbar: { alignItems: "center", backgroundColor: theme.colors.surface1, borderBottomColor: theme.colors.border, borderBottomWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 32, paddingHorizontal: 10 },
-    diffToolbarCompact: { minHeight: 30, paddingHorizontal: 8 },
-    diffRefGroup: { alignItems: "center", flexDirection: "row", flexShrink: 1, gap: 8, minWidth: 0 },
-    diffRefGroupCompact: { flex: 1, width: undefined },
-    diffRefValue: { color: theme.colors.foreground, flexShrink: 1, fontSize: 11, fontWeight: "600", maxWidth: 180 },
-    diffRefArrow: { color: theme.colors.foregroundMuted, fontSize: 12, marginHorizontal: 2 },
-    diffToolbarActions: { alignItems: "center", flexDirection: "row", gap: 8, marginLeft: 8 },
-    diffToolbarActionsCompact: { flexShrink: 0, justifyContent: "flex-end", marginLeft: 3, width: undefined },
-    diffLegendAdded: { color: theme.colors.statusSuccess, fontSize: 11 },
-    diffLegendModified: { color: accent, fontSize: 11 },
-    diffLegendRemoved: { color: theme.colors.statusDanger, fontSize: 11 },
-    hunkNavigator: { alignItems: "center", borderColor: theme.colors.border, borderRadius: 5, borderWidth: 1, flexDirection: "row", marginLeft: 4 },
-    hunkButton: { alignItems: "center", height: 24, justifyContent: "center", width: 24 },
-    hunkButtonText: { color: theme.colors.foreground, fontSize: 17, lineHeight: 18 },
-    hunkCount: { color: theme.colors.foregroundMuted, fontSize: 11, minWidth: 38, textAlign: "center" },
     diffViewport: { flex: 1, minHeight: 0, overflow: "hidden", position: "relative" },
     diffHorizontal: { flex: 1, minHeight: 0 },
     diffScrollContent: { flexGrow: 1, minHeight: "100%", minWidth: "100%", paddingRight: 14 },
@@ -877,8 +593,6 @@ function makeStyles(theme: FilePanelProps["theme"], fontSize=14, wrap=false) {
     diffListViewportSplit: { minWidth: 840 },
     diffListViewportUnified: { minWidth: 620 },
     diffList: { flex: 1, minHeight: 0, minWidth: "100%" },
-    preludeBar: { backgroundColor: theme.colors.surface2, borderBottomColor: theme.colors.border, borderBottomWidth: 1, paddingHorizontal: 12, paddingVertical: 5 },
-    preludeText: { color: theme.colors.foregroundMuted, fontFamily: "monospace", fontSize: 10 },
     hunkRow: { alignItems: "center", backgroundColor: theme.colors.surface2, borderBottomColor: theme.colors.border, borderBottomWidth: 1, borderTopColor: theme.colors.border, borderTopWidth: 1, flexDirection: "row", height: DIFF_HUNK_ROW_HEIGHT, justifyContent: "space-between", paddingHorizontal: 10 },
     hunkRowActive: { backgroundColor: `${theme.colors.statusWarning}18`, borderLeftColor: theme.colors.statusWarning, borderLeftWidth: 2 },
     hunkText: { color: accent, flex: 1, fontFamily: "monospace", fontSize: 11 },

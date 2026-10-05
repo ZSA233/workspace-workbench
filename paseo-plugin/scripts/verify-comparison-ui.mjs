@@ -90,10 +90,10 @@ try{
 
  await page.getByText('compare.go',{exact:true}).first().click();
  await page.getByTestId('workbench-diff-lines').waitFor({timeout:30000});
- await page.getByText('14px',{exact:true}).waitFor();await page.getByTestId('diff-code-unified').first().waitFor();report.checks.push('First Diff opens in unified mode without a saved override');
- await page.getByRole('button',{name:'自动换行',exact:true}).click();
- await page.getByText('换行 ✓',{exact:true}).waitFor();
- await page.getByRole('button',{name:'代码字号',exact:true}).click();await page.getByText('16px',{exact:true}).waitFor();
+ await page.getByTestId('diff-code-unified').first().waitFor();report.checks.push('First Diff opens in unified mode without a saved override');
+ await page.getByRole('button',{name:'Diff reading settings',exact:true}).click();const readingMenu=page.getByTestId('diff-reading-popover');
+ await readingMenu.getByRole('button',{name:'14px',exact:true}).waitFor();await readingMenu.getByRole('button',{name:'Wrap lines',exact:true}).click();
+ await readingMenu.getByRole('button',{name:'16px',exact:true}).click();await readingMenu.getByRole('button',{name:'Close Diff settings',exact:true}).click();
  report.codeFonts=await page.getByTestId('workbench-diff-lines').evaluate(node=>Array.from(node.querySelectorAll('*')).filter(el=>el.textContent==='package'||el.textContent==='sample').map(el=>({text:el.textContent,font:getComputedStyle(el).fontFamily,size:getComputedStyle(el).fontSize,html:el.outerHTML.slice(0,400)})));
  assert.ok(report.codeFonts.length>0);assert.ok(report.codeFonts.every(item=>/Consolas|monospace|Menlo/.test(item.font)),'syntax tokens use actual monospace font');
  report.copied=await page.getByTestId('workbench-diff-lines').evaluate(node=>{

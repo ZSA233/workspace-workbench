@@ -69,3 +69,26 @@ test('creator picker includes historical sessions, deduplicates workspaces and k
  const other={...workspace('c'),creator:{agentId:'other',recordedAt:'2026-01-01T00:00:00Z'}};
  assert.deepEqual(workspaceCreators([b,a,a,workspace('legacy'),other]).map(x=>({id:x.agentId,name:x.name,count:x.count})),[{id:'owner',name:'Latest title',count:2},{id:'other',name:undefined,count:1}]);
 });
+
+test('a pinned creator remains independent of the selected workspace and execution session',()=>{
+ const creator={agentId:'creator-a',recordedAt:'2026-01-01T00:00:00Z'};
+ const original={...workspace('original'),creator};
+ const sibling={...workspace('sibling'),creator};
+ const unrelated={...workspace('unrelated'),creator:{...creator,agentId:'creator-b'}};
+ const pinned=original.creator.agentId;
+ // Removal and selection fallback do not change the captured creation identity.
+ const records=[{...original,state:'removed'},sibling,unrelated,workspace('main')];
+ assert.deepEqual(records.filter(w=>createdInSession(w,pinned)).map(w=>w.id),['original','sibling']);
+ assert.equal(workspaceCreators(records).find(x=>x.agentId===pinned)?.count,2);
+ assert.deepEqual([unrelated].filter(w=>createdInSession(w,pinned)),[]);
+ assert.equal(workspaceCreators([unrelated]).some(x=>x.agentId===pinned),false);
+});
+
+test('invalid or absent creator records are never inferred from workspace identity',()=>{
+ const row=workspace('creator-a');
+ for(const creator of [undefined,{agentId:'creator-a',recordedAt:'invalid'},{agentId:'',recordedAt:'2026-01-01T00:00:00Z'}]){
+   const candidate={...row,creator};
+   assert.equal(createdInSession(candidate,'creator-a'),false);
+   assert.deepEqual(workspaceCreators([candidate]),[]);
+ }
+});

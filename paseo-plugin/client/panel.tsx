@@ -768,7 +768,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       </Modal> : null}
       <WorkspaceSelector
         executionControl={!selectedWorkspaceIsMain&&execution.hasAgent?<IconButton label={`${openExecutionAgent?localizedCopy.executionOpen:localizedCopy.executionDetails} · ${boundAgent?.id||binding?.agentId} · ${executionStatusLabel(execution.status,localizedCopy)}${execution.stale?` · ${localizedCopy.executionStale}`:''}`} icon="MessageSquare" color={executionStatusColor(execution.status,theme)} onPress={openExecutionAgent||openExecutionDetails}/>:undefined}
-        agentId={agentId}
         onOpenLayoutMenu={() => { if (selectorOpen) closeWorkspaceSelector(); openLayoutMenu(); }}
         statusControl={<IconButton label={observationLabel} icon={observationIcon}
           busy={observationRefreshing}

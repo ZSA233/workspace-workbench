@@ -1,4 +1,4 @@
-import { createdInSession, workspaceCreators } from '../../shared/workspace-creator';
+import { createdInSession, workspaceCreator, workspaceCreators } from '../../shared/workspace-creator';
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
@@ -168,7 +168,6 @@ export function AnchoredMenu({ open, onClose, theme, children, width = 190 }: { 
 }
 
 export function WorkspaceSelector({
-  agentId,
   workspaces,
   historyWorkspaces,
   visibleWorkspaces,
@@ -200,7 +199,6 @@ export function WorkspaceSelector({
   theme,
   styles,
 }: {
-  agentId?: string;
   workspaces: WorkspaceSummary[];
   historyWorkspaces: WorkspaceSummary[];
   visibleWorkspaces: WorkspaceSummary[];
@@ -240,13 +238,16 @@ export function WorkspaceSelector({
   const creators = useMemo(() => workspaceCreators([...workspaces,...historyWorkspaces]),[workspaces,historyWorkspaces]);
   const creatorLabel = (id: string) => { const name = creators.find(creator => creator.agentId === id)?.name; return name ? `${name} · ${id.slice(0,8)}` : id.slice(0,8); };
   const selectedCreator = creatorFilter;
-  const creatorOptions = agentId && !creators.some(creator => creator.agentId === agentId)
-    ? [{agentId,count:0},...creators] : creators;
+  const currentCreator = selectedWorkspace?.id === selectedWorkspaceId && !isMainWorkspace(selectedWorkspace)
+    ? workspaceCreator(selectedWorkspace?.creator)?.agentId : undefined;
+  const sameCreatorActive = Boolean(currentCreator && selectedCreator === currentCreator);
+  const sameCreatorCount = creators.find(creator => creator.agentId === currentCreator)?.count || 0;
+  const creatorOptions = creators;
 
   const [collapsedSources, setCollapsedSources] = useState<Set<string>>(new Set());
   const [batchMode, setBatchMode] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
-  useLayoutEffect(() => { setChecked(new Set()); }, [search, filter, batchMode, selectedCreator, agentId]);
+  useLayoutEffect(() => { setChecked(new Set()); }, [search, filter, batchMode, selectedCreator]);
   useEffect(() => { if (!open) { setBatchMode(false); setChecked(new Set()); setCreatorPickerOpen(false); } }, [open]);
   const listRef = useRef<import('react-native').FlatList<WorkspaceTreeRow>>(null);
   const scrollY = useRef(0);
@@ -310,7 +311,11 @@ export function WorkspaceSelector({
       {open ? (
         <View style={styles.selectorExpanded}>
           <View style={styles.filterRow}>
-            <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.creatorFilter} accessibilityState={{ selected: Boolean(selectedCreator), expanded: creatorPickerOpen }} onPress={() => { if (!creatorPickerOpen && !selectedCreator && agentId) setCreatorFilter(agentId); setCreatorPickerOpen(value => !value); }} style={[styles.filterButton, selectedCreator && styles.filterButtonActive, {maxWidth:220,flexDirection:"row",alignItems:"center",gap:4}]}><Text numberOfLines={1} style={[styles.filterButtonText, selectedCreator && styles.filterButtonTextActive]}>{localizedCopy.creatorFilter}{selectedCreator ? `: ${creatorLabel(selectedCreator)}` : ''}</Text><Icon name="ChevronDown" size={12} color={theme.colors.foregroundMuted}/></Pressable>
+            {currentCreator ? <Pressable testID="workspace-same-creator" accessibilityRole="button" accessibilityLabel={`${localizedCopy.sameCreatorSession} · ${sameCreatorCount}`} accessibilityState={{selected:sameCreatorActive}}
+              {...(Platform.OS === 'web' ? {'aria-pressed':sameCreatorActive} : {})}
+              onPress={() => {setCreatorFilter(sameCreatorActive ? null : currentCreator);setCreatorPickerOpen(false);}}
+              style={[styles.filterButton,sameCreatorActive && styles.filterButtonActive]}><Text style={[styles.filterButtonText,sameCreatorActive && styles.filterButtonTextActive]}>{localizedCopy.sameCreatorSession} · {sameCreatorCount}</Text></Pressable> : null}
+            <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.creatorFilter} accessibilityState={{ selected: Boolean(selectedCreator), expanded: creatorPickerOpen }} onPress={() => { setCreatorPickerOpen(value => !value); }} style={[styles.filterButton, selectedCreator && styles.filterButtonActive, {maxWidth:220,flexDirection:"row",alignItems:"center",gap:4}]}><Text numberOfLines={1} style={[styles.filterButtonText, selectedCreator && styles.filterButtonTextActive]}>{localizedCopy.creatorFilter}{selectedCreator ? `: ${creatorLabel(selectedCreator)}` : ''}</Text><Icon name="ChevronDown" size={12} color={theme.colors.foregroundMuted}/></Pressable>
             {filters.map((item) => (
               <Pressable
                 key={item.id}
@@ -326,7 +331,7 @@ export function WorkspaceSelector({
           </View>
           {creatorPickerOpen ? <View style={{marginTop:6, borderWidth:1, borderColor:theme.colors.border, borderRadius:6}}>
             <Pressable accessibilityRole="button" onPress={() => {setCreatorFilter(null);setCreatorPickerOpen(false);}} style={styles.layoutMenuItem}><Text style={styles.filterButtonText}>{localizedCopy.allCreatorSessions}</Text></Pressable>
-            <FlatList style={{maxHeight:160}} data={creatorOptions} keyExtractor={item=>item.agentId} keyboardShouldPersistTaps="handled" renderItem={({item})=><Pressable accessibilityRole="button" accessibilityState={{selected:item.agentId===selectedCreator}} onPress={()=>{setCreatorFilter(item.agentId);setCreatorPickerOpen(false);}} style={styles.layoutMenuItem}><Text numberOfLines={2} style={styles.filterButtonText}>{item.agentId===agentId ? `${localizedCopy.createdInSession} · ` : ''}{creatorLabel(item.agentId)} ({item.count})</Text></Pressable>} ListEmptyComponent={<Text style={styles.layoutMenuHint}>{localizedCopy.noCreatorSessions}</Text>} />
+            <FlatList style={{maxHeight:160}} data={creatorOptions} keyExtractor={item=>item.agentId} keyboardShouldPersistTaps="handled" renderItem={({item})=><Pressable accessibilityRole="button" accessibilityState={{selected:item.agentId===selectedCreator}} onPress={()=>{setCreatorFilter(item.agentId);setCreatorPickerOpen(false);}} style={styles.layoutMenuItem}><Text numberOfLines={2} style={styles.filterButtonText}>{creatorLabel(item.agentId)} ({item.count})</Text></Pressable>} ListEmptyComponent={<Text style={styles.layoutMenuHint}>{localizedCopy.noCreatorSessions}</Text>} />
           </View> : null}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 7 }}>
             <TextInput
@@ -387,7 +392,7 @@ export function WorkspaceSelector({
             showsVerticalScrollIndicator={treeRows.length > 7}
             style={styles.workspaceOptionList}
             windowSize={7}
-            ListEmptyComponent={ready && !loading ? <Text style={styles.emptyText}>{search ? localizedCopy.workspaceSearchEmpty : localizedCopy.text_daa32fe25c}</Text> : null}
+            ListEmptyComponent={ready && !loading ? <Text style={styles.emptyText}>{selectedCreator ? localizedCopy.creatorFilterEmpty : search ? localizedCopy.workspaceSearchEmpty : localizedCopy.text_daa32fe25c}</Text> : null}
           />
           {!selectedCreator && filter === "all" && orphanCandidates?.length ? <View style={{ maxHeight: 170 }}>
             <Text style={styles.selectorListLabel}>{localizedCopy.orphanHeading} · {orphanCandidates.length}</Text>

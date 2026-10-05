@@ -20,6 +20,8 @@ const zhCopy = {
   executionReadRetry: "重新读取绑定",
   executionOpenFailed: "未能打开会话，请在详情中核对状态。",
 
+  sameCreatorSession: "同会话创建",
+  creatorFilterEmpty: "当前范围内没有该会话创建的工作区，可调整分类、搜索或清除创建会话筛选。",
   creatorFilter: "创建会话",
   allCreatorSessions: "全部会话",
   noCreatorSessions: "暂无创建会话记录；旧工作区未记录创建者。",
@@ -744,6 +746,8 @@ const enCopy: WorkbenchCopy = {
   executionReadRetry: "Reload binding",
   executionOpenFailed: "Could not open the session. Check its status in details.",
 
+  sameCreatorSession: "Same creator",
+  creatorFilterEmpty: "No workspaces from this creator match the current filters. Change the category or search, or clear the creator filter.",
   creatorFilter: "Creator session",
   allCreatorSessions: "All sessions",
   noCreatorSessions: "No creator sessions recorded; older workspaces have no creator attribution.",

@@ -1,17 +1,9 @@
+import {NativeHighlightedCode} from './syntax-native';
+import type {SyntaxSpan} from './native-syntax';
 import { createElement, memo, useEffect, useState, type ComponentType, type ReactElement } from "react";
 import { Platform, Text, type StyleProp, type TextStyle } from "react-native";
 
-/**
- * Keep the native entry free of Prism and its grammar modules.
- *
- * Prism's browser entry (and some of the grammar loading paths around it)
- * assumes DOM constructors such as Element are present. Android surfaces can
- * load this module while they are opening a diff, so even a platform check
- * around a static import is too late: the imported module has already run.
- * The web implementation is therefore loaded only after a web renderer has
- * explicitly mounted. Native gets a plain, selectable Text fallback.
- */
-
+/** Native rows draw supplied bounded token ranges, never import the web highlighter. */
 export type SyntaxTheme = {
   colors: {
     surface0: string;
@@ -21,6 +13,9 @@ export type SyntaxTheme = {
 };
 
 export type HighlightedCodeProps = {
+  spans?:readonly SyntaxSpan[]|null;
+  inlineChange?:readonly [number,number];
+  changeBackground?:string;
   code: string;
   path: string;
   theme: SyntaxTheme;
@@ -73,4 +68,4 @@ function WebHighlightedCode(props: HighlightedCodeProps): ReactElement {
 // by Android or iOS.
 export const HighlightedCode = Platform.OS === "web"
   ? memo(WebHighlightedCode)
-  : memo(PlainCode);
+  : NativeHighlightedCode;

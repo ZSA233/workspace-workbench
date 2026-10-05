@@ -1,3 +1,4 @@
+import {useNativeSyntax} from './use-native-syntax';
 import {useMemo,useState,useRef,useEffect,useLayoutEffect,useCallback} from 'react';
 import {Platform} from 'react-native';
 import {parseUnifiedPatch,buildDiffDisplayRows,buildDiffOverviewMarkers,type DiffResult} from './model';
@@ -5,9 +6,11 @@ import {highlightReplacements,measuredDiffRows} from './diff-layout';
 import type {ReviewMode} from './review-mode';
 import type {FileReviewPosition} from './file-review-store';
 /** One view-scoped controller shared by the toolbar, viewport and overview rail. */
-export function useDiffReading({diff,mode,fontSize,wrap,position,foreground}:{diff:DiffResult|null;mode:ReviewMode;fontSize:number;wrap:boolean;position:FileReviewPosition;foreground:boolean}){
+export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path}:{path:string;diff:DiffResult|null;mode:ReviewMode;fontSize:number;wrap:boolean;position:FileReviewPosition;foreground:boolean}){
   const parsed = useMemo(() => highlightReplacements(parseUnifiedPatch(diff?.patch || "")), [diff?.patch]);
   const rows = useMemo(() => buildDiffDisplayRows(parsed, mode), [mode, parsed]);
+  const [visibleRows,setVisibleRows]=useState<number[]>([]);
+  const nativeTokens=useNativeSyntax(rows,path,foreground,visibleRows);
   const [measured, setMeasured] = useState<Record<string,number>>({});
   const [width,setWidth] = useState(0);
   const rowMetrics = useMemo(() => measuredDiffRows(rows,fontSize,wrap?measured:{}),[rows,wrap,fontSize,measured]);
@@ -97,6 +100,7 @@ export function useDiffReading({diff,mode,fontSize,wrap,position,foreground}:{di
       .map((item) => item.index)
       .filter((index): index is number => typeof index === "number")
       .sort((left, right) => left - right);
+    if(Platform.OS!=='web')setVisibleRows(previous=>previous.length===visibleIndexes.length&&previous.every((value,index)=>value===visibleIndexes[index])?previous:visibleIndexes);
     const firstIndex = visibleIndexes[0];
     if (firstIndex === undefined) return;
     const nextHunk = rowHunkIndexesRef.current[firstIndex] || 0;
@@ -105,6 +109,6 @@ export function useDiffReading({diff,mode,fontSize,wrap,position,foreground}:{di
   }).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 10 }).current;
 
- return {parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,hunkRowIndexes,listRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,onViewableItemsChanged,viewabilityConfig};
+ return {nativeTokens,parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,hunkRowIndexes,listRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,onViewableItemsChanged,viewabilityConfig};
 }
 export type DiffReading=ReturnType<typeof useDiffReading>;

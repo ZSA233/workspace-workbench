@@ -197,7 +197,7 @@ export function FileReviewPanel(props: FilePanelProps) {
 
   return (
     <View testID="workbench-diff-panel" ref={activity.ref} style={styles.screen} accessibilityLabel={copy.changesTitle} onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
-      <DiffReadingSurface key={viewKey} diff={diff} mode={mode} wrap={display.wrap} fontSize={display.fontSize} position={viewPosition} foreground={foreground}
+      <DiffReadingSurface path={activeSelection?.path||""} key={viewKey} diff={diff} mode={mode} wrap={display.wrap} fontSize={display.fontSize} position={viewPosition} foreground={foreground}
         renderToolbar={reading=><DiffToolbar selections={selections} activeKey={readKey} onSelect={key=>setActiveFileReview(hostWorkspaceId,key)} onClose={close}
           selection={activeSelection} diff={diff} reading={reading} width={panelWidth} theme={theme} mode={mode} narrow={narrow} onMode={()=>setMode(mode==='split'?'unified':'split')}
           fontSize={display.fontSize} wrap={display.wrap} onDisplay={display.update} stale={diffState.stale}
@@ -245,7 +245,7 @@ function DiffViewer({
 }) {
   reportNativeDiagnostic("file-review-diff-render", { entry: "DiffViewer" });
   const copy = useWorkbenchCopy();
-  const {parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,listRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,onViewableItemsChanged,viewabilityConfig}=reading;
+  const {nativeTokens,parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,listRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,onViewableItemsChanged,viewabilityConfig}=reading;
 
   if (diff.binary) {
     return (
@@ -308,9 +308,9 @@ function DiffViewer({
                     styles={styles}
                   />
                 ) : item.kind === "split" ? (
-                  <SplitRow left={item.left} right={item.right} path={path} theme={theme} styles={styles} />
+                  <SplitRow nativeTokens={nativeTokens} left={item.left} right={item.right} path={path} theme={theme} styles={styles} />
                 ) : (
-                  <UnifiedRow line={item.line} path={path} theme={theme} styles={styles} />
+                  <UnifiedRow nativeTokens={nativeTokens} line={item.line} path={path} theme={theme} styles={styles} />
                 )
               }</View>}
               removeClippedSubviews={!wrap}
@@ -498,11 +498,13 @@ function OverviewRailWeb({
 }
 
 function UnifiedRow({
+  nativeTokens,
   line,
   path,
   theme,
   styles,
 }: {
+  nativeTokens:DiffReading["nativeTokens"];
   line: DiffLine;
   path: string;
   theme: FilePanelProps["theme"];
@@ -518,19 +520,21 @@ function UnifiedRow({
       <Text style={styles.lineNumber}>{line.newLine ?? ""}</Text>
       <Text style={[styles.diffMarker, marker]}>{line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " "}</Text>
       <Text selectable testID="diff-code-unified" style={styles.codeText}>
-        {line.inlineChange ? <>{line.inlineChange[0]>0?<HighlightedCode code={line.content.slice(0,line.inlineChange[0])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}<Text style={[styles.codeSyntaxText,{backgroundColor:line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`} ]}>{line.content.slice(...line.inlineChange)}</Text>{line.inlineChange[1]<line.content.length?<HighlightedCode code={line.content.slice(line.inlineChange[1])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}</> : <HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} />}
+        {Platform.OS!=='web'?<HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} spans={nativeTokens(line.content)} inlineChange={line.inlineChange} changeBackground={line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`}/>:line.inlineChange ? <>{line.inlineChange[0]>0?<HighlightedCode code={line.content.slice(0,line.inlineChange[0])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}<Text style={[styles.codeSyntaxText,{backgroundColor:line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`} ]}>{line.content.slice(...line.inlineChange)}</Text>{line.inlineChange[1]<line.content.length?<HighlightedCode code={line.content.slice(line.inlineChange[1])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}</> : <HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} />}
       </Text>
     </View>
   );
 }
 
 function SplitRow({
+  nativeTokens,
   left,
   right,
   path,
   theme,
   styles,
 }: {
+  nativeTokens:DiffReading["nativeTokens"];
   left: DiffLine | null;
   right: DiffLine | null;
   path: string;
@@ -539,20 +543,22 @@ function SplitRow({
 }) {
   return (
     <View style={styles.splitRow}>
-      <DiffCell line={left} path={path} theme={theme} styles={styles} side="left" />
+      <DiffCell nativeTokens={nativeTokens} line={left} path={path} theme={theme} styles={styles} side="left" />
       <View style={styles.splitDivider} />
-      <DiffCell line={right} path={path} theme={theme} styles={styles} side="right" />
+      <DiffCell nativeTokens={nativeTokens} line={right} path={path} theme={theme} styles={styles} side="right" />
     </View>
   );
 }
 
 function DiffCell({
+  nativeTokens,
   line,
   path,
   theme,
   styles,
   side,
 }: {
+  nativeTokens:DiffReading["nativeTokens"];
   line: DiffLine | null;
   path: string;
   theme: FilePanelProps["theme"];
@@ -569,7 +575,7 @@ function DiffCell({
       <Text style={styles.lineNumber}>{side === "left" ? line.oldLine ?? "" : line.newLine ?? ""}</Text>
       <Text style={[styles.diffMarker, marker]}>{line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " "}</Text>
       <Text selectable testID={`diff-code-${side}`} style={styles.codeText}>
-        {line.inlineChange ? <>{line.inlineChange[0]>0?<HighlightedCode code={line.content.slice(0,line.inlineChange[0])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}<Text style={[styles.codeSyntaxText,{backgroundColor:line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`} ]}>{line.content.slice(...line.inlineChange)}</Text>{line.inlineChange[1]<line.content.length?<HighlightedCode code={line.content.slice(line.inlineChange[1])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}</> : <HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} />}
+        {Platform.OS!=='web'?<HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} spans={nativeTokens(line.content)} inlineChange={line.inlineChange} changeBackground={line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`}/>:line.inlineChange ? <>{line.inlineChange[0]>0?<HighlightedCode code={line.content.slice(0,line.inlineChange[0])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}<Text style={[styles.codeSyntaxText,{backgroundColor:line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`} ]}>{line.content.slice(...line.inlineChange)}</Text>{line.inlineChange[1]<line.content.length?<HighlightedCode code={line.content.slice(line.inlineChange[1])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}</> : <HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} />}
       </Text>
     </View>
   );

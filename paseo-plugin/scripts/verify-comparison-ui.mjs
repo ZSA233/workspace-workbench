@@ -21,7 +21,7 @@ try{
  writeFileSync(join(ui.project,'one','compare.go'),'package sample\n\n// 中文 tab and a deliberately long line to verify wrapping in the narrow viewer '+ 'sample '.repeat(35)+'\nfunc timeout() int { return 5 }\n');
  writeFileSync(join(ui.project,'one','alternate.go'),'package sample\nfunc alternate() int { return 7 }\n');
  for(let i=0;i<30;i++)writeFileSync(join(ui.project,'one',`sample-${String(i).padStart(2,'0')}.txt`),`sample ${i}\n`);
- git('add','compare.go','alternate.go',...Array.from({length:30},(_,i)=>`sample-${String(i).padStart(2,'0')}.txt`));git('commit','-qm','comparison UI fixture');const head=git('rev-parse','HEAD');const longRef='feature/a-long-comparison-reference-for-layout-validation';git('branch',longRef,base);
+ git('add','compare.go','alternate.go',...Array.from({length:30},(_,i)=>`sample-${String(i).padStart(2,'0')}.txt`));git('commit','-qm','feat: add focused comparison fixtures with readable source changes');for(let i=0;i<8;i++)git('commit','--allow-empty','-qm',i%2?`fix: retain the selected comparison when delayed observations finish after a newer request ${i}`:`修复：后台读取完成后保留当前文件选择，并确保不同提交之间的比较不会互相覆盖 ${i}`);const head=git('rev-parse','HEAD');const longRef='feature/a-long-comparison-reference-for-layout-validation';git('branch',longRef,base);
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1600,height:1050}});page.on('pageerror',e=>report.pageErrors.push(e.message));await page.emulateMedia({colorScheme:'dark'});
  let holdRef='',held=[],notifyHeld;const business=[];
  await page.routeWebSocket('**/*',socket=>{const server=socket.connectToServer();socket.onMessage(message=>{if(String(message).includes('repository.compare'))business.push(String(message));server.send(message);});server.onMessage(message=>{
@@ -42,11 +42,22 @@ try{
  report.controlsHeight=(await page.getByTestId('comparison-controls').boundingBox()).height;assert.ok(report.controlsHeight<=150);
  assert.equal(await page.getByLabel('搜索变化文件',{exact:true}).filter({has:page.locator('input')}).count(),0);
  await page.screenshot({path:join(output,'comparison-sidebar.png')});
+ await page.getByRole('tab',{name:'当前独有提交',exact:true}).click();
+ const commitRows=page.locator('[data-testid^="comparison-commit-"]').filter({has:page.getByTestId('comparison-commit-subject')});await commitRows.first().waitFor();
+ assert.equal(await commitRows.count(),9);
+ report.commitRows=await commitRows.evaluateAll(rows=>rows.map(row=>{const title=row.querySelector('[data-testid="comparison-commit-subject"]'),sha=row.querySelector('[data-testid="comparison-commit-sha"]');return {height:row.getBoundingClientRect().height,titleHeight:title.getBoundingClientRect().height,shaBelow:sha.getBoundingClientRect().y>=title.getBoundingClientRect().bottom,shortSha:sha.textContent};}));assert.ok(report.commitRows.every(row=>row.height>=48&&row.titleHeight<=20&&row.shaBelow&&row.shortSha.length===8));
+ await sidebar.screenshot({path:join(output,'comparison-commits.png')});
+ await commitRows.first().getByRole('button',{name:/^提交详情 /}).click();await page.getByTestId('comparison-popover').waitFor();await page.getByText('fix: retain the selected comparison when delayed observations finish after a newer request 7',{exact:true}).last().waitFor();await page.getByTestId('comparison-popover').screenshot({path:join(output,'commit-details.png')});
+ await page.getByRole('button',{name:'查看此次修改',exact:true}).click();await page.getByRole('button',{name:'返回比较结果',exact:true}).click();
+ assert.equal(await commitRows.first().getByRole('button').first().getAttribute('aria-pressed'),'true');
+ await page.getByRole('tab',{name:'比较文件',exact:true}).click();
+ report.checks.push('Commit rows separate titles from short SHA, bound wrapping, expose complete details, and preserve the opened-row marker');
+
  const chooseFrom=async value=>{await page.getByTestId('comparison-from').click();await page.getByLabel('搜索引用或输入提交 SHA',{exact:true}).fill(value);await page.getByRole('button',{name:'使用此引用',exact:true}).click();};
  const nextFrames=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  await nextFrames();const beforeMenus=business.length;
  await page.getByRole('button',{name:'比较设置',exact:true}).click();await page.getByTestId('comparison-popover').waitFor();report.popoverBounds=await page.getByTestId('comparison-popover').boundingBox();report.popoverLayers=await page.getByTestId('comparison-popover').evaluate(node=>{const result=[];while(node){const css=getComputedStyle(node),box=node.getBoundingClientRect();result.push({tag:node.tagName,opacity:css.opacity,z:css.zIndex,position:css.position,x:box.x,y:box.y,width:box.width,height:box.height});node=node.parentElement;}return result;});await page.getByTestId('comparison-popover').screenshot({path:join(output,'popover-detail.png')});await page.screenshot({path:join(output,'comparison-menu.png')});
- await page.getByRole('button',{name:'使用平铺文件列表',exact:true}).click();await page.getByRole('button',{name:'使用目录树',exact:true}).click();
+ await page.getByRole('button',{name:'使用目录树',exact:true}).click();await page.getByRole('button',{name:'使用平铺文件列表',exact:true}).click();
  await page.getByTestId('comparison-popover').getByRole('button',{name:'关闭比较设置',exact:true}).click();await nextFrames();assert.equal(business.length,beforeMenus,'opening menu and switching tree mode do not read Git');
  await page.getByRole('button',{name:'搜索变化文件',exact:true}).click();await page.getByRole('textbox',{name:'搜索变化文件',exact:true}).fill('alternate');assert.equal(await sidebar.getByText('compare.go',{exact:true}).count(),0);
  await page.getByRole('button',{name:'关闭文件搜索',exact:true}).click();await sidebar.getByText('compare.go',{exact:true}).waitFor();assert.equal(await page.getByRole('textbox',{name:'搜索变化文件',exact:true}).count(),0);
@@ -79,14 +90,14 @@ try{
 
  await page.getByText('compare.go',{exact:true}).first().click();
  await page.getByTestId('workbench-diff-lines').waitFor({timeout:30000});
- await page.getByText('14px',{exact:true}).waitFor();
+ await page.getByText('14px',{exact:true}).waitFor();await page.getByTestId('diff-code-unified').first().waitFor();report.checks.push('First Diff opens in unified mode without a saved override');
  await page.getByRole('button',{name:'自动换行',exact:true}).click();
  await page.getByText('换行 ✓',{exact:true}).waitFor();
  await page.getByRole('button',{name:'代码字号',exact:true}).click();await page.getByText('16px',{exact:true}).waitFor();
  report.codeFonts=await page.getByTestId('workbench-diff-lines').evaluate(node=>Array.from(node.querySelectorAll('*')).filter(el=>el.textContent==='package'||el.textContent==='sample').map(el=>({text:el.textContent,font:getComputedStyle(el).fontFamily,size:getComputedStyle(el).fontSize,html:el.outerHTML.slice(0,400)})));
  assert.ok(report.codeFonts.length>0);assert.ok(report.codeFonts.every(item=>/Consolas|monospace|Menlo/.test(item.font)),'syntax tokens use actual monospace font');
  report.copied=await page.getByTestId('workbench-diff-lines').evaluate(node=>{
-   const cells=node.querySelectorAll('[data-testid="diff-code-right"]');const range=document.createRange();range.setStart(cells[0],0);range.setEnd(cells[cells.length-1],cells[cells.length-1].childNodes.length);const selection=document.getSelection();selection.removeAllRanges();selection.addRange(range);const data=new DataTransfer();document.dispatchEvent(new ClipboardEvent('copy',{clipboardData:data,bubbles:true,cancelable:true}));selection.removeAllRanges();return data.getData('text/plain');
+   const cells=node.querySelectorAll('[data-testid="diff-code-unified"]');const range=document.createRange();range.setStart(cells[0],0);range.setEnd(cells[cells.length-1],cells[cells.length-1].childNodes.length);const selection=document.getSelection();selection.removeAllRanges();selection.addRange(range);const data=new DataTransfer();document.dispatchEvent(new ClipboardEvent('copy',{clipboardData:data,bubbles:true,cancelable:true}));selection.removeAllRanges();return data.getData('text/plain');
  });assert.match(report.copied,/package sample/);assert.ok(!/^\d+\s|^\+/m.test(report.copied));
  await page.screenshot({path:join(output,'comparison-diff.png')});
  report.cachedClickMs=[];

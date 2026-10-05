@@ -628,8 +628,8 @@ export function countWorkspaceFilter(
   return workspaces.filter((workspace) => matchesWorkspaceFilter(workspace, filter)).length;
 }
 
-export function defaultTreeMode(files: FileChange[]): "tree" | "files" {
-  return files.length <= 3 ? "files" : "tree";
+export function defaultTreeMode(_files: FileChange[]): "tree" | "files" {
+  return "files";
 }
 
 export function ancestorPaths(path: string): string[] {

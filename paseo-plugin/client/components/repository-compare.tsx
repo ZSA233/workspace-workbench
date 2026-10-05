@@ -1,3 +1,4 @@
+import {ComparisonCommitRow} from "./comparison-commit-row";
 import {useEffect,useRef,useState} from 'react';
 import {useQuery} from '@tanstack/react-query';
 import {ActivityIndicator,Platform,Pressable,Text,View,useWindowDimensions} from 'react-native';
@@ -26,11 +27,12 @@ export function RepositoryCompare(props:Props){
  const {fontScale}=useWindowDimensions();
  const touch=Platform.OS!=='web',rowHeight=comparisonRowHeight(touch,fontScale||1),accent='#55bcf5';
  const [request,setRequest]=useState<ComparisonRequest|null>(()=>comparisonRequest(props.initialFrom||'',props.initialTo||'HEAD'));
- const [overlay,setOverlay]=useState<'from'|'to'|'menu'|'repositories'|null>(null),[anchor,setAnchor]=useState<PopoverAnchor>({x:0,y:0,width:320,height:32});
+ const [overlay,setOverlay]=useState<'from'|'to'|'menu'|'repositories'|'commit-detail'|null>(null),[anchor,setAnchor]=useState<PopoverAnchor>({x:0,y:0,width:320,height:32});
  const [emptyBasis,setEmptyBasis]=useState<ComparisonRequest>({fromRef:'',toRef:props.initialTo||'HEAD',mode:'endpoints'});
  const [draft,setDraft]=useState(''),[fetchError,setFetchError]=useState('');
+ const [detailSha,setDetailSha]=useState(''),[lastOpenedCommit,setLastOpenedCommit]=useState('');
  const [side,setSide]=useState<'files'|'from'|'to'>('files'),[offset,setOffset]=useState(0),[selected,setSelected]=useState(''),[selectedCommit,setSelectedCommit]=useState('');
- const [searchOpen,setSearchOpen]=useState(false),[filter,setFilter]=useState(''),[treeMode,setTreeMode]=useState<'tree'|'files'>('tree');
+ const [searchOpen,setSearchOpen]=useState(false),[filter,setFilter]=useState(''),[treeMode,setTreeMode]=useState<'tree'|'files'>('files');
  useObservationVersions(project,[workspaceId],foreground);
  const query=(action:string,comparison:unknown,enabled:boolean,extra:Record<string,unknown>={})=>({
    queryKey:['workspace-workbench',project,'repository-compare',workspaceId,repo.repoPath,action,comparison,extra],
@@ -48,6 +50,7 @@ export function RepositoryCompare(props:Props){
  const suggested=items.find(item=>item.name==='refs/remotes/origin/main')||items.find(item=>item.name==='refs/remotes/origin/master');
  const applied=data?.comparison||request||emptyBasis;
  const numbers=result(counts.data),history=result(commits.data),fetchState=refData?.fetch;
+ const detailCommit=history?.commits?.find(commit=>commit.sha===detailSha);
  const files=result(stats.data)||data,commitData=result(commitFiles.data);
  const error=fileQuery.data?.error?.message||fileQuery.error?.message||commitFiles.data?.error?.message||commits.data?.error?.message||counts.data?.error?.message||stats.data?.error?.message||refs.data?.error?.message||fetchError||fetchState?.error;
  const pending=foreground&&fileQuery.isFetching;
@@ -99,11 +102,11 @@ export function RepositoryCompare(props:Props){
    </View>
    <View testID="comparison-results" style={{flex:1,minHeight:72}} onLayout={event=>setHeight(event.nativeEvent.layout.height)}>
      <View style={side==='files'&&!selectedCommit?{flex:1,minHeight:0}:{display:'none'}}><ChangedTree fill hideHeader changes={filtered||null} loading={!data&&pending} refreshing={false} error={null} stale={false} mode={treeMode} onMode={setTreeMode} scope="branch" selectedCommit="" selectedFile={selected} onSelectFile={file=>openFile(file)} onLayout={()=>{}} sectionLayout={{collapsed:false,height:null}} availableHeight={height} onSectionToggle={()=>{}} onOpenLayoutMenu={()=>open('menu')} theme={theme} styles={styles}/></View>
-     <View style={side!=='files'&&!selectedCommit?{flex:1,minHeight:0}:{display:'none'}}><ScrollView style={{flex:1}}>{commits.isFetching&&!history?<ActivityIndicator color={accent}/>:null}{history?.commits?.map(commit=><View key={commit.sha}>{menuRow(`${commit.sha.slice(0,8)} ${commit.subject}`,()=>setSelectedCommit(commit.sha))}</View>)}{history&&!history.commits?.length?<Text style={muted}>没有独有提交</Text>:null}<View style={inlineRow}>{(history?.offset||0)>0?menuRow('上一页',()=>setOffset(value=>Math.max(0,value-50)),'ChevronLeft',commits.isFetching):null}{history?.hasMore?menuRow('下一页',()=>setOffset(value=>value+50),'ChevronRight',commits.isFetching):null}</View></ScrollView></View>
+     <View style={side!=='files'&&!selectedCommit?{flex:1,minHeight:0}:{display:'none'}}><ScrollView style={{flex:1}}>{commits.isFetching&&!history?<ActivityIndicator color={accent}/>:null}{history?.commits?.map(commit=><ComparisonCommitRow key={commit.sha} commit={commit} selected={lastOpenedCommit===commit.sha} onSelect={()=>{setLastOpenedCommit(commit.sha);setSelectedCommit(commit.sha);}} onDetails={()=>{setDetailSha(commit.sha);open('commit-detail');}} theme={theme}/>)}{history&&!history.commits?.length?<Text style={muted}>没有独有提交</Text>:null}<View style={inlineRow}>{(history?.offset||0)>0?menuRow('上一页',()=>setOffset(value=>Math.max(0,value-50)),'ChevronLeft',commits.isFetching):null}{history?.hasMore?menuRow('下一页',()=>setOffset(value=>value+50),'ChevronRight',commits.isFetching):null}</View></ScrollView></View>
      {selectedCommit?<ChangedTree key={selectedCommit} fill hideHeader changes={commitData||null} loading={!commitData&&commitFiles.isFetching} refreshing={false} error={null} stale={false} mode={treeMode} onMode={setTreeMode} scope="branch" selectedCommit={selectedCommit} selectedFile={selected} onSelectFile={file=>openFile(file,selectedCommit)} onLayout={()=>{}} sectionLayout={{collapsed:false,height:null}} availableHeight={height} onSectionToggle={()=>{}} onOpenLayoutMenu={()=>open('menu')} theme={theme} styles={styles}/>:null}
    </View>
-   {overlay?<ComparisonPopover title={overlay==='menu'?'比较设置':overlay==='repositories'?'选择仓库':overlay==='from'?'选择起点':'选择终点'} theme={theme} anchor={anchor} onClose={()=>setOverlay(null)}>
-     {overlay==='from'||overlay==='to'?<>
+   {overlay?<ComparisonPopover title={overlay==='commit-detail'?'提交详情':overlay==='menu'?'比较设置':overlay==='repositories'?'选择仓库':overlay==='from'?'选择起点':'选择终点'} theme={theme} anchor={anchor} onClose={()=>setOverlay(null)}>
+     {overlay==='commit-detail'?<><Text selectable style={{color:theme.colors.foreground,fontSize:14,lineHeight:21,marginVertical:8}}>{detailCommit?.subject}</Text><Text selectable style={{...muted,fontFamily:'monospace'}}>{detailSha}</Text>{menuRow('查看此次修改',()=>{setOverlay(null);setLastOpenedCommit(detailSha);setSelectedCommit(detailSha);},'List',!detailCommit)}</>:overlay==='from'||overlay==='to'?<>
        <TextInput autoFocus accessibilityLabel="搜索引用或输入提交 SHA" placeholder="分支、标签或提交 SHA" value={draft} onChangeText={setDraft} onSubmitEditing={()=>choose(draft)} style={[styles.targetInput,{flex:0,height:36,minHeight:36}]}/>
        {menuRow('使用此引用',()=>choose(draft),'Check',!draft.trim())}
        {overlay==='from'&&!production&&suggested?menuRow(`使用并保存 ${suggested.shortName} 为生产分支`,()=>{settings.update({production:{[preferenceKey]:suggested.name}});choose(suggested.name);},'Pin'):null}

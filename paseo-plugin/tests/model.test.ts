@@ -99,7 +99,7 @@ test("saved workspace selection wins over auto detection and falls back safely",
 
 test("tree rows stay compact and expand only the selected directory", () => {
   const files = [file("src/one.ts"), file("src/two.ts"), file("docs/readme.md"), file("root.txt")];
-  assert.equal(defaultTreeMode(files), "tree");
+  assert.equal(defaultTreeMode(files), "files");
   assert.deepEqual(buildTreeRows(files, new Set()).filter((row) => row.kind === "directory").map((row) => row.path), ["docs", "src"]);
   assert.ok(buildTreeRows(files, new Set(["src"])).some((row) => row.kind === "file" && row.file.path === "src/one.ts"));
 });

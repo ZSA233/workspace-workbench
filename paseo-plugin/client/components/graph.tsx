@@ -350,7 +350,7 @@ export function WorkingTreeRow({
           <Text numberOfLines={1} style={styles.graphSubject}>
           <Text style={styles.graphWorktreeLabel}>{copy.text_ef7c82a2b7}</Text>
           {!repository.basicOnly || repository.workingChanges ? <Text style={styles.graphSha}>{formatCopyFrom(copy, "text_29e918bbdd", [formatCopyFrom(copy, "fileCountLabel", [Math.max((repository.workingChanges?.files ?? repository.dirtyPaths?.length ?? 0), repository.dirtyPaths?.length || 0)])])}</Text> : null}
-          <Text>{" · "}</Text>
+          <Text style={styles.graphSha}>{" · "}</Text>
           {repository.workingChanges && (repository.workingChanges.additions || repository.workingChanges.deletions)
             ? <ChangeCounts additions={repository.workingChanges.additions} deletions={repository.workingChanges.deletions} styles={styles} />
             : null}

@@ -1,3 +1,4 @@
+import {WorkbenchThemeContext,type TextThemeColors} from "./theme-context";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { copy } from "../shared/copy";
@@ -14,6 +15,8 @@ type State = { error: Error | null };
  * leave the actual error visible for diagnosis.
  */
 export class PanelErrorBoundary extends Component<Props, State> {
+  static contextType=WorkbenchThemeContext;
+  declare context: TextThemeColors;
   state: State = { error: null };
 
   static getDerivedStateFromError(error: unknown): State {
@@ -44,11 +47,11 @@ export class PanelErrorBoundary extends Component<Props, State> {
       message: this.state.error.message,
     }, null, 2);
     return (
-      <View style={{ flex: 1, padding: 12, gap: 8 }}>
-        <Text style={{ fontWeight: "700" }}>{copy.openFailed}</Text>
-        <Text selectable>{`${this.state.error.name}: ${this.state.error.message}`}</Text>
-        <Text selectable style={{ opacity: 0.75 }}>{diagnostic}</Text>
-        <Text accessibilityRole="button" onPress={() => this.setState({ error: null })}>{copy.setupRetry}</Text>
+      <View style={{ flex: 1, padding: 12, gap: 8,backgroundColor:this.context.surface0 }}>
+        <Text style={{ color:this.context.foreground,fontWeight: "700" }}>{copy.openFailed}</Text>
+        <Text selectable style={{color:this.context.foreground}}>{`${this.state.error.name}: ${this.state.error.message}`}</Text>
+        <Text selectable style={{ color:this.context.foregroundMuted }}>{diagnostic}</Text>
+        <Text style={{color:this.context.foreground}} accessibilityRole="button" onPress={() => this.setState({ error: null })}>{copy.setupRetry}</Text>
       </View>
     );
   }

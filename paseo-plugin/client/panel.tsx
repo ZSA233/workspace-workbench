@@ -91,7 +91,7 @@ import { WorkspaceDeletionPanel } from "./components/workspace-deletion";
 import { chooseProject,useProjectMemory } from "./project-memory";
 import { useSectionSizing } from "./use-section-sizing";
 
-import { ExecutionBindingCard } from "./components/agent";
+import { ExecutionSessionDetails, executionStatusColor, executionStatusLabel } from "./components/agent";
 
 import { ToolchainNotice,WorkspaceView } from "./components/repositories";
 
@@ -226,6 +226,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [panelWidth, setPanelWidth] = useState(0);
   const [panelHeight, setPanelHeight] = useState(0);
   const [reduceMotion, setReduceMotion] = useState(false);
+  const [executionDetailsScope,setExecutionDetailsScope]=useState<string|null>(null);
+  const [handoffFormOpen,setHandoffFormOpen]=useState(false);
+  const [executionNavigationError,setExecutionNavigationError]=useState("");
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const [storageMenuOpen, setStorageMenuOpen] = useState(false);
@@ -377,7 +380,20 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const selectedWorkspaceUnavailable = selectedWorkspace?.state === "create_failed" || selectedWorkspace?.state === "record_invalid";
   const selectedWorkspaceBlocksTasks = selectedWorkspaceUnavailable || selectedWorkspace?.state === "deletion_pending" || selectedWorkspace?.state === "removed";
   const agentId="agentId" in props ? props.agentId:undefined;
-  const {handoffGoal, setHandoffGoal, handoffRelationship, setHandoffRelationship, handoffPacketOpen, setHandoffPacketOpen, handoffPreviewOpen, setHandoffPreviewOpen, materialPreview, handoffUnderstanding, setHandoffUnderstanding, handoffPlan, setHandoffPlan, handoffAcceptance, setHandoffAcceptance, handoffReferences, setHandoffReferences, handoffReviewInstructions, setHandoffReviewInstructions, workerStartMode, setWorkerStartMode, delegating, parentAgentId, agentContextAvailable, agentContextState, bindingQuery, binding, boundAgent, bindingFailure, draftHandoff, draftPacket, handoffAssetOptions, delegateSelectedWorkspace, submitSelectedWorkspace}=useWorkspaceHandoff({projectConfig,selectedWorkspaceId,foreground,listReady,selectedWorkspaceIsMain,selectedWorkspaceBlocksTasks,agentCapability:!!listResult?.capabilities?.agent,agentId,locale,localizedCopy});
+  const {handoffGoal, setHandoffGoal, handoffRelationship, setHandoffRelationship, handoffPacketOpen, setHandoffPacketOpen, handoffPreviewOpen, setHandoffPreviewOpen, materialPreview, handoffUnderstanding, setHandoffUnderstanding, handoffPlan, setHandoffPlan, handoffAcceptance, setHandoffAcceptance, handoffReferences, setHandoffReferences, handoffReviewInstructions, setHandoffReviewInstructions, workerStartMode, setWorkerStartMode, delegating, parentAgentId, agentContextAvailable, agentContextState, execution, bindingQuery, binding, boundAgent, bindingFailure, draftHandoff, draftPacket, handoffAssetOptions, delegateSelectedWorkspace, submitSelectedWorkspace}=useWorkspaceHandoff({projectConfig,selectedWorkspaceId,foreground,listReady,selectedWorkspaceIsMain,selectedWorkspaceBlocksTasks,agentCapability:!!listResult?.capabilities?.agent,agentId,locale,localizedCopy});
+  const executionScope=JSON.stringify([projectConfig,selectedWorkspaceId]);
+  const executionDetailsOpen=executionDetailsScope===executionScope;
+  const latestExecutionScope=useRef(executionScope);latestExecutionScope.current=executionScope;
+  const openExecutionDetails=()=>{setLayoutMenuOpen(false);setStatusMenuOpen(false);setExecutionDetailsScope(executionScope);};
+  useEffect(()=>{setExecutionDetailsScope(null);setHandoffFormOpen(false);setExecutionNavigationError("");},[executionScope]);
+  const openExecutionAgent=execution.canOpen&&boundAgent?.id&&props.navigation?()=>{
+    const target=boundAgent.id;
+    const failed=()=>{if(latestExecutionScope.current!==executionScope)return;setExecutionNavigationError(localizedCopy.executionOpenFailed);openExecutionDetails();};
+    setExecutionDetailsScope(null);setExecutionNavigationError("");
+    try {void Promise.resolve(props.navigation!.openAgent({agentId:target})).catch(failed);}
+    catch {failed();}
+  }:undefined;
+
   const refreshCapable = backendQuery.data?.readCapabilities?.refreshProtocol === 1;
   const basicCapable = backendQuery.data?.readCapabilities?.basicSummaryProtocol === 1;
   const {detailQuery, detailState, detail, detailFailure, detailUnavailable, displayDetail, selectorWorkspace, selectedRepository, graphQuery, graphState, graph, graphFailure, changesScope, changesQuery, changesState, changes, changesFailure, selectedRefresh, basicSummaries, graphFeedback, changesFeedback, graphBusy, retryGraph}=useRepositoryObservation({projectConfig,selectedWorkspaceId,selectedWorkspace,selectedRepoPath,selectedCommit,changeScope,graphView,foreground,tab,backendReady,listReady,refreshCapable,basicCapable,selectedWorkspaceUnavailable,rpc,localizedCopy,observationTiming});
@@ -751,6 +767,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         </Modal.Content>
       </Modal> : null}
       <WorkspaceSelector
+        executionControl={!selectedWorkspaceIsMain&&execution.hasAgent?<IconButton label={`${openExecutionAgent?localizedCopy.executionOpen:localizedCopy.executionDetails} · ${boundAgent?.id||binding?.agentId} · ${executionStatusLabel(execution.status,localizedCopy)}${execution.stale?` · ${localizedCopy.executionStale}`:''}`} icon="MessageSquare" color={executionStatusColor(execution.status,theme)} onPress={openExecutionAgent||openExecutionDetails}/>:undefined}
         agentId={agentId}
         onOpenLayoutMenu={() => { if (selectorOpen) closeWorkspaceSelector(); openLayoutMenu(); }}
         statusControl={<IconButton label={observationLabel} icon={observationIcon}
@@ -791,34 +808,22 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         theme={theme}
         styles={styles}
       />
-      {!selectedWorkspaceIsMain && listResult?.capabilities?.agent ? (
-        <View>
-        {parentAgentId && agentContextAvailable && !selectedWorkspaceBlocksTasks && !binding?.agentId ? <View style={styles.targetRow}>
-          <TextInput value={handoffGoal} onChangeText={setHandoffGoal} placeholder={localizedCopy.text_1b37d56f7a} style={styles.targetInput} />
-          <View style={styles.briefActions}>
+      {executionDetailsOpen&&!selectedWorkspaceIsMain ? <Modal open title={localizedCopy.executionMenu} onOpenChange={open=>{if(!open)setExecutionDetailsScope(null);}}>
+        <Modal.Content scrollable style={{maxHeight:640,width:'100%'}} contentContainerStyle={{gap:12,padding:14}}>
+          <ExecutionSessionDetails execution={execution} refreshing={bindingQuery.isFetching} canDelegate={Boolean(parentAgentId&&agentContextAvailable&&!selectedWorkspaceBlocksTasks)} agentContextState={agentContextState} delegating={delegating} onDelegate={()=>{setExecutionDetailsScope(null);void delegateSelectedWorkspace();}} onOpenAgent={openExecutionAgent} onRetry={()=>{void bindingQuery.refetch({cancelRefetch:false});}} theme={theme} styles={styles}/>
+          {executionNavigationError?<Text style={styles.warningText}>{executionNavigationError}</Text>:null}
+          {parentAgentId&&agentContextAvailable&&!selectedWorkspaceBlocksTasks&&!binding?.agentId?<Pressable accessibilityRole="button" accessibilityState={{expanded:handoffFormOpen}} onPress={()=>setHandoffFormOpen(value=>!value)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.executionShowHandoff}</Text></Pressable>:null}
+        {handoffFormOpen && parentAgentId && agentContextAvailable && !selectedWorkspaceBlocksTasks && !binding?.agentId ? <View style={[styles.targetRow,{flexDirection:"column",alignItems:"stretch"}]}>
+          <TextInput value={handoffGoal} onChangeText={setHandoffGoal} placeholder={localizedCopy.text_1b37d56f7a} style={[styles.targetInput,{flexGrow:0,minHeight:36}]} />
+          <View style={[styles.briefActions,{flexWrap:"wrap"}]}>
             {(["default", "independent", "child"] as const).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: handoffRelationship === relationship }} onPress={() => setHandoffRelationship(relationship)} style={[styles.secondaryButton, handoffRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "default" ? localizedCopy.reviewSettingsFollowDefault : relationship === "independent" ? localizedCopy.reviewSettingsIndependentShort : localizedCopy.reviewSettingsChildAgent}</Text></Pressable>)}
           </View>
-          <Pressable onPress={() => setHandoffPacketOpen(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.handoffPacket}</Text></Pressable>
-          <Pressable disabled={delegating || !handoffGoal.trim()} onPress={delegateSelectedWorkspace} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.handoffPreview}</Text></Pressable>
+          <Pressable onPress={() => {setExecutionDetailsScope(null);setHandoffPacketOpen(true);}} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.handoffPacket}</Text></Pressable>
+          <Pressable disabled={delegating || !handoffGoal.trim()} onPress={()=>{setExecutionDetailsScope(null);void delegateSelectedWorkspace();}} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.handoffPreview}</Text></Pressable>
         </View> : null}
-        <ExecutionBindingCard
-          workspaceId={selectedWorkspaceId}
-          binding={binding}
-          agent={boundAgent}
-          loading={Boolean(selectedWorkspaceId && bindingQuery.isFetching && !bindingQuery.data)}
-          refreshing={manualRefreshing && bindingQuery.isFetching}
-          error={bindingFailure}
-          canDelegate={Boolean(parentAgentId && agentContextAvailable && !selectedWorkspaceBlocksTasks)}
-          agentContextState={agentContextState}
-          delegating={delegating}
-          onDelegate={delegateSelectedWorkspace}
-          onOpenAgent={boundAgent?.id && props.navigation ? () => props.navigation?.openAgent({ agentId: boundAgent.id }) : undefined}
-          theme={theme}
-          styles={styles}
-        />
         {binding?.handoffBundle ? <HandoffMaterialsCard key={`${binding.handoffBundle.id}:${binding.handoffBundle.version}`} projectConfig={projectConfig} workspaceId={selectedWorkspaceId} bundle={binding.handoffBundle} styles={styles} /> : null}
-        </View>
-      ) : null}
+        </Modal.Content>
+      </Modal>:null}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabs}>
         <TabButton active={tab === "workspace"} label={localizedCopy.tabWorkspace} onPress={() => setTab("workspace")} theme={theme} styles={styles} />
         <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
@@ -981,6 +986,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         styles={styles}
       />
       <LayoutMenu
+        onOpenExecution={!selectedWorkspaceIsMain&&listResult?.capabilities?.agent?openExecutionDetails:undefined}
         onOpenCreator={props.navigation ? id => { setLayoutMenuOpen(false); props.navigation?.openAgent({ agentId: id }); } : undefined}
         onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}
         onCreate={listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setCreateOpen(true); } : undefined}

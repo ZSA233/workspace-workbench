@@ -20,6 +20,7 @@ export const iconShapes:Record<string,IconPart[]>={
  RefreshCw:[...path(20,8,17,4,10,3,5,6,3,12,5,18,11,21,17,19,20,15),...path(20,3,20,8,15,8)],
  Columns2:[box(3,3,18,18,2),line(12,3,12,21)],Rows3:[box(3,3,18,18,2),line(3,9,21,9),line(3,15,21,15)],
  Folder:[...path(3,20,3,5,10,5,12,8,21,8,21,20,3,20)],
+ MessageSquare:path(4,3,20,3,20,17,10,17,4,21,4,3),
  Check:path(4,12,10,18,21,5),Pin:[...path(8,3,16,3,15,10,19,14,5,14,9,10,8,3),line(12,14,12,22)],
 };
 export const genericIcon:IconPart[]=[box(4,4,16,16,3),line(8,12,16,12),line(12,8,12,16)];

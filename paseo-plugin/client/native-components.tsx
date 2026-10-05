@@ -1,3 +1,4 @@
+import {useWorkbenchThemeColors} from "./theme-context";
 import { GeometricIcon } from "./geometric-icon";
 import {
   FlatList as NativeFlatList,
@@ -101,10 +102,12 @@ export function FlatList<Item>(props: FlatListProps<Item> & { ref?: Ref<NativeFl
 }
 
 export function TextInput(props: TextInputProps) {
+  const colors=useWorkbenchThemeColors();
+  const themedProps={...props,style:[{color:colors.foreground},props.style],placeholderTextColor:props.placeholderTextColor??colors.foregroundMuted};
   if (Platform.OS !== "web") reportNativeSelection("TextInput", "react-native");
   return Platform.OS === "web"
-    ? renderComponent(hostTextInput, NativeTextInput, props)
-    : renderComponent(null, NativeTextInput, props);
+    ? renderComponent(hostTextInput, NativeTextInput, themedProps)
+    : renderComponent(null, NativeTextInput, themedProps);
 }
 
 function NativeModalCompat({ open, onOpenChange, title, children }: {
@@ -113,12 +116,13 @@ function NativeModalCompat({ open, onOpenChange, title, children }: {
   title: string;
   children: ReactNode;
 }) {
+  const colors=useWorkbenchThemeColors();
   if (!isRenderable(NativeModal) || !isRenderable(View) || !isRenderable(Text)) return null;
   return (
     createElement(NativeModal as any, { transparent: true, visible: open, onRequestClose: () => onOpenChange(false) },
       createElement(View as any, { style: { flex: 1, justifyContent: "center", padding: 16 } },
-        createElement(View as any, { style: { maxHeight: "90%", padding: 12, backgroundColor: "#202124", borderRadius: 8 } },
-          createElement(Text as any, { style: { color: "#fff", fontWeight: "700", marginBottom: 8 } }, title),
+        createElement(View as any, { style: { maxHeight: "90%", padding: 12, backgroundColor: colors.surface1, borderRadius: 8 } },
+          createElement(Text as any, { style: { color: colors.foreground, fontWeight: "700", marginBottom: 8 } }, title),
           children
         ),
       ),

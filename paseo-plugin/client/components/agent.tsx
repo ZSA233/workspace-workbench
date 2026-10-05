@@ -1,15 +1,13 @@
+import {executionBindingState} from "../execution-binding-state";
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { ActivityIndicator,Pressable,Text,View } from "react-native";
-import { copy,formatCopyFrom,type WorkbenchCopy } from "../../shared/copy";
+import { copy,type WorkbenchCopy } from "../../shared/copy";
 
-import {
-type WorkspaceBindingResponse
-} from "../../shared/handoff";
 import { useWorkbenchCopy } from "../i18n";
-import { InlineRefresh,makeStyles } from "./ui";
+import { makeStyles } from "./ui";
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 
@@ -34,87 +32,38 @@ export function executionStatusLabel(status: string | undefined | null, strings:
 }
 
 export function executionStatusColor(status: string | undefined | null, theme: PanelProps["theme"]): string {
-  if (["running", "initializing", "completed", "idle"].includes(status || "")) return theme.colors.statusSuccess;
-  if (["permission", "blocked", "pending"].includes(status || "")) return theme.colors.statusWarning;
-  if (["error", "closed", "archived"].includes(status || "")) return theme.colors.statusDanger;
+  if (["permission", "blocked"].includes(status || "")) return theme.colors.statusWarning;
+  if (["error"].includes(status || "")) return theme.colors.statusDanger;
   return theme.colors.foregroundMuted;
 }
 
-export function ExecutionBindingCard({
-  workspaceId,
-  binding,
-  agent,
-  loading,
-  refreshing,
-  error,
-  canDelegate,
-  agentContextState,
-  delegating,
-  onDelegate,
-  onOpenAgent,
-  theme,
-  styles,
-}: {
-  workspaceId: string;
-  binding: WorkspaceBindingResponse["binding"];
-  agent: WorkspaceBindingResponse["agent"];
-  loading: boolean;
-  refreshing: boolean;
-  error: string | null;
-  canDelegate: boolean;
-  agentContextState?: "ready" | "loading" | "unavailable" | "missing";
-  delegating: boolean;
-  onDelegate: () => void;
-  onOpenAgent?: () => void;
-  theme: PanelProps["theme"];
-  styles: ReturnType<typeof makeStyles>;
+export function ExecutionSessionDetails({execution,refreshing,canDelegate,agentContextState,delegating,onDelegate,onOpenAgent,onRetry,theme,styles}:{
+  execution: ReturnType<typeof executionBindingState>;
+  refreshing:boolean;canDelegate:boolean;agentContextState?:"ready"|"loading"|"unavailable"|"missing";
+  delegating:boolean;onDelegate():void;onOpenAgent?:()=>void;onRetry():void;
+  theme:PanelProps["theme"];styles:ReturnType<typeof makeStyles>;
 }) {
-  if (!workspaceId) return null;
-  const localizedCopy = useWorkbenchCopy();
-  const bindingStatus = binding?.status;
-  const relationshipLabel = binding?.relationship === "child" ? localizedCopy.reviewSettingsChildAgent : binding?.relationship === "independent" ? localizedCopy.reviewSettingsIndependent : localizedCopy.reviewSettingsFollowExecution;
-  const status = bindingStatus && ["completed", "blocked", "permission", "error", "archived"].includes(bindingStatus)
-    ? bindingStatus
-    : agent?.status || bindingStatus || "not-started";
-  const statusColor = error && !loading || agentContextState === "unavailable" ? theme.colors.statusWarning : executionStatusColor(status, theme);
-  const statusText = loading
-    ? localizedCopy.text_b21b631cd5
-    : agentContextState === "loading"
-      ? localizedCopy.agentContextLoading
-      : agentContextState === "unavailable" && !binding
-        ? localizedCopy.agentContextUnavailable
-        : error && !binding && !agent
-          ? localizedCopy.text_95abdc4ebd
-          : !canDelegate && !binding
-            ? localizedCopy.agentCoordinatorRequired
-            : executionStatusLabel(status, localizedCopy);
-  const recoverable = canDelegate && ["error", "blocked", "closed"].includes(status);
-  return (
-    <View style={styles.executionBar} accessibilityLabel={formatCopyFrom(localizedCopy, "text_f41a05dfe8", [statusText])}>
-      <View style={styles.executionSummary}>
-        <View style={[styles.executionStatusDot, { backgroundColor: statusColor }]} />
-        <Text style={styles.executionLabel}>{relationshipLabel}</Text>
-        <View style={[styles.executionStatus, { borderColor: statusColor }]}>
-          <Text style={[styles.executionStatusText, { color: statusColor }]}>{statusText}</Text>
-        </View>
-        <Text style={styles.executionStatusText}>{agent?.planningState === "plan" ? "计划" : agent?.planningState === "execute" ? "执行" : "模式未知"} · 权限：{agent?.permissionModeId || "未知"}</Text>
-        <InlineRefresh visible={refreshing} theme={theme} styles={styles} />
-      </View>
-      {recoverable || onOpenAgent ? (
-        <View style={styles.executionActions}>
-          {onOpenAgent ? (
-            <Pressable accessibilityRole="button" disabled={delegating} onPress={onOpenAgent} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>{localizedCopy.text_f7acefd2d4}</Text>
-            </Pressable>
-          ) : null}
-          {recoverable ? (
-            <Pressable accessibilityRole="button" disabled={delegating} onPress={onDelegate} style={[styles.secondaryButton, delegating && styles.executionButtonDisabled]}>
-              {delegating ? <ActivityIndicator color={theme.colors.foregroundMuted} size="small" /> : null}
-              <Text style={styles.secondaryButtonText}>{localizedCopy.text_2b6021df2f}</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      ) : null}
+  const strings=useWorkbenchCopy(),{binding,agent,status,state,error,stale}=execution;
+  const row=(label:string,value:string)=><View style={{flexDirection:'row',gap:12,paddingVertical:5}}><Text style={{color:theme.colors.foregroundMuted,fontSize:12,width:76}}>{label}</Text><Text selectable style={{color:theme.colors.foreground,fontSize:12,flex:1}}>{value}</Text></View>;
+  return <View testID="execution-session-details" style={{gap:8}}>
+    {state==='loading'?<View style={{flexDirection:'row',gap:8}}><ActivityIndicator color={theme.colors.foregroundMuted}/><Text style={styles.layoutMenuHint}>{strings.text_b21b631cd5}</Text></View>:null}
+    {state==='none'?<Text style={styles.layoutMenuHint}>{strings.executionUnbound}</Text>:null}
+    {state==='failed'?<Text style={styles.warningText}>{strings.executionReadFailed}</Text>:null}
+    {stale?<Text style={styles.warningText}>{strings.executionStale}</Text>:null}
+    {error?<Text selectable style={styles.warningText}>{error}</Text>:null}
+    {binding?<>
+      <Text selectable style={styles.executionStatusText}>{binding.agentId||strings.executionNotObserved}</Text>
+      {row(strings.executionStatus,status?executionStatusLabel(status,strings):strings.executionNotObserved)}
+      {row(strings.executionRelationship,binding.relationship==='child'?strings.reviewSettingsChildAgent:binding.relationship==='independent'?strings.reviewSettingsIndependent:strings.executionNotObserved)}
+      {row(strings.executionMode,agent?.planningState==='plan'?strings.executionPlan:agent?.planningState==='execute'?strings.executionExecute:strings.executionNotObserved)}
+      {row(strings.executionPermission,agent?.permissionModeId||strings.executionNotObserved)}
+      {!onOpenAgent&&binding.agentId?<Text style={styles.layoutMenuHint}>{strings.executionUnavailable}</Text>:null}
+    </>:null}
+    {!canDelegate&&!binding?<Text style={styles.layoutMenuHint}>{agentContextState==='loading'?strings.agentContextLoading:agentContextState==='unavailable'?strings.agentContextUnavailable:strings.agentCoordinatorRequired}</Text>:null}
+    <View style={[styles.briefActions,{flexWrap:'wrap'}]}>
+      {onOpenAgent?<Pressable accessibilityRole="button" onPress={onOpenAgent} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{strings.executionOpen}</Text></Pressable>:null}
+      <Pressable accessibilityRole="button" disabled={refreshing} onPress={onRetry} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{strings.executionReadRetry}</Text></Pressable>
+      {canDelegate&&['error','blocked','closed'].includes(status||'')?<Pressable accessibilityRole="button" disabled={delegating} onPress={onDelegate} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{strings.text_2b6021df2f}</Text></Pressable>:null}
     </View>
-  );
+  </View>;
 }

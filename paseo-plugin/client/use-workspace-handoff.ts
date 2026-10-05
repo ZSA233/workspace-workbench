@@ -1,3 +1,4 @@
+import {executionBindingState,retainBindingResponse} from './execution-binding-state';
 import { useRpc } from '@getpaseo/plugin/client';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -122,6 +123,7 @@ export function useWorkspaceHandoff({ projectConfig, selectedWorkspaceId, foregr
                 : "unavailable";
     const bindingQuery = useQuery({
         queryKey: ["workspace-workbench", projectConfig, "execution-binding", selectedWorkspaceId],
+        structuralSharing: (previous, incoming) => retainBindingResponse(previous,incoming,selectedWorkspaceId),
         queryFn: () => bindingRpc({ workspaceId: selectedWorkspaceId }),
         enabled: foreground && Boolean(selectedWorkspaceId && listReady && !selectedWorkspaceIsMain && agentCapability),
         refetchInterval: false,
@@ -130,8 +132,9 @@ export function useWorkspaceHandoff({ projectConfig, selectedWorkspaceId, foregr
         retry: false,
         staleTime: 1000,
     });
-    const binding = (bindingQuery.data?.binding || null) as WorkspaceBindingResponse["binding"];
-    const savedHandoff = bindingQuery.data?.handoff || null;
+    const execution = executionBindingState(selectedWorkspaceId,bindingQuery.data,bindingQuery.isPending,queryErrorMessage(bindingQuery.error,localizedCopy));
+    const binding = execution.binding;
+    const savedHandoff = execution.handoff;
     const artifactListQuery = useQuery({
         queryKey: ["workspace-workbench", projectConfig, "handoff-artifacts"],
         queryFn: () => artifactListRpc({ projectConfig }),
@@ -140,8 +143,8 @@ export function useWorkspaceHandoff({ projectConfig, selectedWorkspaceId, foregr
         retry: false,
         staleTime: 5000,
     });
-    const boundAgent = (bindingQuery.data?.agent || null) as WorkspaceBindingResponse["agent"];
-    const bindingFailure = bindingQuery.data?.error?.message || queryErrorMessage(bindingQuery.error, localizedCopy);
+    const boundAgent = execution.agent;
+    const bindingFailure = execution.error;
     useEffect(() => {
         setHandoffGoal("");
         setHandoffRelationship("default");
@@ -257,5 +260,5 @@ export function useWorkspaceHandoff({ projectConfig, selectedWorkspaceId, foregr
     const draftHandoff = buildSelectedHandoff();
     const draftPacket = draftHandoff?.reviewPacket || null;
     const handoffAssetOptions = useMemo(() => (artifactListQuery.data?.artifacts || []).filter((artifact) => artifact.kind === "image" || artifact.mimeType.startsWith("image/")), [artifactListQuery.data?.artifacts]);
-    return { handoffGoal, setHandoffGoal, handoffRelationship, setHandoffRelationship, handoffPacketOpen, setHandoffPacketOpen, handoffPreviewOpen, setHandoffPreviewOpen, materialPreview, handoffUnderstanding, setHandoffUnderstanding, handoffPlan, setHandoffPlan, handoffAcceptance, setHandoffAcceptance, handoffReferences, setHandoffReferences, handoffReviewInstructions, setHandoffReviewInstructions, workerStartMode, setWorkerStartMode, delegating, parentAgentId, agentContextAvailable, agentContextState, bindingQuery, binding, boundAgent, bindingFailure, draftHandoff, draftPacket, handoffAssetOptions, delegateSelectedWorkspace, submitSelectedWorkspace };
+    return { handoffGoal, setHandoffGoal, handoffRelationship, setHandoffRelationship, handoffPacketOpen, setHandoffPacketOpen, handoffPreviewOpen, setHandoffPreviewOpen, materialPreview, handoffUnderstanding, setHandoffUnderstanding, handoffPlan, setHandoffPlan, handoffAcceptance, setHandoffAcceptance, handoffReferences, setHandoffReferences, handoffReviewInstructions, setHandoffReviewInstructions, workerStartMode, setWorkerStartMode, delegating, parentAgentId, agentContextAvailable, agentContextState, execution, bindingQuery, binding, boundAgent, bindingFailure, draftHandoff, draftPacket, handoffAssetOptions, delegateSelectedWorkspace, submitSelectedWorkspace };
 }

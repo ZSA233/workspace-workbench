@@ -1,3 +1,4 @@
+import {DIFF_CHANGE_GUTTER_STYLE} from './diff-layout';
 import {DiffToolbar} from './components/diff-toolbar';
 import {useDiffReading,type DiffReading} from './use-diff-reading';
 import type {ReactNode} from 'react';
@@ -245,7 +246,7 @@ function DiffViewer({
 }) {
   reportNativeDiagnostic("file-review-diff-render", { entry: "DiffViewer" });
   const copy = useWorkbenchCopy();
-  const {nativeTokens,parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,listRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,onViewableItemsChanged,viewabilityConfig}=reading;
+  const {nativeTokens,parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,listRef,horizontalRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,jumpToRow,onScrollToIndexFailed,onViewableItemsChanged,viewabilityConfig}=reading;
 
   if (diff.binary) {
     return (
@@ -270,6 +271,8 @@ function DiffViewer({
       {diff.truncated ? <Text style={styles.warningText}>{copy.text_1d3d755616}</Text> : null}
       <View style={styles.diffViewport} onLayout={event=>setWidth(event.nativeEvent.layout.width)}>
         <ScrollView
+          ref={horizontalRef}
+          testID="diff-horizontal-scroll"
           horizontal
           scrollEnabled={!wrap}
           showsHorizontalScrollIndicator
@@ -295,11 +298,9 @@ function DiffViewer({
                 const offset = Number(event.nativeEvent?.contentOffset?.y) || 0;
                 if (restoredPosition.current && foreground && event.nativeEvent?.layoutMeasurement?.height !== 0) { position.offset = offset; setScrollOffset(offset); }
               }}
-              onScrollToIndexFailed={({ index }: { index: number }) => {
-                listRef.current?.scrollToOffset?.({ offset: Math.max(0, rowMetrics.offsets[index] || 0), animated: true });
-              }}
+              onScrollToIndexFailed={onScrollToIndexFailed}
               onViewableItemsChanged={onViewableItemsChanged as any}
-              renderItem={({ item }: { item: DiffDisplayRow }) => <View onLayout={event=>{if(wrap){const h=event.nativeEvent.layout.height;setMeasured(current=>current[item.key]===h?current:{...current,[item.key]:h});}}}>
+              renderItem={({ item }: { item: DiffDisplayRow }) => <View onLayout={event=>{if(wrap){const h=event.nativeEvent.layout.height;if(!Number.isFinite(h)||h<=0)return;setMeasured(current=>current[item.key]===h?current:{...current,[item.key]:h});}}}>
                 {item.kind === "hunk" ? (
                   <HunkRow
                     active={item.hunkIndex === currentHunk}
@@ -323,10 +324,10 @@ function DiffViewer({
           </View>
         </ScrollView>
         <OverviewRail
-          contentHeight={contentHeight || rowMetrics.contentHeight}
+          contentHeight={rowMetrics.contentHeight}
           currentHunk={currentHunk}
           markers={overviewMarkers}
-          onSelectHunk={jumpToHunk}
+          onSelectRow={jumpToRow}
           scrollOffset={scrollOffset}
           platform={platform}
           theme={theme}
@@ -365,7 +366,7 @@ function OverviewRail({
   contentHeight,
   currentHunk,
   markers,
-  onSelectHunk,
+  onSelectRow,
   scrollOffset,
   platform,
   theme,
@@ -375,7 +376,7 @@ function OverviewRail({
   contentHeight: number;
   currentHunk: number;
   markers: DiffOverviewMarker[];
-  onSelectHunk: (index: number) => void;
+  onSelectRow: (index: number) => void;
   scrollOffset: number;
   platform: FilePanelProps["layout"]["platform"];
   theme: FilePanelProps["theme"];
@@ -383,8 +384,8 @@ function OverviewRail({
   styles: ReturnType<typeof makeStyles>;
 }) {
   return platform === "web"
-    ? <OverviewRailWeb contentHeight={contentHeight} currentHunk={currentHunk} markers={markers} onSelectHunk={onSelectHunk} scrollOffset={scrollOffset} theme={theme} height={height} styles={styles} />
-    : <OverviewRailNative contentHeight={contentHeight} currentHunk={currentHunk} markers={markers} onSelectHunk={onSelectHunk} scrollOffset={scrollOffset} theme={theme} height={height} styles={styles} />;
+    ? <OverviewRailWeb contentHeight={contentHeight} currentHunk={currentHunk} markers={markers} onSelectRow={onSelectRow} scrollOffset={scrollOffset} theme={theme} height={height} styles={styles} />
+    : <OverviewRailNative contentHeight={contentHeight} currentHunk={currentHunk} markers={markers} onSelectRow={onSelectRow} scrollOffset={scrollOffset} theme={theme} height={height} styles={styles} />;
 }
 
 type OverviewRailProps = Omit<Parameters<typeof OverviewRail>[0], "platform">;
@@ -409,7 +410,6 @@ function overviewMarkerMetrics(marker: DiffOverviewMarker, height: number) {
 }
 
 function overviewMarkerColor(marker: DiffOverviewMarker, currentHunk: number, theme: FilePanelProps["theme"]): string {
-  if (marker.hunkIndex === currentHunk) return theme.colors.statusWarning;
   if (marker.kind === "added") return theme.colors.statusSuccess;
   if (marker.kind === "removed") return theme.colors.statusDanger;
   return observerAccent(theme);
@@ -419,7 +419,7 @@ function OverviewRailNative({
   contentHeight,
   currentHunk,
   markers,
-  onSelectHunk,
+  onSelectRow,
   scrollOffset,
   theme,
   height,
@@ -435,9 +435,10 @@ function OverviewRailNative({
         return (
           <Pressable
             key={`${marker.hunkIndex}-${marker.kind}-${marker.startLine}-${index}`}
-            accessibilityLabel={formatCopyFrom(copy, "diffHunk", [marker.hunkIndex + 1])}
+            testID={`diff-overview-marker-${index}`}
+            accessibilityLabel={`${copy.diffOverview}: ${marker.startLine}–${marker.endLine}`}
             accessibilityRole="button"
-            onPress={() => onSelectHunk(marker.hunkIndex)}
+            onPress={() => onSelectRow(marker.startRow)}
             style={[styles.overviewMarker, {
               backgroundColor: overviewMarkerColor(marker, currentHunk, theme),
               height: frame.height,
@@ -455,7 +456,7 @@ function OverviewRailWeb({
   contentHeight,
   currentHunk,
   markers,
-  onSelectHunk,
+  onSelectRow,
   scrollOffset,
   theme,
   height,
@@ -472,9 +473,13 @@ function OverviewRailWeb({
           return (
             <Rect
               key={`${marker.hunkIndex}-${marker.kind}-${marker.startLine}-${index}`}
+            data-testid={`diff-overview-marker-${index}`}
+              role="button"
+              aria-label={`${copy.diffOverview}: ${marker.startLine}–${marker.endLine}`}
+              data-start-row={marker.startRow}
               fill={overviewMarkerColor(marker, currentHunk, theme)}
               height={frame.height}
-              onPress={() => onSelectHunk(marker.hunkIndex)}
+              onPress={() => onSelectRow(marker.startRow)}
               rx={1.5}
               width={7}
               x={2}
@@ -611,7 +616,7 @@ function makeStyles(theme: FilePanelProps["theme"], fontSize=14, wrap=false) {
     contextRow: { backgroundColor: theme.colors.surface0 },
     addedRow: { backgroundColor: `${theme.colors.statusSuccess}1f` },
     removedRow: { backgroundColor: `${theme.colors.statusDanger}1f` },
-    changeGutter: { minHeight: "100%", width: 3 },
+    changeGutter: DIFF_CHANGE_GUTTER_STYLE,
     contextGutter: { backgroundColor: "transparent" },
     addedGutter: { backgroundColor: theme.colors.statusSuccess },
     removedGutter: { backgroundColor: theme.colors.statusDanger },

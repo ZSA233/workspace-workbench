@@ -27,3 +27,6 @@ export function highlightReplacements(patch:ParsedPatch):ParsedPatch {
     return {...hunk,lines};
   })};
 }
+
+/** Stretch after text measurement; percentage min-height feeds viewport height back into auto rows in Yoga. */
+export const DIFF_CHANGE_GUTTER_STYLE={width:3,alignSelf:'stretch' as const,flexShrink:0};

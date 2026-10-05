@@ -867,6 +867,8 @@ export const DIFF_LINE_ROW_HEIGHT = 22;
 export type DiffOverviewMarkerKind = "added" | "removed" | "modified";
 
 export type DiffOverviewMarker = {
+  startRow: number;
+  endRow: number;
   hunkIndex: number;
   kind: DiffOverviewMarkerKind;
   startLine: number;
@@ -1018,13 +1020,14 @@ function changedLinesForDisplayRow(row: DiffDisplayRow): DiffLine[] {
  * A contiguous removed + added block is represented as one modified range so
  * the overview matches how a side-by-side editor presents a changed hunk.
  */
-export function buildDiffOverviewMarkers(rows: DiffDisplayRow[]): DiffOverviewMarker[] {
-  const metrics = diffDisplayRowMetrics(rows);
+export function buildDiffOverviewMarkers(rows: DiffDisplayRow[], metrics: DiffDisplayRowMetrics = diffDisplayRowMetrics(rows)): DiffOverviewMarker[] {
   const markers: DiffOverviewMarker[] = [];
 
   if (!rows.length || !metrics.contentHeight) return markers;
 
   let active: {
+    startRow: number;
+    endRow: number;
     endOffset: number;
     hunkIndex: number;
     lines: DiffLine[];
@@ -1043,6 +1046,8 @@ export function buildDiffOverviewMarkers(rows: DiffDisplayRow[]): DiffOverviewMa
         ? "added"
         : "removed";
     markers.push({
+      startRow: active.startRow,
+      endRow: active.endRow,
       hunkIndex: active.hunkIndex,
       kind,
       startLine,
@@ -1062,6 +1067,8 @@ export function buildDiffOverviewMarkers(rows: DiffDisplayRow[]): DiffOverviewMa
     if (!active || active.hunkIndex !== row.hunkIndex) {
       flush();
       active = {
+        startRow: index,
+        endRow: index,
         endOffset: metrics.offsets[index] + metrics.lengths[index],
         hunkIndex: row.hunkIndex,
         lines: [...changed],
@@ -1069,6 +1076,7 @@ export function buildDiffOverviewMarkers(rows: DiffDisplayRow[]): DiffOverviewMa
       };
       return;
     }
+    active.endRow = index;
     active.endOffset = metrics.offsets[index] + metrics.lengths[index];
     active.lines.push(...changed);
   });

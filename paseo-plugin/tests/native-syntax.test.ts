@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {buildSync} from 'esbuild';
 import {NATIVE_SYNTAX_LIMITS as limits,scanNativeLine,nativeRenderSegments,nativeLanguage} from '../client/native-syntax.ts';
-import {createNativeSyntaxEngine,NativeSyntaxCache} from '../client/native-syntax-engine.ts';
+import {createNativeSyntaxEngine,createNativeSyntaxCache} from '../client/native-syntax-engine.ts';
 import {syntaxPalette} from '../client/syntax-palette.ts';
 const tokens=(code:string,lang:'go'|'javascript'|'typescript'|'json')=>scanNativeLine(code,lang)!.filter(t=>t.kind!=='plain').map(t=>[code.slice(t.start,t.end),t.kind]);
 test('native scanner identifies basic Go, JS, TS and JSON tokens',()=>{
@@ -33,7 +33,7 @@ test('line size, span count and cooperative budget limits return plain content',
 });
 function harness(scan?:typeof scanNativeLine,clock?:()=>number){
  const jobs=new Map<number,()=>void>();let id=0,published=0,errors=0;
- const cache=new NativeSyntaxCache();
+ const cache=createNativeSyntaxCache();
  const engine=createNativeSyntaxEngine({cache,scan,now:clock||(()=>0),publish:()=>published++,onError:()=>errors++,schedule:fn=>{jobs.set(++id,fn);return id;},cancel:handle=>{jobs.delete(handle as number);}});
  const step=()=>{const first=jobs.entries().next().value;if(first){jobs.delete(first[0]);first[1]();}};
  return {engine,cache,jobs,step,published:()=>published,errors:()=>errors,drain(){let n=0;while(jobs.size){assert.ok(++n<1000);step();}}};
@@ -54,7 +54,7 @@ test('deadline is checked during scanning, rather than racing an uninterruptible
  let time=0;const h=harness(undefined,()=>time+=0.5);h.engine.update('go',['"'+'x'.repeat(1000)+'"']);h.drain();assert.equal(h.engine.read('"'+'x'.repeat(1000)+'"'),null);assert.ok(h.engine.stats().yielded>0);
 });
 test('cache enforces all three bounds and keys exclude theme',()=>{
- const cache=new NativeSyntaxCache();for(let i=0;i<400;i++)cache.put('go',`// ${i} `+'x'.repeat(1000),[{start:0,end:1000,kind:'comment'}]);
+ const cache=createNativeSyntaxCache();for(let i=0;i<400;i++)cache.put('go',`// ${i} `+'x'.repeat(1000),[{start:0,end:1000,kind:'comment'}]);
  assert.ok(cache.stats().lines<=limits.cacheLines);assert.ok(cache.stats().chars<=limits.cacheChars);
  for(let i=0;i<400;i++)cache.put('javascript',`line${i}`,Array.from({length:96},(_,j)=>({start:j,end:j+1,kind:'plain'})));
  assert.ok(cache.stats().spans<=limits.cacheSpans);assert.ok(cache.stats().lines<=limits.cacheLines);

@@ -46,12 +46,22 @@ try{
     report.layouts.push({colorScheme,...metrics});await panel.screenshot({path:join(output,`${colorScheme}-${width}.png`)});
    }
    if(!baseline){
+    const secondMarker=panel.getByTestId('diff-overview-marker-1');await secondMarker.click();
+    await page.waitForFunction(()=>{const list=document.querySelector('[data-testid="workbench-diff-lines"]'),top=list.getBoundingClientRect().top;const first=[...list.querySelectorAll('[data-testid="diff-code-unified"]')].find(n=>n.getBoundingClientRect().bottom>top+1);return first?.textContent.includes('270');});
+    await panel.getByTestId('diff-overview-marker-0').click();
+    await page.waitForFunction(()=>{const list=document.querySelector('[data-testid="workbench-diff-lines"]'),top=list.getBoundingClientRect().top;const first=[...list.querySelectorAll('[data-testid="diff-code-unified"]')].find(n=>n.getBoundingClientRect().bottom>top+1);return first?.textContent.includes('10:');});
+    report.checks.push(`${colorScheme}: overview clicks align the exact changed row rather than the hunk header`);
     const before=business.length;await panel.getByRole('button',{name:'Diff reading settings',exact:true}).click();const menu=page.getByTestId('diff-reading-popover');await menu.waitFor();await menu.getByRole('button',{name:'Comparison details',exact:true}).click();await menu.getByText(base,{exact:true}).first().waitFor();await menu.getByText(head,{exact:true}).first().waitFor();
     const colors=await menu.evaluate(node=>Array.from(node.querySelectorAll('*')).filter(n=>n.childNodes.length===1&&n.firstChild.nodeType===3).map(n=>getComputedStyle(n).color));if(colorScheme==='dark')assert.ok(colors.every(c=>c!=='rgb(0, 0, 0)'));await menu.screenshot({path:join(output,`details-${colorScheme}.png`)});
     await menu.getByRole('button',{name:'Close Diff settings',exact:true}).click();await frames();assert.equal(business.length,before,'menus must not trigger business reads');
+    await panel.evaluate(node=>{node.style.width='320px';});await frames();await panel.getByTestId('diff-horizontal-scroll').evaluate(node=>{node.scrollLeft=80;});
     await panel.getByRole('button',{name:'Diff reading settings',exact:true}).click();await menu.getByRole('button',{name:'16px',exact:true}).click();await menu.getByRole('button',{name:'Wrap lines',exact:true}).click();await menu.getByRole('button',{name:'Close Diff settings',exact:true}).click();
+    await page.waitForFunction(()=>{const node=document.querySelector('[data-testid="diff-code-unified"]');return node&&node.getBoundingClientRect().height>30&&node.getBoundingClientRect().height<200;});
+    const wrapMetrics=await panel.evaluate(node=>{const list=node.querySelector('[data-testid="workbench-diff-lines"]'),bounds=list.getBoundingClientRect(),rows=[...list.querySelectorAll('[data-testid="diff-code-unified"]')].filter(row=>{const r=row.getBoundingClientRect();return r.top>=bounds.top&&r.bottom<=bounds.bottom;});return {visibleRows:rows.length,maxRowHeight:Math.max(...rows.map(row=>row.getBoundingClientRect().height)),horizontalOffset:node.querySelector('[data-testid="diff-horizontal-scroll"]').scrollLeft};});
+    assert.ok(wrapMetrics.visibleRows>=4&&wrapMetrics.maxRowHeight<200,JSON.stringify(wrapMetrics));assert.equal(wrapMetrics.horizontalOffset,0);report['wrap-'+colorScheme]=wrapMetrics;await panel.screenshot({path:join(output,`wrapped-${colorScheme}-320.png`)});
     await panel.getByRole('button',{name:'Diff reading settings',exact:true}).click();await menu.getByRole('button',{name:'14px',exact:true}).click();await menu.getByRole('button',{name:'Disable line wrapping',exact:true}).click();await menu.getByRole('button',{name:'Close Diff settings',exact:true}).click();
 
+    await panel.evaluate(node=>{node.style.width='1000px';});await frames();
     const count=panel.getByTestId('diff-hunk-count');await panel.getByRole('button',{name:'Next change hunk',exact:true}).click();await count.filter({hasText:'2 / 3'}).waitFor();
     const scrollTop=()=>panel.getByTestId('workbench-diff-lines').evaluate(node=>Math.max(...[node,...node.querySelectorAll('*')].map(n=>n.scrollTop||0)));
     // Wait for actual scroll completion using scrollend or two unchanged animation frames.

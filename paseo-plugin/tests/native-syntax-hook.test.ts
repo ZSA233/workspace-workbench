@@ -4,11 +4,11 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import {readFileSync} from 'node:fs';
 import * as lexical from '../client/native-syntax.ts';
-import {createNativeSyntaxEngine,NativeSyntaxCache} from '../client/native-syntax-engine.ts';
+import {createNativeSyntaxEngine,createNativeSyntaxCache} from '../client/native-syntax-engine.ts';
 import type {DiffDisplayRow} from '../client/model.ts';
 function harness(failLoad=false){
  const slots:any[]=[];let cursor=0,loads=0,scans=0,updates=0,id=0;const effects:Array<()=>void>=[],jobs=new Map<number,()=>void>(),diagnostics:unknown[]=[];
- const cache=new NativeSyntaxCache();
+ const cache=createNativeSyntaxCache();
  const react={useRef:(value:unknown)=>{const at=cursor++;return slots[at]??(slots[at]={current:value});},useState:(value:unknown)=>{const at=cursor++;if(!(at in slots))slots[at]=value;return [slots[at],(next:any)=>{slots[at]=typeof next==='function'?next(slots[at]):next;updates++;}];},
   useEffect:(effect:()=>unknown,deps:unknown[])=>{const at=cursor++,previous=slots[at];if(!previous||deps.some((value,i)=>value!==previous.deps[i])){effects.push(()=>{previous?.cleanup?.();slots[at]={deps,cleanup:effect()};});}}
  };

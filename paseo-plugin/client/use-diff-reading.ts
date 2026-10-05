@@ -5,17 +5,24 @@ import {parseUnifiedPatch,buildDiffDisplayRows,buildDiffOverviewMarkers,type Dif
 import {highlightReplacements,measuredDiffRows} from './diff-layout';
 import type {ReviewMode} from './review-mode';
 import type {FileReviewPosition} from './file-review-store';
+const EMPTY_MEASUREMENTS:Record<string,number>={};
 /** One view-scoped controller shared by the toolbar, viewport and overview rail. */
 export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path}:{path:string;diff:DiffResult|null;mode:ReviewMode;fontSize:number;wrap:boolean;position:FileReviewPosition;foreground:boolean}){
   const parsed = useMemo(() => highlightReplacements(parseUnifiedPatch(diff?.patch || "")), [diff?.patch]);
   const rows = useMemo(() => buildDiffDisplayRows(parsed, mode), [mode, parsed]);
   const [visibleRows,setVisibleRows]=useState<number[]>([]);
   const nativeTokens=useNativeSyntax(rows,path,foreground,visibleRows);
-  const [measured, setMeasured] = useState<Record<string,number>>({});
   const [width,setWidth] = useState(0);
-  const rowMetrics = useMemo(() => measuredDiffRows(rows,fontSize,wrap?measured:{}),[rows,wrap,fontSize,measured]);
-  useEffect(()=>{setMeasured({});},[wrap,fontSize,width]);
-  const overviewMarkers = useMemo(() => buildDiffOverviewMarkers(rows), [rows]);
+  const measurementGeneration=useMemo(()=>({}),[rows,fontSize,wrap,width]);
+  const latestMeasurement=useRef(measurementGeneration);latestMeasurement.current=measurementGeneration;
+  const [measurements,setMeasurements]=useState<{generation:object|null;values:Record<string,number>}>({generation:null,values:{}});
+  const measured=measurements.generation===measurementGeneration?measurements.values:EMPTY_MEASUREMENTS;
+  const setMeasured=useCallback((update:(current:Record<string,number>)=>Record<string,number>)=>{
+    if(latestMeasurement.current!==measurementGeneration)return;
+    setMeasurements(current=>{if(latestMeasurement.current!==measurementGeneration)return current;const values=current.generation===measurementGeneration?current.values:EMPTY_MEASUREMENTS;const next=update(values);return next===values&&current.generation===measurementGeneration?current:{generation:measurementGeneration,values:next};});
+  },[measurementGeneration]);
+  const rowMetrics = useMemo(() => measuredDiffRows(rows,fontSize,wrap?measured:EMPTY_MEASUREMENTS),[rows,wrap,fontSize,measured]);
+  const overviewMarkers = useMemo(() => buildDiffOverviewMarkers(rows,rowMetrics), [rows,rowMetrics]);
   const hunkRowIndexes = useMemo(
     () => rows.flatMap((item, index) => (item.kind === "hunk" ? [index] : [])),
     [rows],
@@ -26,6 +33,8 @@ export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path
   const rowHunkIndexesRef = useRef(rowHunkIndexes);
   rowHunkIndexesRef.current = rowHunkIndexes;
   const listRef = useRef<any>(null);
+  const horizontalRef = useRef<any>(null);
+  useLayoutEffect(()=>{if(wrap)horizontalRef.current?.scrollTo?.({x:0,animated:false});},[wrap,width]);
   const copyRoot = useRef<any>(null);
   useEffect(()=>{
     if(Platform.OS!=='web') return;
@@ -82,17 +91,29 @@ export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path
 
   const mounted = useRef(true);
   useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
+  const pendingRow=useRef<{index:number;attempts:number}|null>(null);
+  const jumpToRow=useCallback((index:number)=>{
+    if(!mounted.current||index<0||index>=rows.length)return;
+    position.hunk=rows[index].hunkIndex;setCurrentHunk(position.hunk);
+    pendingRow.current={index,attempts:0};
+    listRef.current?.scrollToIndex?.({index,animated:true,viewPosition:0});
+  },[rows,position]);
+  const onScrollToIndexFailed=useCallback(({index}:{index:number})=>{
+    if(!mounted.current)return;
+    pendingRow.current={index,attempts:(pendingRow.current?.attempts||0)+1};
+    listRef.current?.scrollToOffset?.({offset:Math.max(0,rowMetrics.offsets[index]||0),animated:false});
+  },[rowMetrics]);
+  useEffect(()=>{
+    const pending=pendingRow.current;if(!pending||!wrap||!measured[rows[pending.index]?.key]||pending.attempts>3)return;
+    const attempt={index:pending.index,attempts:pending.attempts+1};pendingRow.current=attempt;
+    listRef.current?.scrollToIndex?.({index:pending.index,animated:false,viewPosition:0});
+    if(pendingRow.current===attempt)pendingRow.current=null;
+  },[measured,rows,wrap]);
   const jumpToHunk = useCallback((requestedIndex: number) => {
     if (!mounted.current || !hunkRowIndexes.length) return;
     const nextIndex = ((requestedIndex % hunkRowIndexes.length) + hunkRowIndexes.length) % hunkRowIndexes.length;
-    position.hunk=nextIndex;
-    setCurrentHunk(nextIndex);
-    listRef.current?.scrollToIndex?.({
-      index: hunkRowIndexes[nextIndex],
-      animated: true,
-      viewPosition: 0,
-    });
-  }, [hunkRowIndexes,position]);
+    jumpToRow(hunkRowIndexes[nextIndex]);
+  }, [hunkRowIndexes,jumpToRow]);
 
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ index: number | null }> }) => {
     if (!mounted.current) return;
@@ -109,6 +130,6 @@ export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path
   }).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 10 }).current;
 
- return {nativeTokens,parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,hunkRowIndexes,listRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,onViewableItemsChanged,viewabilityConfig};
+ return {nativeTokens,parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,hunkRowIndexes,listRef,horizontalRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,jumpToRow,onScrollToIndexFailed,onViewableItemsChanged,viewabilityConfig};
 }
 export type DiffReading=ReturnType<typeof useDiffReading>;

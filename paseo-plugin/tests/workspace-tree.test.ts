@@ -1,4 +1,4 @@
-import {createdInSession} from '../shared/workspace-creator.ts';
+import {createdInSession,workspaceCreators} from '../shared/workspace-creator.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { workspaceForest, workspaceTreeRows } from '../client/workspace-tree.ts';
@@ -61,4 +61,11 @@ test('creator filtering retains ancestry as context without selecting another se
  const all=[parent,child,legacy],matches=all.filter(w=>createdInSession(w,'current'));
  const tree=workspaceForest(all,matches);assert.deepEqual(tree[0].members.map(w=>w.id),['child']);assert.equal(tree[0].match,false);
  assert.deepEqual(names(workspaceTreeRows(tree,new Set())),['parent','child']);assert.equal(createdInSession(child,''),false);assert.equal(createdInSession(legacy,'current'),false);
+});
+
+test('creator picker includes historical sessions, deduplicates workspaces and keeps the newest name',()=>{
+ const a={...workspace('a'),creator:{agentId:'owner',name:'Earlier title',recordedAt:'2026-01-01T00:00:00Z'}};
+ const b={...workspace('b'),state:'removed',creator:{agentId:'owner',name:'Latest title',recordedAt:'2026-02-01T00:00:00Z'}};
+ const other={...workspace('c'),creator:{agentId:'other',recordedAt:'2026-01-01T00:00:00Z'}};
+ assert.deepEqual(workspaceCreators([b,a,a,workspace('legacy'),other]).map(x=>({id:x.agentId,name:x.name,count:x.count})),[{id:'owner',name:'Latest title',count:2},{id:'other',name:undefined,count:1}]);
 });

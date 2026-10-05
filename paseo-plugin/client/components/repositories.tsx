@@ -1,3 +1,4 @@
+import { IconButton } from "./icon-button";
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
@@ -60,6 +61,8 @@ export const WorkspaceView = memo(function WorkspaceView({
   onContentLayout,
   repositoryDetailsOpen,
   onToggleRepositoryDetails,
+  onOpenCompare,
+  onCompare,
   onCommit,
   onGraphBase,
   onGraphMore,
@@ -109,6 +112,8 @@ export const WorkspaceView = memo(function WorkspaceView({
   onContentLayout: (height: number) => void;
   repositoryDetailsOpen: boolean;
   onToggleRepositoryDetails: () => void;
+  onOpenCompare?: ()=>void;
+  onCompare?: (sha:string, role:"from"|"to")=>void;
   onCommit: (sha: string) => void;
   onGraphBase: () => void;
   onGraphMore: () => void;
@@ -193,6 +198,7 @@ export const WorkspaceView = memo(function WorkspaceView({
             styles={styles}
           />
           <View style={styles.sectionHeaderRight}>
+            {onOpenCompare && selectedRepository ? <IconButton label="比较仓库" icon="GitCompare" color={theme.colors.foregroundMuted} onPress={onOpenCompare}/> : null}
             <ObservationIndicator lastSuccessfulAt={observationTimes?.detail} hasContent={Boolean(detail)} error={detailError} loading={detailLoading} refreshing={detailRefreshing} theme={theme} styles={styles} />
             <Text accessibilityLabel={copy.repositoryVerificationCount.replace("{0}", String(confirmedRepositoryCount ?? repositories.filter(repo => !repo.observationPending && !!repo.branch).length)).replace("{1}", String(repositories.length))} style={styles.sectionCount}>{detailLoading ? "…" : `${repositories.length}`}</Text>
           </View>
@@ -267,6 +273,7 @@ export const WorkspaceView = memo(function WorkspaceView({
             loading={graphLoading}
             error={graphError}
             selectedCommit={selectedCommit}
+            onCompare={onCompare}
             onCommit={onCommit}
             onGraphBase={onGraphBase}
             onGraphMore={onGraphMore}

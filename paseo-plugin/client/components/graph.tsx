@@ -7,7 +7,7 @@ import { ActivityIndicator,Platform,Pressable,Text,View,type ViewStyle } from "r
 import { formatCopyFrom } from "../../shared/copy";
 import { uniqueCommits } from '../graph/continuity';
 import { createHistoryLoadGate } from "../graph/pagination";
-import { ScrollView } from "../native-components";
+import { ScrollView, Modal, Icon } from "../native-components";
 import { IconButton } from "./icon-button";
 import { ObservationIndicator } from './observation-indicator';
 
@@ -116,6 +116,7 @@ export function CommitGraph({
   loading,
   error,
   selectedCommit,
+  onCompare,
   onCommit,
   lastSuccessfulAt,
   onGraphBase,
@@ -143,6 +144,7 @@ export function CommitGraph({
   error: string | null;
   lastSuccessfulAt?: string | null;
   selectedCommit: string;
+  onCompare?: (sha:string, role:"from"|"to")=>void;
   onCommit: (sha: string) => void;
   onGraphBase: () => void;
   onGraphMore: () => void;
@@ -255,6 +257,7 @@ export function CommitGraph({
                     row={row}
                     selected={row.node.sha === selectedCommit}
                     hovered={row.node.sha === hoveredCommit}
+                    onCompare={onCompare}
                     onCommit={onCommit}
                     onHoverCommit={onHoverCommit}
                     onHoverClear={onHoverClear}
@@ -361,6 +364,7 @@ export const GraphCommitRow = memo(function GraphCommitRow({
   row,
   selected,
   hovered,
+  onCompare,
   onCommit,
   onHoverCommit,
   onHoverClear,
@@ -371,6 +375,7 @@ export const GraphCommitRow = memo(function GraphCommitRow({
   row: GraphRow;
   selected: boolean;
   hovered: boolean;
+  onCompare?: (sha:string, role:"from"|"to")=>void;
   onCommit: (sha: string) => void;
   onHoverCommit?: (sha: string) => void;
   onHoverClear?: (sha: string) => void;
@@ -380,6 +385,7 @@ export const GraphCommitRow = memo(function GraphCommitRow({
 }) {
   const copy = useWorkbenchCopy();
   const tags = graphReferenceTags(row, theme, false);
+  const [menu,setMenu]=useState(false);
   return (
     <Pressable
       accessibilityRole="button"
@@ -399,6 +405,8 @@ export const GraphCommitRow = memo(function GraphCommitRow({
           <Text style={styles.graphSha}>{row.node.shortSha}</Text>
           {`  ${row.node.subject || (row.node.isBase ? copy.graphBaseLabel : row.node.shortSha)}`}
         </Text>
+        {onCompare ? <Pressable accessibilityRole="button" accessibilityLabel="提交比较操作" onPress={event=>{event.stopPropagation();setMenu(value=>!value);}}><Icon name="Ellipsis" size={16} color={theme.colors.foregroundMuted}/></Pressable>:null}
+        {menu&&onCompare?<Modal open onOpenChange={setMenu} title={`${row.node.shortSha} · 比较`}><Modal.Content style={{padding:16}}>{(['from','to'] as const).map(role=><Pressable key={role} onPress={event=>{event.stopPropagation();setMenu(false);onCompare(row.node.sha,role);}}><Text style={styles.graphSha}>{role==='from'?'设为比较起点':'与起点比较'}　</Text></Pressable>)}</Modal.Content></Modal>:null}
         {tags.map((tag, index) => <MiniTag key={`${tag.label}-${index}`} label={tag.label} color={tag.color} styles={styles} />)}
       </View>
     </Pressable>

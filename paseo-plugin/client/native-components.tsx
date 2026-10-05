@@ -1,3 +1,4 @@
+import { GeometricIcon } from "./geometric-icon";
 import {
   FlatList as NativeFlatList,
   Modal as NativeModal,
@@ -78,23 +79,8 @@ export function nativeComponentInventory(): Record<string, string> {
 // undefined native export.
 export function Icon({ name, size = 16, color }: IconProps) {
   if (Platform.OS === "web" && isRenderable(hostIcon)) return renderComponent(hostIcon, null, { name, size, color });
-  reportNativeSelection("Icon", "text-glyph");
-  const glyphs: Record<string, string> = {
-    ArrowLeft: "‹",
-    ChevronDown: "⌄",
-    ChevronRight: "›",
-    ChevronUp: "⌃",
-    ChevronsUpDown: "↕",
-    CircleX: "⊗",
-    Ellipsis: "⋯",
-    FolderTree: "▦",
-    GitBranch: "⑂",
-    Info: "ⓘ",
-    List: "☷",
-    Lock: "▣",
-  };
-  const glyph = glyphs[name] || "·";
-  return isRenderable(Text) ? createElement(Text as any, { style: { color, fontSize: size, lineHeight: size } }, glyph) : null;
+  reportNativeSelection("Icon", "geometry");
+  return createElement(GeometricIcon, {name,size,color});
 }
 
 export function ScrollView(props: ScrollViewProps & { ref?: Ref<NativeScrollView> }) {

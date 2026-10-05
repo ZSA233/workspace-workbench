@@ -39,7 +39,7 @@ type Entry = { active: boolean; lastUsed: number; seen?: ObserverResponse; seenE
 const recoverableRead = (q: QueryView) => (q.data?.error?.details as { recovery?: string } | undefined)?.recovery === 'repository';
 const retryDelay = (q: QueryView, failures: number) => (recoverableRead(q) ? policy.recoveryMs : policy.retryMs)[Math.min(Math.max(0, failures - 1), 3)];
 const terminalRead = (q: QueryView) => (q.data?.error?.details as { terminal?: boolean } | undefined)?.terminal === true && !recoverableRead(q);
-const durable = new Set(['path_invalid', 'file_not_changed', 'worktree_missing', 'repository_missing', 'commit_missing', 'base_missing', 'workspace_not_found']);
+const durable = new Set(['path_invalid', 'file_not_changed', 'worktree_missing', 'repository_missing', 'commit_missing', 'base_missing', 'workspace_not_found', 'comparison_invalid', 'comparison_unrelated', 'comparison_multiple_bases']);
 
 /** Owns refresh decisions, not payloads. QueryClient remains the single data cache. */
 export function createObservationCoordinator(project: string, host: CoordinatorHost, time: Clock = clock) {

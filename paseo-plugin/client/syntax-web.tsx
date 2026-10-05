@@ -157,11 +157,8 @@ function tokenLines(code: string, language: string, grammar: Grammar): SyntaxTok
   return tokens;
 }
 
-export const editorCodeFontFamily = Platform.OS === "web"
-  ? 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace'
-  : Platform.OS === "ios"
-    ? "Menlo"
-    : "monospace";
+export { editorCodeFontFamily } from "./code-font";
+import { editorCodeFontFamily } from "./code-font";
 
 type HighlightedCodeProps = {
   code: string;
@@ -174,13 +171,14 @@ export const HighlightedCode = memo(function HighlightedCode({ code, path, theme
   const language = languageForPath(path);
   const palette = syntaxPalette(theme);
   const codeStyle: StyleProp<TextStyle> = [
-    style,
     {
       color: palette.plain,
       fontFamily: editorCodeFontFamily,
       ...(Platform.OS === "web" ? { whiteSpace: "pre" } : {}),
     } as TextStyle,
+    style,
   ];
+  if (!code) return <Text selectable style={codeStyle} />;
   const grammar = language === "plain" ? null : Prism.languages[language];
   if (!grammar) return <Text selectable style={codeStyle}>{code || " "}</Text>;
   const tokens = tokenLines(code || " ", language, grammar);
@@ -189,7 +187,7 @@ export const HighlightedCode = memo(function HighlightedCode({ code, path, theme
       {(tokens[0] || []).map((token, index) => (
         <Text
           key={`${token.content}-${index}`}
-          style={{ color: tokenColor(token.types, palette) }}
+          style={{ color: tokenColor(token.types, palette), fontFamily: editorCodeFontFamily }}
         >
           {token.content}
         </Text>

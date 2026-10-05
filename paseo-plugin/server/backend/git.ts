@@ -251,6 +251,11 @@ export class Git {
   ): Promise<{ args: string[]; left: string | null; right: string | null }> {
     if (scope === "working")
       return { args: ["diff", "HEAD"], left: "HEAD", right: null };
+    if (scope === "compare") {
+      if (!base || !commit) throw new WorkbenchError("comparison_invalid", "Both endpoints are required");
+      const [left, right] = await Promise.all([this.commit(base), this.commit(commit)]);
+      return { args: ["diff", left, right], left, right };
+    }
     if (scope === "branch") {
       if (!base) throw new WorkbenchError("base_missing", "base is required");
       const left = await this.commit(base),

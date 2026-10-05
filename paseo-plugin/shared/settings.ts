@@ -23,6 +23,8 @@ export const observerSettings = defineSettings({
     selectedWorkspaceByPaseoWorkspace: z.record(z.string(), z.string()).default({}),
     sectionLayoutByPaseoWorkspace: z.record(z.string(), sectionLayout).default({}),
     lastProjectByHost: z.record(z.string(), z.string()).default({}),
+    diffDisplay: z.object({fontSize: z.number().refine(value => [12,14,16,18].includes(value)).default(14), wrap: z.boolean().default(false)}).default({fontSize:14,wrap:false}),
+    productionBranches: z.record(z.string(), z.string()).default({}),
     reviewModeByPaseoWorkspace: z.record(z.string(), reviewMode).default({}),
   }),
   migrate: (values) => {

@@ -258,8 +258,9 @@ The result identifies the supplied sources; it never claims that historical
 attachments or full tool outputs were automatically copied. Retry/status uses the
 same request identity and never automatically resends an uncertain delivery.
 
-Workspace records optionally retain their creator session. Agent-context panels
-provide **Created in this session**, combined with search and active/history
-filters. Creation attribution is independent of execution bindings and parent
+Workspace records optionally retain their creator session. Every panel entry
+provides **Creator session**, combined with search and active/history filters.
+When the host supplies an explicit current session it is offered as a shortcut;
+workspace and global entries can select any creator recorded in the project. Creation attribution is independent of execution bindings and parent
 Workspace provenance. Retries and later sessions do not replace the creator;
 legacy records without attribution remain visible in the full list.

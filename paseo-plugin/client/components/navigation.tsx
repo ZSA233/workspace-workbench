@@ -1,4 +1,4 @@
-import { createdInSession } from '../../shared/workspace-creator';
+import { createdInSession, workspaceCreators } from '../../shared/workspace-creator';
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
@@ -58,7 +58,7 @@ export function PanelHeader({
           onPress={onOpenLayoutMenu}
           style={styles.layoutMenuButton}
         >
-          <Text style={styles.layoutMenuButtonText}>⋯</Text>
+          <Icon name="Ellipsis" size={18} color={theme.colors.foregroundMuted}/>
         </Pressable>
       </View>
     </View>
@@ -231,25 +231,31 @@ export function WorkspaceSelector({
   const localizedCopy = useWorkbenchCopy();
   const [search, setSearch] = useState("");
   const [creatorFilter, setCreatorFilter] = useState<string | null>(null);
-  const mineOnly = Boolean(agentId && creatorFilter === agentId);
+  const [creatorPickerOpen, setCreatorPickerOpen] = useState(false);
+  const creators = useMemo(() => workspaceCreators([...workspaces,...historyWorkspaces]),[workspaces,historyWorkspaces]);
+  const creatorLabel = (id: string) => { const name = creators.find(creator => creator.agentId === id)?.name; return name ? `${name} · ${id.slice(0,8)}` : id.slice(0,8); };
+  const selectedCreator = creatorFilter;
+  const creatorOptions = agentId && !creators.some(creator => creator.agentId === agentId)
+    ? [{agentId,count:0},...creators] : creators;
+
   const [collapsedSources, setCollapsedSources] = useState<Set<string>>(new Set());
   const [batchMode, setBatchMode] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
-  useLayoutEffect(() => { setChecked(new Set()); }, [search, filter, batchMode, mineOnly, agentId]);
-  useEffect(() => { if (!open) { setBatchMode(false); setChecked(new Set()); } }, [open]);
+  useLayoutEffect(() => { setChecked(new Set()); }, [search, filter, batchMode, selectedCreator, agentId]);
+  useEffect(() => { if (!open) { setBatchMode(false); setChecked(new Set()); setCreatorPickerOpen(false); } }, [open]);
   const listRef = useRef<import('react-native').FlatList<WorkspaceTreeRow>>(null);
   const scrollY = useRef(0);
   const previousRows = useRef<string[]>([]);
   const previousScope = useRef('');
   useEffect(() => { if (!open) setSearch(""); }, [open]);
-  const searchedWorkspaces = useMemo(() => visibleWorkspaces.filter((workspace) => matchesWorkspaceSearch(workspace, search) && (!mineOnly || createdInSession(workspace, agentId!))), [visibleWorkspaces, search, mineOnly, agentId]);
+  const searchedWorkspaces = useMemo(() => visibleWorkspaces.filter((workspace) => matchesWorkspaceSearch(workspace, search) && (!selectedCreator || createdInSession(workspace, selectedCreator))), [visibleWorkspaces, search, selectedCreator]);
   const forest = useMemo(() => workspaceForest([...workspaces, ...historyWorkspaces], searchedWorkspaces), [workspaces, historyWorkspaces, searchedWorkspaces]);
   const treeRows = useMemo(() => workspaceTreeRows(forest, collapsedSources, Boolean(search.trim())), [forest, collapsedSources, search]);
   const selectable = searchedWorkspaces.filter(workspace => batchEligible(workspace, filter === 'history' ? 'delete' : 'remove') && !lifecycleBusyWorkspaceIds?.includes(workspace.id));
   const selectedTargets = selectable.filter(workspace => checked.has(workspace.id));
   const selectedCount = searchedWorkspaces.filter(workspace => checked.has(workspace.id)).length;
   const toggleChecked = (id: string) => setChecked(prior => { const next = new Set(prior); next.has(id) ? next.delete(id) : next.add(id); return next; });
-  const scope = `${filter}:${search}:${mineOnly ? agentId : ""}`;
+  const scope = `${filter}:${search}:${selectedCreator || ""}`;
   const rowIdentity = JSON.stringify(treeRows.map(row => row.node.key));
   useLayoutEffect(() => {
     const ids: string[] = JSON.parse(rowIdentity), old = previousRows.current;
@@ -259,9 +265,9 @@ export function WorkspaceSelector({
     } else if (previousScope.current !== scope) { scrollY.current = 0; listRef.current?.scrollToOffset({ offset: 0, animated: false }); }
     previousRows.current = ids; previousScope.current = scope;
   }, [rowIdentity, scope, open]);
-  const scopedWorkspaces = mineOnly ? workspaces.filter(workspace => createdInSession(workspace, agentId!)) : workspaces;
-  const scopedHistory = mineOnly ? historyWorkspaces.filter(workspace => createdInSession(workspace, agentId!)) : historyWorkspaces;
-  const scopedVisible = mineOnly ? visibleWorkspaces.filter(workspace => createdInSession(workspace, agentId!)) : visibleWorkspaces;
+  const scopedWorkspaces = selectedCreator ? workspaces.filter(workspace => createdInSession(workspace, selectedCreator)) : workspaces;
+  const scopedHistory = selectedCreator ? historyWorkspaces.filter(workspace => createdInSession(workspace, selectedCreator)) : historyWorkspaces;
+  const scopedVisible = selectedCreator ? visibleWorkspaces.filter(workspace => createdInSession(workspace, selectedCreator)) : visibleWorkspaces;
   const attention = countWorkspaceFilter(scopedWorkspaces, "attention");
   const filters: { id: WorkspaceFilter; label: string; count: number }[] = [
     { id: "all", label: localizedCopy.text_778fc8f994, count: scopedWorkspaces.length },
@@ -274,7 +280,7 @@ export function WorkspaceSelector({
   return (
     <View style={styles.selector}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={onOpen} style={[styles.selectorButton, { flex: 1 }]}>
+      <Pressable testID="workbench-workspace-selector-toggle" accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={onOpen} style={[styles.selectorButton, { flex: 1 }]}>
         <View style={styles.selectorCopy}>
           <View style={styles.selectorValueRow}>
             <Text numberOfLines={1} style={styles.selectorValue}>{workspaceDisplayName(selectedWorkspace, localizedCopy)}</Text>
@@ -298,7 +304,7 @@ export function WorkspaceSelector({
       {open ? (
         <View style={styles.selectorExpanded}>
           <View style={styles.filterRow}>
-            {agentId ? <Pressable accessibilityRole="button" accessibilityState={{ selected: mineOnly }} onPress={() => setCreatorFilter(mineOnly ? null : agentId)} style={[styles.filterButton, mineOnly && styles.filterButtonActive]}><Text style={[styles.filterButtonText, mineOnly && styles.filterButtonTextActive]}>{localizedCopy.createdInSession}</Text></Pressable> : null}
+            <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.creatorFilter} accessibilityState={{ selected: Boolean(selectedCreator), expanded: creatorPickerOpen }} onPress={() => { if (!creatorPickerOpen && !selectedCreator && agentId) setCreatorFilter(agentId); setCreatorPickerOpen(value => !value); }} style={[styles.filterButton, selectedCreator && styles.filterButtonActive, {maxWidth:220,flexDirection:"row",alignItems:"center",gap:4}]}><Text numberOfLines={1} style={[styles.filterButtonText, selectedCreator && styles.filterButtonTextActive]}>{localizedCopy.creatorFilter}{selectedCreator ? `: ${creatorLabel(selectedCreator)}` : ''}</Text><Icon name="ChevronDown" size={12} color={theme.colors.foregroundMuted}/></Pressable>
             {filters.map((item) => (
               <Pressable
                 key={item.id}
@@ -312,6 +318,10 @@ export function WorkspaceSelector({
               </Pressable>
             ))}
           </View>
+          {creatorPickerOpen ? <View style={{marginTop:6, borderWidth:1, borderColor:theme.colors.border, borderRadius:6}}>
+            <Pressable accessibilityRole="button" onPress={() => {setCreatorFilter(null);setCreatorPickerOpen(false);}} style={styles.layoutMenuItem}><Text style={styles.filterButtonText}>{localizedCopy.allCreatorSessions}</Text></Pressable>
+            <FlatList style={{maxHeight:160}} data={creatorOptions} keyExtractor={item=>item.agentId} keyboardShouldPersistTaps="handled" renderItem={({item})=><Pressable accessibilityRole="button" accessibilityState={{selected:item.agentId===selectedCreator}} onPress={()=>{setCreatorFilter(item.agentId);setCreatorPickerOpen(false);}} style={styles.layoutMenuItem}><Text numberOfLines={2} style={styles.filterButtonText}>{item.agentId===agentId ? `${localizedCopy.createdInSession} · ` : ''}{creatorLabel(item.agentId)} ({item.count})</Text></Pressable>} ListEmptyComponent={<Text style={styles.layoutMenuHint}>{localizedCopy.noCreatorSessions}</Text>} />
+          </View> : null}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 7 }}>
             <TextInput
               accessibilityLabel={localizedCopy.workspaceSearchPlaceholder}
@@ -373,7 +383,7 @@ export function WorkspaceSelector({
             windowSize={7}
             ListEmptyComponent={ready && !loading ? <Text style={styles.emptyText}>{search ? localizedCopy.workspaceSearchEmpty : localizedCopy.text_daa32fe25c}</Text> : null}
           />
-          {!mineOnly && filter === "all" && orphanCandidates?.length ? <View style={{ maxHeight: 170 }}>
+          {!selectedCreator && filter === "all" && orphanCandidates?.length ? <View style={{ maxHeight: 170 }}>
             <Text style={styles.selectorListLabel}>{localizedCopy.orphanHeading} · {orphanCandidates.length}</Text>
             <FlatList data={orphanCandidates} keyExtractor={(item) => item.id} nestedScrollEnabled
               renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`${item.resume ? localizedCopy.orphanResume : localizedCopy.orphanCandidate} ${item.name}`} onPress={() => onOpenOrphan?.(item.id)} style={styles.workspaceOption}>

@@ -31,6 +31,7 @@ function emptySettingsValues(): ObserverSettingsValues {
     sectionLayoutByPaseoWorkspace: {},
     lastProjectByHost: {},
     reviewModeByPaseoWorkspace: {},
+    diffDisplay: {fontSize:14,wrap:false}, productionBranches: {},
   };
 }
 

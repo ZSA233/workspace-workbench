@@ -36,3 +36,11 @@ test('file positions survive panel remounts but are isolated by file, scope, hos
  assert.equal(getFileReviewPosition('positions',key,'split').hunk,0);
  clearFileReviews('positions');
 });
+
+test('comparison tabs use frozen endpoints and keep different comparisons separate',()=>{
+ const a:FileReviewSelection={workspaceId:'one',repoPath:'api',path:'file.ts',scope:'compare',branch:'feature',status:'M',statusLabel:'Modified',comparison:{fromRef:'main',toRef:'HEAD',fromSha:'a'.repeat(40),toSha:'b'.repeat(40),leftSha:'a'.repeat(40),mode:'endpoints',mergeBase:null}};
+ const b={...a,comparison:{...a.comparison!,toSha:'c'.repeat(40)}};
+ const request={hostWorkspaceId:'comparisons',panelId:'changes'};
+ openFileReview(a,request);openFileReview(b,request);openFileReview({...a,comparison:{...a.comparison!,fromRef:'production'}},request);
+ assert.equal(getFileReviews('comparisons').length,2);assert.notEqual(selectionKey(a),selectionKey(b));clearFileReviews('comparisons');
+});

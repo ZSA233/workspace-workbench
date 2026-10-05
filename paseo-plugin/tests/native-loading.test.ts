@@ -91,10 +91,9 @@ test("native diff controls do not mount injected web host lists", () => {
   assert.match(source, /Platform\.OS === "web"[\s\S]*renderComponent\(hostTextInput/);
   assert.match(source, /Platform\.OS === "web" && isRenderable\(hostModal\)/);
   const nativeSyntax = readFileSync(new URL("../client/syntax.tsx", import.meta.url), "utf8");
-  assert.match(nativeSyntax, /Platform\.OS === "web"[\s\S]*import\("\.\/syntax-web"\)/);
-  assert.ok(source.includes('Ellipsis: "⋯"'));
-  assert.ok(source.includes('Info: "ⓘ"'));
-  assert.ok(source.includes('GitBranch: "⑂"'));
+  assert.match(nativeSyntax, /if \(Platform\.OS !== "web"\) return;[\s\S]*import\("\.\/syntax-web"\)/);
+  assert.ok(source.includes("createElement(GeometricIcon"));
+  assert.ok(!source.includes("text-glyph"));
 });
 
 test("desktop opens Explorer; native surfaces keep workspace and Agent identities", () => {

@@ -42,7 +42,7 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
-const versionedMethods = new Set<string>(["workspace.environment", "workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
+const versionedMethods = new Set<string>(["workspace.environment", "workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
 const mutationMethods = new Set<string>([
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
   "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete",
@@ -54,7 +54,7 @@ const BRIDGE_IN_FLIGHT = 16;
 const READ_METHODS = new Set<string>([
   "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify",
   "workspace.operation.status",
-  "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary",
+  "workspace.orphan.preview", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary",
   "review-set.compare", "review-set.brief",
 ]);
 // Paseo currently gives plugin RPC calls a shorter host budget than the
@@ -66,7 +66,7 @@ const READ_METHODS = new Set<string>([
 // process itself.
 const SERVER_BUILD_ID = "observer-bridge-v2";
 // Environment preparation uses a durable, declaration-scoped request identity.
-const replayableMethods = new Set<string>(["workspace.environment", "observer.health", "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary", "review-set.compare", "review-set.brief"]);
+const replayableMethods = new Set<string>(["workspace.environment", "observer.health", "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary", "review-set.compare", "review-set.brief"]);
 
 function configuredBridgeTimeoutMs(method?: string): number {
   if (method === "workspace.environment") return 2_000;
@@ -84,7 +84,7 @@ function configuredBridgeTimeoutMs(method?: string): number {
 }
 
 function requestParams(input: QueryInput): Record<string, unknown> {
-  if (!READ_METHODS.has(input.method) || !["workspace.detail", "repository.summary", "repository.graph", "repository.changes", "repository.diff"].includes(input.method))
+  if (!READ_METHODS.has(input.method) || !["workspace.detail", "repository.summary", "repository.compare", "repository.graph", "repository.changes", "repository.diff"].includes(input.method))
     return input.params || {};
   const project = currentProject();
   const timing = project ? (() => { try { return loadConfig(project.configPath).timing; } catch { return DEFAULT_OBSERVATION_TIMING; } })() : DEFAULT_OBSERVATION_TIMING;

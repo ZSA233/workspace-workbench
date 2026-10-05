@@ -22,7 +22,7 @@ import {
 } from "./storage.ts";
 const cancellableMethods = new Set([
   "workspace.environment", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify",
-  "workspace.orphan.preview", "repository.summary", "repository.graph", "repository.changes", "repository.diff",
+  "workspace.orphan.preview", "repository.summary", "repository.compare", "repository.graph", "repository.changes", "repository.diff",
   "review-set.compare", "review-set.brief",
 ]);
 export async function socketAlive(path: string): Promise<boolean> {

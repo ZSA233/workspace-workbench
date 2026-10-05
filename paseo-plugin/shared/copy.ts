@@ -2,6 +2,9 @@ export type WorkbenchLocale = "zh-CN" | "en-US";
 
 /** Central default UI copy; stable keys survive component moves. */
 const zhCopy = {
+  creatorFilter: "创建会话",
+  allCreatorSessions: "全部会话",
+  noCreatorSessions: "暂无创建会话记录；旧工作区未记录创建者。",
   createdInSession: "本会话创建",
   creatorSession: "创建会话",
   openCreatorSession: "打开创建会话",
@@ -705,6 +708,9 @@ export type WorkbenchCopy = {
 
 const enCopy: WorkbenchCopy = {
   ...zhCopy,
+  creatorFilter: "Creator session",
+  allCreatorSessions: "All sessions",
+  noCreatorSessions: "No creator sessions recorded; older workspaces have no creator attribution.",
   createdInSession: "Created in this session",
   creatorSession: "Created by session",
   openCreatorSession: "Open creator session",

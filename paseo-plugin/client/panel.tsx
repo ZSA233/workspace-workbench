@@ -1,3 +1,4 @@
+import { RepositoryCompare } from './components/repository-compare';
 import { readWorkspaceLineage, workspaceInstanceKey } from '../shared/workspace-lineage';
 import {
 useRpc,
@@ -338,6 +339,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [graphView, setGraphView] = useState<{ historyMode: "branch" | "full"; maxCommits: number }>({ historyMode: "branch", maxCommits: 50 });
   const [changeTreeMode, setChangeTreeMode] = useState<ChangeTreeMode | null>(null);
   const scopeRepositoryIdentity = useRef("");
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparisonEnd,setComparisonEnd] = useState("HEAD");
+  const [comparisonStart, setComparisonStart] = useState("");
+  useEffect(()=>{setComparisonOpen(false);setComparisonStart("");setComparisonEnd("HEAD");},[selectedWorkspaceId]);
   const [repositoryDetailsOpen, setRepositoryDetailsOpen] = useState(false);
   const [reviewIds, setReviewIds] = useState<string[]>([]);
   const [targetOverrides, setTargetOverrides] = useState<Record<string, string>>({});
@@ -518,12 +523,13 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         : []),
     ], observationTiming.clientRefreshTimeoutMs, setManualRefreshing);
   const refreshAll = useCallback(() => {
+    if (comparisonOpen) void refreshArea('repository-compare');
     if (!refreshCapable) return refreshLegacy();
     void backendQuery.refetch();
     selectedRefresh.refresh();
     basicSummaries.refresh();
     void refreshArea('workspace-list');
-  }, [refreshCapable, refreshLegacy, selectedRefresh.refresh, refreshArea, basicSummaries.refresh, backendQuery.refetch]);
+  }, [comparisonOpen, refreshCapable, refreshLegacy, selectedRefresh.refresh, refreshArea, basicSummaries.refresh, backendQuery.refetch]);
 
 
   // The version poll resumes observation queries; only bootstrap needs a direct retry.
@@ -835,6 +841,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
             </View>
           ) : null}
           {tab === "workspace" ? (
+            <View style={{flex:1,minHeight:0}}>
+            {selectedRepository ? <View style={comparisonOpen ? {flex:1,minHeight:0}:{display:'none'}}><RepositoryCompare key={`${projectConfig}:${selectedWorkspaceId}:${selectedRepoPath}:${comparisonStart}:${comparisonEnd}`} project={projectConfig} workspaceId={selectedWorkspaceId} hostWorkspaceId={hostWorkspaceId} agentId={agentId} directory={selectedWorkspace?.treePath || selectedWorkspace?.sourceRoot} repo={selectedRepository} repositories={displayDetail?.repositories||[]} onRepository={path=>{setComparisonStart("");setComparisonEnd("HEAD");onRepo(path);}} foreground={foreground && comparisonOpen} styles={styles} theme={theme} initialFrom={comparisonStart} initialTo={comparisonEnd} onClose={()=>setComparisonOpen(false)} rpc={rpc}/></View> : null}
+            <View style={comparisonOpen ? {display:'none'} : {flex:1,minHeight:0}}>
             <WorkspaceView
               observationTimes={{ detail: detailState.lastSuccessfulAt, graph: graphState.lastSuccessfulAt, changes: changesState.lastSuccessfulAt }}
               detail={displayDetail}
@@ -860,6 +869,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               selectedRepository={selectedRepository}
               repositoryDetailsOpen={repositoryDetailsOpen}
               onToggleRepositoryDetails={onToggleRepositoryDetails}
+              onOpenCompare={()=>setComparisonOpen(true)}
+              onCompare={(sha,role)=>{if(role==='from'){setComparisonStart(sha);setComparisonOpen(false);}else{setComparisonEnd(sha);setComparisonOpen(true);}}}
               onCommit={chooseCommit}
               onGraphBase={onGraphBase}
               onGraphMore={onGraphMore}
@@ -867,7 +878,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               graphLoadingMore={graphBusy && Boolean(graph)}
               onScope={chooseScope}
               onFile={onOpenChangedFile}
-              onRepo={onRepo}
+              onRepo={path=>{setComparisonStart("");setComparisonEnd("HEAD");onRepo(path);}}
               sectionLayout={preferences.sectionLayout}
               availableHeight={panelHeight}
               sectionDragging={sectionDragging}
@@ -884,6 +895,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               theme={theme}
               styles={styles}
             />
+            </View></View>
           ) : reviewTab === "agent" ? <View>
             {selectedWorkspaceIsMain ? <View style={styles.targetRow}>
               <Text style={styles.layoutMenuHint}>{localizedCopy.mainReviewHint}</Text>

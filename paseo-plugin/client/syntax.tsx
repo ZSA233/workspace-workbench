@@ -27,11 +27,8 @@ export type HighlightedCodeProps = {
   style?: StyleProp<TextStyle>;
 };
 
-export const editorCodeFontFamily = Platform.OS === "web"
-  ? 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace'
-  : Platform.OS === "ios"
-    ? "Menlo"
-    : "monospace";
+export { editorCodeFontFamily } from "./code-font";
+import { editorCodeFontFamily } from "./code-font";
 
 type WebSyntaxModule = typeof import("./syntax-web");
 
@@ -44,7 +41,7 @@ function PlainCode({ code, theme, style }: HighlightedCodeProps): ReactElement {
         { color: theme.colors.foreground, fontFamily: editorCodeFontFamily } as TextStyle,
       ]}
     >
-      {code || " "}
+      {code}
     </Text>
   );
 }

@@ -835,6 +835,7 @@ export function layoutGraph(nodes: CommitNode[]): GraphRow[] {
 export type DiffLineKind = "context" | "added" | "removed";
 
 export type DiffLine = {
+  inlineChange?: [number,number];
   kind: DiffLineKind;
   content: string;
   oldLine: number | null;

@@ -268,16 +268,6 @@ function contributeClient(client: PluginClientContext) {
         openWorkbench(workspace.id);
       },
     }),
-    registerCommand({
-      id: "open-workspace-workbench-agent",
-      title: "Open Workspace Workbench",
-      icon: "GitBranch",
-      keywords: ["workspace", "git", "branch", "review", "changes"],
-      context: "agent",
-      onSelect({ workspace, agent }) {
-        openWorkbench(workspace.id, agent.id);
-      },
-    }),
   ];
 
   console.info(`[workbench/${INITIALIZATION_REVISION}] registered`, platform);

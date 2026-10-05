@@ -1,3 +1,4 @@
+import { comparisonKey, type Comparison } from '../shared/comparison.ts';
 import { useSyncExternalStore } from "react";
 
 export type FileReviewSelection = {
@@ -6,7 +7,8 @@ export type FileReviewSelection = {
   repoPath: string;
   path: string;
   oldPath?: string | null;
-  scope: "branch" | "working" | "commit";
+  scope: "branch" | "working" | "commit" | "compare";
+  comparison?: Comparison;
   commitSha?: string;
   branch: string;
   baseSha?: string;
@@ -44,8 +46,8 @@ const emptySelections: FileReviewSelection[] = [];
 const emptyActiveKey = "";
 let opener: FileReviewOpener | null = null;
 
-export function selectionKey(selection: Pick<FileReviewSelection, "projectConfig" | "workspaceId" | "repoPath" | "path" | "scope" | "commitSha">): string {
-  return JSON.stringify([selection.projectConfig || "", selection.workspaceId, selection.repoPath, selection.path, selection.scope, selection.commitSha || ""]);
+export function selectionKey(selection: Pick<FileReviewSelection, "projectConfig" | "workspaceId" | "repoPath" | "path" | "scope" | "commitSha" | "comparison" | "oldPath">): string {
+  return JSON.stringify([selection.projectConfig || "", selection.workspaceId, selection.repoPath, selection.path, selection.scope, selection.commitSha || "", selection.oldPath || "", comparisonKey(selection.comparison)]);
 }
 
 function notify(): void {

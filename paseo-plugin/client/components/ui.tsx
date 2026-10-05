@@ -273,6 +273,7 @@ export const SectionAllocationContext = createContext<{
 } | null>(null);
 
 export function SectionViewport({
+  fill,
   scrollAnchor,
   windowed = false,
   onScroll,
@@ -286,6 +287,7 @@ export function SectionViewport({
   styles,
   children,
 }: {
+  fill?: boolean;
   scrollAnchor?: { identity: string; keys: string[]; rowHeight: number };
   windowed?: boolean;
   onScroll?: ScrollViewProps["onScroll"];
@@ -332,7 +334,7 @@ export function SectionViewport({
   useEffect(() => () => { if (active.current) latest.current?.cancel(); }, []);
   const dragging = Boolean(allocation?.dragging);
   const viewportStyle = { maxHeight: sectionAutoMaxHeight(id, availableHeight, id === "changes"), minHeight: MIN_SECTION_HEIGHT };
-  const boundedStyle = allocation ? allocation.outerScroll ? windowed ? viewportStyle : { maxHeight: undefined, minHeight: 0 } : { height: allocation.sizes[id], minHeight: 0, maxHeight: allocation.sizes[id] } : viewportStyle;
+  const boundedStyle = fill ? {height:availableHeight,minHeight:0,maxHeight:availableHeight} : allocation ? allocation.outerScroll ? windowed ? viewportStyle : { maxHeight: undefined, minHeight: 0 } : { height: allocation.sizes[id], minHeight: 0, maxHeight: allocation.sizes[id] } : viewportStyle;
   return (
     <View style={[styles.sectionViewportFrame, !resizable && { minHeight: MIN_SECTION_HEIGHT }]}>
       <ScrollView
@@ -340,8 +342,8 @@ export function SectionViewport({
         onScroll={event => { scrollOffset.current = event.nativeEvent.contentOffset.y; onScroll?.(event); }}
         scrollEventThrottle={32}
         nestedScrollEnabled
-        scrollEnabled={!dragging && (!allocation?.outerScroll || windowed)}
-        onContentSizeChange={(_, height) => { setContentHeight(height); allocation?.measureContent?.(id, height + (resizable ? 6 : 0)); }}
+        scrollEnabled={!dragging && (fill || !allocation?.outerScroll || windowed)}
+        onContentSizeChange={(_, height) => { setContentHeight(height); if(!fill) allocation?.measureContent?.(id, height + (resizable ? 6 : 0)); }}
         onLayout={(event) => {
           const height = event.nativeEvent.layout.height;
           setViewportHeight(height);

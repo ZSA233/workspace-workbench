@@ -32,6 +32,7 @@ type ChangeTreeMode = "tree" | "files";
 
 
 export function ChangedTree({
+  fill, title, hideHeader=false,
   changes,
   loading,
   lastSuccessfulAt,
@@ -53,6 +54,7 @@ export function ChangedTree({
   theme,
   styles,
 }: {
+  fill?: boolean; title?: string; hideHeader?: boolean;
   changes: ChangesResult | null;
   loading: boolean;
   refreshing: boolean;
@@ -102,11 +104,11 @@ export function ChangedTree({
       onLayout={(event) => onLayout(event.nativeEvent.layout.y)}
       style={styles.treeSection}
     >
-      <View style={styles.sectionHeader}>
+      {!hideHeader?<View style={styles.sectionHeader}>
         <View style={styles.sectionTitleRow}>
           <SectionDisclosureButton
             expanded={!sectionLayout.collapsed}
-            label={selectedCommit ? copy.text_b5d0217a47 : scope === "working" ? copy.text_b6a933155a : copy.text_f30d1e7faf}
+            label={title || (selectedCommit ? copy.text_b5d0217a47 : scope === "working" ? copy.text_b6a933155a : copy.text_f30d1e7faf)}
             onLongPress={onOpenLayoutMenu}
             onPress={() => onSectionToggle(!sectionLayout.collapsed)}
             theme={theme}
@@ -120,8 +122,10 @@ export function ChangedTree({
           <IconButton label={copy.text_49deaf7da2} icon="List" active={mode === "files"} color={mode === "files" ? theme.colors.accentForeground : theme.colors.foregroundMuted} background={mode === "files" ? observerAccent(theme) : undefined} onPress={() => onMode("files")} />
         </View>
       </View>
+      :null}
       {!sectionLayout.collapsed ? (
         <SectionViewport
+          fill={fill}
           id="changes"
           windowed={windowed}
           onScroll={event => setScrollTop(event.nativeEvent.contentOffset.y)}

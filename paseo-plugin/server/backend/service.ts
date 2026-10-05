@@ -1,3 +1,4 @@
+import { compareRepository, fetchComparisonRef } from './repository-comparison.ts';
 import type {ObservationScheduler} from './observation-scheduler.ts';
 import { RuntimeReadQueue } from './runtime-read-queue.ts';
 import { sessionEnvironment } from './session-environment.ts';
@@ -38,7 +39,7 @@ export class Service {
   startedAt = Date.now();
   eventLoop = new EventLoopMetrics();
   version: string;
-  build = buildId(["../server/backend/service.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts", "../server/backend/runtime-tools.ts", "../server/backend/runtime-layout.ts", "../server/backend/runtime-summary.ts", "../server/backend/runtime-observation.ts", "../server/backend/runtime-read-queue.ts", "../server/backend/environment-snapshots.ts", "../server/backend/workspaces.ts", "../server/backend/workspace-records.ts", "../server/backend/workspace-catalog.ts", "../server/backend/workspace-directory.ts", "../server/backend/workspace-creation.ts", "../server/backend/workspace-removal.ts", "../server/backend/workspace-deletion.ts", "../server/backend/workspace-activity-guard.ts", "../server/backend/workspace-record-encoding.ts", "../server/backend/workspace-infrastructure.ts", "../server/backend/workspace-scope.ts", "../server/backend/workspace-lineage.ts", "./workspace-lineage.ts"]);
+  build = buildId(["../server/backend/service.ts", "../server/backend/repository-comparison.ts", "../server/backend/diff-content.ts", "./comparison.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts", "../server/backend/runtime-tools.ts", "../server/backend/runtime-layout.ts", "../server/backend/runtime-summary.ts", "../server/backend/runtime-observation.ts", "../server/backend/runtime-read-queue.ts", "../server/backend/environment-snapshots.ts", "../server/backend/workspaces.ts", "../server/backend/workspace-records.ts", "../server/backend/workspace-catalog.ts", "../server/backend/workspace-directory.ts", "../server/backend/workspace-creation.ts", "../server/backend/workspace-removal.ts", "../server/backend/workspace-deletion.ts", "../server/backend/workspace-activity-guard.ts", "../server/backend/workspace-record-encoding.ts", "../server/backend/workspace-infrastructure.ts", "../server/backend/workspace-scope.ts", "../server/backend/workspace-lineage.ts", "./workspace-lineage.ts"]);
   constructor(config: Config, version = "0.1.3", dependencies:{scheduler?:ObservationScheduler;cacheClock?:()=>number}={}) {
     this.config = config;
     this.version = version;
@@ -212,6 +213,10 @@ export class Service {
       }
       case "observer.refresh":
         return this.observation.refresh.request(params);
+      case "repository.fetch":
+        return fetchComparisonRef(this.observation, params);
+      case "repository.compare":
+        return compareRepository(this.observation, params, signal);
       case "repository.summary":
         return this.observation.refresh.query(method, params, signal);
       case "repository.diff.read":

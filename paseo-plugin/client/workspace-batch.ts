@@ -10,8 +10,8 @@ export type BatchEntry = {
 };
 export type BatchState = { open: boolean; action: BatchAction; phase: 'idle' | 'preview' | 'confirm' | 'running' | 'complete'; entries: BatchEntry[] };
 export function batchEligible(workspace: WorkspaceSummary, action: BatchAction): boolean {
-  return workspace.id !== 'main' && (action === 'remove'
-    ? workspace.state !== 'removed' && workspace.state !== 'deletion_pending'
+  return workspace.id !== 'main' && workspace.managed !== false && workspace.kind !== 'live' && workspace.kind !== 'linked-live' && (action === 'remove'
+    ? ['active', 'create_failed'].includes(workspace.state)
     : action === 'delete' ? workspace.state === 'removed'
     : workspace.state === 'removed' || workspace.state === 'deletion_pending');
 }

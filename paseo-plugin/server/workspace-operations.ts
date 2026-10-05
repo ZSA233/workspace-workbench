@@ -1,3 +1,4 @@
+import { creationSource } from './workspace-creator.ts';
 import { currentProject, resolveProject, withProject } from "./projects.ts";
 import { handleObserver } from "./observer.ts";
 import type { ObserverResponse } from "../shared/observer.ts";
@@ -33,7 +34,9 @@ export async function handleWorkspaceCreate(input: WorkspaceCreateInput) {
       const response = await handleObserver({ method: "workspace.create", params: {
         ...(input.requestId ? { requestId: input.requestId } : {}),
         name: input.name,
+        creator: creationSource(input),
         ...(input.repositories ? { repositories: input.repositories } : {}),
+        ...(input.parentWorkspaceId ? { parentWorkspaceId: input.parentWorkspaceId } : {}),
         ...(input.sourceWorkspaceId ? { sourceWorkspaceId: input.sourceWorkspaceId } : {}),
         ...(input.branchName ? { branchName: input.branchName } : {}),
         ...(input.rootBaseRef ? { rootBaseRef: input.rootBaseRef } : {}),

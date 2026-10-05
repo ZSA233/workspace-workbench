@@ -2,6 +2,17 @@ export type WorkbenchLocale = "zh-CN" | "en-US";
 
 /** Central default UI copy; stable keys survive component moves. */
 const zhCopy = {
+  createdInSession: "本会话创建",
+  creatorSession: "创建会话",
+  openCreatorSession: "打开创建会话",
+  sourceExpand: "展开或折叠",
+  sourceSelectGroup: "选择此组",
+  sourceLabel: "创建来源",
+  sourceDefault: "主仓库（默认）",
+  sourceSearch: "搜索来源工作区…",
+  sourceBaseDefault: "设置起点（默认来源工作区 HEAD）",
+  sourceRemoved: "来源工作区已移除或替换；保留创建时记录。",
+
   batchManage: "批量管理",
   batchExit: "退出批量",
   batchSelectAll: "全选当前结果",
@@ -17,6 +28,7 @@ const zhCopy = {
   batchReconcile: "核对待确认项",
   batchLossConsent: "确认丢弃此工作区的全部工作树内容",
   batchDetails: "查看影响",
+  batchHideDetails: "收起影响",
   batchPreserved: "保留分支、提交和外部引用；永久删除会清理工作树、Agent 绑定及审核记录。",
   batchRemoveHint: "移入历史只隐藏工作区，保留文件、分支和记录。",
   batchTargets: "实际执行名单",
@@ -693,6 +705,17 @@ export type WorkbenchCopy = {
 
 const enCopy: WorkbenchCopy = {
   ...zhCopy,
+  createdInSession: "Created in this session",
+  creatorSession: "Created by session",
+  openCreatorSession: "Open creator session",
+  sourceExpand: "Expand or collapse",
+  sourceSelectGroup: "Select group",
+  sourceLabel: "Creation source",
+  sourceDefault: "Source repositories (default)",
+  sourceSearch: "Search source workspaces…",
+  sourceBaseDefault: "Set base (parent HEAD by default)",
+  sourceRemoved: "Source workspace is unavailable or replaced; its recorded identity is retained.",
+
   batchManage: "Manage multiple",
   batchExit: "Exit selection",
   batchSelectAll: "Select matching items",
@@ -708,6 +731,7 @@ const enCopy: WorkbenchCopy = {
   batchReconcile: "Reconcile uncertain items",
   batchLossConsent: "Discard all managed working-tree content in this workspace",
   batchDetails: "Inspect impact",
+  batchHideDetails: "Hide impact",
   batchPreserved: "Branches, commits and external refs remain. Permanent deletion removes working trees, Agent bindings and review records.",
   batchRemoveHint: "Moving to history hides workspaces and retains files, branches and records.",
   batchTargets: "Confirmed targets",

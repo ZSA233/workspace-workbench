@@ -1,3 +1,4 @@
+import { WorkspaceLineages } from './workspace-lineage.ts';
 import { WorkspaceScope } from './workspace-scope.ts';
 import type { Config } from './config.ts';
 import { ObservationRecords } from './observation-records.ts';
@@ -22,6 +23,7 @@ export class Workspaces {
     readonly catalog: WorkspaceCatalog;
     readonly directory: WorkspaceDirectory;
     readonly activity: WorkspaceActivity;
+    readonly lineages: WorkspaceLineages;
     readonly creation: WorkspaceCreation;
     readonly scope: WorkspaceScope;
     readonly removal: WorkspaceRemoval;
@@ -34,7 +36,8 @@ export class Workspaces {
         this.catalog = new WorkspaceCatalog({ ...infrastructure, config: () => this.config, onDiscoveryChanged: () => this.onDiscoveryChanged?.(), records: this.records, onOrphanScanChanged: () => this.onOrphanScanChanged?.() });
         this.directory = new WorkspaceDirectory({ ...infrastructure, config: () => this.config, catalog: this.catalog, records: this.records });
         this.activity = new WorkspaceActivity({ ...infrastructure, preparationActive: id => this.preparationActive(id), config: () => this.config });
-        this.creation = new WorkspaceCreation({ ...infrastructure, records: this.records, config: () => this.config, catalog: this.catalog, directory: this.directory });
+        this.lineages = new WorkspaceLineages({ directory: this.directory });
+        this.creation = new WorkspaceCreation({ ...infrastructure, records: this.records, config: () => this.config, catalog: this.catalog, directory: this.directory, lineages: this.lineages });
         this.scope = new WorkspaceScope({ creation: this.creation, records: this.records, directory: this.directory, activity: this.activity });
         this.removal = new WorkspaceRemoval({ ...infrastructure, directory: this.directory, records: this.records });
         this.deletion = new WorkspaceDeletion({ ...infrastructure, config: () => this.config, records: this.records, activity: this.activity, directory: this.directory });

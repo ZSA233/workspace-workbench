@@ -17,10 +17,12 @@ export const workspaceCreate = defineRpc({
   name: "workspace.workbench.workspace-create",
   input: z.object({
     projectConfig,
+    token: z.string().min(1).optional(),
     requestId,
     name: z.string().trim().min(1),
     repositories: repositoryRefs,
-    sourceWorkspaceId: z.string().trim().min(1).optional(),
+    parentWorkspaceId: z.string().trim().min(1).optional(),
+  sourceWorkspaceId: z.string().trim().min(1).optional(),
     branchName: z.string().trim().min(1).optional(),
     rootBaseRef: z.string().trim().min(1).optional(),
     baseRefs,

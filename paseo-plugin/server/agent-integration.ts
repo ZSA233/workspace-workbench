@@ -150,7 +150,16 @@ export function registerAgentIntegration(server: PluginServerContext, currentApi
       await flush(next, context);
     });
   }
-  cleanups.push(server.on("agent.turn_started", (event, context) => notify(event.agent.id, "running", event.turnId || "started", context)));
+  function rememberTitle(agent: {id:string;cwd:string;title:string|null}) {
+    if (!agent.title) return;
+    try { withProject({directory:agent.cwd}, () => {
+      const session=readState<{token:string}>(`session:${agent.id}`);
+      if (!session) return;
+      const identity=readState<AgentIdentity & {title?:string}>(`context:${session.token}`);
+      if (identity?.agentId===agent.id && identity.cwd===agent.cwd && !identity.revoked && identity.title!==agent.title) writeState(`context:${session.token}`,{...identity,title:agent.title});
+    }); } catch { /* Optional display metadata never blocks a turn. */ }
+  }
+  cleanups.push(server.on("agent.turn_started", (event, context) => { rememberTitle(event.agent); return notify(event.agent.id, "running", event.turnId || "started", context); }));
   cleanups.push(server.on("agent.turn_ended", (event, context) => notify(event.agent.id, event.outcome.kind === "completed" ? "turn-ended" : event.outcome.kind, event.turnId || "ended", context)));
   cleanups.push(server.on("agent.permission_requested", (event, context) => notify(event.agent.id, "permission", digest(event.request), context)));
   cleanups.push(server.on("agent.permission_resolved", (event, context) => notify(event.agent.id, "running", event.requestId, context)));

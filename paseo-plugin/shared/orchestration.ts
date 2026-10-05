@@ -1,3 +1,4 @@
+import { reviewArtifactReferenceSchema } from './review-packet.ts';
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { handoffSchema } from "./handoff.ts";
@@ -7,11 +8,13 @@ export const workflowRequest = z.object({
   workspaceId: z.string().min(1).optional(),
   name: z.string().trim().min(1).optional(),
   repositories: z.array(z.string().min(1)).min(1).optional(),
+  parentWorkspaceId: z.string().trim().min(1).optional(),
   sourceWorkspaceId: z.string().min(1).optional(),
   branchName: z.string().min(1).optional(),
   rootBaseRef: z.string().min(1).optional(),
   baseRefs: z.record(z.string(), z.string()).default({}),
   handoff: handoffSchema,
+  contextMode: z.literal("paseo").optional(),
 });
 export const workflowStatusRequest = z.object({
   requestId: z.string().min(1),
@@ -22,11 +25,13 @@ export const workflowSubmitRequest = z.object({
   workspaceId: z.string().min(1).optional(),
   name: z.string().trim().min(1).optional(),
   repositories: z.array(z.string().min(1)).min(1).optional(),
+  parentWorkspaceId: z.string().trim().min(1).optional(),
   sourceWorkspaceId: z.string().min(1).optional(),
   branchName: z.string().min(1).optional(),
   rootBaseRef: z.string().min(1).optional(),
   baseRefs: z.record(z.string(), z.string()).default({}),
   task: z.string().trim().min(1),
+  references: z.array(reviewArtifactReferenceSchema).max(128).default([]),
   originalPaths: z.array(z.string().trim().min(1)).max(128).default([]),
   startMode: z.enum(["adaptive", "plan-first"]).default("adaptive"),
   relationship: z.enum(["independent", "child"]).optional(),

@@ -1,3 +1,4 @@
+import { creationSource } from './server/workspace-creator';
 import { defineRpc } from "@getpaseo/plugin";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
@@ -96,7 +97,14 @@ export default function contribute(server: PluginServerContext) {
   const withHost: PluginServerContext = {
     ...measured,
     handle: (contract, handler) => measured.handle(contract, (input, context) => host.run(
-      paseo => handler(input, { ...context, paseo }),
+      (paseo, client) => handler(input, Object.assign({}, context, { paseo, exportHistory: async (agentId: string) => {
+        if (!client.buildAgentForkContext) throw new Error("handoff_history_unavailable: Host history export is unavailable");
+        try { return await client.buildAgentForkContext(agentId); }
+        catch (error) {
+          if (/unsupported|unknown.*(method|message|request)|not implemented/i.test(String(error))) throw new Error("handoff_history_unavailable: Host does not support chat history export");
+          throw error;
+        }
+      } })),
       readOnlyHostMethods.has(contract.name)
         || contract.name === "workspace.workbench.orchestrate" && (input as { action?: string }).action === "status"
         || contract.name === "workspace.workbench.session" && ["status", "history", "wait"].includes(String((input as { action?: string }).action))
@@ -176,6 +184,10 @@ export default function contribute(server: PluginServerContext) {
     });
   }
   measured.handle(observerQuery, async (input, context) => {
+    if (input.method === "workspace.create") {
+      const { creator: _ignored, contextAgentId, ...params } = input.params || {};
+      input = { ...input, params: { ...params, creator: withProject(input, () => creationSource({ contextAgentId: typeof contextAgentId === "string" ? contextAgentId : undefined })) } };
+    }
     const response = await handleObserver(input, context);
     if (input.method !== "observer.versions" || !response.ok || !response.result || typeof response.result !== "object") return response;
     return { ...response, result: { ...response.result, hostTransport: host.status() } };

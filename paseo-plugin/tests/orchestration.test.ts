@@ -188,7 +188,7 @@ test("submit creates an internal operation identity and hands original paths to 
   };
   try {
     const request = workflowSubmitRequest.parse({ workspaceId: "sample", task: "Implement the approved requirement", originalPaths: [source] });
-    const result = await withProject({ projectConfig: config }, () => orchestrate("submit", request, "parent", { paseo, query }));
+    const result = await withProject({ projectConfig: config }, () => orchestrate("submit", request, "parent", { paseo, query, exportHistory: async () => ({attachment:{type:"text",text:"Prior user requirement: preserve the API."},itemCount:1}) }));
     assert.equal((result as { ok?: boolean }).ok, true);
     assert.equal((result as { action?: string }).action, "accepted");
     const requestId = (result as { requestId?: string }).requestId;
@@ -203,4 +203,27 @@ test("submit creates an internal operation identity and hands original paths to 
     if (prior === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = prior;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('flat parent provenance survives workflow parsing and uses the parent catalog', async () => {
+  const root=realpathSync(mkdtempSync(join(tmpdir(),'workbench-source-flow-'))), config=join(root,'project.json');
+  writeFileSync(config,JSON.stringify({sourceRoot:root,workspaceRoot:root,stateRoot:root,agent:{provider:'paseo'}}));
+  const previous=process.env.WORKSPACE_WORKBENCH_CONFIG;process.env.WORKSPACE_WORKBENCH_CONFIG=config;
+  const calls:Array<{method:string;params?:Record<string,unknown>}>=[];
+  const paseo={agents:{ref:()=>({refresh:async()=>({agent:parent(root)})})}} as unknown as PaseoApi;
+  const query=async(input:{method:string;params?:Record<string,unknown>})=>{
+    calls.push(input);
+    if(input.method==='workspace.list') return {ok:true,result:{capabilities:{create:true,agent:true}}};
+    if(input.method==='workspace.detail') return {ok:true,result:{workspace:{sourceRoot:root},repositories:[{id:'repo',repoPath:'repo',sourcePath:join(root,'repo'),worktreePath:join(root,'trees','parent','repo')}]}};
+    throw Error(input.method);
+  };
+  try {
+    const request=workflowRequest.parse({requestId:'derived',name:'child',parentWorkspaceId:'parent-workspace',handoff:{goal:'Fixture change'}});
+    const result=await withProject({projectConfig:config},()=>orchestrate('preview',request,'parent',{paseo,query}));
+    assert.equal((result as {ok?:boolean}).ok,true);
+    assert.equal((result as {request:{parentWorkspaceId:string}}).request.parentWorkspaceId,'parent-workspace');
+    assert.deepEqual((result as {request:{repositories:string[]}}).request.repositories,['repo']);
+    assert.equal(calls.find(call=>call.method==='workspace.detail')?.params?.workspaceId,'parent-workspace');
+    assert.equal(workflowSubmitRequest.parse({task:'fixture',parentWorkspaceId:'parent-workspace'}).parentWorkspaceId,'parent-workspace');
+  } finally {if(previous===undefined)delete process.env.WORKSPACE_WORKBENCH_CONFIG;else process.env.WORKSPACE_WORKBENCH_CONFIG=previous;rmSync(root,{recursive:true,force:true});}
 });

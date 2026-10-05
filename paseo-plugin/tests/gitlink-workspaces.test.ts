@@ -99,6 +99,9 @@ test("selected Gitlink root appears as one live workspace and creates matching n
     git(join(f.outer, "server"), "commit", "-qam", "source-change");
     const request = { sourceWorkspaceId: live.id, name: "example", branchName: "feature/example" };
     const created = await f.service.handle("workspace.create", request);
+    assert.equal(created.lineage.parent.id, live.id);
+    assert.equal(created.lineage.recordedBy, 'gitlink');
+    assert.equal(created.lineage.repositories.find((repo: { repositoryId: string }) => repo.repositoryId === 'server').baseSha, f.pinned);
     const childPath = join(created.treePath, "server");
     assert.equal(git(created.treePath, "branch", "--show-current"), "feature/example");
     assert.equal(git(childPath, "branch", "--show-current"), "feature/example");

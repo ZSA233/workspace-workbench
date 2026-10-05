@@ -16,6 +16,7 @@ export type BundleManifest = {
   sources: BundleSource[]; blockers: string[]; warnings: string[];
   conversation: { state: "complete" | "partial" | "unavailable"; pages: number; messages: number; epoch?: string; boundary?: number; oldest?: number; attachmentMetadata: "available" | "not_exposed"; reason?: string };
   parent?: BundleRef;
+  historyFile?: string;
 };
 const flights = new Map<string, Promise<BundleManifest>>();
 const hash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
@@ -67,7 +68,7 @@ function sourceDocument(sources: BundleSource[], conversation: BundleManifest["c
   return ["# 原始资料索引", "", ...sources.map(source => `- ${source.id} · ${source.title} · ${source.required ? "必读" : "按需"} · ${source.status}\n  来源：${source.origin}\n  ${source.file ? `读取：${source.file}（图片使用 workbench_handoff_asset）` : "原件未取得"}${source.reading ? `\n  阅读重点：${source.reading}` : ""}${source.error ? `\n  问题：${source.error}` : ""}${source.alternatives.length ? `\n  可读替代：${source.alternatives.join(", ")}` : ""}`), "", "## 会话覆盖范围", JSON.stringify(conversation), "", "只归档公开用户消息、助手回复与工具名称/状态；不归档隐藏推理和工具原始输入输出。可识别凭据已脱敏。", "", ...warnings.map(w => `- ${w}`)].join("\n");
 }
 
-async function build(input: { ref: BundleRef; ownerAgentId: string; ownerCwd: string; identity: string; handoff: Handoff; runtime: ArtifactRuntime; context?: AgentContext; parent?: BundleRef; supplement?: { text: string; sender: string; requestId: string }; references?: ReviewArtifactReference[] }) {
+async function build(input: { ref: BundleRef; ownerAgentId: string; ownerCwd: string; identity: string; handoff: Handoff; runtime: ArtifactRuntime; context?: AgentContext; lightweight?: boolean; parent?: BundleRef; supplement?: { text: string; sender: string; requestId: string }; references?: ReviewArtifactReference[] }) {
   const target = directory(input.ref);
   if (existsSync(join(target, "manifest.json"))) {
     const prior = readBundle(input.ref);
@@ -99,48 +100,56 @@ async function build(input: { ref: BundleRef; ownerAgentId: string; ownerCwd: st
       put("HANDOFF.md", readBundleFile(input.parent, "HANDOFF.md").toString("utf8") + `\n\n## 新补充\n开始/继续前必读 supplements/${input.ref.version}.md。本版继承之前所有补充。\n`);
     } else {
       put("HANDOFF.md", coreDocument(input.handoff));
-      const deadline = Date.now() + materialLimits.archiveTimeoutMs;
-      let cursor: { epoch: string; seq: number } | undefined, archiveBytes = 0;
-      try {
-        // A local preview may intentionally run without a live Paseo host
-        // connection.  Keep the bundle valid and make the missing timeline
-        // explicit in SOURCES.md instead of making basic Workspace creation
-        // depend on the Agent transport.
-        const timeline = input.context?.paseo?.agents.ref(input.ownerAgentId).timeline;
-        if (!timeline) throw new Error("host_timeline_unavailable");
-        for (let pageNo = 0; pageNo < materialLimits.archivePages; pageNo++) {
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          const page = await Promise.race([timeline.refetch({ limit: materialLimits.pageItems, direction: cursor ? "before" : "tail", ...(cursor ? { cursor } : {}) }), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("archive_deadline")), Math.max(0, deadline - Date.now())); })]).finally(() => clearTimeout(timer));
-          if (page.error || page.staleCursor || page.gap || cursor && page.reset || conversation.epoch && page.epoch !== conversation.epoch) throw new Error("host_timeline_incomplete");
-          conversation.epoch = page.epoch;
-          conversation.boundary ??= page.endCursor?.seq;
-          conversation.oldest = page.startCursor?.seq;
-          const chunks: string[] = [];
-          for (const entry of page.entries) {
-            const item = entry.item;
-            if (item.type === "user_message" || item.type === "assistant_message") {
-              const chunk = `## M${entry.seqStart} · ${item.type} · ${entry.timestamp}\n${redactArchiveText(item.text)}\n`;
-              if (Buffer.byteLength(chunk) > MAX_TEXT_BYTES) { warnings.push(`M${entry.seqStart}: message exceeds ${MAX_TEXT_BYTES} bytes; omitted`); conversation.state = "partial"; continue; }
-              chunks.push(chunk); conversation.messages++;
-            } else if (item.type === "tool_call") chunks.push(`## M${entry.seqStart} · tool\n${String(item.name).slice(0, 200)} · ${item.status}\n`);
+      if (input.lightweight) {
+        if (!input.context?.exportHistory) throw new Error('handoff_history_unavailable: Host history export is unavailable');
+        const exported = await input.context.exportHistory(input.ownerAgentId);
+        if (exported.attachment?.type !== 'text' || typeof exported.attachment.text !== 'string' || !exported.attachment.text.trim()) throw new Error('handoff_history_unavailable: Host returned no chat history');
+        put('CHAT_HISTORY.txt', redactArchiveText(exported.attachment.text));
+        conversation = {state:'complete',pages:1,messages:exported.itemCount,attachmentMetadata:'not_exposed'};
+      } else {
+        const deadline = Date.now() + materialLimits.archiveTimeoutMs;
+        let cursor: { epoch: string; seq: number } | undefined, archiveBytes = 0;
+        try {
+          // A local preview may intentionally run without a live Paseo host
+          // connection.  Keep the bundle valid and make the missing timeline
+          // explicit in SOURCES.md instead of making basic Workspace creation
+          // depend on the Agent transport.
+          const timeline = input.context?.paseo?.agents.ref(input.ownerAgentId).timeline;
+          if (!timeline) throw new Error("host_timeline_unavailable");
+          for (let pageNo = 0; pageNo < materialLimits.archivePages; pageNo++) {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const page = await Promise.race([timeline.refetch({ limit: materialLimits.pageItems, direction: cursor ? "before" : "tail", ...(cursor ? { cursor } : {}) }), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("archive_deadline")), Math.max(0, deadline - Date.now())); })]).finally(() => clearTimeout(timer));
+            if (page.error || page.staleCursor || page.gap || cursor && page.reset || conversation.epoch && page.epoch !== conversation.epoch) throw new Error("host_timeline_incomplete");
+            conversation.epoch = page.epoch;
+            conversation.boundary ??= page.endCursor?.seq;
+            conversation.oldest = page.startCursor?.seq;
+            const chunks: string[] = [];
+            for (const entry of page.entries) {
+              const item = entry.item;
+              if (item.type === "user_message" || item.type === "assistant_message") {
+                const chunk = `## M${entry.seqStart} · ${item.type} · ${entry.timestamp}\n${redactArchiveText(item.text)}\n`;
+                if (Buffer.byteLength(chunk) > MAX_TEXT_BYTES) { warnings.push(`M${entry.seqStart}: message exceeds ${MAX_TEXT_BYTES} bytes; omitted`); conversation.state = "partial"; continue; }
+                chunks.push(chunk); conversation.messages++;
+              } else if (item.type === "tool_call") chunks.push(`## M${entry.seqStart} · tool\n${String(item.name).slice(0, 200)} · ${item.status}\n`);
+            }
+            // The installed host timeline schema has no image/attachment metadata.
+            // Keep this explicit rather than claiming original attachments were copied.
+            for (let n = 0; n < chunks.length; n++) {
+              archiveBytes += Buffer.byteLength(chunks[n]);
+              if (archiveBytes > materialLimits.archiveBytes) throw new Error("archive_size_limit");
+              put(`conversation/${String(pageNo).padStart(3, "0")}-${String(n).padStart(3, "0")}.md`, chunks[n]);
+            }
+            conversation.pages++;
+            if (!page.hasOlder) { conversation.state = warnings.length ? "partial" : "complete"; break; }
+            if (!page.startCursor || cursor && page.startCursor.seq >= cursor.seq) throw new Error("archive_cursor_stalled");
+            cursor = page.startCursor;
+            if (pageNo === materialLimits.archivePages - 1) throw new Error("archive_page_limit");
           }
-          // The installed host timeline schema has no image/attachment metadata.
-          // Keep this explicit rather than claiming original attachments were copied.
-          for (let n = 0; n < chunks.length; n++) {
-            archiveBytes += Buffer.byteLength(chunks[n]);
-            if (archiveBytes > materialLimits.archiveBytes) throw new Error("archive_size_limit");
-            put(`conversation/${String(pageNo).padStart(3, "0")}-${String(n).padStart(3, "0")}.md`, chunks[n]);
-          }
-          conversation.pages++;
-          if (!page.hasOlder) { conversation.state = warnings.length ? "partial" : "complete"; break; }
-          if (!page.startCursor || cursor && page.startCursor.seq >= cursor.seq) throw new Error("archive_cursor_stalled");
-          cursor = page.startCursor;
-          if (pageNo === materialLimits.archivePages - 1) throw new Error("archive_page_limit");
+        } catch (error) {
+          conversation.state = conversation.pages ? "partial" : "unavailable";
+          conversation.reason = error instanceof Error ? error.message : "archive_unavailable";
+          warnings.push(`Conversation export: ${conversation.reason}`);
         }
-      } catch (error) {
-        conversation.state = conversation.pages ? "partial" : "unavailable";
-        conversation.reason = error instanceof Error ? error.message : "archive_unavailable";
-        warnings.push(`Conversation export: ${conversation.reason}`);
       }
       warnings.push("Host timeline does not expose original attachment metadata; declare original documents/images in references. Text mentions are not proof an attachment was archived.");
     }
@@ -152,7 +161,7 @@ async function build(input: { ref: BundleRef; ownerAgentId: string; ownerCwd: st
         const artifact = resolveArtifactReference(reference, input.runtime);
         const file = `assets/${digest(reference.id).slice(0, 24)}${artifact.binary ? ".bin" : ".txt"}`;
         put(file, artifact.bytes, !artifact.binary);
-        Object.assign(source, { file, mimeType: artifact.mimeType, size: artifact.bytes.length, hash: hash(artifact.bytes), status: artifact.mimeType === "application/pdf" ? "unsupported" : "ready" });
+        Object.assign(source, { title: reference.title || artifact.title, file, mimeType: artifact.mimeType, size: artifact.bytes.length, hash: hash(artifact.bytes), status: artifact.mimeType === "application/pdf" ? "unsupported" : "ready" });
         if (source.status === "unsupported") source.error = "PDF original saved; supply readable text or page images";
       } catch (error) { source.error = error instanceof Error ? error.message : "source_unavailable"; }
       sources.push(source);
@@ -160,14 +169,14 @@ async function build(input: { ref: BundleRef; ownerAgentId: string; ownerCwd: st
     const blockers = sources.filter(source => source.required && source.status !== "ready" && !(source.status === "unsupported" && source.alternatives.length && source.alternatives.every(id => sources.some(other => other.id === id && other.status === "ready")))).map(source => source.id);
     for (const source of sources) if (!source.required && source.status !== "ready") warnings.push(`${source.id}: ${source.error}`);
     put("SOURCES.md", sourceDocument(sources, conversation, warnings));
-    const manifest: BundleManifest = { schemaVersion: 1, bundle: input.ref, ownerAgentId: input.ownerAgentId, ownerCwd: input.ownerCwd, identity: input.identity, createdAt: new Date().toISOString(), files, sources, blockers, warnings, conversation, ...(input.parent ? { parent: input.parent } : {}) };
+    const manifest: BundleManifest = { schemaVersion: 1, bundle: input.ref, ownerAgentId: input.ownerAgentId, ownerCwd: input.ownerCwd, identity: input.identity, createdAt: new Date().toISOString(), files, sources, blockers, warnings, conversation, ...(files["CHAT_HISTORY.txt"] ? { historyFile: "CHAT_HISTORY.txt" } : {}), ...(input.parent ? { parent: input.parent } : {}) };
     writeFileSync(join(staging, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
     renameSync(staging, target);
     return readBundle(input.ref);
   } catch (error) { rmSync(staging, { recursive: true, force: true }); throw error; }
 }
 
-export function createPreviewBundle(input: { ownerAgentId: string; ownerCwd: string; identity: string; handoff: Handoff; runtime: ArtifactRuntime; context?: AgentContext }): Promise<BundleManifest> {
+export function createPreviewBundle(input: { ownerAgentId: string; ownerCwd: string; identity: string; handoff: Handoff; runtime: ArtifactRuntime; context?: AgentContext; lightweight?: boolean }): Promise<BundleManifest> {
   const ref = { id: digest({ owner: input.ownerAgentId, identity: input.identity }), version: 1 };
   const key = directory(ref);
   const prior = flights.get(key); if (prior) return prior;

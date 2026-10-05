@@ -1,3 +1,5 @@
+import type { WorkspaceCreator } from '../shared/workspace-creator';
+import type { WorkspaceLineage } from '../shared/workspace-lineage';
 import type { ReviewEvent } from "../shared/agent-review.ts";
 
 export type WorkspaceFilter = "all" | "attention" | "dirty" | "unpushed" | "history";
@@ -196,6 +198,10 @@ export type ObservationMeta = {
 };
 
 export type WorkspaceSummary = {
+  creator?: WorkspaceCreator;
+  instanceKey?: string;
+  lineage?: WorkspaceLineage;
+  sourceWorkspaceId?: string;
   id: string;
   displayName?: string;
   kind?: "managed" | "live" | "linked-live";
@@ -423,7 +429,7 @@ export type DetailResult = {
 };
 
 export type ListResult = {
-  capabilities?: { create?: boolean; prepare?: boolean; cleanup?: boolean; remove?: boolean; restore?: boolean; permanentDelete?: boolean; agent?: boolean };
+  capabilities?: { lineage?: boolean; create?: boolean; prepare?: boolean; cleanup?: boolean; remove?: boolean; restore?: boolean; permanentDelete?: boolean; agent?: boolean };
   workspaces: WorkspaceSummary[];
   orphanCandidates?: Array<{ id: string; name: string; treePath: string; repositoryCount: number; recordInvalid?: boolean; resume?: boolean }>;
   observedAt?: string;

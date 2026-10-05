@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { copy } from "../shared/copy.ts";
 import type { BundleRef } from "../shared/handoff-materials.ts";
 import { actualPlanningState,assertCoordinatorExecution,assertInitialWorkerMode,childExecutionConfig,ExecutionPolicyError } from "./execution-policy.ts";
-import { assertBundleReady } from "./handoff-bundles.ts";
+import { assertBundleReady, readBundle, readBundleFile } from "./handoff-bundles.ts";
 import { digest,readState,writeState } from "./orchestration-state.ts";
 import { currentProject } from "./projects.ts";
 import { cacheExecutionConfig,publishSessionEnvironment,runtimeEnvironment } from './session-environment.ts';
@@ -47,7 +47,7 @@ type RuntimeResult = {
   };
 };
 
-export type AgentContext = { paseo: PaseoApi; query?: typeof queryObserver };
+export type AgentContext = { paseo: PaseoApi; query?: typeof queryObserver; exportHistory?: (agentId: string) => Promise<{ attachment: { type: string; text?: string } | null; itemCount: number }> };
 
 function samePath(left: string | null | undefined, right: string | null | undefined): boolean {
   if (!left || !right) return false;
@@ -170,6 +170,18 @@ function providerFromAgent(agent: PaseoAgent): string | null {
 }
 
 function handoffPrompt(workspaceId: string, handoff: Handoff, runtime: RuntimeResult, relationship: AgentRelationship, artifacts: ResolvedWorkbenchArtifact[] = [], bundle?: BundleRef): string {
+  if (bundle && readBundle(bundle).historyFile) return [
+    'Workspace Workbench task handoff',
+    `Task: ${handoff.goal}`,
+    `Assigned directory: ${runtime.treePath}`,
+    `Repositories: ${(runtime.repositories || []).map(repo => `${repo.id}: ${repo.worktreePath}`).join('; ')}`,
+    'The attached chat history is background. Follow the latest requirements and corrections. Historical directory names do not change the assigned execution directory. Verify cwd before editing.',
+    `Explicit files and images: ${readBundle(bundle).sources.map(source=>`${source.id}: ${source.title}`).join('; ') || 'none'}. Historical attachments were not automatically enumerated.`,
+    `Use workbench_handoff_read with bundle=${JSON.stringify(bundle)} and file=SOURCES.md to find the supplied originals; use workbench_handoff_asset for required source content.`,
+    handoff.startMode === 'plan-first' ? 'Planning only; wait for explicit implementation authorization.' : 'Continue the approved task without restarting planning unnecessarily.',
+    `Report completion through workbench_execution_report with materialsVersion: ${bundle.version}, changes, tests, limitations and ready_for_review.`,
+    'Do not recreate this assigned Workspace or repeat its handoff.',
+  ].join('\n');
   if (bundle) return [
     "Workspace Workbench execution handoff", `Workspace: ${workspaceId}`, `Directory: ${runtime.treePath}`,
     `Repositories: ${(runtime.repositories || []).map(repo => `${repo.id}: ${repo.worktreePath} (${repo.branch})`).join("; ")}`,
@@ -377,6 +389,7 @@ async function delegateAgent(
     } catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "agent_recovery_required", message: (error as Error).message } }; }
   }
   if (saved) {
+    if (input.bundle && readBundle(input.bundle).historyFile && JSON.stringify(saved.handoffBundle) !== JSON.stringify(input.bundle)) return {ok:false,action:'blocked' as const,workspaceId:input.workspaceId,error:{code:'handoff_materials_changed',message:'This execution session belongs to a different frozen handoff; send a supplement to that session instead.'}};
     try {
       const current = await context.paseo.agents.ref(saved.agentId).refresh();
       if (current?.agent && current.agent.status !== "closed" && !current.agent.archivedAt) {
@@ -468,7 +481,10 @@ async function delegateAgent(
         "workspace-workbench.handoff": handoffHash,
       },
     });
-    if (project && gateway) writeState(`context:${reportToken}`, { agentId: created.id, cwd: runtime.treePath, workspaceId: input.workspaceId });
+    if (project && gateway) {
+      writeState(`context:${reportToken}`, { agentId: created.id, cwd: runtime.treePath, workspaceId: input.workspaceId });
+      writeState(`session:${created.id}`, { token: reportToken });
+    }
     if (project) writeState(creationKey, { handoffHash, parentAgentId: input.parentAgentId, relationship, stage: "created", agentId: created.id });
     const now = new Date().toISOString();
     const binding: AgentBinding = {
@@ -505,7 +521,12 @@ async function delegateAgent(
       assertInitialWorkerMode(worker, input.handoff.startMode === "plan-first");
       await verifyCoordinator();
       const images = resolvedArtifactImageAttachments(handoffArtifacts);
-      await created.send(handoffPrompt(input.workspaceId, input.handoff, runtime, relationship, handoffArtifacts, input.bundle), { messageId: handoffHash, ...(images.length ? { images } : {}) });
+      const material = input.bundle ? readBundle(input.bundle) : undefined;
+      const attachments = material?.historyFile && input.bundle ? [{type:'text' as const,mimeType:'text/plain' as const,contextKind:'chat_history' as const,title:'Chat history',text:readBundleFile(input.bundle,material.historyFile,material).toString('utf8')}] : [];
+      if (material?.historyFile && input.bundle) for (const source of material.sources) {
+        if (source.status === 'ready' && source.file && source.mimeType?.startsWith('image/')) images.push({data:readBundleFile(input.bundle,source.file,material).toString('base64'),mimeType:source.mimeType});
+      }
+      await created.send(handoffPrompt(input.workspaceId, input.handoff, runtime, relationship, handoffArtifacts, input.bundle), { messageId: handoffHash, ...(images.length ? { images } : {}), ...(attachments.length ? {attachments} : {}) });
     } catch (error) {
       return { ok: false, action: "failed" as const, workspaceId: input.workspaceId, error: { code: error instanceof ExecutionPolicyError ? error.code : "handoff_delivery_uncertain", message: error instanceof Error ? error.message : "Agent handoff delivery is uncertain" } };
     }

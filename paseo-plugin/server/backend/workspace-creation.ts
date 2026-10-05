@@ -1,3 +1,7 @@
+import { workspaceCreator } from '../../shared/workspace-creator.ts';
+import { workspaceInstanceKey } from "../../shared/workspace-lineage.ts";
+import { randomUUID } from "node:crypto";
+import type { WorkspaceLineages } from "./workspace-lineage.ts";
 import { basename,join } from "node:path";
 import { repositoryPath,type Config,type Repository } from "./config.ts";
 import { childPath,commitGitlinks } from "./gitlinks.ts";
@@ -8,7 +12,7 @@ import type { WorkspaceInfrastructure } from './workspace-infrastructure.ts';
 import { pythonJson } from './workspace-record-encoding.ts';
 import type { WorkspaceRecords } from './workspace-records.ts';
 function createRequestParams(params: Json): Json {
-    const { requestId: _requestId, operationId: _operationId, ...stableParams } = params;
+    const { requestId: _requestId, operationId: _operationId, creator: _creator, ...stableParams } = params;
     return stableParams;
 }
 type Dependencies = {
@@ -17,7 +21,8 @@ type Dependencies = {
     Git: WorkspaceInfrastructure["Git"];
     records: Pick<WorkspaceRecords, "recordPath" | "read" | "save" | "sourceRecord" | "select">;
     catalog: Pick<WorkspaceCatalog, "orphanPreview">;
-    directory: Pick<WorkspaceDirectory, "get">;
+    directory: Pick<WorkspaceDirectory, "get" | "roster">;
+    lineages: WorkspaceLineages;
     config: () => Config;
 };
 export class WorkspaceCreation {
@@ -73,7 +78,7 @@ export class WorkspaceCreation {
                 }
             }
             record = {
-                schemaVersion: 1, id, displayName: id, kind: "managed", managed: true,
+                schemaVersion: 1, instanceId: randomUUID(), id, displayName: id, kind: "managed", managed: true,
                 origin: "adopted", state: "adopting", description: "Recovered from existing Git worktrees",
                 sourceRoot: this.deps.config().sourceRoot, treePath: preview.treePath,
                 repositoryIds: preview.repositories.map((repo: Json) => repo.id),
@@ -147,6 +152,7 @@ export class WorkspaceCreation {
             branch,
             baseRef,
             baseSha: await git.commit(baseRef),
+            baseBranch: (await git.run(['rev-parse', '--symbolic-full-name', baseRef], false)).stdout.trim(),
             mode: "managed",
         };
     }
@@ -281,10 +287,12 @@ export class WorkspaceCreation {
                 if ((await git.run(["show-ref", "--verify", `refs/heads/${branch}`], false)).code === 0)
                     throw new WorkbenchError("branch_exists", `branch already exists in ${plan.repoPath}`);
             }
-            workspace = { schemaVersion: 1, requestHash, ...(params.requestId ? { operationId: String(params.requestId) } : {}), id, displayName: params.name.trim(), kind: "managed",
-                layout: "gitlink", managed: true, state: "creating", sourceWorkspaceId: source.id,
+            workspace = { schemaVersion: 1, ...(workspaceCreator(params.creator) ? { creator: workspaceCreator(params.creator) } : {}), requestHash, ...(params.requestId ? { operationId: String(params.requestId) } : {}), id, displayName: params.name.trim(), kind: "managed",
+                layout: "gitlink", instanceId: randomUUID(), managed: true, state: "creating", sourceWorkspaceId: source.id,
                 sourceRoot: root, treePath, branchName: branch, repositories: plans,
                 repositoryIds: plans.map(plan => plan.id), createdAt: this.deps.storage.now() };
+            workspace.lineage = this.deps.lineages.snapshot(source, workspaceInstanceKey(workspace as any), "gitlink");
+            workspace.lineage.repositories = plans.map((repo: Json) => ({ repositoryId: repo.id, baseRef: repo.baseRef, baseSha: repo.baseSha }));
             this.deps.records.save(workspace, false);
         }
         try {
@@ -302,6 +310,7 @@ export class WorkspaceCreation {
         }
     }
     async create(params: Json) {
+        if (params.parentWorkspaceId && params.sourceWorkspaceId) throw new WorkbenchError('request_invalid', 'Use either a flat parent or a Gitlink source');
         if (params.sourceWorkspaceId)
             return this.createGitlink(params);
         if (!params.name?.trim())
@@ -309,7 +318,11 @@ export class WorkspaceCreation {
         const id = slug(params.id || params.name), requestHash = hash(pythonJson(createRequestParams(params)));
         if (id === "main")
             throw new WorkbenchError("workspace_id_reserved", "reserved workspace id");
-        const selected = this.deps.records.select(params), path = this.deps.records.recordPath(id);
+        const path = this.deps.records.recordPath(id);
+        const saved = this.deps.records.read(path);
+        const selected = this.deps.records.select(params.parentWorkspaceId && params.repositories === undefined
+            ? { ...params, repositories: (() => { const source = saved || this.deps.directory.get(String(params.parentWorkspaceId)); return source.repositoryIds || source.repositories.map((repo: Json) => repo.id); })() }
+            : params);
         let workspace: Json;
         if (this.deps.files.existsSync(path)) {
             workspace = this.deps.directory.get(id);
@@ -333,6 +346,8 @@ export class WorkspaceCreation {
                 throw new WorkbenchError("path_invalid", "workspace target already exists");
             workspace = {
                 schemaVersion: 1,
+                ...(workspaceCreator(params.creator) ? { creator: workspaceCreator(params.creator) } : {}),
+                instanceId: randomUUID(),
                 requestHash,
                 ...(params.requestId ? { operationId: String(params.requestId) } : {}),
                 id,
@@ -347,8 +362,29 @@ export class WorkspaceCreation {
                 repositories: [],
                 createdAt: this.deps.storage.now(),
             };
-            for (const item of selected)
-                workspace.repositories.push(await this.plan(item.repo, workspace, item.baseRef, params.branchTemplate));
+            const parent = params.parentWorkspaceId ? this.deps.directory.get(String(params.parentWorkspaceId)) : null;
+            if (parent && (parent.id === 'main' || parent.layout === 'gitlink' || !['active','removed'].includes(parent.state)))
+                throw new WorkbenchError('workspace_source_invalid', 'Select an available flat Workspace as the parent');
+            if (parent && params.parentInstanceKey && params.parentInstanceKey !== workspaceInstanceKey(parent as any)) throw new WorkbenchError('workspace_identity_changed', 'Source Workspace was replaced');
+            if (parent) workspace.lineage = this.deps.lineages.snapshot(parent, workspaceInstanceKey(workspace as any), 'creation', await this.deps.directory.roster().catch(() => undefined));
+            for (const item of selected) {
+                const inherited = parent?.repositories.find((repo: Json) => repo.id === item.repo.id);
+                let parentHead: string | undefined;
+                if (inherited && !item.baseRef) {
+                    if (!this.deps.files.existsSync(inherited.worktreePath)) throw new WorkbenchError('workspace_source_missing', 'Parent repository worktree is missing');
+                    const parentGit = new this.deps.Git(inherited.worktreePath, this.deps.config().operationTimeout);
+                    if (canonical(await parentGit.root()) !== canonical(inherited.worktreePath)) throw new WorkbenchError('workspace_source_invalid', 'Parent repository is not an exact Git root');
+                    const sourceGit = new this.deps.Git(repositoryPath(this.deps.config(), item.repo), this.deps.config().operationTimeout);
+                    const common = (await parentGit.run(['rev-parse','--path-format=absolute','--git-common-dir'])).stdout.trim();
+                    const expected = (await sourceGit.run(['rev-parse','--path-format=absolute','--git-common-dir'])).stdout.trim();
+                    if (canonical(common) !== canonical(expected)) throw new WorkbenchError('workspace_source_invalid', 'Parent repository belongs to another Git object store');
+                    parentHead = await parentGit.commit('HEAD');
+                } else if (parent && !item.baseRef) throw new WorkbenchError('workspace_source_repository_missing', 'Specify a base ref for repositories absent from the parent');
+                const plan = await this.plan(item.repo, workspace, item.baseRef || parentHead || null, params.branchTemplate);
+                workspace.repositories.push(plan);
+                if (parent) workspace.lineage.repositories.push({ repositoryId: item.repo.id, baseRef: plan.baseRef, baseSha: plan.baseSha, ...(parentHead ? { parentHead } : {}), overridden: !!item.baseRef });
+            }
+            if (!parent) workspace.lineage = await this.deps.lineages.infer(workspace) || { version: 1, parent: null, ancestors: [], recordedBy: 'creation', repositories: workspace.repositories.map((repo: Json) => ({ repositoryId: repo.id, baseRef: repo.baseRef, baseSha: repo.baseSha })) };
             this.deps.files.mkdirSync(treePath, { recursive: true, mode: 0o700 });
             this.deps.records.save(workspace, false);
         }
@@ -356,6 +392,7 @@ export class WorkspaceCreation {
             for (const item of selected) {
                 let plan = workspace.repositories.find((repo: Json) => repo.id === item.repo.id);
                 if (!plan) {
+                    if (params.parentWorkspaceId) throw new WorkbenchError('workspace_source_plan_missing', 'The saved source plan is incomplete; preserved existing worktrees');
                     plan = await this.plan(item.repo, workspace, item.baseRef, params.branchTemplate);
                     workspace.repositories.push(plan);
                     this.deps.records.save(workspace, false);

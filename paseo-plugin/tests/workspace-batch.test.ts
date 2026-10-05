@@ -18,6 +18,8 @@ function setup(handler: (input: WorkspaceLifecycleInput) => Promise<WorkspaceLif
 }
 test('eligibility excludes main and uses action-specific state', () => {
   assert.equal(batchEligible(workspace('main'), 'remove'), false);
+  assert.equal(batchEligible({...workspace('linked-root'),kind:'linked-live',managed:false}, 'remove'), false);
+  assert.equal(batchEligible(workspace('invalid','record_invalid'), 'remove'), false);
   assert.equal(batchEligible(workspace('a', 'deletion_pending'), 'remove'), false);
   assert.equal(batchEligible(workspace('a', 'deletion_pending'), 'restore'), true);
   assert.equal(batchEligible(workspace('a'), 'delete'), false);
@@ -78,6 +80,21 @@ test('missing preview or active task is blocked; cancelling preview ignores late
   const preview = other.batch.preview([workspace('a','removed'), workspace('b','removed')], 'delete'); other.batch.close();
   gate.resolve(success(other.calls[0])); await preview;
   assert.equal(other.calls.length, 1); assert.equal(other.batch.snapshot().open, false);
+});
+test('content-loss consent selects only individually authorized targets and cannot unlock blocked targets', async () => {
+  const c = setup(async input => input.action === 'inspect' ? { ...success(input), result: {
+    workspaceId: input.workspaceId, preview: true, canDelete: input.workspaceId !== 'blocked', requiresDataLossConfirmation: true,
+  } } : success(input));
+  await c.batch.preview(['dirty-a','dirty-b','blocked'].map(id => workspace(id,'removed')), 'delete');
+  c.batch.consent('dirty-a', true);
+  c.batch.consent('dirty-a', false);
+  c.batch.consent('dirty-b', true);
+  c.batch.consent('blocked', true);
+  await c.batch.confirm();
+  const writes = c.calls.filter(input => input.action === 'delete');
+  assert.deepEqual(writes.map(input => input.workspaceId), ['dirty-b']);
+  assert.equal(writes[0].confirmDataLoss, true);
+  assert.deepEqual(c.batch.snapshot().entries.map(entry => entry.phase), ['skipped','complete','blocked']);
 });
 test('new data-loss authorization is required on permanent deletion retry', async () => {
   let inspections = 0;

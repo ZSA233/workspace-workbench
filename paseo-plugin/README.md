@@ -210,3 +210,56 @@ use this description or inherited variables, never private runtime records or
 storage layout. The descriptor is not an authorization token and contains no
 secrets. It is refreshed on a new session/open operation; existing processes retain
 their own environment.
+
+## Workspace sources
+
+The selector automatically shows a collapsible tree when creation bases identify
+one parent Workspace. Independent Workspaces stay as ordinary rows. Search retains
+ancestor context; "Select group" includes only eligible matches in the current
+filter, including collapsed descendants. Deleting a parent does not cascade.
+
+Creation resolves actual Git references and matches local branch ownership within
+the registered project. All selected repositories must identify the same unique
+Workspace. A shared commit, a common main branch, ambiguous ownership or mixed
+sources do not establish a parent. The resulting identity and resolved SHAs are
+journaled before Git mutations and reused during recovery, even if the parent moves.
+Existing records with saved base branches use metadata-only matching and require
+the parent record to predate the child; a newer same-name Workspace cannot adopt
+an old child. No Git history scan or record rewrite runs while browsing the list.
+
+The optional `parentWorkspaceId` on create, preview and submit remains a shortcut
+for creating directly from a flat Workspace's committed HEADs. Omitted repositories
+use its scope; explicit `baseRefs` retain configured-source Git reference semantics.
+Uncommitted files are not copied. Workflow checkpoints freeze repository scope
+before handoff. `sourceWorkspaceId` retains its separate Gitlink meaning; do not
+provide both fields. Neither field binds a session exclusively to a Workspace.
+
+Provenance uses optional schema-v1 fields and immutable creation identities. Old
+records and their unknown fields remain readable. Sources are captured by creation;
+the UI does not require manual classification or display an unclassified category.
+
+### Lightweight handoff and creator filtering
+
+`workbench_workspace_create` creates Git worktrees without starting an Agent.
+When a new execution session is explicitly requested, `workbench_workspace_submit`
+exports the current Paseo chat text and freezes it for that request. This uses the
+host's history export capability; it is not a native model-session clone. A host
+without this capability returns a handoff error while Git-only creation remains available.
+The existing execution-policy gate currently verifies Codex only. Claude can
+consume host-exported history, but Workbench does not yet certify its independent
+planning state and therefore does not dispatch a Claude execution handoff.
+
+Supply required images/files through `references` using registered `assetId` values
+or source-repository paths. `originalPaths` remains supported for originals inside
+a source repository. Originals are frozen before dispatch; missing or oversized
+references stop the handoff before Agent creation. Images are sent as native image
+inputs and other originals remain readable through the existing handoff tools.
+The result identifies the supplied sources; it never claims that historical
+attachments or full tool outputs were automatically copied. Retry/status uses the
+same request identity and never automatically resends an uncertain delivery.
+
+Workspace records optionally retain their creator session. Agent-context panels
+provide **Created in this session**, combined with search and active/history
+filters. Creation attribution is independent of execution bindings and parent
+Workspace provenance. Retries and later sessions do not replace the creator;
+legacy records without attribution remain visible in the full list.

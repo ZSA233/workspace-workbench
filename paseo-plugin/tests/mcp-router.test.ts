@@ -284,3 +284,16 @@ test('connection status inherits cancellation instead of starting a fresh readin
     rmSync(home,{recursive:true,force:true});
   }
 });
+
+test('MCP create and submit retain optional parent Workspace without introducing tools', async () => {
+  const connect=DaemonClient.prototype.connect, close=DaemonClient.prototype.close, invoke=DaemonClient.prototype.invokePluginRpc;
+  const seen:Array<{parentWorkspaceId?:string;request?:{parentWorkspaceId?:string}}> = [];
+  DaemonClient.prototype.connect=async function(){};DaemonClient.prototype.close=async function(){};
+  DaemonClient.prototype.invokePluginRpc=async function(...args:unknown[]){seen.push(args[2] as typeof seen[number]);return {ok:true};};
+  try {
+    const creation=await handle({method:'tools/call',params:{name:'workbench_workspace_create',arguments:{name:'derived',parentWorkspaceId:'source-workspace'}}});
+    assert.equal(creation.isError,false);assert.equal(seen.at(-1)?.parentWorkspaceId,'source-workspace');
+    const submit=await handle({method:'tools/call',params:{name:'workbench_workspace_submit',arguments:{name:'derived',task:'fixture task',parentWorkspaceId:'source-workspace'}}});
+    assert.equal(submit.isError,false);assert.equal(seen.at(-1)?.request?.parentWorkspaceId,'source-workspace');
+  } finally {DaemonClient.prototype.connect=connect;DaemonClient.prototype.close=close;DaemonClient.prototype.invokePluginRpc=invoke;}
+});

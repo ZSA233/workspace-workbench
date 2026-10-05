@@ -1,3 +1,4 @@
+import { readWorkspaceLineage, workspaceInstanceKey } from '../shared/workspace-lineage';
 import {
 useRpc,
 type PluginAgentPanelProps,
@@ -698,7 +699,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
           </View>
         </Modal.Content>
       </Modal> : null}
-      {createOpen ? <CreateWorkspace projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} linkedSources={allWorkspaces.filter(workspace => workspace.kind === "linked-live")} preferredSourceId={selectedWorkspace?.kind === "linked-live" ? selectedWorkspace.id : ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await refreshArea("workspace-list"); selectCreatedWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
+      {createOpen ? <CreateWorkspace agentId={agentId} projectKey={projectConfig} currentRepo={selectedRepository?.repoPath || ""} parentSources={listResult?.capabilities?.lineage ? observedWorkspaces.filter(workspace => workspace.managed && !workspace.layout && ["active","removed"].includes(workspace.state)) : []} linkedSources={allWorkspaces.filter(workspace => workspace.kind === "linked-live")} preferredSourceId={selectedWorkspace?.kind === "linked-live" ? selectedWorkspace.id : ""} rpc={rpc} onClose={() => setCreateOpen(false)} onCreated={async (id) => { await refreshArea("workspace-list"); selectCreatedWorkspace(id); setCreateOpen(false); }} styles={styles} /> : null}
       {handoffPacketOpen ? <Modal open onOpenChange={(open) => { if (!open) setHandoffPacketOpen(false); }} title={localizedCopy.handoffPacket}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
           <Text style={styles.layoutMenuHint}>{localizedCopy.handoffPacketHint}</Text>
@@ -744,6 +745,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         </Modal.Content>
       </Modal> : null}
       <WorkspaceSelector
+        agentId={agentId}
         onOpenLayoutMenu={() => { if (selectorOpen) closeWorkspaceSelector(); openLayoutMenu(); }}
         statusControl={<IconButton label={observationLabel} icon={observationIcon}
           busy={observationRefreshing}
@@ -967,9 +969,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         styles={styles}
       />
       <LayoutMenu
+        onOpenCreator={props.navigation ? id => { setLayoutMenuOpen(false); props.navigation?.openAgent({ agentId: id }); } : undefined}
         onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}
         onCreate={listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setCreateOpen(true); } : undefined}
         selectedWorkspace={selectedWorkspace}
+        sourceAvailable={readWorkspaceLineage(selectedWorkspace?.lineage)?.parent ? observedWorkspaces.some(workspace => workspaceInstanceKey(workspace) === readWorkspaceLineage(selectedWorkspace?.lineage)!.parent!.instanceKey) : undefined}
         onAddRepositories={selectedWorkspace?.managed && selectedWorkspace.layout !== "gitlink" && !selectedWorkspaceBlocksTasks && listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setAddRepositoriesOpen(true); } : undefined}
         onSelectMainRepositories={selectedWorkspaceId === "main" ? () => { setLayoutMenuOpen(false); setMainRepositoryFilter(""); setMainRepositoriesOpen(true); } : undefined}
         onSelectLinkedWorkspaces={() => { setLayoutMenuOpen(false); setLinkedWorkspaceFilter(""); setLinkedWorkspacesOpen(true); }}

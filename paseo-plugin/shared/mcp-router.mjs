@@ -25,7 +25,7 @@ const publicTools = [
   { name: "workbench_workspace_preview", description: "Optional local preview that freezes handoff materials without Git changes; it does not require a Paseo host connection. Use direct create for a simple Git Workspace." },
   { name: "workbench_workspace_execute", description: "Run the saved preview; requestId alone is enough after preview. Full input remains accepted. Report success and end this turn." },
   { name: "workbench_workspace_status", description: "Read an uncertain Workspace handoff using its request ID (requestId); use operation_status for a Git or preparation operationId." },
-  { name: "workbench_workspace_submit", description: "Submit an authorized task and original paths, then create or reuse its Workspace and start the worker without a separate preview." },
+  { name: "workbench_workspace_submit", description: "Hand off to a new session using frozen chat text and supplied file/image references. Creates or reuses a Workspace. Historical attachments need explicit references." },
   { name: "workbench_workspace_create", description: "Create or reuse a Git Workspace only. This does not require an Agent, handoff, Reviewer or parent session." },
   { name: "workbench_workspace_delegate", description: "Explicitly delegate an already-created Workspace with the supplied handoff. Creating the Workspace and starting an Agent remain separate actions." },
   { name: "workbench_workspace_add_repositories", description: "Add repositories to an existing flat managed Workspace without creating a new Workspace or Agent session." },
@@ -87,6 +87,7 @@ const schema = {
     workspaceId: { type: "string", minLength: 1 },
     name: { type: "string", minLength: 1 },
     repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    parentWorkspaceId: { type: "string", minLength: 1, description: "Flat Workspace whose committed repository HEADs supply defaults for a derived Workspace. Does not copy uncommitted changes." },
     sourceWorkspaceId: { type: "string", minLength: 1, description: "Selected read-only Gitlink Workspace to use as a nested workspace source." },
     branchName: { type: "string", minLength: 1, description: "One branch name for the outer repository and every child repository." },
     rootBaseRef: { type: "string", minLength: 1, description: "Outer repository ref; child defaults come from its pinned Gitlink commits." },
@@ -156,6 +157,7 @@ const workspaceCreateSchema = {
     requestId: { type: "string", minLength: 1 },
     name: { type: "string", minLength: 1 },
     repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    parentWorkspaceId: { type: "string", minLength: 1, description: "Flat Workspace whose committed repository HEADs supply defaults for a derived Workspace. Does not copy uncommitted changes." },
     sourceWorkspaceId: { type: "string", minLength: 1 },
     branchName: { type: "string", minLength: 1 },
     rootBaseRef: { type: "string", minLength: 1 },
@@ -187,10 +189,12 @@ const workspaceSubmitSchema = {
   properties: {
     requestId: { type: "string", minLength: 1 }, workspaceId: { type: "string", minLength: 1 },
     name: { type: "string", minLength: 1 }, repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    parentWorkspaceId: { type: "string", minLength: 1, description: "Flat Workspace whose committed repository HEADs supply defaults for a derived Workspace. Does not copy uncommitted changes." },
     sourceWorkspaceId: { type: "string", minLength: 1, description: "Selected Gitlink Workspace source." },
     branchName: { type: "string", minLength: 1, description: "Shared outer and child branch name." },
     rootBaseRef: { type: "string", minLength: 1, description: "Outer repository base ref; children default to pinned commits." },
     baseRefs: { type: "object", additionalProperties: { type: "string" } }, task: { type: "string", minLength: 1 },
+    references: { ...schema.properties.handoff.properties.reviewPacket.properties.references, maxItems: 128, description: "Original files/images to include, using registered assetId or source-repository paths. Every supplied reference must be readable before dispatch." },
     originalPaths: { type: "array", maxItems: 128, items: { type: "string", minLength: 1 } },
     startMode: { enum: ["adaptive", "plan-first"] }, relationship: { enum: ["independent", "child"] },
   },
@@ -391,7 +395,7 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
               ? "workspace.workbench.workspace-operation-status"
               : "workspace.workbench.workspace-preview", tool.name === "workbench_workspace_preview"
                 ? { projectConfig: runtime.projectConfig, token: runtime.token, request: args }
-                : { ...args, projectConfig: runtime.projectConfig })
+                : { ...args, projectConfig: runtime.projectConfig, ...(tool.name === "workbench_workspace_create" && runtime.token ? { token: runtime.token } : {}) })
         : materialAction
         ? client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.handoff-materials", { ...args, ...context, action: tool.name.split("_").at(-1) })
         : delegateAction

@@ -1,3 +1,5 @@
+import { WorkspaceSourcePicker } from "./workspace-source";
+import { workspaceSource } from "../../shared/workspace-lineage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Icon, Modal, TextInput } from "../native-components";
 import { useQuery } from "@tanstack/react-query";
@@ -8,9 +10,11 @@ import { clampCreateWorkspaceHeight, CREATE_WORKSPACE_MAX_HEIGHT, CREATE_WORKSPA
 import { makeStyles } from "./ui";
 import { useWorkbenchCopy } from "../i18n";
 
-export function CreateWorkspace({ addTo, projectKey, currentRepo, linkedSources = [], preferredSourceId = "", rpc, onCreated, onClose, styles }: {
+export function CreateWorkspace({ agentId, addTo, projectKey, currentRepo, linkedSources = [], parentSources = [], preferredSourceId = "", rpc, onCreated, onClose, styles }: {
+  agentId?: string;
   addTo?: { id: string; repositoryPaths: string[] };
   linkedSources?: WorkspaceSummary[];
+  parentSources?: WorkspaceSummary[];
   preferredSourceId?: string;
   projectKey: string; currentRepo: string;
   rpc(input: { method: ObserverMethod; params: Record<string, unknown> }): Promise<ObserverResponse>;
@@ -21,6 +25,7 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, linkedSources 
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string[]>(!addTo && currentRepo ? [currentRepo] : []);
   const [bases, setBases] = useState<Record<string, string>>({});
+  const [parentSource, setParentSource] = useState<WorkspaceSummary | null>(null);
   const [linkedSource, setLinkedSource] = useState(preferredSourceId);
   const [branchName, setBranchName] = useState("");
   const [rootBaseRef, setRootBaseRef] = useState("");
@@ -38,11 +43,11 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, linkedSources 
     const timer = setTimeout(() => setPreviewRef(rootBaseRef.trim() || "HEAD"), 300);
     return () => clearTimeout(timer);
   }, [rootBaseRef]);
-  const catalog = useQuery({ queryKey: ["workbench-create-catalog", projectKey], queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: "main", summary: true } }), enabled: !linkedSource, retry: false });
+  const catalog = useQuery({ queryKey: ["workbench-create-catalog", projectKey, parentSource?.id || "main"], queryFn: () => rpc({ method: "workspace.detail", params: { workspaceId: parentSource?.id || "main", summary: true } }), enabled: !linkedSource, retry: false });
   const linkedCatalog = useQuery({ queryKey: ["workbench-linked-create", projectKey, linkedSource, previewRef], queryFn: () => rpc({ method: "linked.workspace.preview", params: { sourceWorkspaceId: linkedSource, rootBaseRef: previewRef } }), enabled: Boolean(linkedSource), retry: false });
   const linkedPreview = linkedCatalog.data?.ok ? linkedCatalog.data.result as { rootSha: string; links: Array<{ path: string; pinnedSha: string; issue?: string }> } : null;
   const repositories = (catalog.data?.ok ? (catalog.data.result as DetailResult).repositories : []).filter((repo) => !addTo?.repositoryPaths.includes(repo.repoPath));
-  const valid = repositories.filter((repo) => repo.status !== "missing" && Boolean(repo.head));
+  const valid = repositories.filter((repo) => repo.status !== "missing" && Boolean(repo.head || parentSource && repo.observationPending));
   const canCreate = linkedSource && !addTo
     ? Boolean(name.trim() && previewRef === (rootBaseRef.trim() || "HEAD") && linkedPreview?.links.length && !linkedPreview.links.some(link => link.issue))
     : Boolean((addTo || name.trim()) && selected.length && selected.every((path) => valid.some((repo) => repo.repoPath === path)));
@@ -62,7 +67,7 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, linkedSources 
   const dialogHeight = clampCreateWorkspaceHeight(requestedHeight, maxHeight);
   const listContentHeight = Math.max(CREATE_WORKSPACE_MIN_LIST_HEIGHT, filteredRepositories.length * 48 + (filteredRepositories.length > 8 ? 12 : 0));
   const statusHeight = Boolean(error) || catalog.isPending || catalog.isError || Boolean(catalog.data && !catalog.data.ok) ? 28 : 0;
-  const listHeight = Math.min(listContentHeight, Math.max(CREATE_WORKSPACE_MIN_LIST_HEIGHT, dialogHeight - 142 - (expanded ? selected.length * 42 + 28 : 0) - statusHeight));
+  const listHeight = Math.min(listContentHeight, Math.max(CREATE_WORKSPACE_MIN_LIST_HEIGHT, dialogHeight - 142 - (!addTo && !linkedSource && parentSources.length ? 42 : 0) - (expanded ? selected.length * 42 + 28 : 0) - statusHeight));
   const latest = useRef({ dialogHeight, maxHeight });
   latest.current = { dialogHeight, maxHeight };
   const inputStyle = [styles.targetInput, { flex: undefined, flexGrow: 0, flexShrink: 0, height: 36, minHeight: 36, fontSize: 13 }];
@@ -112,8 +117,8 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, linkedSources 
             branchName: branchName.trim() || `feature/${name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-")}`,
             rootBaseRef: rootBaseRef.trim() || "HEAD",
             baseRefs: Object.fromEntries((linkedPreview?.links || []).filter(link => bases[link.path]?.trim()).map(link => [link.path, bases[link.path].trim()])) }
-        : { ...(addTo ? { workspaceId: addTo.id } : { name: name.trim() }), repositories: [...selected].sort(), baseRefs: Object.fromEntries(selected.map((path) => [path, bases[path]?.trim() || "HEAD"])) };
-      const response = await rpc({ method: addTo ? "workspace.addRepositories" : "workspace.create", params });
+        : { ...(addTo ? { workspaceId: addTo.id } : { name: name.trim() }), ...(parentSource && !addTo ? { parentWorkspaceId: parentSource.id, parentInstanceKey: workspaceSource(parentSource).instanceKey } : {}), repositories: [...selected].sort(), baseRefs: Object.fromEntries(selected.filter(path => !parentSource || bases[path]?.trim()).map((path) => [path, bases[path]?.trim() || "HEAD"])) };
+      const response = await rpc({ method: addTo ? "workspace.addRepositories" : "workspace.create", params: { ...params, ...(!addTo && agentId ? { contextAgentId: agentId } : {}) } });
       if (!response.ok) throw new Error(response.error?.message || copy.text_deb3990191);
       const result = response.result as { id: string; preparations?: Array<{ status?: string }> };
       if (result.preparations?.some((item) => item.status === "prepare_failed")) throw new Error("仓库已添加，运行时准备失败。修复运行时后重试；不会重复创建仓库。");
@@ -130,6 +135,7 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, linkedSources 
       contentContainerStyle={styles.createModalBody}
     >
       {!addTo ? <TextInput accessibilityLabel={copy.text_76848596cb} placeholder={copy.text_76848596cb} value={name} onChangeText={setName} editable={!busy} style={inputStyle} /> : null}
+      {!addTo && !linkedSource && parentSources.length ? <WorkspaceSourcePicker sources={parentSources} selected={parentSource ? workspaceSource(parentSource) : null} onSelect={value => { setParentSource(value); setSelected([]); setBases({}); }} disabled={busy} emptyLabel={copy.sourceDefault} styles={styles} /> : null}
       {!addTo && linkedSources.length ? <View style={{ gap: 5 }}>
         <Text style={styles.repositoryMeta}>{copy.linkedCreateSource}</Text>
         <Pressable accessibilityRole="button" accessibilityState={{ selected: !linkedSource }} onPress={() => setLinkedSource("")} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{!linkedSource ? "✓ " : "○ "}{copy.linkedCreateFlat}</Text></Pressable>
@@ -173,7 +179,7 @@ export function CreateWorkspace({ addTo, projectKey, currentRepo, linkedSources 
       </View>
       {catalog.isPending ? <Text style={styles.emptyText}>{copy.text_96c3e67563}</Text> : null}
       {catalog.isError || catalog.data && !catalog.data.ok ? <Text style={styles.warningText}>{copy.createCatalogFailed}</Text> : null}
-      <Pressable onPress={() => setExpanded((value) => !value)}><Text style={styles.secondaryButtonText}>{copy.createBase}</Text></Pressable>
+      <Pressable onPress={() => setExpanded((value) => !value)}><Text style={styles.secondaryButtonText}>{parentSource ? copy.sourceBaseDefault : copy.createBase}</Text></Pressable>
       </>}
       {error ? <Text style={styles.warningText}>{error}</Text> : null}
       <Pressable accessibilityRole="button" disabled={!canCreate || busy} onPress={() => { void create(); }} style={[styles.copyButton, (!canCreate || busy) && { opacity: 0.5 }]}><Text style={styles.copyButtonText}>{busy ? copy.text_1680b04bf6 : addTo ? "添加仓库" : copy.text_fcbd093292}</Text></Pressable>

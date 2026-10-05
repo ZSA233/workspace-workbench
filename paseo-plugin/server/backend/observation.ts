@@ -1,3 +1,5 @@
+import { workspaceCreator } from '../../shared/workspace-creator.ts';
+import { workspaceInstanceKey } from "../../shared/workspace-lineage.ts";
 import { RepositoryRefresh } from "./repository-refresh.ts";
 import { randomUUID } from "node:crypto";
 import { DiffContent } from "./diff-content.ts";
@@ -137,6 +139,10 @@ export class Observation {
     return {
       id: workspace.id,
       displayName: workspace.displayName || workspace.id,
+      instanceKey: workspaceInstanceKey(workspace as any),
+      ...(workspaceCreator(workspace.creator) ? { creator: workspaceCreator(workspace.creator) } : {}),
+      ...(workspace.lineage !== undefined ? { lineage: workspace.lineage } : {}),
+      ...(workspace.sourceWorkspaceId ? { sourceWorkspaceId: workspace.sourceWorkspaceId } : {}),
       kind: workspace.kind || "managed",
       managed: workspace.managed !== false,
       ...(workspace.layout ? { layout: workspace.layout } : {}),
@@ -293,7 +299,7 @@ export class Observation {
       orphanCandidates = orphanScan.candidates,
       orphanIds = new Set(orphanCandidates.map((candidate: Json) => candidate.id)),
       c = this.workspaces.config,
-      workspaces = metadata.workspaces
+      workspaces = this.workspaces.lineages.summaries(metadata.workspaces)
         .filter((w: Json) => (params.includeRemoved || w.state !== "removed") &&
           !(orphanIds.has(w.id) && ["record_invalid", "adopting", "adopt_failed"].includes(w.state)));
     const discovered = metadata.discovered;

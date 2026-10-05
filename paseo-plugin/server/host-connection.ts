@@ -5,7 +5,7 @@ import { createPaseoApi } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { nativeWebSocketFactory } from "@getpaseo/client/internal/daemon-client-websocket-transport";
 
-type Client = Pick<DaemonClient, "connect" | "close" | "getConnectionState">;
+type Client = Pick<DaemonClient, "connect" | "close" | "getConnectionState"> & Partial<Pick<DaemonClient, "buildAgentForkContext">>;
 type Managed = { client: Client; api: PaseoApi; endpoint: string };
 type Factory = (endpoint: string) => Managed;
 
@@ -102,13 +102,13 @@ export class HostConnection {
     finally { if (this.connecting === flight) this.connecting = null; }
   }
 
-  async run<T>(operation: (api: PaseoApi) => Promise<T> | T, readOnly = false): Promise<T> {
+  async run<T>(operation: (api: PaseoApi, client: Client) => Promise<T> | T, readOnly = false): Promise<T> {
     const attempt = async () => {
       const api = await this.api();
       if (this.closed || api !== this.managed?.api) throw new Error('host_transport_unavailable');
       this.active++; this.leases.set(api, (this.leases.get(api) || 0) + 1);
       try {
-        const result = await operation(api);
+        const result = await operation(api, this.managed!.client);
         this.lastSuccessfulAt = new Date().toISOString();
         return result;
       } finally {

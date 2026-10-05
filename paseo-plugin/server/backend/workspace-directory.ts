@@ -22,6 +22,7 @@ export class WorkspaceDirectory {
         return {
             observe: true,
             create: c.managementEnabled,
+            lineage: c.managementEnabled,
             prepare: c.managementEnabled && !!c.toolchain,
             agent: c.agentEnabled,
             cleanup: c.managementEnabled,

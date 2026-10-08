@@ -1,3 +1,6 @@
+import {createScrollSignal} from './diff-scroll-store';
+import {useDiffMeasurements} from './use-diff-measurements';
+import {rowAtOffset} from './diff-scroll-model';
 import {useDiffCodeCopy} from './use-diff-code-copy';
 import {useNativeSyntax} from './use-native-syntax';
 import {useMemo,useState,useRef,useEffect,useLayoutEffect,useCallback} from 'react';
@@ -8,20 +11,16 @@ import type {ReviewMode} from './review-mode';
 import type {FileReviewPosition} from './file-review-store';
 const EMPTY_MEASUREMENTS:Record<string,number>={};
 /** One view-scoped controller shared by the toolbar, viewport and overview rail. */
-export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path}:{path:string;diff:DiffResult|null;mode:ReviewMode;fontSize:number;wrap:boolean;position:FileReviewPosition;foreground:boolean}){
-  const parsed = useMemo(() => highlightReplacements(parseUnifiedPatch(diff?.patch || "")), [diff?.patch]);
+export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path,railSize}:{railSize?:number;path:string;diff:DiffResult|null;mode:ReviewMode;fontSize:number;wrap:boolean;position:FileReviewPosition;foreground:boolean}){
+  const [dragging,setDragging]=useState(false),heldDiff=useRef(diff);if(!dragging)heldDiff.current=diff;
+  const patch=heldDiff.current?.patch;
+  const parsed = useMemo(() => highlightReplacements(parseUnifiedPatch(patch || "")), [patch]);
   const rows = useMemo(() => buildDiffDisplayRows(parsed, mode), [mode, parsed]);
   const [visibleRows,setVisibleRows]=useState<number[]>([]);
   const nativeTokens=useNativeSyntax(rows,path,foreground,visibleRows);
   const [width,setWidth] = useState(0);
-  const measurementGeneration=useMemo(()=>({}),[rows,fontSize,wrap,width]);
-  const latestMeasurement=useRef(measurementGeneration);latestMeasurement.current=measurementGeneration;
-  const [measurements,setMeasurements]=useState<{generation:object|null;values:Record<string,number>}>({generation:null,values:{}});
-  const measured=measurements.generation===measurementGeneration?measurements.values:EMPTY_MEASUREMENTS;
-  const setMeasured=useCallback((update:(current:Record<string,number>)=>Record<string,number>)=>{
-    if(latestMeasurement.current!==measurementGeneration)return;
-    setMeasurements(current=>{if(latestMeasurement.current!==measurementGeneration)return current;const values=current.generation===measurementGeneration?current.values:EMPTY_MEASUREMENTS;const next=update(values);return next===values&&current.generation===measurementGeneration?current:{generation:measurementGeneration,values:next};});
-  },[measurementGeneration]);
+  const measurementGeneration=useMemo(()=>({}),[rows,fontSize,wrap,width,railSize]);
+  const measurements=useDiffMeasurements(measurementGeneration,dragging),measured=measurements.values,measureRow=measurements.measure;
   const rowMetrics = useMemo(() => measuredDiffRows(rows,fontSize,wrap?measured:EMPTY_MEASUREMENTS),[rows,wrap,fontSize,measured]);
   const overviewMarkers = useMemo(() => buildDiffOverviewMarkers(rows,rowMetrics), [rows,rowMetrics]);
   const hunkRowIndexes = useMemo(
@@ -40,16 +39,19 @@ export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path
   useDiffCodeCopy(copyRoot);
   const [currentHunk, setCurrentHunk] = useState(Math.min(position.hunk, Math.max(0, hunkRowIndexes.length - 1)));
   const [viewportHeight, setViewportHeight] = useState(0);
-  const [scrollOffset, setScrollOffset] = useState(position.offset);
+  const scrollSignal=useRef(createScrollSignal(position.offset)).current;
+  useEffect(()=>()=>scrollSignal.dispose(),[scrollSignal]);
   const restoredPosition = useRef(false);
   const initialOffset = useRef({ x: 0, y: position.offset }).current;
   const [contentHeight, setContentHeight] = useState(0);
   const layoutAnchor=useRef({identity:`${wrap}:${fontSize}:${width}`,metrics:rowMetrics});
   useLayoutEffect(()=>{
     const identity=`${wrap}:${fontSize}:${width}`,previous=layoutAnchor.current;
-    if(identity!==previous.identity){
-      const index=Math.max(0,previous.metrics.offsets.findIndex((offset,i)=>offset+previous.metrics.lengths[i]>position.offset));
-      const offset=rowMetrics.offsets[index]||0;position.offset=offset;listRef.current?.scrollToOffset({offset,animated:false});setScrollOffset(offset);
+    // First content must restore the saved tab offset before applying layout anchors.
+    if(restoredPosition.current&&previous.metrics.offsets.length>0&&(identity!==previous.identity||previous.metrics!==rowMetrics)){
+      const index=rowAtOffset(previous.metrics,position.offset);
+      const within=Math.max(0,position.offset-(previous.metrics.offsets[index]||0));
+      const offset=(rowMetrics.offsets[index]||0)+Math.min(within,rowMetrics.lengths[index]||0);position.offset=offset;listRef.current?.scrollToOffset({offset,animated:false});scrollSignal.set(offset);
     }
     layoutAnchor.current={identity,metrics:rowMetrics};
   },[wrap,fontSize,width,rowMetrics,position]);
@@ -60,7 +62,7 @@ export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path
     const offset = Math.min(position.offset, Math.max(0, contentHeight - viewportHeight));
     listRef.current.scrollToOffset({ offset, animated: false });
     restoredPosition.current = true;
-    setScrollOffset(offset);
+    scrollSignal.set(offset);
   }, [foreground, viewportHeight, contentHeight, position]);
 
   const onListLayout = useCallback((event: any) => {
@@ -113,6 +115,6 @@ export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path
   }).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 10 }).current;
 
- return {nativeTokens,parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,hunkRowIndexes,listRef,horizontalRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,jumpToRow,onScrollToIndexFailed,onViewableItemsChanged,viewabilityConfig};
+ return {lineHeight:fontSize+8,nativeTokens,parsed,rows,measureRow,dragging,setDragging,measurementGeneration,width,setWidth,rowMetrics,overviewMarkers,hunkRowIndexes,listRef,horizontalRef,copyRoot,currentHunk,viewportHeight,scrollSignal,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,jumpToRow,onScrollToIndexFailed,onViewableItemsChanged,viewabilityConfig};
 }
 export type DiffReading=ReturnType<typeof useDiffReading>;

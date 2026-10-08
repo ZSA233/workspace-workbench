@@ -1,3 +1,4 @@
+import {comparisonContentVersion} from './comparison-content-version';
 import {useEffect, useRef, useCallback, useSyncExternalStore} from 'react';
 import {useQueries, useQueryClient} from '@tanstack/react-query';
 import {trimComparisonBodies, markComparisonBodyUsed} from './comparison-body-budget';
@@ -25,17 +26,13 @@ export function useComparisonBodies(jobs: BodyJob[], host: string, rpc: DiffRpc,
     const reader = useRef(createDiffReadClient()).current;
     const rpcRef = useRef(rpc);
     rpcRef.current = rpc;
-    const version = useRef(0);
-    const subscribe = useCallback((notify: () => void) => client.getQueryCache().subscribe(event => {
-        if (event.query.queryKey[1] === 'file-review' && (event.type === 'removed' ||
-            event.type === 'updated' && ['success', 'error'].includes(event.action.type))) {
-            version.current++;
-            notify();
-        }
-    }), [client]);
-    // Consumers must advance from the cache event itself. Observer timestamps can lag
-    // behind the render that disables a completed slot and enables its successor.
-    const cacheVersion = useSyncExternalStore(subscribe, () => version.current);
+    const scopeRef=useRef<readonly unknown[]>([]);
+    if(jobs[0])scopeRef.current=[jobs[0].selection.projectConfig,host,jobs[0].selection.workspaceId,jobs[0].selection.repoPath];
+    const snapshot=useRef(comparisonContentVersion(client,()=>scopeRef.current)).current;
+    const subscribe=useCallback((notify:()=>void)=>client.getQueryCache().subscribe(event=>{
+        if(event.query.queryKey[1]==='file-review'&&(event.type==='removed'||event.type==='updated'&&['success','error'].includes(event.action.type)))notify();
+    }),[client]);
+    const cacheVersion=useSyncExternalStore(subscribe,snapshot);
     const pending = jobs.filter(job => {
         if (client.getQueryState(bodyKey(job, host))?.status === 'error') return false;
         const response = client.getQueryData<ObserverResponse>(bodyKey(job, host));
@@ -78,12 +75,11 @@ export function useComparisonBodies(jobs: BodyJob[], host: string, rpc: DiffRpc,
     }, [demandIdentity, cacheVersion, foreground, client]);
     function response(job: BodyJob): ObserverResponse | undefined {
         const key = bodyKey(job, host), data = client.getQueryData<ObserverResponse>(key);
-        if (data) return data;
         const error = client.getQueryState(key)?.error;
-        return error ? {ok: false, error: {code: 'read_failed', message: String(error)}} : undefined;
+        return error ? {ok:false,error:{code:'read_failed',message:String(error)}} : data;
     }
     return {
-        cacheVersion,
+        cacheVersion, contentVersion:cacheVersion,
         read: (job: BodyJob) => displayedObservation(response(job)),
         response,
         retry: (job: BodyJob) => {

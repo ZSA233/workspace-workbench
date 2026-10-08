@@ -20,7 +20,7 @@ try{
  const config=join(ui.project,'project.json');
  const tree=join(ui.project,'one'),git=(...args)=>execFileSync('git',['-C',tree,...args],{encoding:'utf8'}).trim();
  const lines=Array.from({length:500},(_,i)=>`// source context ${i+1}`);writeFileSync(join(tree,'alpha.go'),lines.join('\n')+'\n');writeFileSync(join(tree,'beta.ts'),'export const count = 1;\n');writeFileSync(join(tree,'gamma.json'),'{"count":1}\n');git('add','.');git('commit','-qm','baseline');const base=git('rev-parse','HEAD');
- lines[249]='const requested = 2 // '+ 'long readable context '.repeat(8);writeFileSync(join(tree,'alpha.go'),lines.join('\n')+'\n');writeFileSync(join(tree,'beta.ts'),'export const count = 2;\n');writeFileSync(join(tree,'gamma.json'),'{"count":2}\n');for(let i=0;i<25;i++)writeFileSync(join(tree,`later-${String(i).padStart(2,'0')}.txt`),'later sample\n');git('add','.');git('commit','-qm','final changes');const head=git('rev-parse','HEAD');
+ lines[249]='const requested = 2 // '+ 'long readable context '.repeat(8);writeFileSync(join(tree,'alpha.go'),lines.join('\n')+'\n');writeFileSync(join(tree,'beta.ts'),'export const count = 2;\n');writeFileSync(join(tree,'gamma.json'),'{"count":2}\n');for(let i=0;i<25;i++)writeFileSync(join(tree,`later-${String(i).padStart(2,'0')}.txt`),i===24?Array.from({length:200},(_,n)=>`last delayed content ${n}`).join('\n')+'\n':'later sample\n');git('add','.');git('commit','-qm','final changes');const head=git('rev-parse','HEAD');
  const agent=await client.createAgent({config:{provider:'codex',cwd:ui.project,modeId:'auto',featureValues:{plan_mode:false}}});
  const token=JSON.parse(readFileSync(join(ui.project,'state','orchestration',digest('session:'+agent.id)+'.json'),'utf8')).token;
  const gateway=JSON.parse(readFileSync(join(dirname(ui.continueFile),'paseo','workspace-workbench/gateway.json'),'utf8'));
@@ -29,8 +29,8 @@ try{
  const scope={workspaceId:'main',repoPath:'one',scope:'compare',comparison:{fromRef:base,toRef:head},paths:['alpha.go','beta.ts']};
  const snapshot=(await call('workbench_change_notes_read',scope)).snapshot;
  await call('workbench_change_notes_write',{workspaceId:'main',repoPath:'one',batch:{requestId:'continuous-notes',snapshotId:snapshot.id,operations:[{id:'context-note',expectedRevision:0,action:'upsert',content:{title:'Hidden context explanation',reason:'Retain the surrounding behavior while changing the default',behavior:'Default becomes two',basis:'requirement',requirement:'Sample requirement',perspective:'implementer',anchors:[{path:'alpha.go',side:'new',start:190,end:190},{path:'beta.ts',side:'new',start:1,end:1}]}}]}});
- browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1600,height:1050},permissions:['clipboard-read','clipboard-write']});page=await context.newPage();page.on('pageerror',e=>report.pageErrors.push(e.message));page.on('console',e=>{if(e.type()==='error'&&!e.text().startsWith('workbench_client_diagnostic '))report.consoleErrors.push(e.text());});await page.emulateMedia({colorScheme:'dark'});
- const requests=report.requests=[],activeReads=new Set();let holdPath='',held=[],heldReady,failPath='later-22.txt';report.maxConcurrentReads=0;
+ browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1600,height:1050},permissions:['clipboard-read','clipboard-write']});page=await context.newPage();await page.addInitScript(()=>{window.__commits=0;window.__REACT_DEVTOOLS_GLOBAL_HOOK__={supportsFiber:true,inject:()=>1,onCommitFiberRoot:()=>window.__commits++,onCommitFiberUnmount:()=>{}};});page.on('pageerror',e=>report.pageErrors.push(e.message));page.on('console',e=>{if(e.type()==='error'&&!e.text().startsWith('workbench_client_diagnostic '))report.consoleErrors.push(e.text());});await page.emulateMedia({colorScheme:'dark'});
+ const requests=report.requests=[],statuses=report.readStatuses=[],activeReads=new Set();let holdPath='',held=[],heldReady,failPath='later-22.txt';report.maxConcurrentReads=0;
  await page.routeWebSocket('**/*',socket=>{const server=socket.connectToServer();socket.onMessage(message=>{
   try{const walk=o=>{if(!o||typeof o!=='object')return;if(o.method==='repository.diff.read'){
    const p=o.params;if(p?.action==='start'){requests.push(p);activeReads.add(p.requestId);report.maxConcurrentReads=Math.max(report.maxConcurrentReads,activeReads.size);}else if(p?.action==='release')activeReads.delete(p.requestId);
@@ -38,6 +38,7 @@ try{
  });server.onMessage(message=>{
   let parsed,hold=false,changed=false;const completed=[];
   try{parsed=JSON.parse(String(message));const walk=o=>{if(!o||typeof o!=='object')return;
+   if(o.protocol===1&&o.taskId)statuses.push({request:o.requestId,state:o.state,lines:o.result?.lines?.length,start:o.result?.lines?.[0]?.oldLine,error:o.error?.code});
    if(o.protocol===1&&o.taskId&&['ready','failed','cancelled'].includes(o.state)){
     completed.push(o.requestId);if(o.result?.path===holdPath)hold=true;
     if(failPath&&o.result?.path===failPath){o.state='failed';o.error={code:'ui_injected_file_failure',message:'Sample file unavailable'};delete o.result;changed=true;}
@@ -73,6 +74,13 @@ try{
  // A held, offscreen file cannot take over a later selection; a failed file is local.
  holdPath='later-24.txt';const blocked=new Promise(resolve=>heldReady=resolve);
  await sidebar.getByText(holdPath,{exact:true}).click();await blocked;
+ if(process.env.WORKBENCH_VERIFY_RAIL==='1'){
+  const rail=panel.getByTestId('diff-overview-rail'),r=await rail.boundingBox(),t=await panel.getByTestId('diff-overview-thumb').boundingBox();await page.mouse.move(r.x+r.width-4,t.y+t.height/2);await page.mouse.down();await page.mouse.move(r.x+r.width-4,t.y+t.height/2-20,{steps:3});
+  const frozenHeight=await panel.getByTestId('workbench-diff-lines').evaluate(n=>n.scrollHeight),commits=await page.evaluate(()=>window.__commits);
+  holdPath='';for(const send of held)send();held=[];await page.waitForFunction(before=>window.__commits>before,commits);await frames();await frames();assert.equal(await panel.getByTestId('workbench-diff-lines').evaluate(n=>n.scrollHeight),frozenHeight,'arrival must not change drag mapping');await page.mouse.up();
+  await page.waitForFunction(before=>document.querySelector('[data-testid="workbench-diff-lines"]').scrollHeight>before+1000,frozenHeight);report.checks.push('A delayed body arriving during rail drag is published after release; drag mapping stays fixed');
+ }
+
  await sidebar.getByText('alpha.go',{exact:true}).click();await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
  holdPath='';for(const send of held)send();held=[];await frames();await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
  await sidebar.getByText('later-22.txt',{exact:true}).click();await panel.getByText('Sample file unavailable · 重试',{exact:true}).waitFor();

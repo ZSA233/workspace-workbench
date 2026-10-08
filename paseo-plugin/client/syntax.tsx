@@ -41,14 +41,18 @@ function PlainCode({ code, theme, style }: HighlightedCodeProps): ReactElement {
   );
 }
 
+let loadedWebRenderer:ComponentType<HighlightedCodeProps>|null=null;
+let webLoad:Promise<WebSyntaxModule>|null=null;
 function WebHighlightedCode(props: HighlightedCodeProps): ReactElement {
-  const [webRenderer, setWebRenderer] = useState<ComponentType<HighlightedCodeProps> | null>(null);
+  const [webRenderer, setWebRenderer] = useState<ComponentType<HighlightedCodeProps> | null>(()=>loadedWebRenderer);
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
+    if(loadedWebRenderer){if(!webRenderer)setWebRenderer(()=>loadedWebRenderer);return;}
     let active = true;
-    void import("./syntax-web").then((module: WebSyntaxModule) => {
-      if (active) setWebRenderer(() => module.HighlightedCode);
+    void (webLoad ||= import("./syntax-web")).then((module: WebSyntaxModule) => {
+      loadedWebRenderer=module.HighlightedCode;
+      if (active) setWebRenderer(() => loadedWebRenderer);
     }).catch(() => {
       // Plain text remains a useful and safe fallback if the optional web
       // highlighter cannot be loaded. Do not turn a diff into a panel error.

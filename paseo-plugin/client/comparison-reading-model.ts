@@ -1,3 +1,4 @@
+import {rowAtOffset} from './diff-scroll-model.ts';
 import { parseUnifiedPatch, pairDiffLines, type DiffLine, type DiffDisplayRow, type DiffResult } from './model.ts';
 import { highlightReplacements } from './diff-layout.ts';
 import type { ContextSlice } from '../shared/diff-context.ts';
@@ -145,7 +146,7 @@ export function documentMetrics(rows: DocumentRow[], fontSize: number, measureme
     lengths.push(size);
     height += size;
 } return { offsets, lengths, contentHeight: height }; }
-export function documentAnchor(rows: DocumentRow[], metrics: ReturnType<typeof documentMetrics>, offset: number, covered = 0) { let index = Math.max(0, metrics.offsets.findIndex((y, i) => y + metrics.lengths[i] > offset + covered)); if (rows[index] && rows[index].kind !== 'code') {
+export function documentAnchor(rows: DocumentRow[], metrics: ReturnType<typeof documentMetrics>, offset: number, covered = 0) { let index = rowAtOffset(metrics, offset+covered); if (rows[index] && rows[index].kind !== 'code') {
     const path = rows[index].path;
     for (let i = index + 1; i < rows.length && rows[i].path === path; i++) {
         if (rows[i].kind === 'code') {
@@ -155,17 +156,20 @@ export function documentAnchor(rows: DocumentRow[], metrics: ReturnType<typeof d
     }
 } const row = rows[index]; if (!row)
     return; const line = row.kind === 'code' ? (row.display.kind === 'unified' ? row.display.line : row.display.kind === 'split' ? row.display.right || row.display.left : null) : null; return { key: row.key, path: row.path, oldLine: line?.oldLine, newLine: line?.newLine, offset: offset - (metrics.offsets[index] || 0) }; }
-export function anchorOffset(anchor: {
-    key: string;
-    path: string;
-    oldLine?: number | null;
-    newLine?: number | null;
-    offset: number;
-} | undefined, rows: DocumentRow[], metrics: ReturnType<typeof documentMetrics>) { if (!anchor)
-    return 0; let index = rows.findIndex(r => r.key === anchor.key); if (index < 0 && (anchor.oldLine != null || anchor.newLine != null))
-    index = rows.findIndex(r => { if (r.path !== anchor.path || r.kind !== 'code')
-        return false; const lines = r.display.kind === 'unified' ? [r.display.line] : r.display.kind === 'split' ? [r.display.left, r.display.right] : []; return lines.some(l => l && (anchor.newLine != null ? l.newLine === anchor.newLine : l.oldLine === anchor.oldLine)); }); if (index < 0)
-    index = rows.findIndex(r => r.path === anchor.path && r.kind === 'file'); return Math.max(0, (metrics.offsets[Math.max(0, index)] || 0) + Math.min(anchor.offset, metrics.lengths[Math.max(0, index)] || 0)); }
+const documentIndexes=new WeakMap<DocumentRow[],{keys:Map<string,number>;files:Map<string,number>;lines:Map<string,number>}>();
+export function documentIndex(rows:DocumentRow[]){
+ let index=documentIndexes.get(rows);if(index)return index;
+ const keys=new Map<string,number>(),files=new Map<string,number>(),lines=new Map<string,number>();
+ rows.forEach((row,i)=>{keys.set(row.key,i);if(row.kind==='file')files.set(row.path,i);if(row.kind==='code'){
+  const values=row.display.kind==='unified'?[row.display.line]:row.display.kind==='split'?[row.display.left,row.display.right]:[];
+  for(const line of values){if(line?.oldLine!=null)lines.set(JSON.stringify([row.path,'old',line.oldLine]),i);if(line?.newLine!=null)lines.set(JSON.stringify([row.path,'new',line.newLine]),i);}
+ }});index={keys,files,lines};documentIndexes.set(rows,index);return index;
+}
+export function anchorOffset(anchor:{key:string;path:string;oldLine?:number|null;newLine?:number|null;offset:number}|undefined,rows:DocumentRow[],metrics:ReturnType<typeof documentMetrics>){
+ if(!anchor)return 0;const lookup=documentIndex(rows);
+ const index=lookup.keys.get(anchor.key)??lookup.lines.get(JSON.stringify([anchor.path,anchor.newLine!=null?'new':'old',anchor.newLine??anchor.oldLine]))??lookup.files.get(anchor.path)??0;
+ return Math.max(0,(metrics.offsets[index]||0)+Math.min(anchor.offset,metrics.lengths[index]||0));
+}
 export function mergeVisibleContexts(ranges: VisibleContext[], next: VisibleContext) {
     const sorted = [...ranges, next].sort((a, b) => (a.newStart - a.oldStart) - (b.newStart - b.oldStart) || a.oldStart - b.oldStart), merged: VisibleContext[] = [];
     for (const range of sorted) {

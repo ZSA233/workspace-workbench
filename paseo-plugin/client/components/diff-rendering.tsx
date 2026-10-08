@@ -1,13 +1,12 @@
 import {Platform,Pressable,StyleSheet,Text,View} from 'react-native';
 import type {PluginWorkspacePanelProps,PluginAgentPanelProps} from '@getpaseo/plugin/client';
 import type {DiffReading} from '../use-diff-reading';
-import type {DiffHunk,DiffLine,DiffOverviewMarker} from '../model';
+import type {DiffHunk,DiffLine} from '../model';
 import {DIFF_HUNK_ROW_HEIGHT} from '../model';
 import {DIFF_CHANGE_GUTTER_STYLE} from '../diff-layout';
 import {editorCodeFontFamily,HighlightedCode} from '../syntax';
-import {Svg,Rect} from '../graph/svg-web';
+import {railWidth} from '../diff-scroll-model';
 import {observerAccent} from '../theme';
-import {copy} from '../../shared/copy';
 type FilePanelProps=PluginWorkspacePanelProps|PluginAgentPanelProps;
 export function HunkRow({
   active,
@@ -32,145 +31,7 @@ export function HunkRow({
   );
 }
 
-export function OverviewRail({
-  contentHeight,
-  currentHunk,
-  markers,
-  onSelectRow,
-  scrollOffset,
-  platform,
-  theme,
-  height,
-  styles,
-}: {
-  contentHeight: number;
-  currentHunk: number;
-  markers: DiffOverviewMarker[];
-  onSelectRow: (index: number) => void;
-  scrollOffset: number;
-  platform: FilePanelProps["layout"]["platform"];
-  theme: FilePanelProps["theme"];
-  height: number;
-  styles: ReturnType<typeof makeStyles>;
-}) {
-  return platform === "web"
-    ? <OverviewRailWeb contentHeight={contentHeight} currentHunk={currentHunk} markers={markers} onSelectRow={onSelectRow} scrollOffset={scrollOffset} theme={theme} height={height} styles={styles} />
-    : <OverviewRailNative contentHeight={contentHeight} currentHunk={currentHunk} markers={markers} onSelectRow={onSelectRow} scrollOffset={scrollOffset} theme={theme} height={height} styles={styles} />;
-}
-
-type OverviewRailProps = Omit<Parameters<typeof OverviewRail>[0], "platform">;
-
-function overviewRailMetrics(contentHeight: number, height: number, scrollOffset: number) {
-  const scrollable = height > 0 && contentHeight > height;
-  const thumbHeight = scrollable
-    ? Math.min(height, Math.max(18, (height / contentHeight) * height))
-    : height;
-  const maxThumbTop = Math.max(0, height - thumbHeight);
-  const thumbTop = scrollable
-    ? Math.min(maxThumbTop, Math.max(0, (scrollOffset / Math.max(1, contentHeight - height)) * maxThumbTop))
-    : 0;
-  return { thumbHeight, thumbTop };
-}
-
-function overviewMarkerMetrics(marker: DiffOverviewMarker, height: number) {
-  const markerHeight = Math.min(height, Math.max(3, marker.extent * height));
-  const maxTop = Math.max(0, height - markerHeight);
-  const markerTop = Math.min(maxTop, Math.max(0, marker.position * height));
-  return { height: markerHeight, top: markerTop };
-}
-
-function overviewMarkerColor(marker: DiffOverviewMarker, currentHunk: number, theme: FilePanelProps["theme"]): string {
-  if (marker.kind === "added") return theme.colors.statusSuccess;
-  if (marker.kind === "removed") return theme.colors.statusDanger;
-  return observerAccent(theme);
-}
-
-function OverviewRailNative({
-  contentHeight,
-  currentHunk,
-  markers,
-  onSelectRow,
-  scrollOffset,
-  theme,
-  height,
-  styles,
-}: OverviewRailProps) {
-  if (!height) return null;
-  const { thumbHeight, thumbTop } = overviewRailMetrics(contentHeight, height, scrollOffset);
-  return (
-    <View accessibilityLabel={copy.diffOverview} style={[styles.overviewRail, { height }]}>
-      <View pointerEvents="none" style={[styles.overviewBackground, { height }]} />
-      {markers.map((marker, index) => {
-        const frame = overviewMarkerMetrics(marker, height);
-        return (
-          <Pressable
-            key={`${marker.hunkIndex}-${marker.kind}-${marker.startLine}-${index}`}
-            testID={`diff-overview-marker-${index}`}
-            accessibilityLabel={`${copy.diffOverview}: ${marker.startLine}–${marker.endLine}`}
-            accessibilityRole="button"
-            onPress={() => onSelectRow(marker.startRow)}
-            style={[styles.overviewMarker, {
-              backgroundColor: overviewMarkerColor(marker, currentHunk, theme),
-              height: frame.height,
-              top: frame.top,
-            }]}
-          />
-        );
-      })}
-      {contentHeight > height ? <View pointerEvents="none" style={[styles.overviewThumb, { height: thumbHeight, top: thumbTop }]} /> : null}
-    </View>
-  );
-}
-
-function OverviewRailWeb({
-  contentHeight,
-  currentHunk,
-  markers,
-  onSelectRow,
-  scrollOffset,
-  theme,
-  height,
-  styles,
-}: OverviewRailProps) {
-  if (!height) return null;
-  const { thumbHeight, thumbTop } = overviewRailMetrics(contentHeight, height, scrollOffset);
-  return (
-    <View accessibilityLabel={copy.diffOverview} style={[styles.overviewRail, { height }]}>
-      <Svg height={height} style={styles.overviewSvg} width={12}>
-        <Rect fill={theme.colors.surface2} height={height} width={12} x={0} y={0} />
-        {markers.map((marker, index) => {
-          const frame = overviewMarkerMetrics(marker, height);
-          return (
-            <Rect
-              key={`${marker.hunkIndex}-${marker.kind}-${marker.startLine}-${index}`}
-            data-testid={`diff-overview-marker-${index}`}
-              role="button"
-              aria-label={`${copy.diffOverview}: ${marker.startLine}–${marker.endLine}`}
-              data-start-row={marker.startRow}
-              fill={overviewMarkerColor(marker, currentHunk, theme)}
-              height={frame.height}
-              onPress={() => onSelectRow(marker.startRow)}
-              rx={1.5}
-              width={7}
-              x={2}
-              y={frame.top}
-            />
-          );
-        })}
-        {contentHeight > height ? (
-          <Rect
-            fill={`${theme.colors.foregroundMuted}88`}
-            height={thumbHeight}
-            rx={3}
-            width={3}
-            x={9}
-            y={thumbTop}
-          />
-        ) : null}
-      </Svg>
-    </View>
-  );
-}
+export {OverviewRail} from './diff-overview';
 
 export function UnifiedRow({
   nativeTokens,
@@ -256,7 +117,7 @@ function DiffCell({
   );
 }
 
-export function makeStyles(theme: FilePanelProps["theme"], fontSize=14, wrap=false) {
+export function makeStyles(theme: FilePanelProps["theme"], fontSize=14, wrap=false,railSize=railWidth(Platform.OS!=='web')) {
   const accent = observerAccent(theme);
   return StyleSheet.create({
     screen: { backgroundColor: theme.colors.surface0, flex: 1 },
@@ -269,7 +130,7 @@ export function makeStyles(theme: FilePanelProps["theme"], fontSize=14, wrap=fal
     diffShell: { backgroundColor: theme.colors.surface0, flex: 1, minHeight: 0 },
     diffViewport: { flex: 1, minHeight: 0, overflow: "hidden", position: "relative" },
     diffHorizontal: { flex: 1, minHeight: 0 },
-    diffScrollContent: { flexGrow: 1, minHeight: "100%", minWidth: "100%", paddingRight: 14 },
+    diffScrollContent: { flexGrow: 1, minHeight: "100%", minWidth: "100%", paddingRight: railSize },
     diffListViewport: { flex: 1, minHeight: 0 },
     diffListViewportSplit: { minWidth: 840 },
     diffListViewportUnified: { minWidth: 620 },
@@ -297,11 +158,6 @@ export function makeStyles(theme: FilePanelProps["theme"], fontSize=14, wrap=fal
     removedMarker: { color: theme.colors.statusDanger, fontWeight: "700" },
     codeText: { color: theme.colors.foreground, flexShrink: wrap ? 1 : 0, ...(wrap?{flex:1}:{}), fontFamily: editorCodeFontFamily, fontSize, lineHeight: fontSize+8, ...(Platform.OS === "web" ? {whiteSpace:wrap?"pre-wrap":"pre",overflowWrap:"anywhere",tabSize:4} as any : {}), paddingLeft: 8, paddingRight: 16 },
     codeSyntaxText: { color: theme.colors.foreground, flexShrink: wrap ? 1 : 0, ...(wrap?{flex:1}:{}), fontFamily: editorCodeFontFamily, fontSize, lineHeight: fontSize+8, ...(Platform.OS === "web" ? {whiteSpace:wrap?"pre-wrap":"pre",overflowWrap:"anywhere",tabSize:4} as any : {}) },
-    overviewRail: { backgroundColor: theme.colors.surface2, borderLeftColor: theme.colors.border, borderLeftWidth: 1, position: "absolute", right: 0, top: 0, width: 14, zIndex: 5 },
-    overviewSvg: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
-    overviewBackground: { left: 0, position: "absolute", top: 0, width: 12 },
-    overviewMarker: { borderRadius: 1.5, left: 2, position: "absolute", width: 7 },
-    overviewThumb: { backgroundColor: `${theme.colors.foregroundMuted}88`, borderRadius: 3, left: 9, position: "absolute", width: 3 },
     binaryState: { backgroundColor: theme.colors.surface1, borderColor: theme.colors.border, borderRadius: 8, borderWidth: 1, margin: 20, padding: 16 },
     binaryTitle: { color: theme.colors.foreground, fontSize: 13, fontWeight: "700" },
   });

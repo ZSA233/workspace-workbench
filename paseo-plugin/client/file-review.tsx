@@ -1,3 +1,4 @@
+import {useDiffRailWidth} from './use-diff-rail-width';
 import {fileReviewQueryKey,fileReviewParams} from './file-review-query';
 import {ComparisonReviewPanel} from './comparison-review';
 import {HunkRow,OverviewRail,UnifiedRow,SplitRow,makeStyles} from './components/diff-rendering';
@@ -93,7 +94,8 @@ function SingleFileReviewPanel(props: FilePanelProps) {
   const [panelWidth, setPanelWidth] = useState(0);
   const narrow = layout.compact || (panelWidth > 0 && panelWidth < MIN_SPLIT_PANEL_WIDTH);
   const display = useDisplaySettings();
-  const styles = useMemo(() => makeStyles(theme, display.fontSize, display.wrap), [theme, display.fontSize, display.wrap]);
+  const railSize=useDiffRailWidth();
+  const styles = useMemo(() => makeStyles(theme, display.fontSize, display.wrap,railSize), [theme, display.fontSize, display.wrap,railSize]);
   const activeKey = useActiveFileReviewKey(hostWorkspaceId);
   const { mode, setMode } = useReviewModePreference(hostWorkspaceId, narrow);
   const activeSelection = selections.find((item) => selectionKey(item) === activeKey) || selections.at(-1);
@@ -190,7 +192,7 @@ function SingleFileReviewPanel(props: FilePanelProps) {
 
   return (
     <View testID="workbench-diff-panel" ref={activity.ref} style={styles.screen} accessibilityLabel={copy.changesTitle} onLayout={(event) => setPanelWidth(event.nativeEvent.layout.width)}>
-      <DiffReadingSurface path={activeSelection?.path||""} key={viewKey} diff={diff} mode={mode} wrap={display.wrap} fontSize={display.fontSize} position={viewPosition} foreground={foreground}
+      <DiffReadingSurface railSize={railSize} path={activeSelection?.path||""} key={viewKey} diff={diff} mode={mode} wrap={display.wrap} fontSize={display.fontSize} position={viewPosition} foreground={foreground}
         renderToolbar={reading=><DiffToolbar extra={notes.toolbar} selections={selections} activeKey={readKey} onSelect={key=>setActiveFileReview(hostWorkspaceId,key)} onClose={close}
           selection={activeSelection} diff={diff} reading={reading} width={panelWidth} theme={theme} mode={mode} narrow={narrow} onMode={()=>setMode(mode==='split'?'unified':'split')}
           fontSize={display.fontSize} wrap={display.wrap} onDisplay={display.update} stale={diffState.stale}
@@ -201,7 +203,7 @@ function SingleFileReviewPanel(props: FilePanelProps) {
           {readTask && !diff ? <Text style={styles.emptyText}>{readTask.state === 'queued' ? copy.diffQueued : copy.text_a74b5d91fa}</Text> : null}
           {error ? <Pressable accessibilityRole="button" onPress={() => { reader.retry(readKey); void diffQuery.refetch({ cancelRefetch: false }); }}><Text style={styles.metaText}>{copy.refreshNow}</Text></Pressable> : null}
           {diffQuery.isLoading ? <Text style={styles.emptyText}>{copy.text_a74b5d91fa}</Text> : null}
-          {diff?<DiffViewer notes={notes} reading={reading} wrap={display.wrap} position={viewPosition} foreground={foreground} diff={diff} mode={mode} path={activeSelection.path} platform={layout.platform} theme={theme} styles={styles}/>:null}
+          {diff?<DiffViewer railSize={railSize} notes={notes} reading={reading} wrap={display.wrap} position={viewPosition} foreground={foreground} diff={diff} mode={mode} path={activeSelection.path} platform={layout.platform} theme={theme} styles={styles}/>:null}
         </View>:<View style={styles.emptyState}><Text style={styles.emptyTitle}>{copy.text_982b60ebcc}</Text><Text style={styles.emptyText}>{copy.text_5720774925}</Text></View>}
       </DiffReadingSurface>
       {notes.overlay}
@@ -215,6 +217,7 @@ function DiffReadingSurface({renderToolbar,children,...input}:Parameters<typeof 
 }
 
 function DiffViewer({
+  railSize,
   notes,
   reading,
   wrap,
@@ -227,6 +230,7 @@ function DiffViewer({
   theme,
   styles,
 }: {
+  railSize:number;
   notes:DiffNotes;
   reading:DiffReading;
   wrap: boolean;
@@ -241,7 +245,7 @@ function DiffViewer({
 }) {
   reportNativeDiagnostic("file-review-diff-render", { entry: "DiffViewer" });
   const copy = useWorkbenchCopy();
-  const {nativeTokens,parsed,rows,setMeasured,width,setWidth,rowMetrics,overviewMarkers,listRef,horizontalRef,copyRoot,currentHunk,viewportHeight,scrollOffset,setScrollOffset,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,jumpToRow,onScrollToIndexFailed,onViewableItemsChanged,viewabilityConfig}=reading;
+  const {nativeTokens,parsed,rows,measureRow,setDragging,measurementGeneration,width,setWidth,rowMetrics,overviewMarkers,listRef,horizontalRef,copyRoot,currentHunk,viewportHeight,scrollSignal,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,jumpToRow,onScrollToIndexFailed,onViewableItemsChanged,viewabilityConfig}=reading;
 
   const noteScroll=useRef({x:0,y:position.offset});
   const notesRef=useRef(notes);notesRef.current=notes;
@@ -286,7 +290,7 @@ function DiffViewer({
           contentContainerStyle={styles.diffScrollContent}
           style={styles.diffHorizontal}
         >
-          <View style={[styles.diffListViewport, mode === "split" ? styles.diffListViewportSplit : styles.diffListViewportUnified, wrap && {width:Math.max(0,width-14),minWidth:0}]}>
+          <View style={[styles.diffListViewport, mode === "split" ? styles.diffListViewportSplit : styles.diffListViewportUnified, wrap && {width:Math.max(0,width-railSize),minWidth:0}]}>
             <FlatList
               testID="workbench-diff-lines"
               ref={listRef}
@@ -304,11 +308,11 @@ function DiffViewer({
               onScroll={(event: any) => {
                 const offset = Number(event.nativeEvent?.contentOffset?.y) || 0;
                 if(offset!==noteScroll.current.y){noteScroll.current.y=offset;notes.onScroll();}
-                if (restoredPosition.current && foreground && event.nativeEvent?.layoutMeasurement?.height !== 0) { position.offset = offset; setScrollOffset(offset); }
+                if (restoredPosition.current && foreground && event.nativeEvent?.layoutMeasurement?.height !== 0) { position.offset = offset; scrollSignal.set(offset); }
               }}
               onScrollToIndexFailed={onScrollToIndexFailed}
               onViewableItemsChanged={noteViewable as any}
-              renderItem={({ item,index }: { item: DiffDisplayRow;index:number }) => <View onLayout={event=>{if(wrap){const h=event.nativeEvent.layout.height;if(!Number.isFinite(h)||h<=0)return;setMeasured(current=>current[item.key]===h?current:{...current,[item.key]:h});}}}>
+              renderItem={({ item,index }: { item: DiffDisplayRow;index:number }) => <View onLayout={event=>{if(wrap){const h=event.nativeEvent.layout.height;if(!Number.isFinite(h)||h<=0)return;measureRow(item.key,h);}}}>
                 {item.kind === "hunk" ? (
                   <HunkRow
                     active={item.hunkIndex === currentHunk}
@@ -332,15 +336,19 @@ function DiffViewer({
           </View>
         </ScrollView>
         <OverviewRail
+          width={railSize}
+          lineHeight={reading.lineHeight}
           contentHeight={rowMetrics.contentHeight}
-          currentHunk={currentHunk}
           markers={overviewMarkers}
-          onSelectRow={jumpToRow}
-          scrollOffset={scrollOffset}
-          platform={platform}
+          onSelectRow={index=>jumpToRow(index,false)}
+          scroll={scrollSignal}
+          active={foreground}
+          layoutIdentity={measurementGeneration}
+          onInteractionStart={()=>notes.onScroll()}
+          onDragStateChange={setDragging}
+          onOffset={offset=>{position.offset=offset;scrollSignal.set(offset);listRef.current?.scrollToOffset({offset,animated:false});}}
           theme={theme}
           height={viewportHeight}
-          styles={styles}
         />
       </View>
     </View>

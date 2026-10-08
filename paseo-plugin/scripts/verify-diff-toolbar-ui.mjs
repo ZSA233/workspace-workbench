@@ -57,6 +57,22 @@ try{
     await panel.getByTestId('diff-overview-marker-0').click();
     await page.waitForFunction(()=>{const list=document.querySelector('[data-testid="workbench-diff-lines"]'),top=list.getBoundingClientRect().top;const first=[...list.querySelectorAll('[data-testid="diff-code-unified"]')].find(n=>n.getBoundingClientRect().bottom>top+1);return first?.textContent.includes('10:');});
     report.checks.push(`${colorScheme}: overview clicks align the exact changed row rather than the hunk header`);
+    if(process.env.WORKBENCH_VERIFY_RAIL==='1'){
+      const rail=panel.getByTestId('diff-overview-rail'),box=await rail.boundingBox();assert.equal(box.width,24);
+      const first=await panel.getByTestId('diff-overview-marker-0').boundingBox();
+      await page.mouse.click(box.x+2,first.y+first.height/2);
+      await page.waitForFunction(()=>{const list=document.querySelector('[data-testid="workbench-diff-lines"]'),top=list.getBoundingClientRect().top;const first=[...list.querySelectorAll('[data-testid="diff-code-unified"]')].find(n=>n.getBoundingClientRect().bottom>top+1);return first?.textContent.includes('10:');});
+      const list=panel.getByTestId('workbench-diff-lines');
+      const expected=await list.evaluate((node,ratio)=>Math.max(0,Math.min(node.scrollHeight-node.clientHeight,node.scrollHeight*ratio-node.clientHeight/2)),.2);
+      await page.mouse.click(box.x+2,box.y+box.height*.2);await page.waitForFunction(expected=>Math.abs(document.querySelector('[data-testid="workbench-diff-lines"]').scrollTop-expected)<4,expected);
+      const thumb=await panel.getByTestId('diff-overview-thumb').boundingBox(),beforeDrag=await list.evaluate(n=>n.scrollTop);
+      await page.mouse.move(box.x+box.width-4,thumb.y+thumb.height/2);await page.mouse.down();await page.mouse.move(box.x-120,thumb.y+thumb.height/2+100,{steps:8});await page.mouse.up();await page.waitForFunction(before=>document.querySelector('[data-testid="workbench-diff-lines"]').scrollTop>before+100,beforeDrag);
+      await rail.press('Home');await page.waitForFunction(()=>document.querySelector('[data-testid="workbench-diff-lines"]').scrollTop===0);await rail.press('End');await page.waitForFunction(()=>{const n=document.querySelector('[data-testid="workbench-diff-lines"]');return Math.abs(n.scrollTop-(n.scrollHeight-n.clientHeight))<3;});
+      await rail.press('Home');const atTop=await panel.getByTestId('diff-overview-thumb').boundingBox();await page.mouse.move(box.x+box.width-4,atTop.y+8);await page.mouse.down();await page.mouse.move(box.x+box.width-4,atTop.y+80,{steps:5});await rail.press('Escape');const cancelled=await list.evaluate(n=>n.scrollTop);await page.mouse.move(box.x-100,atTop.y+200,{steps:5});await page.mouse.up();assert.equal(await list.evaluate(n=>n.scrollTop),cancelled);
+      await rail.screenshot({path:join(output,`rail-${colorScheme}.png`)});await panel.getByTestId('diff-overview-marker-0').click();
+      report.checks.push(`${colorScheme}: expanded marker hit, empty track, captured drag outside rail, keyboard endpoints and Escape cancellation`);
+    }
+
     const before=business.length;await panel.getByRole('button',{name:'Diff reading settings',exact:true}).click();const menu=page.getByTestId('diff-reading-popover');await menu.waitFor();await menu.getByRole('button',{name:'Comparison details',exact:true}).click();await menu.getByText(base,{exact:true}).first().waitFor();await menu.getByText(head,{exact:true}).first().waitFor();
     const colors=await menu.evaluate(node=>Array.from(node.querySelectorAll('*')).filter(n=>n.childNodes.length===1&&n.firstChild.nodeType===3).map(n=>getComputedStyle(n).color));if(colorScheme==='dark')assert.ok(colors.every(c=>c!=='rgb(0, 0, 0)'));await menu.screenshot({path:join(output,`details-${colorScheme}.png`)});
     await menu.getByRole('button',{name:'Close Diff settings',exact:true}).click();await frames();assert.equal(business.length,before,'menus must not trigger business reads');
@@ -104,6 +120,12 @@ await panel.getByRole('tab',{name:'beta/item.go',exact:true,selected:true}).wait
     report.checks.push(`${colorScheme}: multi-file labels, close/middle-close, cached scroll restoration, hunk navigation, mode switching, code copy and enlarged type`);
     report.checks.push(`${colorScheme}: compact row, frozen reference details, settings work, menus issue no business reads`);
    }
+ }
+ if(process.env.WORKBENCH_VERIFY_RAIL==='1'){
+  await page.close();page=await browser.newPage({viewport:{width:1500,height:1000},hasTouch:true});page.on('pageerror',e=>report.pageErrors.push(e.message));await page.emulateMedia({colorScheme:'dark'});await openDiff();
+  const touchPanel=page.getByTestId('workbench-diff-panel');await touchPanel.evaluate(node=>Object.assign(node.style,{position:'fixed',left:'12px',top:'80px',width:'320px',height:'700px',zIndex:'100'}));await frames();
+  const rail=touchPanel.getByTestId('diff-overview-rail');await page.waitForFunction(()=>document.querySelector('[data-testid="diff-overview-rail"]')?.getBoundingClientRect().width===44);
+  const box=await rail.boundingBox();await rail.tap({position:{x:3,y:box.height*.3}});await page.waitForFunction(()=>document.querySelector('[data-testid="workbench-diff-lines"]').scrollTop>0);await touchPanel.screenshot({path:join(output,'coarse-pointer-320.png')});report.checks.push('Coarse web pointer uses a 44px reserved track and touch positioning works; this is not native-device evidence');
  }
  assert.equal(report.pageErrors.length,0);report.ok=true;
 }catch(error){report.ok=false;report.error=error.stack;process.exitCode=1;if(page){report.visible=await page.locator('body').innerText().catch(()=>'');await page.screenshot({path:join(output,'failure.png')}).catch(()=>{});}}

@@ -264,3 +264,7 @@ When the host supplies an explicit current session it is offered as a shortcut;
 workspace and global entries can select any creator recorded in the project. Creation attribution is independent of execution bindings and parent
 Workspace provenance. Retries and later sessions do not replace the creator;
 legacy records without attribution remain visible in the full list.
+
+## 改动说明
+
+Agent 可为固定比较范围批量提交修改原因、需求依据和行为变化，在文件列表及 Diff 中查看；疑问保存在本地并可复制给当前会话。使用方式与边界见 [CHANGE-NOTES.md](CHANGE-NOTES.md)。

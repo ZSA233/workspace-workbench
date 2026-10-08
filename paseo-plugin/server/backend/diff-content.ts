@@ -3,7 +3,7 @@ import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Git, withBackgroundGit } from './git.ts';
 import { validateDiffPath } from './file-diff.ts';
-import { stable, WorkbenchError, type Json } from './storage.ts';
+import { hash, stable, WorkbenchError, type Json } from './storage.ts';
 import type { Workspaces } from './workspaces.ts';
 import type { ObservationCache } from './cache.ts';
 import type { ObservationScheduler } from './observation-scheduler.ts';
@@ -42,7 +42,7 @@ export class DiffContent {
       const diff = await git.diff(scope, params.path, base, scope === 'compare' ? params.comparison.toSha : params.commitSha, { oldPath: params.oldPath, maxBytes: this.workspaces.config.maxDiffBytes });
       const observedAt = new Date().toISOString();
       return { schemaVersion: 'workspace.workbench/v1', workspaceId: workspace.id, repoPath: repo.repoPath, scope, path: params.path,
-        head: diff.head, baseSha: diff.left, left: diff.left, right: diff.right, patch: diff.patch,
+        head: diff.head, baseSha: diff.left, left: diff.left, right: diff.right, patch: diff.patch, patchDigest:hash(diff.patch),
         binary: /Binary files |GIT binary patch/.test(diff.patch), truncated: diff.truncated, readBytes: diff.bytes,
         observation: { state: 'ready', observedAt, ...(immutable ? { immutableIdentity: context.identity } : { validationKey: `${path}#${scope === 'working' ? 'working' : 'refs'}`, validationToken: token, validationDependencies: { [`${path}#${scope === 'working' ? 'working' : 'refs'}`]: token } }) } };
     }, true, true, { workspaceId: workspace.id, repoPath: path });

@@ -1,3 +1,4 @@
+import {ChangeNotes} from './change-notes.ts';
 import { compareRepository, fetchComparisonRef } from './repository-comparison.ts';
 import type {ObservationScheduler} from './observation-scheduler.ts';
 import { RuntimeReadQueue } from './runtime-read-queue.ts';
@@ -29,6 +30,7 @@ export const managementMethods = new Set([
   "linked.workspaces.save",
 ]);
 export class Service {
+  notes: ChangeNotes;
   config: Config;
   workspaces: Workspaces;
   runtime: Runtime | null;
@@ -39,11 +41,12 @@ export class Service {
   startedAt = Date.now();
   eventLoop = new EventLoopMetrics();
   version: string;
-  build = buildId(["../server/backend/service.ts", "../server/backend/repository-comparison.ts", "../server/backend/diff-content.ts", "./comparison.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts", "../server/backend/runtime-tools.ts", "../server/backend/runtime-layout.ts", "../server/backend/runtime-summary.ts", "../server/backend/runtime-observation.ts", "../server/backend/runtime-read-queue.ts", "../server/backend/environment-snapshots.ts", "../server/backend/workspaces.ts", "../server/backend/workspace-records.ts", "../server/backend/workspace-catalog.ts", "../server/backend/workspace-directory.ts", "../server/backend/workspace-creation.ts", "../server/backend/workspace-removal.ts", "../server/backend/workspace-deletion.ts", "../server/backend/workspace-activity-guard.ts", "../server/backend/workspace-record-encoding.ts", "../server/backend/workspace-infrastructure.ts", "../server/backend/workspace-scope.ts", "../server/backend/workspace-lineage.ts", "./workspace-lineage.ts"]);
+  build = buildId(["../server/backend/service.ts", "../server/backend/change-notes.ts", "./change-notes.ts", "../server/backend/repository-comparison.ts", "../server/backend/diff-content.ts", "./comparison.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts", "../server/backend/runtime-tools.ts", "../server/backend/runtime-layout.ts", "../server/backend/runtime-summary.ts", "../server/backend/runtime-observation.ts", "../server/backend/runtime-read-queue.ts", "../server/backend/environment-snapshots.ts", "../server/backend/workspaces.ts", "../server/backend/workspace-records.ts", "../server/backend/workspace-catalog.ts", "../server/backend/workspace-directory.ts", "../server/backend/workspace-creation.ts", "../server/backend/workspace-removal.ts", "../server/backend/workspace-deletion.ts", "../server/backend/workspace-activity-guard.ts", "../server/backend/workspace-record-encoding.ts", "../server/backend/workspace-infrastructure.ts", "../server/backend/workspace-scope.ts", "../server/backend/workspace-lineage.ts", "./workspace-lineage.ts"]);
   constructor(config: Config, version = "0.1.3", dependencies:{scheduler?:ObservationScheduler;cacheClock?:()=>number}={}) {
     this.config = config;
     this.version = version;
     this.workspaces = new Workspaces(config);
+    this.notes = new ChangeNotes(this.workspaces,path=>String(this.observation.scheduler.token(path,'working')));
     this.runtime = config.toolchain ? new Runtime(config) : null;
     this.cache = new ObservationCache(config,dependencies.cacheClock);
     this.observation = new Observation(
@@ -96,6 +99,9 @@ export class Service {
     };
   }
   async handle(method: string, params: Json = {}, signal?: AbortSignal): Promise<Json> {
+    if (method === 'notes.read') return this.notes.read(params,signal);
+    if (method === 'notes.write') return this.workspaces.mutations.run(()=>this.notes.write(params,params.author));
+    if (method === 'notes.feedback') return this.workspaces.mutations.run(()=>this.notes.feedback(params));
     if (method === 'workspace.prepare.task') return params.action === 'status' ? this.preparations.request(params) : this.workspaces.mutations.run(() => this.preparations.request(params));
     if (method === 'workspace.prepare') {
       const task = await this.workspaces.mutations.run(() => this.preparations.request({...params, action:'start', requestId: params.requestId || `legacy:${hash(stable(params))}`}));
@@ -123,7 +129,7 @@ export class Service {
       }));
     switch (method) {
       case "observer.versions":
-        return this.observation.scheduler.versions(Array.isArray(params.workspaceIds) ? params.workspaceIds.slice(0, 100).filter((id: unknown) => typeof id === "string") : []);
+        return {...await this.observation.scheduler.versions(Array.isArray(params.workspaceIds) ? params.workspaceIds.slice(0, 100).filter((id: unknown) => typeof id === "string") : []), notesRevision:this.notes.revision};
       case "observer.health":
         return this.health();
       case "workspace.list":

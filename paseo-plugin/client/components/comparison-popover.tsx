@@ -6,7 +6,7 @@ import {IconButton} from './icon-button';
 import type {PluginWorkspacePanelProps} from '@getpaseo/plugin/client';
 export type PopoverAnchor={x:number;y:number;width:number;height:number};
 /** This surface is separate from destructive-action dialogs. */
-export function ComparisonPopover({title,anchor,onClose,children,theme,closeLabel='关闭比较设置',testID='comparison-popover'}:{closeLabel?:string;testID?:string;title:string;anchor:PopoverAnchor;onClose():void;children:ReactNode;theme:PluginWorkspacePanelProps['theme']}){
+export function ComparisonPopover({title,anchor,onClose,children,theme,closeLabel='关闭比较设置',testID='comparison-popover',hideHeader=false,noteBrief}:{hideHeader?:boolean;noteBrief?:boolean;closeLabel?:string;testID?:string;title:string;anchor:PopoverAnchor;onClose():void;children:ReactNode;theme:PluginWorkspacePanelProps['theme']}){
  const window=useWindowDimensions(),native=Platform.OS!=='web';
  const [keyboardTop,setKeyboardTop]=useState<number|null>(null);
  const keyboard=keyboardOverlap(window.height,keyboardTop);
@@ -21,8 +21,8 @@ export function ComparisonPopover({title,anchor,onClose,children,theme,closeLabe
  const body=(
    <View style={{flex:1,justifyContent:'flex-end',paddingBottom:keyboard}}>
      <Pressable accessibilityRole="button" accessibilityLabel={closeLabel} onPress={onClose} style={{position:'absolute',top:0,bottom:0,left:0,right:0,backgroundColor:native?'#0005':'transparent'}}/>
-     <View testID={testID} accessibilityViewIsModal style={[{backgroundColor:theme.colors.surface1,borderColor:theme.colors.border,borderWidth:1,padding:12,maxHeight:Math.max(140,window.height-keyboard-32),borderRadius:8},native?{borderBottomLeftRadius:0,borderBottomRightRadius:0}:{position:'absolute',width,left:modalAvailable?Math.max(8,Math.min(anchor.x+anchor.width-width,window.width-width-8)):0,top:modalAvailable?Math.max(8,Math.min(anchor.y+anchor.height+4,window.height-400)):anchor.height,maxHeight:Math.max(140,window.height-Math.max(8,Math.min(anchor.y+anchor.height+4,window.height-400))-8)}]}>
-       <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}><Text accessibilityRole="header" style={{color:theme.colors.foreground,fontSize:14,fontWeight:'600'}}>{title}</Text><IconButton label={closeLabel} icon="X" color={theme.colors.foregroundMuted} onPress={onClose}/></View>
+     <View testID={testID} accessibilityViewIsModal style={[{backgroundColor:theme.colors.surface1,borderColor:theme.colors.border,borderWidth:1,padding:12,maxHeight:noteBrief===undefined?Math.max(140,window.height-keyboard-32):Math.max(80,(window.height-keyboard)*(noteBrief ? 0.45 : 0.85)),borderRadius:8},native?{borderBottomLeftRadius:0,borderBottomRightRadius:0}:{position:'absolute',width,left:modalAvailable?Math.max(8,Math.min(anchor.x+anchor.width-width,window.width-width-8)):0,top:modalAvailable?Math.max(8,Math.min(anchor.y+anchor.height+4,window.height-400)):anchor.height,maxHeight:Math.max(140,window.height-Math.max(8,Math.min(anchor.y+anchor.height+4,window.height-400))-8)}]}>
+       {!hideHeader?<View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}><Text accessibilityRole="header" style={{color:theme.colors.foreground,fontSize:14,fontWeight:'600'}}>{title}</Text><IconButton label={closeLabel} icon="X" color={theme.colors.foregroundMuted} onPress={onClose}/></View>:null}
        <ScrollView keyboardShouldPersistTaps="handled" style={{flexShrink:1}} contentContainerStyle={{gap:4,paddingBottom:native?16:0}}>{children}</ScrollView>
      </View>
    </View>

@@ -16,7 +16,12 @@ const materialTools = [
   { name: "workbench_handoff_asset", description: "Fetch an original image or readable text asset from the assigned materials version." },
 ];
 const connectionTool = { name: "workbench_connection_status", description: "Check the local MCP, Paseo and plugin RPC connection without a project or Agent context." };
+const noteTools=[
+ {name:"workbench_change_notes_read",description:"Freeze changed locations and existing explanations. Follow nextOffset or supply up to 8 paths. Describe meaningful behavior changes; do not invent requirement evidence."},
+ {name:"workbench_change_notes_write",description:"Batch write explanations for a captured snapshot. Use expectedRevision (0 for new notes); retry with the same requestId. Cannot mark user approval. Skip trivial formatting."}
+];
 const publicTools = [
+ ...noteTools,
   ...materialTools,
   ...["status", "message", "history", "wait", "stop"].map(action => ({ name: `workbench_session_${action}`, description: ({ status: "Read the bound worker status and review phase.", message: "Send a supplement to the bound worker; requestId deduplicates delivery. Default steer; use interrupt only when explicitly requested.", history: "Read bounded public worker conversation history.", wait: "Wait at most 30 seconds for worker progress. Do not automatically loop.", stop: "Explicitly cancel the bound worker current turn and check its state." })[action] })),
   { name: "workbench_review_read", description: "Accept the assigned coordinator review and read its frozen material; do not edit." },
@@ -73,7 +78,7 @@ function toolsFor(runtime) {
   return runtime.reviewOnly
   ? [...roleTools.filter((tool) => tool.name === "workbench_reviewer_read" || tool.name === "workbench_reviewer_result"), ...materialTools, connectionTool]
   : runtime.executionReportOnly
-  ? [...roleTools.filter((tool) => tool.name === "workbench_execution_report"), ...materialTools, connectionTool]
+  ? [...roleTools.filter((tool) => tool.name === "workbench_execution_report"), ...materialTools, ...noteTools, connectionTool]
   : runtime.executionReport
   ? independentWorkerTools
   : publicTools;
@@ -289,6 +294,7 @@ function callArguments(message) {
   return direct;
 }
 function toolInputSchema(name) {
+  if(name.startsWith("workbench_change_notes_")) return changeNotesSchema(name.endsWith("write"));
   if (name === "workbench_connection_status") return { type: "object", additionalProperties: false, properties: {} };
   return extraSchema(name) || (name === "workbench_artifact_register" ? artifactRegisterSchema
     : name === "workbench_reviewer_read" ? reviewerReadSchema
@@ -386,7 +392,9 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
   const context = callContext(runtime, args);
   let result;
   try { result = await withMcpConnection(client, () => (
-        directWorkspaceAction
+        tool.name.startsWith("workbench_change_notes_")
+        ? client.invokePluginRpc("workspace-workbench-paseo","workspace.workbench.change-notes",{...args,projectConfig:runtime.projectConfig,token:runtime.token,workspaceId:args.workspaceId||runtime.workerWorkspace,action:tool.name.endsWith("write")?"write":args.list?"list":"read"})
+        : directWorkspaceAction
         ? client.invokePluginRpc("workspace-workbench-paseo", tool.name === "workbench_workspace_create"
           ? "workspace.workbench.workspace-create"
           : tool.name === "workbench_workspace_add_repositories"
@@ -428,4 +436,11 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
     return { content: [{ type: "text", text: JSON.stringify(metadata) }, { type: "image", data: image.data, mimeType: image.mimeType }], isError: false };
   }
   return { content: [{ type: "text", text: JSON.stringify(result) }], isError: result?.ok === false };
+}
+
+function changeNotesSchema(write){
+ const str={type:'string',minLength:1};
+ const anchor={type:'object',additionalProperties:false,required:['path','side'],properties:{path:str,side:{enum:['file','old','new']},start:{type:'integer',minimum:1},end:{type:'integer',minimum:1}}};
+ const content={type:'object',additionalProperties:false,required:['title','reason','behavior','basis','perspective','anchors'],properties:{title:str,reason:str,behavior:str,basis:{enum:['requirement','autonomous','missing-context']},requirement:{type:'string'},perspective:{enum:['implementer','inferred']},question:{type:'string'},evidence:{type:'string'},anchors:{type:'array',minItems:1,maxItems:32,items:anchor}}};
+ return {type:'object',additionalProperties:false,required:['workspaceId','repoPath',...(write?['batch']:[])],properties:{workspaceId:str,repoPath:str,...(write?{batch:{type:'object',additionalProperties:false,required:['requestId','snapshotId','operations'],properties:{requestId:str,snapshotId:str,operations:{type:'array',minItems:1,maxItems:32,items:{type:'object',additionalProperties:false,required:['id','expectedRevision','action'],properties:{id:str,expectedRevision:{type:'integer',minimum:0},action:{enum:['upsert','withdraw']},content}}}}}}:{list:{type:'boolean',description:'Read existing explanations in nextOffset pages without Git work'},scope:{enum:['branch','working','commit','compare']},comparison:{type:'object',properties:{fromRef:str,toRef:str,mode:{enum:['endpoints','contribution']}}},commitSha:str,paths:{type:'array',maxItems:8,items:str},offset:{type:'integer',minimum:0},snapshotId:str})}};
 }

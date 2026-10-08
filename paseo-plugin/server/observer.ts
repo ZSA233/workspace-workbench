@@ -42,7 +42,7 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
-const versionedMethods = new Set<string>(["workspace.environment", "workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
+const versionedMethods = new Set<string>(["notes.read", "notes.write", "notes.feedback", "workspace.environment", "workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
 const mutationMethods = new Set<string>([
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
   "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete",
@@ -52,6 +52,7 @@ const BRIDGE_CACHE_ENTRIES = 128;
 const BRIDGE_CACHE_BYTES = 8 * 1024 * 1024;
 const BRIDGE_IN_FLIGHT = 16;
 const READ_METHODS = new Set<string>([
+  "notes.read",
   "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify",
   "workspace.operation.status",
   "workspace.orphan.preview", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary",

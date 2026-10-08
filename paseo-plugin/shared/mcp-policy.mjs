@@ -5,6 +5,7 @@ const shortReads = new Set([
   "workbench_review_status",
 ]);
 const mutations = new Set([
+  "workbench_change_notes_write",
   "workbench_workspace_preview", "workbench_workspace_submit", "workbench_workspace_create",
   "workbench_workspace_delegate", "workbench_workspace_add_repositories",
   "workbench_session_message", "workbench_session_stop", "workbench_review_read",

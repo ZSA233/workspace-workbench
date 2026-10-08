@@ -60,6 +60,7 @@ export function useFileView({ projectConfig, hostWorkspaceId, agentId, selectedW
             workspaceId: selectedWorkspace.id,
             repoPath: selectedRepository.repoPath,
             path: file.path,
+            changeNoteId:file.changeNoteId,
             oldPath: file.oldPath,
             scope: changesScope,
             commitSha: selectedCommit || undefined,

@@ -379,6 +379,7 @@ export function issueDisplayLabel(code: string, strings: WorkbenchCopy = copy): 
 }
 
 export type FileChange = {
+  changeNoteId?:string;
   statisticsState?: "ready" | "deferred" | "unavailable";
   path: string;
   oldPath?: string | null;
@@ -462,6 +463,8 @@ export type ChangesResult = {
 };
 
 export type DiffResult = {
+  patchDigest?:string;
+  left?:string|null;right?:string|null;
   path: string;
   oldPath?: string | null;
   scope: string;

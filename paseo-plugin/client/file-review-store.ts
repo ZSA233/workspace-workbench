@@ -2,6 +2,8 @@ import { comparisonKey, type Comparison } from '../shared/comparison.ts';
 import { useSyncExternalStore } from "react";
 
 export type FileReviewSelection = {
+  changeNoteId?:string;
+  changeNoteRequest?:number;
   projectConfig?: string;
   workspaceId: string;
   repoPath: string;
@@ -65,6 +67,7 @@ export function openFileReview(
   selection: FileReviewSelection,
   request: FileReviewOpenRequest,
 ): void {
+  if(selection.changeNoteId)selection={...selection,changeNoteRequest:Date.now()};
   const current = selectionsByHostWorkspace.get(request.hostWorkspaceId) || [];
   const key = selectionKey(selection);
   const existingIndex = current.findIndex((item) => selectionKey(item) === key);

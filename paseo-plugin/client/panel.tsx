@@ -849,6 +849,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
             {selectedRepository ? <View style={comparisonOpen ? {flex:1,minHeight:0}:{display:'none'}}><RepositoryCompare key={`${projectConfig}:${selectedWorkspaceId}:${selectedRepoPath}:${comparisonStart}:${comparisonEnd}`} project={projectConfig} workspaceId={selectedWorkspaceId} hostWorkspaceId={hostWorkspaceId} agentId={agentId} directory={selectedWorkspace?.treePath || selectedWorkspace?.sourceRoot} repo={selectedRepository} repositories={displayDetail?.repositories||[]} onRepository={path=>{setComparisonStart("");setComparisonEnd("HEAD");onRepo(path);}} foreground={foreground && comparisonOpen} styles={styles} theme={theme} initialFrom={comparisonStart} initialTo={comparisonEnd} onClose={()=>setComparisonOpen(false)} rpc={rpc}/></View> : null}
             <View style={comparisonOpen ? {display:'none'} : {flex:1,minHeight:0}}>
             <WorkspaceView
+              noteScope={selectedRepository?{projectConfig,workspaceId:selectedWorkspaceId,repoPath:selectedRepoPath,scope:selectedCommit?"commit":changesScope,commitSha:selectedCommit||undefined,baseSha:selectedRepository.baseSha||undefined,head:selectedRepository.head||undefined}:undefined}
               observationTimes={{ detail: detailState.lastSuccessfulAt, graph: graphState.lastSuccessfulAt, changes: changesState.lastSuccessfulAt }}
               detail={displayDetail}
               unavailable={listUnavailable || detailUnavailable}

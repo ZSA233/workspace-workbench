@@ -37,6 +37,7 @@ import { CommitGraph } from "./graph";
 import { ChangedTree } from "./changes";
 
 export const WorkspaceView = memo(function WorkspaceView({
+  noteScope,
   detail,
   unavailable,
   detailLoading,
@@ -108,6 +109,7 @@ export const WorkspaceView = memo(function WorkspaceView({
   selectedCommit: string;
   selectedFile: string;
   changeScope: Exclude<ChangeScope, "commit">;
+  noteScope?:import('../use-change-notes').NoteScope;
   selectedRepository: RepositorySummary | undefined;
   onContentLayout: (height: number) => void;
   repositoryDetailsOpen: boolean;
@@ -294,7 +296,7 @@ export const WorkspaceView = memo(function WorkspaceView({
             theme={theme}
             styles={styles}
           />
-          <ChangedTree
+          <ChangedTree noteScope={noteScope}
             lastSuccessfulAt={observationTimes?.changes}
             changes={changes}
             loading={changesLoading}

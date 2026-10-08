@@ -48,6 +48,7 @@ export function observationRefreshDiagnostics(client: QueryClient, project: stri
 export function useObservationVersions(projectConfig: string | undefined, workspaceIds: string[], enabled = true) {
   const [issue, setIssue] = useState<string | null>(null);
   const rpc = useRpc(observerQuery), client = useQueryClient();
+  const noteRevision=useRef<string|undefined>(undefined);
   const rpcRef = useRef(rpc); rpcRef.current = rpc;
   const idsKey = JSON.stringify([...new Set(workspaceIds.filter(Boolean))].sort());
   useEffect(() => {
@@ -60,7 +61,7 @@ export function useObservationVersions(projectConfig: string | undefined, worksp
       projects.set(projectConfig, controller);
     }
     const remove = controller.add({ ids: JSON.parse(idsKey), issue: setIssue,
-      reader: ids => rpcRef.current({ projectConfig, method: 'observer.versions', params: { workspaceIds: ids } }) });
+      reader: async ids => {const response=await rpcRef.current({ projectConfig, method: 'observer.versions', params: { workspaceIds: ids } });const revision=(response.result as {notesRevision?:string}|undefined)?.notesRevision;if(revision&&noteRevision.current!==revision){noteRevision.current=revision;void client.invalidateQueries({queryKey:['change-notes',projectConfig]});}return response;} });
     return () => { remove(); setIssue(null); };
   }, [projectConfig, idsKey, enabled, client]);
   return issue;

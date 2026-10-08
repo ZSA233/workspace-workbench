@@ -271,6 +271,13 @@ try {
     await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "drop" });
     await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "probe" });
   }
+  const pluginConnections = () => logs.split("\n").flatMap(line => {
+    try { const value=JSON.parse(line);return value.msg==="Client connected via hello"&&String(value.clientId||"").startsWith("workbench-plugin-")?[value]:[]; }catch{return [];}
+  });
+  // Host-wide connection counts depend on the installed Paseo version. Check
+  // growth across the measured interval and the plugin's own session identity.
+  const connectionBaseline=pluginConnections().at(-1);
+  assert.ok(connectionBaseline);
   const initialPluginHeap = (await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "gc" })).heapUsed;
   for (let i = 0; i < 100; i++) {
     const dropped = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "drop" });
@@ -290,7 +297,8 @@ try {
     catch { return []; }
   });
   assert.ok(hostConnections.length > 0 && hostConnections.at(-1).resumed === true, "injected reconnects must reuse the host session");
-  assert.ok(hostConnections.at(-1).totalSessions <= 5, "injected reconnects accumulated host sessions");
+  assert.ok(hostConnections.at(-1).totalSessions <= connectionBaseline.totalSessions, "injected reconnects accumulated host sessions");
+  assert.equal(hostConnections.at(-1).sessionId,connectionBaseline.sessionId,"plugin reconnect changed session identity");
   assert.equal((await rpc(configs[0], "observer.health")).result.process.pid, health[0].result.process.pid);
   report.hostConnection = { ...recoveredHost.hostTransport, hostSessions: hostConnections.at(-1).totalSessions, warmupReconnects: 5, measuredReconnects: 100, retainedPluginHeapIncrease };
   report.checks.push("plugin-owned host API connection recovered from 100 injected transport closes without plugin or backend reload");

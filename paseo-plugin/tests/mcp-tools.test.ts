@@ -18,6 +18,7 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
   assert.equal(result.status, 0, result.stderr);
   const response = JSON.parse(result.stdout.trim()) as { result: { tools: Array<{ name: string; description: string; inputSchema: { required: string[] } }> } };
   assert.deepEqual(response.result.tools.map((tool) => tool.name), [
+    "workbench_change_notes_read", "workbench_change_notes_write",
     "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset",
     "workbench_session_status", "workbench_session_message", "workbench_session_history", "workbench_session_wait", "workbench_session_stop", "workbench_review_read", "workbench_review_result",
     "workbench_artifact_register",
@@ -66,7 +67,7 @@ test("review and execution MCP processes expose only their role tools", () => {
   assert.deepEqual(JSON.parse(reviewer.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_reviewer_read", "workbench_reviewer_result", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset", "workbench_connection_status"]);
   const execution = spawnSync(process.execPath, [fileURLToPath(new URL("../mcp.mjs", import.meta.url))], { encoding: "utf8", input, env: { ...mcpEnv, WORKBENCH_EXECUTION_REPORT_ONLY: "1" } });
   assert.equal(execution.status, 0, execution.stderr);
-  assert.deepEqual(JSON.parse(execution.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_execution_report", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset", "workbench_connection_status"]);
+  assert.deepEqual(JSON.parse(execution.stdout.trim()).result.tools.map((tool: { name: string }) => tool.name), ["workbench_execution_report", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset", "workbench_change_notes_read", "workbench_change_notes_write", "workbench_connection_status"]);
 });
 
 test("independent execution MCP keeps public tools and completion reporting", () => {

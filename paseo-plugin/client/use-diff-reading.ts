@@ -92,11 +92,11 @@ export function useDiffReading({diff,mode,fontSize,wrap,position,foreground,path
   const mounted = useRef(true);
   useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
   const pendingRow=useRef<{index:number;attempts:number}|null>(null);
-  const jumpToRow=useCallback((index:number)=>{
+  const jumpToRow=useCallback((index:number,animated=true)=>{
     if(!mounted.current||index<0||index>=rows.length)return;
     position.hunk=rows[index].hunkIndex;setCurrentHunk(position.hunk);
     pendingRow.current={index,attempts:0};
-    listRef.current?.scrollToIndex?.({index,animated:true,viewPosition:0});
+    listRef.current?.scrollToIndex?.({index,animated,viewPosition:0});
   },[rows,position]);
   const onScrollToIndexFailed=useCallback(({index}:{index:number})=>{
     if(!mounted.current)return;

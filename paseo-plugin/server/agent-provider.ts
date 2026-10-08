@@ -440,7 +440,7 @@ async function delegateAgent(
       } : {}),
     };
     const workerMcpTools = restrictedWorker
-      ? ["workbench_execution_report", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset"]
+      ? ["workbench_execution_report", "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset", "workbench_change_notes_read", "workbench_change_notes_write"]
       : [
           "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset",
           "workbench_session_status", "workbench_session_message", "workbench_session_history", "workbench_session_wait", "workbench_session_stop",
@@ -449,6 +449,7 @@ async function delegateAgent(
           "workbench_review_preview", "workbench_review_execute", "workbench_review_status", "workbench_review_stop", "workbench_review_resume",
           "workbench_execution_report",
         ];
+    if(!restrictedWorker)workerMcpTools.push("workbench_change_notes_read", "workbench_change_notes_write");
     const existingPreapproved = childConfig.toolPolicy?.preapproved || [];
     const workerPreapproved = workerMcpTools.map(tool => ({ kind: "mcp" as const, server: workerMcpServer, tool }));
     const preapproved = [...existingPreapproved, ...workerPreapproved].filter((grant, index, all) => (

@@ -1,3 +1,5 @@
+import {changeNotesRpc} from './shared/change-notes-rpc';
+import {handleChangeNotes} from './server/change-notes';
 import { creationSource } from './server/workspace-creator';
 import { defineRpc } from "@getpaseo/plugin";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -117,6 +119,7 @@ export default function contribute(server: PluginServerContext) {
       return handler(event, { ...context, paseo });
     }),
   };
+  withHost.handle(changeNotesRpc,(input,context)=>withProject(input,()=>handleChangeNotes(input,context)));
   measured.registerSettings(observerSettings);
   withHost.handle(workspaceHandoffPreview, (input, context) => withProject(input, () => orchestrate("preview", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)));
   withHost.handle(handoffMaterials, (input, context) => withProject(input, () => handleHandoffMaterials(input, context)));
@@ -184,6 +187,7 @@ export default function contribute(server: PluginServerContext) {
     });
   }
   measured.handle(observerQuery, async (input, context) => {
+    if(input.method.startsWith("notes.")) throw new Error("notes_use_authorized_interface");
     if (input.method === "workspace.create") {
       const { creator: _ignored, contextAgentId, ...params } = input.params || {};
       input = { ...input, params: { ...params, creator: withProject(input, () => creationSource({ contextAgentId: typeof contextAgentId === "string" ? contextAgentId : undefined })) } };

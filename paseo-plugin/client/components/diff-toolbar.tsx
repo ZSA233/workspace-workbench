@@ -1,3 +1,4 @@
+import type {ReactNode} from 'react';
 import {useCallback,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {Platform,Pressable,Text,View} from 'react-native';
 import type {PluginWorkspacePanelProps} from '@getpaseo/plugin/client';
@@ -12,7 +13,7 @@ import type {ReviewMode} from '../review-mode';
 import {useWorkbenchCopy,useWorkbenchLocale} from '../i18n';
 import {observerAccent} from '../theme';
 
-type Props={selections:FileReviewSelection[];activeKey:string;selection?:FileReviewSelection;diff:DiffResult|null;reading:DiffReading;
+type Props={extra?:ReactNode;selections:FileReviewSelection[];activeKey:string;selection?:FileReviewSelection;diff:DiffResult|null;reading:DiffReading;
  onSelect(key:string):void;onClose(selection:FileReviewSelection):void;width:number;theme:PluginWorkspacePanelProps['theme'];
  mode:ReviewMode;narrow:boolean;onMode():void;fontSize:number;wrap:boolean;onDisplay(patch:{fontSize?:number;wrap?:boolean}):void;stale:boolean;retry?:()=>void};
 export function DiffToolbar(props:Props){
@@ -66,6 +67,7 @@ export function DiffToolbar(props:Props){
       <Text testID="diff-hunk-count" style={[muted,{textAlign:'center',minWidth:34}]}>{Math.min(reading.currentHunk+1,reading.hunkRowIndexes.length)} / {reading.hunkRowIndexes.length}</Text>
       <IconButton label={copy.text_d8b1574142} icon="ChevronRight" color={colors.foreground} onPress={()=>reading.jumpToHunk(reading.currentHunk+1)}/>
     </View>:null}
+    {props.extra}
     {layout.showMode?modeControl:null}
     {retry?<IconButton label={copy.refreshNow} icon="CircleAlert" color={colors.statusWarning} onPress={retry}/>:null}
     <IconButton label={text('Diff 阅读设置','Diff reading settings')} icon="Ellipsis" color={colors.foregroundMuted} onPress={()=>open('more')}/>

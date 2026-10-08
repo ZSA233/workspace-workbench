@@ -1,3 +1,4 @@
+import {workspaceInstanceKey} from '../../shared/workspace-lineage.ts';
 import { join } from 'node:path';
 import { atomicJson, optionalJson, hash } from './storage.ts';
 import { Git } from './git.ts';
@@ -25,6 +26,7 @@ export async function resolveComparison(git: Git, input: Json): Promise<Comparis
 /** Stateless producers use the same bounded Git queue and observation cache. */
 export async function compareRepository(observation: Observation, params: Json, signal?: AbortSignal): Promise<Json> {
   const {workspace, repo, path} = await observation.workspaces.observationRecords.request('context', {workspaceId: String(params.workspaceId || ''), repository: params.repoPath || params.repositoryId || ''});
+  if(params.workspaceInstance&&params.workspaceInstance!==workspaceInstanceKey(workspace))throw new WorkbenchError('workspace_instance_changed','The original workspace no longer exists');
   const git = new Git(path, observation.workspaces.config.gitTimeout, Date.now() + Math.min(30_000, observation.workspaces.config.observationTimeout), signal, true);
   if (await git.root() !== path) throw new WorkbenchError('repository_root_mismatch', 'Expected recorded repository root');
   const token = observation.scheduler.token(path, 'refs');
@@ -33,9 +35,9 @@ export async function compareRepository(observation: Observation, params: Json, 
   const comparison = await resolveComparison(git, params.comparison || {});
   const action = params.action || 'files';
   const offset = Math.max(0, Math.floor(Number(params.offset) || 0));
-  const key = `comparison:${stable([workspace.id, path, comparisonKey(comparison), action, params.side, offset])}`;
+  const key = `comparison:${stable([workspace.id, workspaceInstanceKey(workspace), path, comparisonKey(comparison), action, params.side, offset])}`;
   const result = await observation.cache.read(key, key, async () => {
-    const common = {workspaceId: workspace.id, repoPath: repo.repoPath, comparison};
+    const common = {workspaceInstance:workspaceInstanceKey(workspace),workspaceId: workspace.id, repoPath: repo.repoPath, comparison};
     if (action === 'counts') {
       const values = (await git.text(['rev-list', '--left-right', '--count', `${comparison.fromSha}...${comparison.toSha}`])).split(/\s+/).map(Number);
       return {...common, fromOnly: values[0], toOnly: values[1]};

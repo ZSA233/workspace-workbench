@@ -13,7 +13,7 @@ import type {ReviewMode} from '../review-mode';
 import {useWorkbenchCopy,useWorkbenchLocale} from '../i18n';
 import {observerAccent} from '../theme';
 
-type Props={extra?:ReactNode;selections:FileReviewSelection[];activeKey:string;selection?:FileReviewSelection;diff:DiffResult|null;reading:DiffReading;
+type Props={extra?:ReactNode;selections:FileReviewSelection[];activeKey:string;selection?:FileReviewSelection;diff:DiffResult|null;reading:Pick<DiffReading,'hunkRowIndexes'|'currentHunk'|'jumpToHunk'|'parsed'>;navigationLabel?:string;
  onSelect(key:string):void;onClose(selection:FileReviewSelection):void;width:number;theme:PluginWorkspacePanelProps['theme'];
  mode:ReviewMode;narrow:boolean;onMode():void;fontSize:number;wrap:boolean;onDisplay(patch:{fontSize?:number;wrap?:boolean}):void;stale:boolean;retry?:()=>void};
 export function DiffToolbar(props:Props){
@@ -51,7 +51,7 @@ export function DiffToolbar(props:Props){
        style={{flexDirection:'row',alignItems:'center',minHeight:layout.minHeight-1,borderBottomWidth:2,borderBottomColor:active?accent:'transparent',backgroundColor:active?colors.surface2:'transparent',flexShrink:0}}>
        <Pressable accessibilityRole="tab" accessibilityLabel={labels[index]} accessibilityState={{selected:active}} onPress={()=>onSelect(key)} onLongPress={()=>toast.show(description)}
         {...(Platform.OS==='web'?{title:description,'aria-selected':active}:{})} style={{flexDirection:'row',alignItems:'center',paddingHorizontal:8,minHeight:touch?44:30,gap:5,maxWidth:260}}>
-        <Text style={{fontSize:12,fontWeight:'700',color:entry.status==='A'?colors.statusSuccess:entry.status==='D'?colors.statusDanger:entry.status==='R'?accent:colors.statusWarning}}>{entry.status||'M'}</Text>
+        <Text style={{fontSize:12,fontWeight:'700',color:entry.status==='A'?colors.statusSuccess:entry.status==='D'?colors.statusDanger:entry.status==='R'?accent:colors.statusWarning}}>{entry.kind==='comparison'?'':entry.status||'M'}</Text>
         {active&&stale?<Icon name="CircleAlert" size={12} color={colors.statusWarning}/>:null}
         <Text numberOfLines={1} style={[normal,{flexShrink:1,maxWidth:tabWidth?Math.min(210,Math.max(24,tabWidth-(touch?76:58))):210}]}>{labels[index]}</Text>
        </Pressable>
@@ -62,9 +62,9 @@ export function DiffToolbar(props:Props){
    </ScrollView>
    <View testID="diff-toolbar-actions" style={{flexDirection:'row',alignItems:'center',flexShrink:0,gap:2}}>
     {layout.showRange&&references?<Pressable testID="diff-short-range" accessibilityRole="button" accessibilityLabel={text('比较详情','Comparison details')} onPress={()=>open('details')} style={{maxWidth:220,paddingHorizontal:6,minHeight:touch?44:28,justifyContent:'center'}}><Text numberOfLines={1} style={muted}>{references.fromLabel} → {references.toLabel}</Text></Pressable>:null}
-    {reading.hunkRowIndexes.length?<View testID="diff-hunk-navigation" style={{flexDirection:'row',alignItems:'center'}}>
+    {reading.hunkRowIndexes.length||props.navigationLabel?<View testID="diff-hunk-navigation" style={{flexDirection:'row',alignItems:'center'}}>
       <IconButton label={copy.text_0d310558b7} icon="ChevronLeft" color={colors.foreground} onPress={()=>reading.jumpToHunk(reading.currentHunk-1)}/>
-      <Text testID="diff-hunk-count" style={[muted,{textAlign:'center',minWidth:34}]}>{Math.min(reading.currentHunk+1,reading.hunkRowIndexes.length)} / {reading.hunkRowIndexes.length}</Text>
+      <Text testID="diff-hunk-count" style={[muted,{textAlign:'center',minWidth:34}]}>{props.navigationLabel||`${Math.min(reading.currentHunk+1,reading.hunkRowIndexes.length)} / ${reading.hunkRowIndexes.length}`}</Text>
       <IconButton label={copy.text_d8b1574142} icon="ChevronRight" color={colors.foreground} onPress={()=>reading.jumpToHunk(reading.currentHunk+1)}/>
     </View>:null}
     {props.extra}

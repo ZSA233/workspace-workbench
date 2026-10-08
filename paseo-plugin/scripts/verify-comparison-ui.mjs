@@ -90,7 +90,7 @@ try{
 
  await page.getByText('compare.go',{exact:true}).first().click();
  await page.getByTestId('workbench-diff-lines').waitFor({timeout:30000});
- await page.getByTestId('diff-code-unified').first().waitFor();report.checks.push('First Diff opens in unified mode without a saved override');
+ await page.getByTestId('diff-code-unified').filter({hasText:'func timeout'}).waitFor();report.checks.push('First Diff opens in unified mode without a saved override');
  await page.getByRole('button',{name:'Diff reading settings',exact:true}).click();const readingMenu=page.getByTestId('diff-reading-popover');
  await readingMenu.getByRole('button',{name:'14px',exact:true}).waitFor();await readingMenu.getByRole('button',{name:'Wrap lines',exact:true}).click();
  await readingMenu.getByRole('button',{name:'16px',exact:true}).click();await readingMenu.getByRole('button',{name:'Close Diff settings',exact:true}).click();
@@ -103,7 +103,8 @@ try{
  report.cachedClickMs=[];
  for(let i=0;i<22;i++){
    const alternate=i%2===0;await page.evaluate(()=>{document.addEventListener('click',()=>window.__comparisonClick=performance.now(),{once:true,capture:true});});
-   await page.getByText(alternate?'alternate.go':'compare.go',{exact:true}).last().click();
+   await sidebar.getByText(alternate?'alternate.go':'compare.go',{exact:true}).click();
+   await page.getByTestId('comparison-sticky-file').filter({hasText:alternate?'alternate.go':'compare.go'}).waitFor();
    await page.getByTestId('workbench-diff-lines').getByText(alternate?'alternate':'timeout',{exact:true}).waitFor();
    const elapsed=await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(performance.now()-window.__comparisonClick)))));if(i>=2)report.cachedClickMs.push(elapsed);
  }

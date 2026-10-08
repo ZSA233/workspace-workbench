@@ -22,7 +22,7 @@ export class ChangeNotes {
  private workingToken:(path:string)=>string;
  constructor(workspaces:Workspaces,workingToken:(path:string)=>string=()=> 'unobserved'){this.workspaces=workspaces;this.workingToken=workingToken;}
  private root(){return join(this.workspaces.config.stateRoot,'change-notes');}
- private async context(p:Json){const c=await this.workspaces.observationRecords.request('context',{workspaceId:String(p.workspaceId||''),repository:p.repoPath||''});return {...c,instance:workspaceInstanceKey(c.workspace)};}
+ private async context(p:Json){const c=await this.workspaces.observationRecords.request('context',{workspaceId:String(p.workspaceId||''),repository:p.repoPath||''});const instance=workspaceInstanceKey(c.workspace);if(p.workspaceInstance&&p.workspaceInstance!==instance)throw new WorkbenchError('workspace_instance_changed','The original workspace no longer exists');return {...c,instance};}
  private ledgerPath(instance:string,repoPath:string){return join(this.root(),'ledgers',hash(stable([instance,repoPath]))+'.json');}
  private snapshotPath(id:string){if(!/^[a-f0-9]{64}$/.test(id))throw new WorkbenchError('notes_snapshot_invalid','Invalid snapshot');return join(this.root(),'snapshots',id+'.json');}
  async read(p:Json,signal?:AbortSignal):Promise<Json>{

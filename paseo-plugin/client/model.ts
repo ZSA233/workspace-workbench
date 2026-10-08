@@ -463,6 +463,7 @@ export type ChangesResult = {
 };
 
 export type DiffResult = {
+  contextLines?:number;
   patchDigest?:string;
   left?:string|null;right?:string|null;
   path: string;

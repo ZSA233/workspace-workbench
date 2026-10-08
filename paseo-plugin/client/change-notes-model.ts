@@ -1,7 +1,7 @@
 import type {FileReviewSelection} from './file-review-store';
 import type {DiffResult} from './model';
 import type {ChangeNote,NotesResult} from '../shared/change-notes';
-export type NoteScope=Pick<FileReviewSelection,'projectConfig'|'workspaceId'|'repoPath'|'scope'|'comparison'|'commitSha'|'baseSha'|'head'> & {path?:string;changeNoteId?:string;changeNoteRequest?:number;noteComparisonId?:string;noteId?:string};
+export type NoteScope=Pick<FileReviewSelection,'projectConfig'|'workspaceInstance'|'workspaceId'|'repoPath'|'scope'|'comparison'|'commitSha'|'baseSha'|'head'> & {path?:string;changeNoteId?:string;changeNoteRequest?:number;noteComparisonId?:string;noteId?:string};
 export function noteCurrent(note:ChangeNote,data:NotesResult,scope:NoteScope,diff?:DiffResult|null){
  const s=data.snapshots[note.snapshotId];if(!s||s.scope!==scope.scope)return false;
  if(scope.scope==='compare'&&JSON.stringify(s.comparison)!==JSON.stringify(scope.comparison)){

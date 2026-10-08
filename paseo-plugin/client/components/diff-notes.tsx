@@ -25,7 +25,7 @@ function NoteMarker({markerKey,ids,selected,pending,label,color,pendingColor,onP
  </View>;
 }
 /** Holds interaction state only; result data stays in React Query. */
-export function useDiffNotes(scope:NoteScope|undefined,diff:DiffResult|null,enabled:boolean,theme:PluginWorkspacePanelProps['theme'],openOther?:(anchor:ChangeNote['content']['anchors'][number],note:ChangeNote,data:import('../../shared/change-notes').NotesResult)=>void){
+export function useDiffNotes(scope:NoteScope|undefined,diff:DiffResult|null,enabled:boolean,theme:PluginWorkspacePanelProps['theme'],openOther?:(anchor:ChangeNote['content']['anchors'][number],note:ChangeNote,data:import('../../shared/change-notes').NotesResult)=>void,options?:{revealAnchor?(anchor:ChangeNote['content']['anchors'][number]):void}){
  const query=useChangeNotes(scope,enabled&&!!diff),zh=useWorkbenchLocale()==='zh-CN',window=useWindowDimensions();
  const toolbarRef=useRef<any>(null),layerRef=useRef<any>(null),nodes=useRef(new Map<string,any>()),epoch=useRef(0);
  const view=JSON.stringify([scope?.projectConfig,scope?.workspaceId,scope?.repoPath,scope?.path,scope?.scope,scope?.commitSha,scope?.comparison]);
@@ -34,7 +34,7 @@ export function useDiffNotes(scope:NoteScope|undefined,diff:DiffResult|null,enab
  const [popup,setPopup]=useState<Popup|null>(null),popupRef=useRef(popup);popupRef.current=popup;
  const [expanded,setExpanded]=useState(false);
  const drafts=useRef(new Map<string,NoteDraft>());
- const pending=useRef<{view:string;id:string;anchor?:ChangeNote['content']['anchors'][number];jumped:boolean;keepPosition?:boolean;settled?:boolean;frame?:()=>void}|null>(null);
+ const pending=useRef<{view:string;id:string;anchor?:ChangeNote['content']['anchors'][number];jumped:boolean;keepPosition?:boolean;settled?:boolean;revealed?:boolean;frame?:()=>void}|null>(null);
  const driver=useRef<{view:string;rows:DiffDisplayRow[];placements:Placements;jump(index:number):void}|null>(null);
  const retry=useRef(()=>{}),remeasure=useRef(()=>{});
  const close=useCallback((restoreFocus=false)=>{if(restoreFocus&&Platform.OS==='web'){const key=popupRef.current?.key,node=key==='toolbar'?toolbarRef.current:key?nodes.current.get(key):null;node?.querySelector?.('[role="button"],button')?.focus?.({preventScroll:true});}epoch.current++;if(pending.current?.frame)pending.current.frame();pending.current=null;popupRef.current=null;setPopup(null);setExpanded(false);},[]);
@@ -83,6 +83,7 @@ export function useDiffNotes(scope:NoteScope|undefined,diff:DiffResult|null,enab
   const target=driver.current;if(!target||target.view!==view)return;
   let index=target.placements.first.get(note.id);
   if(request.anchor){const a=request.anchor;index=target.rows.findIndex(r=>r.kind!=='hunk'&&(r.kind==='unified'?[r.line]:[r.left,r.right]).some(line=>(a.side==='old'?line?.oldLine:line?.newLine)===a.start));if(index<0)index=undefined;}
+  if(current(note)&&index===undefined&&options?.revealAnchor&&!request.revealed){const a=request.anchor||note.content.anchors.find(a=>a.path===scope?.path&&a.side!=='file');if(a){request.revealed=true;options.revealAnchor(a);return;}}
   if(!current(note)||index===undefined){measure('toolbar',[note.id],note.id);return;}
   const key=rowKey(target.rows[index].key);
   const jump=()=>{if(!request.jumped){request.jumped=true;target.jump(index!);}};

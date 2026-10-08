@@ -1,3 +1,5 @@
+import {workspaceInstanceKey} from '../../shared/workspace-lineage.ts';
+import {contextRequest,readDiffContext} from './diff-context.ts';
 import { comparisonKey } from '../../shared/comparison.ts';
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -19,18 +21,26 @@ export class DiffContent {
     if (params.oldPath != null && typeof params.oldPath !== 'string') throw new WorkbenchError('path_invalid', 'Previous path must be a string');
     if (params.oldPath) validateDiffPath(params.oldPath);
     const { workspace, repo, path } = await this.workspaces.observationRecords.request('context', { workspaceId: String(params.workspaceId || ''), repository: params.repoPath || params.repositoryId || '' });
+    if(params.workspaceInstance&&params.workspaceInstance!==workspaceInstanceKey(workspace))throw new WorkbenchError('workspace_instance_changed','The original workspace no longer exists');
     const scope = String(params.scope || 'branch');
     if (scope === 'commit' && (typeof params.commitSha !== 'string' || !params.commitSha)) throw new WorkbenchError('commit_required', 'Commit is required');
     if (!['working', 'branch', 'commit', 'compare'].includes(scope)) throw new WorkbenchError('scope_invalid', 'Unsupported diff scope');
     if (scope === 'compare' && ![params.comparison?.leftSha, params.comparison?.toSha].every(value => typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(value))) throw new WorkbenchError('comparison_invalid', 'Frozen comparison endpoints are required');
+    if(params.readKind!==undefined&&params.readKind!=='context')throw new WorkbenchError('diff_kind_invalid','Unsupported content kind');
+    if(params.readKind==='context'){if(scope!=='compare')throw new WorkbenchError('context_unsupported','Context requires a frozen comparison');contextRequest(params.context);}
     const token = this.scheduler.token(path, scope === 'working' ? 'working' : 'refs');
     const immutable = scope === 'compare' || scope === 'commit' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(String(params.commitSha || ''));
-    const identity = stable({ workspace: workspace.id, repository: path, record: repo, scope, path: params.path, oldPath: params.oldPath || null, commit: params.commitSha || null, comparison: comparisonKey(params.comparison) });
+    const identity = stable({ workspace: workspace.id, workspaceInstance:workspaceInstanceKey(workspace), repository: path, record: repo, scope, path: params.path, contextLines:80, oldPath: params.oldPath || null, commit: params.commitSha || null, comparison: comparisonKey(params.comparison), ...(params.readKind==='context'?{readKind:'context',context:contextRequest(params.context)}:{}) });
     return { workspace, repo, path, scope, token, immutable, identity, key: `diff-content:${identity}`, taskKey: `${identity}:${immutable ? '' : token}` };
   }
   async read(params: Json, deadline: number, signal?: AbortSignal): Promise<Json> {
     const context = await this.identify(params);
     const { workspace, repo, path, scope, token, immutable, key } = context;
+    if(params.readKind==='context'){
+      const patch=await this.read({...params,readKind:undefined,context:undefined},deadline,signal);
+      const git=new Git(path,this.workspaces.config.gitTimeout,deadline,signal,true);
+      return this.cache.read(key,context.identity,async()=>({...await readDiffContext(git,patch,params,this.cache,this.workspaces.config.maxDiffBytes),observation:{state:'ready',immutableIdentity:hash(context.identity)}}),true,true,{workspaceId:workspace.id,repoPath:path});
+    }
     const file = immutable ? null : await lstat(join(path, params.path)).catch(() => null);
     const fingerprint = immutable ? context.identity : `${token}:${file?.ino}:${file?.mtimeMs}:${file?.size}`;
     const cached = this.cache.peek(key, fingerprint);
@@ -41,9 +51,9 @@ export class DiffContent {
     const value = await this.cache.read(key, fingerprint, async () => {
       const diff = await git.diff(scope, params.path, base, scope === 'compare' ? params.comparison.toSha : params.commitSha, { oldPath: params.oldPath, maxBytes: this.workspaces.config.maxDiffBytes });
       const observedAt = new Date().toISOString();
-      return { schemaVersion: 'workspace.workbench/v1', workspaceId: workspace.id, repoPath: repo.repoPath, scope, path: params.path,
-        head: diff.head, baseSha: diff.left, left: diff.left, right: diff.right, patch: diff.patch, patchDigest:hash(diff.patch),
-        binary: /Binary files |GIT binary patch/.test(diff.patch), truncated: diff.truncated, readBytes: diff.bytes,
+      return { schemaVersion: 'workspace.workbench/v1', workspaceId: workspace.id, repoPath: repo.repoPath, scope, path: params.path, contextLines:80,
+        oldPath:'oldPath' in diff?diff.oldPath:params.oldPath, head: diff.head, baseSha: diff.left, left: diff.left, right: diff.right, patch: diff.patch, patchDigest:hash(diff.patch),
+        binary: /^Binary files .* differ$|^GIT binary patch$/m.test(diff.patch), truncated: diff.truncated, readBytes: diff.bytes,
         observation: { state: 'ready', observedAt, ...(immutable ? { immutableIdentity: context.identity } : { validationKey: `${path}#${scope === 'working' ? 'working' : 'refs'}`, validationToken: token, validationDependencies: { [`${path}#${scope === 'working' ? 'working' : 'refs'}`]: token } }) } };
     }, true, true, { workspaceId: workspace.id, repoPath: path });
     // Watching prepares in the background; content does not wait for an index scan.

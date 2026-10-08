@@ -4,8 +4,13 @@ import type {DiffResult} from './model.ts';
 /** Directory suffixes disambiguate filenames; scope/repository disambiguate identical paths. */
 export function diffTabLabels(selections:FileReviewSelection[]):string[]{
  return selections.map((selection,index)=>{
+  if(selection.kind==='comparison'){
+   const groups=selections.filter(s=>s.kind==='comparison'),range=selection.comparison;
+   if(groups.length===1)return '整组差异';
+   return `整组差异 · ${selection.workspaceId}/${selection.repoPath} · ${range?.fromSha.slice(0,8)}→${range?.toSha.slice(0,8)}${range?.mode==='contribution'?' (共同祖先)':''}`;
+  }
   const parts=selection.path.split('/');
-  const peers=selections.filter((other,i)=>i!==index&&other.path.split('/').at(-1)===parts.at(-1));
+  const peers=selections.filter((other,i)=>i!==index&&other.kind!=='comparison'&&other.path.split('/').at(-1)===parts.at(-1));
   if(!peers.length)return parts.at(-1)||selection.path;
   let label=selection.path;
   for(let depth=2;depth<=parts.length;depth++){

@@ -27,6 +27,6 @@ int main(){run(true,700,110);run(false,700,110);run(false,1000,110);run(false,70
  }finally{rmSync(root,{recursive:true,force:true});}
 });
 test('diff renderer uses the validated gutter and resets horizontal offset in wrap mode',()=>{
- const source=readFileSync(new URL('../client/file-review.tsx',import.meta.url),'utf8');assert.match(source,/changeGutter: DIFF_CHANGE_GUTTER_STYLE/);assert.match(source,/ref=\{horizontalRef\}/);
+ const source=readFileSync(new URL('../client/file-review.tsx',import.meta.url),'utf8');assert.match(source,/components\/diff-rendering/);const rendering=readFileSync(new URL('../client/components/diff-rendering.tsx',import.meta.url),'utf8');assert.match(rendering,/changeGutter: DIFF_CHANGE_GUTTER_STYLE/);assert.match(source,/ref=\{horizontalRef\}/);
  const controller=readFileSync(new URL('../client/use-diff-reading.ts',import.meta.url),'utf8');assert.match(controller,/if\(wrap\)horizontalRef.current\?\.scrollTo\?\.\(\{x:0,animated:false\}\)/);
 });

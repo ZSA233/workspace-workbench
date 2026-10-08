@@ -2,6 +2,9 @@ import { comparisonKey, type Comparison } from '../shared/comparison.ts';
 import { useSyncExternalStore } from "react";
 
 export type FileReviewSelection = {
+  kind?:'file'|'comparison';
+  workspaceInstance?:string;
+  targetRequest?:number;
   changeNoteId?:string;
   changeNoteRequest?:number;
   projectConfig?: string;
@@ -27,6 +30,10 @@ type FileReviewOpenRequest = {
   selection?: FileReviewSelection;
 };
 
+export type ComparisonViewState={display?:{fontSize:number;wrap:boolean};mode?:'unified'|'split';collapsed:Set<string>;expanded:Record<string,Array<{oldStart:number;newStart:number;count:number}>>;contexts:Record<string,unknown[]>;anchor?:{key:string;path:string;oldLine?:number|null;newLine?:number|null;offset:number};currentPath?:string;lastTarget?:string};
+const comparisonViews=new Map<string,ComparisonViewState>();
+export function getComparisonView(host:string,key:string){const id=JSON.stringify([host,key]);let state=comparisonViews.get(id);if(!state){state={collapsed:new Set(),expanded:{},contexts:{}};comparisonViews.set(id,state);}return state;}
+
 type FileReviewOpener = (request: FileReviewOpenRequest) => void;
 
 const selectionsByHostWorkspace = new Map<string, FileReviewSelection[]>();
@@ -48,8 +55,9 @@ const emptySelections: FileReviewSelection[] = [];
 const emptyActiveKey = "";
 let opener: FileReviewOpener | null = null;
 
-export function selectionKey(selection: Pick<FileReviewSelection, "projectConfig" | "workspaceId" | "repoPath" | "path" | "scope" | "commitSha" | "comparison" | "oldPath">): string {
-  return JSON.stringify([selection.projectConfig || "", selection.workspaceId, selection.repoPath, selection.path, selection.scope, selection.commitSha || "", selection.oldPath || "", comparisonKey(selection.comparison)]);
+export function selectionKey(selection: Pick<FileReviewSelection, "projectConfig" | "workspaceId" | "repoPath" | "path" | "scope" | "commitSha" | "comparison" | "oldPath" | "kind" | "workspaceInstance">): string {
+  if(selection.kind==='comparison')return JSON.stringify(['comparison',selection.projectConfig||'',selection.workspaceId,selection.workspaceInstance||'',selection.repoPath,comparisonKey(selection.comparison)]);
+  return JSON.stringify([selection.projectConfig || "", selection.workspaceId, selection.repoPath, selection.path, selection.scope, selection.commitSha || "", selection.oldPath || "", comparisonKey(selection.comparison),...(selection.workspaceInstance?[selection.workspaceInstance]:[])]);
 }
 
 function notify(): void {
@@ -67,6 +75,7 @@ export function openFileReview(
   selection: FileReviewSelection,
   request: FileReviewOpenRequest,
 ): void {
+  if(selection.kind==='comparison')selection={...selection,targetRequest:Date.now()};
   if(selection.changeNoteId)selection={...selection,changeNoteRequest:Date.now()};
   const current = selectionsByHostWorkspace.get(request.hostWorkspaceId) || [];
   const key = selectionKey(selection);
@@ -81,6 +90,7 @@ export function openFileReview(
 }
 
 export function closeFileReview(hostWorkspaceId: string, closingKey: string): void {
+  comparisonViews.delete(JSON.stringify([hostWorkspaceId,closingKey]));
   const current = selectionsByHostWorkspace.get(hostWorkspaceId) || [];
   const closingIndex = current.findIndex((item) => selectionKey(item) === closingKey);
   const next = current.filter((item) => selectionKey(item) !== closingKey);
@@ -114,6 +124,7 @@ export function getActiveFileReviewKey(hostWorkspaceId: string): string {
 }
 
 export function clearFileReviews(hostWorkspaceId: string): void {
+  for(const key of comparisonViews.keys())if(JSON.parse(key)[0]===hostWorkspaceId)comparisonViews.delete(key);
   positionsByHostWorkspace.delete(hostWorkspaceId);
   if (!selectionsByHostWorkspace.has(hostWorkspaceId)) return;
   selectionsByHostWorkspace.delete(hostWorkspaceId);

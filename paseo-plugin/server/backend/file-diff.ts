@@ -78,5 +78,5 @@ export async function readSingleDiff(git: Git, scope: string, path: string, base
     : [...range.args, '--no-ext-diff', '--no-textconv', '--find-renames', '--unified=80', '--', ...(oldPath ? [oldPath] : []), path];
   const result = await git.run(args, false, { maxBytes, truncate: true });
   if (result.code !== 0 && !(untracked && result.code === 1)) throw new WorkbenchError('git_diff_failed', result.stderr);
-  return { patch: result.truncated ? utf8Prefix(Buffer.from(result.stdout)) : result.stdout, left: untracked ? null : range.left, right: range.right, head: scope === 'working' ? head : range.right, truncated: result.truncated, bytes: result.bytes };
+  return { oldPath:oldPath||path, patch: result.truncated ? utf8Prefix(Buffer.from(result.stdout)) : result.stdout, left: untracked ? null : range.left, right: range.right, head: scope === 'working' ? head : range.right, truncated: result.truncated, bytes: result.bytes };
 }

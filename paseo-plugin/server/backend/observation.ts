@@ -474,7 +474,7 @@ export class Observation {
     const stat = context.immutable ? null : await lstat(join(context.path, params.path)).catch(() => null);
     if (Number.isFinite(params.readDeadline) && Date.now() >= params.readDeadline) throw new WorkbenchError('observer_timeout', 'Diff start request expired before acceptance');
     const sourceKey = `${context.taskKey}:${stat?.ino}:${stat?.mtimeMs}:${stat?.size}`;
-    return this.diffTasks.start(sourceKey, requestId, (signal, deadline) => this.diffContent.read(params, deadline, signal), 30_000, context.identity);
+    return this.diffTasks.start(sourceKey, requestId, (signal, deadline) => this.diffContent.read(params, deadline, signal), 30_000, context.identity,params.intent==='background'?'background':'interactive');
   }
   async repositoryQuery(method: string, params: Json, signal?: AbortSignal) {
     if (method === 'repository.diff') {

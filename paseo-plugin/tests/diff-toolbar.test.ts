@@ -42,3 +42,13 @@ test('same SHA pair with different comparison semantics keeps distinct tab label
  const second={...first,comparison:{...comparison,mode:'contribution' as const}};
  assert.equal(new Set(diffTabLabels([first,second])).size,2);
 });
+
+
+test('whole comparison labels distinguish both endpoints and mode without changing file labels',()=>{
+ const comparison={fromRef:'origin/main',toRef:'HEAD',fromSha:'1'.repeat(40),toSha:'2'.repeat(40),mode:'endpoints' as const,leftSha:'1'.repeat(40),mergeBase:null};
+ const first={...selection(),kind:'comparison' as const,scope:'compare' as const,comparison};
+ const second={...first,comparison:{...comparison,fromSha:'3'.repeat(40),leftSha:'3'.repeat(40)}};
+ const third={...first,comparison:{...comparison,mode:'contribution' as const}};
+ assert.equal(new Set(diffTabLabels([first,second,third])).size,3);
+ assert.deepEqual(diffTabLabels([first,selection()]),['整组差异','item.go']);
+});

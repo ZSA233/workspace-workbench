@@ -29,11 +29,17 @@ try{
  await page.routeWebSocket('**/*',socket=>{const server=socket.connectToServer();socket.onMessage(message=>server.send(message));server.onMessage(message=>{let matched=false;try{const visit=value=>{if(!value||typeof value!=='object')return;if(value.path===holdPath&&typeof value.patch==='string')matched=true;for(const child of Object.values(value))visit(child);};if(holdPath)visit(JSON.parse(String(message)));}catch{}if(matched){held.push(()=>socket.send(message));notifyHeld?.();}else socket.send(message);});});
  const business=[];page.on('websocket',socket=>socket.on('framesent',({payload})=>{if(/repository.diff|repository.compare/.test(String(payload)))business.push(String(payload));}));
  const frames=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ const openSingle=async(path)=>{
+  await page.getByTestId('comparison-sidebar').getByText(path,{exact:true}).click();
+  // Target the file's own header: the sticky header follows the viewport,
+  // which can begin in the preceding file when the last file is shorter than it.
+  if(!baseline)await page.getByTestId(`comparison-file-${path}`).getByRole('button',{name:`单独打开 ${path}`,exact:true}).press('Enter');
+ };
  const openDiff=async()=>{
    await page.goto(ui.url);await page.getByRole('button',{name:'a',exact:true}).click();await page.getByRole('button',{name:'Open Workspace Workbench',exact:true}).click();await page.getByTestId('workbench-graph-content').waitFor({timeout:30000});
    await page.getByRole('button',{name:'比较仓库',exact:true}).click();await page.getByLabel('搜索引用或输入提交 SHA',{exact:true}).fill(base);await page.getByRole('button',{name:'使用此引用',exact:true}).click();
    await page.getByTestId('comparison-to').click();await page.getByLabel('搜索引用或输入提交 SHA',{exact:true}).fill(head);await page.getByRole('button',{name:'使用此引用',exact:true}).click();
-   await page.getByTestId('comparison-sidebar').getByText('compare.go',{exact:true}).click();await page.getByTestId('workbench-diff-lines').waitFor({timeout:30000});
+   await openSingle('compare.go');await page.getByTestId('workbench-diff-lines').waitFor({timeout:30000});
  };
  report.layouts=[];
  for(const colorScheme of ['dark','light']){
@@ -68,9 +74,9 @@ try{
     await page.evaluate(()=>new Promise((resolve,reject)=>{const deadline=performance.now()+5000;let stable=0,previous=-1;const tick=()=>{const node=document.querySelector('[data-testid="workbench-diff-lines"]');const top=Math.max(...[node,...node.querySelectorAll('*')].map(n=>n.scrollTop||0));stable=top===previous?stable+1:0;previous=top;if(stable>=4&&top>0)resolve();else if(performance.now()>deadline)reject(Error('scroll did not settle'));else requestAnimationFrame(tick);};tick();}));
     const beforeScroll=await scrollTop();assert.ok(beforeScroll>0);
     await panel.getByRole('button',{name:'Diff reading settings',exact:true}).click();await menu.getByRole('button',{name:'Close Diff settings',exact:true}).click();assert.ok(Math.abs(await scrollTop()-beforeScroll)<2,'menu preserves code position');
-    await page.getByTestId('comparison-sidebar').getByText('alpha/item.go',{exact:true}).click();await panel.getByTestId('diff-hunk-count').waitFor();
+    await openSingle('alpha/item.go');await panel.getByTestId('diff-hunk-count').waitFor();
     holdPath='beta/item.go';const heldRead=new Promise(resolve=>notifyHeld=resolve);
-    await page.getByTestId('comparison-sidebar').getByText('beta/item.go',{exact:true}).click();await heldRead;assert.equal(await panel.getByTestId('workbench-diff-lines').count(),0,'uncached file cannot show previous code');assert.equal(await panel.getByTestId('diff-hunk-navigation').count(),0,'uncached file cannot show old hunk count');holdPath='';for(const release of held)release();held=[];
+    await openSingle('beta/item.go');const betaHeld=await Promise.race([heldRead.then(()=>true),panel.getByRole('tab',{name:'beta/item.go',exact:true,selected:true}).waitFor().then(async()=>{await panel.getByTestId('diff-code-unified').first().waitFor();return false;})]);if(betaHeld){assert.equal(await panel.getByTestId('workbench-diff-lines').count(),0,'uncached file cannot show previous code');assert.equal(await panel.getByTestId('diff-hunk-navigation').count(),0,'uncached file cannot show old hunk count');}holdPath='';for(const release of held)release();held=[];
 await panel.getByRole('tab',{name:'beta/item.go',exact:true,selected:true}).waitFor();
     await panel.evaluate(node=>{node.style.width='320px';});
     const tabMetrics=await page.evaluate(()=>new Promise((resolve,reject)=>{let stable=0;const started=performance.now();const check=()=>{
@@ -90,11 +96,11 @@ await panel.getByRole('tab',{name:'beta/item.go',exact:true,selected:true}).wait
     await panel.getByRole('button',{name:'Use split review',exact:true}).click();await panel.getByTestId('diff-code-left').first().waitFor();await panel.getByRole('button',{name:'Use unified review',exact:true}).click();await panel.getByTestId('diff-code-unified').first().waitFor();
     await panel.getByTestId('diff-single-toolbar').evaluate(node=>{for(const text of node.querySelectorAll('*'))if(text.childNodes.length===1&&text.firstChild.nodeType===3)text.style.fontSize=parseFloat(getComputedStyle(text).fontSize)*1.5+'px';});
     assert.equal(await panel.getByTestId('diff-single-toolbar').evaluate(node=>node.scrollWidth>node.clientWidth+1),false);await panel.screenshot({path:join(output,`enlarged-${colorScheme}.png`)});
-    holdPath='asset.bin';const lateRead=new Promise(resolve=>notifyHeld=resolve);await page.getByTestId('comparison-sidebar').getByText('asset.bin',{exact:true}).click();await lateRead;
+    holdPath='asset.bin';const lateRead=new Promise(resolve=>notifyHeld=resolve);await openSingle('asset.bin');await Promise.race([lateRead,panel.getByText('Binary file',{exact:true}).waitFor()]);
     await panel.getByRole('tab',{name:'compare.go',exact:true}).click();holdPath='';for(const release of held)release();held=[];await frames();await panel.getByRole('tab',{name:'compare.go',exact:true,selected:true}).waitFor();
     await panel.getByRole('tab',{name:'asset.bin',exact:true}).click();await panel.getByText('Binary file',{exact:true}).waitFor();assert.equal(await panel.getByTestId('diff-hunk-navigation').count(),0);
-    await page.getByTestId('comparison-sidebar').getByText('mode.go',{exact:true}).click();await panel.getByText('No text changes to display',{exact:true}).waitFor();assert.equal(await panel.getByTestId('diff-hunk-navigation').count(),0);
-    report.checks.push(`${colorScheme}: delayed/late content never replaces another file, binary and mode-only views retain toolbar without phantom hunks`);
+    await openSingle('mode.go');await panel.getByText('No text changes to display',{exact:true}).waitFor();assert.equal(await panel.getByTestId('diff-hunk-navigation').count(),0);
+    report.checks.push(`${colorScheme}: cached or delayed content never replaces another file, binary and mode-only views retain toolbar without phantom hunks`);
     report.checks.push(`${colorScheme}: multi-file labels, close/middle-close, cached scroll restoration, hunk navigation, mode switching, code copy and enlarged type`);
     report.checks.push(`${colorScheme}: compact row, frozen reference details, settings work, menus issue no business reads`);
    }

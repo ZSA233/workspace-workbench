@@ -1,0 +1,4 @@
+import { comparisonKey } from '../shared/comparison';
+import type { FileReviewSelection } from './file-review-store';
+export function fileReviewQueryKey(selection: FileReviewSelection, host: string) { return ['workspace-workbench', 'file-review', selection.projectConfig, host, selection.workspaceId, selection.repoPath, selection.path, selection.scope, selection.commitSha, comparisonKey(selection.comparison), selection.workspaceInstance || '', selection.oldPath || '']; }
+export function fileReviewParams(selection: FileReviewSelection) { return { workspaceId: selection.workspaceId, workspaceInstance: selection.workspaceInstance, repoPath: selection.repoPath, path: selection.path, oldPath: selection.oldPath, scope: selection.scope, comparison: selection.comparison, commitSha: selection.commitSha }; }

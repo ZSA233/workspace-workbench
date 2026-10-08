@@ -1,3 +1,5 @@
+import {buildComparisonCatalog,savedComparison} from './change-note-catalog.ts';
+import {comparisonKey} from '../../shared/comparison.ts';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {Git} from './git.ts';
@@ -25,19 +27,34 @@ export class ChangeNotes {
  private snapshotPath(id:string){if(!/^[a-f0-9]{64}$/.test(id))throw new WorkbenchError('notes_snapshot_invalid','Invalid snapshot');return join(this.root(),'snapshots',id+'.json');}
  async read(p:Json,signal?:AbortSignal):Promise<Json>{
   const c=await this.context(p);
-  if(p.action==='list'){
+  if(p.action==='list'||p.action==='catalog'){
    const ledger=await load(this.ledgerPath(c.instance,c.repo.repoPath),empty());
-   const all=ledger.notes.filter(n=>!n.withdrawn&&(!Array.isArray(p.paths)||n.content.anchors.some(a=>p.paths.includes(a.path))));
+   let candidates=ledger.notes;
+   if(p.action==='catalog'||p.comparisonId||p.comparisonKey){
+    const catalog=buildComparisonCatalog(ledger);
+    if(p.catalogRevision&&p.catalogRevision!==catalog.revision)throw new WorkbenchError('notes_catalog_changed','Explanations changed while paging; reload the directory');
+    if(p.action==='catalog'){
+     const search=String(p.search||'').trim().toLowerCase();
+     const matched=catalog.records.filter(g=>!search||[...g.record.aliases.flatMap(a=>[a.fromRef,a.toRef]),g.record.comparison.fromSha,g.record.comparison.toSha,...[...g.notes.values()].map(n=>n.content.title)].join(' ').toLowerCase().includes(search));
+     const offset=Math.max(0,Math.floor(Number(p.offset)||0));
+     return {records:matched.slice(offset,offset+20).map(g=>g.record),total:catalog.records.length,matched:matched.length,nextOffset:offset+20<matched.length?offset+20:null,revision:catalog.revision};
+    }
+    const group=catalog.records.find(g=>p.comparisonId?g.record.id===p.comparisonId:comparisonKey(g.record.comparison)===p.comparisonKey);
+    candidates=group?[...group.notes.values()]:[];
+    if(!p.comparisonId)candidates.push(...ledger.notes.filter(n=>!group?.notes.has(n.id)));
+   }
+   const all=candidates.filter(n=>!n.withdrawn&&(!p.noteId||n.id===p.noteId)&&(!Array.isArray(p.paths)||n.content.anchors.some(a=>p.paths.includes(a.path))));
    const offset=Math.max(0,Math.floor(Number(p.offset)||0)),page=all.slice(offset,offset+16);
    const snapshots:Record<string,Snapshot>={};
-   for(const id of new Set(page.map(n=>n.snapshotId))){const snapshot=ledger.snapshots?.[id]||await load<Snapshot>(this.snapshotPath(id));snapshots[id]={...snapshot,files:snapshot.files.map(f=>({...f,patch:undefined}))};}
-   return {notes:page,feedback:ledger.feedback.map(identifiedFeedback).filter(e=>!e.deleted&&page.some(n=>n.id===e.id)),snapshots,workingToken:this.workingToken(c.path),nextOffset:offset+16<all.length?offset+16:null,revision:hash(stable([ledger.notes,ledger.feedback]))};
+   for(const id of new Set(page.map(n=>n.snapshotId))){const snapshot=ledger.snapshots?.[id]||await load<Snapshot>(this.snapshotPath(id));snapshots[id]={...snapshot,comparison:savedComparison(snapshot)||snapshot.comparison,files:snapshot.files.map(f=>({...f,patch:undefined}))};}
+   return {notes:page,feedback:ledger.feedback.map(identifiedFeedback).filter(e=>!e.deleted&&page.some(n=>n.id===e.id)),snapshots,workingToken:this.workingToken(c.path),nextOffset:offset+16<all.length?offset+16:null,revision:hash(stable([ledger.notes,ledger.history,ledger.feedback]))};
   }
   if(p.snapshotId){const snapshot=await load<Snapshot>(this.snapshotPath(p.snapshotId));this.check(snapshot,c);return {snapshot};}
   const git=new Git(c.path,this.workspaces.config.gitTimeout,Date.now()+25000,signal,true);
   if(await git.root()!==c.path)throw new WorkbenchError('repository_root_mismatch','Expected recorded repository');
   const scope=String(p.scope||'compare');
   const comparison=scope==='compare'?await resolveComparison(git,p.comparison||{}):undefined;
+  if(comparison){for(const [field,label] of [['fromRef','fromLabel'],['toRef','toLabel']] as const){const value=p.comparison?.[label];if(value!==undefined){if(typeof value!=='string'||!value.trim()||value.length>4096||value.includes('\0'))throw new WorkbenchError('comparison_invalid','Invalid display reference');comparison[field]=value;}}}
   const base=comparison?.leftSha||(scope==='branch'?c.repo.baseSha:null);
   let commit=comparison?.toSha||p.commitSha;
   const range=await git.range(scope,base,commit);

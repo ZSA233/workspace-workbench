@@ -10,10 +10,11 @@ import type {NoteDraft} from '../note-popover-model';
 import type {PluginWorkspacePanelProps} from '@getpaseo/plugin/client';
 type Props={note:ChangeNote;data:NotesResult;current:boolean;theme:PluginWorkspacePanelProps['theme'];draft:NoteDraft;
  onDraftChange(value:NoteDraft,expected?:NoteDraft):void;onExpanded(value:boolean):void;onOriginal?:()=>Promise<string>;onClose():void;
+ onLatest?:()=>Promise<void>;
  onManage(edit:NoteManagementInput):Promise<void>;
  onFeedback(action:'read'|'question'|'confirm',text?:string):Promise<void>;onAnchor?(index:number):void};
 /** The default view is intentionally small; the full explanation is preserved in details. */
-export function ChangeNoteCard({note,data,current,theme,draft,onDraftChange,onExpanded,onClose,onFeedback,onAnchor,onOriginal,onManage}:Props){
+export function ChangeNoteCard({note,data,current,theme,draft,onDraftChange,onExpanded,onClose,onFeedback,onAnchor,onOriginal,onManage,onLatest}:Props){
  const zh=useWorkbenchLocale()==='zh-CN',t=(a:string,b:string)=>zh?a:b,c=theme.colors,accent=observerAccent(theme);
  const draftRef=useRef(draft);
  function publishDraft(value:NoteDraft,expected?:NoteDraft){if(expected&&JSON.stringify(draftRef.current)!==JSON.stringify(expected))return;draftRef.current=value;onDraftChange(value,expected);}
@@ -56,13 +57,13 @@ export function ChangeNoteCard({note,data,current,theme,draft,onDraftChange,onEx
    <Text testID="change-note-summary" numberOfLines={3} ellipsizeMode="tail" style={normal}>{n.reason}</Text>
    {!current||pending?<View style={{flexDirection:'row',alignItems:'center',gap:5,alignSelf:'flex-start',borderWidth:1,borderColor:c.statusWarning,borderRadius:4,paddingHorizontal:5,paddingVertical:1}}><Icon name="CircleAlert" size={12} color={c.statusWarning}/><Text style={{...muted,color:c.statusWarning}}>{!current?t('待更新','Needs update'):t('待确认','Needs confirmation')}</Text></View>:null}
    <View style={{flexDirection:'row',alignItems:'center',borderTopWidth:1,borderTopColor:c.border,paddingTop:3}}>
-    <IconButton label={t('提出疑问','Ask a question')} icon="MessageSquare" color={c.foregroundMuted} onPress={()=>edit('question')}/>
+    {!note.historical?<IconButton label={t('提出疑问','Ask a question')} icon="MessageSquare" color={c.foregroundMuted} onPress={()=>edit('question')}/>:null}
     <IconButton label={t('说明操作','Explanation actions')} icon="Ellipsis" color={c.foregroundMuted} onPress={()=>show('more')}/>
     <View style={{flex:1}}/>{button(t('详情','Details'),()=>show('details'))}
    </View>
   </>:mode==='more'?<>
-   {button(t('编辑说明','Edit explanation'),startEdit)}{button(t('删除说明','Delete explanation'),()=>{setEdit({action:'withdraw'});show('withdraw');})}
-   {button(t('已阅','Read'),()=>void save('read'))}{button(t('复制说明与疑问','Copy explanation and questions'),()=>void copy())}{button(t('记录确认结果','Record confirmation'),()=>edit('confirm'))}
+   {!note.historical?button(t('编辑说明','Edit explanation'),startEdit):null}{!note.historical?button(t('删除说明','Delete explanation'),()=>{setEdit({action:'withdraw'});show('withdraw');}):null}
+   {!note.historical?button(t('已阅','Read'),()=>void save('read')):null}{button(t('复制说明与疑问','Copy explanation and questions'),()=>void copy())}{!note.historical?button(t('记录确认结果','Record confirmation'),()=>edit('confirm')):null}
   </>:mode==='edit'&&management?.action==='edit'?<>
    <Text style={muted}>{t('保留代码关联和原作者，保存为用户修订。','Keeps code locations and original author; saved as a user revision.')}</Text>
    {editField('title',t('标题','Title'),200)}{editField('reason',t('修改原因','Reason'),8000)}{editField('behavior',t('行为变化','Behavior change'),8000)}
@@ -89,10 +90,11 @@ export function ChangeNoteCard({note,data,current,theme,draft,onDraftChange,onEx
    {n.anchors.map((a,i)=><Pressable key={i} accessibilityRole="button" onPress={()=>onAnchor?.(i)} style={{paddingVertical:5}}><Text style={{...muted,color:accent}}>{a.path} · {a.side} {a.start?`${a.start}–${a.end}`:''}</Text></Pressable>)}
    <Text selectable style={muted}>{t(n.perspective==='implementer'?'实现者说明':'根据代码推断',n.perspective==='implementer'?'Implementer explanation':'Inferred from code')} · {note.author}{note.editedBy==='user'?t(' · 用户修订',' · Edited by user'):''} · v{note.revision}</Text>
    <Text selectable style={muted}>{snapshot?.left||'∅'} → {snapshot?.right||t('工作树快照','Working snapshot')}</Text>
-   {events.map((e,i)=><View key={e.eventId||i}><Text selectable style={muted}>{e.action==='read'?t('已阅（不代表认可）','Read (not approval)'):`${e.action==='question'?t('疑问','Question'):t('用户确认记录','User confirmation')}: ${e.text}`}</Text>{e.action==='question'&&e.eventId?<View style={{flexDirection:'row',gap:12}}>{button(t('编辑疑问','Edit question'),()=>startQuestion(e,'question-edit'))}{button(t('删除疑问','Delete question'),()=>startQuestion(e,'question-delete'))}</View>:null}</View>)}
+   {events.map((e,i)=><View key={e.eventId||i}><Text selectable style={muted}>{e.action==='read'?t('已阅（不代表认可）','Read (not approval)'):`${e.action==='question'?t('疑问','Question'):t('用户确认记录','User confirmation')}: ${e.text}`}</Text>{!note.historical&&e.action==='question'&&e.eventId?<View style={{flexDirection:'row',gap:12}}>{button(t('编辑疑问','Edit question'),()=>startQuestion(e,'question-edit'))}{button(t('删除疑问','Delete question'),()=>startQuestion(e,'question-delete'))}</View>:null}</View>)}
    {onOriginal?button(t('查看原快照','View original snapshot'),()=>{void onOriginal().then(setOriginal).catch(e=>setError(String(e)));}):null}
    {original?<><Text style={muted}>{t('原快照文本','Original snapshot text')} · {originalPage+1}/{Math.ceil(original.length/8192)}</Text><Text selectable style={{...normal,fontFamily:'monospace'}}>{original.slice(originalPage*8192,(originalPage+1)*8192)}</Text><View style={{flexDirection:'row'}}>{originalPage>0?button(t('上一页','Previous page'),()=>setOriginalPage(p=>p-1)):null}{(originalPage+1)*8192<original.length?button(t('下一页','Next page'),()=>setOriginalPage(p=>p+1)):null}</View></>:null}
   </>}
+  {note.historical?<><Text style={muted}>{t(`历史修订 v${note.revision}（只读）`,`Historical revision v${note.revision} (read only)`)}</Text>{onLatest?button(t('查看最新版本','View latest revision'),()=>{void onLatest().catch(e=>{if(mounted.current)setError(String(e));});}):null}</>:null}
   {error?<Text style={{...normal,color:c.statusDanger}}>{error}</Text>:null}
  </View>;
 }

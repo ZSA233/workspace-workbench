@@ -47,3 +47,48 @@ test('concurrent revisions have one winner; withdraw preserves history and reque
  assert.equal((await write('withdraw',1,'withdraw')).revisions[0].revision,2);
  await assert.rejects(f.service.handle('notes.feedback',{...f.params,feedback:{requestId:'old-user',id:'one',revision:1,action:'confirm',text:'yes'}}),/changed/);
 }finally{f.close();}});
+
+test('comparison catalog pagination, version guard, fixed label identities and historical reads',async()=>{const f=fixture();try{
+ const write=async(snapshotId:string,id:string,revision=0)=>f.service.handle('notes.write',{...f.params,author:'agent',batch:{requestId:`catalog-${id}-${revision}`,snapshotId,operations:[{id,expectedRevision:revision,action:'upsert',content}]}});
+ const first=await f.service.handle('notes.read',{...f.params,comparison:{...f.params.comparison,fromLabel:'origin/main',toLabel:'feature/sample'}});await write(first.snapshot.id,'one');
+ const duplicate=await f.service.handle('notes.read',{...f.params,comparison:{...f.params.comparison,fromLabel:'release/stable',toLabel:'feature/sample'}});await write(duplicate.snapshot.id,'two');
+ let catalog=await f.service.handle('notes.read',{...f.params,action:'catalog'});assert.equal(catalog.total,1);assert.equal(catalog.records[0].noteCount,2);assert.equal(catalog.records[0].aliases.length,2);
+ const originalId=catalog.records[0].id;
+ writeFileSync(join(f.repo,'sample.go'),'package sample\n\nfunc value() int { return 3 }\n');git(f.repo,'commit','-qam','new default');
+ const next=await f.service.handle('notes.read',{...f.params,comparison:{fromRef:f.base,toRef:'HEAD',fromLabel:'origin/main',toLabel:'feature/sample'}});await write(next.snapshot.id,'one',1);
+ const old=await f.service.handle('notes.read',{...f.params,action:'list',comparisonId:originalId});assert.equal(old.notes.find((n:any)=>n.id==='one').historical,true);assert.equal(old.notes.find((n:any)=>n.id==='one').latestRevision,2);
+ await assert.rejects(f.service.handle('notes.manage',{...f.params,management:{requestId:'old-edit',id:'one',revision:1,action:'withdraw'}}),/changed/);
+ await assert.rejects(f.service.handle('notes.read',{...f.params,action:'catalog',catalogRevision:catalog.revision,offset:20}),/changed while paging/);
+ assert.equal((await f.service.handle('notes.read',{...f.params,action:'catalog',search:'release/stable'})).matched,1);
+ assert.equal((await f.service.handle('notes.read',{...f.params,action:'catalog',search:'missing'})).total,2);
+ for(let i=0;i<21;i++){
+  git(f.repo,'commit','--allow-empty','-qm',`snapshot ${i}`);
+  const snapshot=await f.service.handle('notes.read',{...f.params,comparison:{fromRef:f.base,toRef:'HEAD'}});await write(snapshot.snapshot.id,`page-${i}`);
+ }
+ catalog=await f.service.handle('notes.read',{...f.params,action:'catalog'});assert.equal(catalog.records.length,20);assert.equal(catalog.nextOffset,20);
+ const page=await f.service.handle('notes.read',{...f.params,action:'catalog',offset:20,catalogRevision:catalog.revision});assert.equal(page.records.length,3);
+ assert.equal(new Set([...catalog.records,...page.records].map((r:any)=>r.id)).size,23);
+}finally{f.close();}});
+
+test('catalog and saved explanations remain readable after a Git object disappears',async()=>{const f=fixture();try{
+ const {snapshot}=await f.service.handle('notes.read',f.params);
+ await f.service.handle('notes.write',{...f.params,author:'agent',batch:{requestId:'retain',snapshotId:snapshot.id,operations:[{id:'one',expectedRevision:0,action:'upsert',content}]}});
+ const original=await f.service.handle('notes.read',{...f.params,action:'catalog'});
+ rmSync(join(f.repo,'.git','objects',f.head.slice(0,2),f.head.slice(2)));
+ const after=await f.service.handle('notes.read',{...f.params,action:'catalog'});assert.deepEqual(after,original);
+ const notes=await f.service.handle('notes.read',{...f.params,action:'list',comparisonId:original.records[0].id});assert.equal(notes.notes.length,1);
+ const saved=await f.service.handle('notes.read',{...f.params,snapshotId:snapshot.id});assert.match(saved.snapshot.files[0].patch,/return 2/);
+ await assert.rejects(f.service.handle('repository.compare',f.params));
+}finally{f.close();}});
+
+test('catalog revisions track user question edits and withdrawal removes the whole record',async()=>{const f=fixture();try{
+ const {snapshot}=await f.service.handle('notes.read',f.params);
+ await f.service.handle('notes.write',{...f.params,author:'agent',batch:{requestId:'user-note',snapshotId:snapshot.id,operations:[{id:'one',expectedRevision:0,action:'upsert',content:{...content,question:''}}]}});
+ await f.service.handle('notes.feedback',{...f.params,feedback:{requestId:'question',id:'one',revision:1,action:'question',text:'Why?'}});
+ const before=await f.service.handle('notes.read',{...f.params,action:'catalog'});assert.equal(before.records[0].pendingCount,1);
+ const list=await f.service.handle('notes.read',{...f.params,action:'list'}),event=list.feedback[0];
+ const edit={...f.params,management:{requestId:'delete-question',id:'one',revision:1,action:'question-delete',eventId:event.eventId,expectedVersion:event.version}};
+ await f.service.handle('notes.manage',edit);await f.service.handle('notes.manage',edit);
+ const after=await f.service.handle('notes.read',{...f.params,action:'catalog'});assert.equal(after.records[0].pendingCount,0);assert.notEqual(after.revision,before.revision);
+ await f.service.handle('notes.manage',{...f.params,management:{requestId:'delete-note',id:'one',revision:1,action:'withdraw'}});assert.equal((await f.service.handle('notes.read',{...f.params,action:'catalog'})).total,0);
+}finally{f.close();}});

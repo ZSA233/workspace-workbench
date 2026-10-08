@@ -89,6 +89,38 @@ and retain input on failure. The active file's unsaved edit can be reopened afte
 closing its popup. Management changes only explanation metadata; it does not read
 Git or change code anchors. Archived workspaces must be restored before editing.
 
+## Compare explanation directory
+
+The Compare repository header includes a speech-bubble record count. Open it to
+search the current workspace/repository's annotated comparisons by reference,
+SHA or explanation title. Each page contains 20 records. The header counts
+comparisons; a file's bubble counts explanations, not review coverage.
+
+Records are derived from existing metadata and revisions, without a Git scan.
+File pages and reference aliases for the same frozen endpoints/mode merge into
+one record. Commit, working-tree and creation-base notes stay in their own views.
+A migrated note retains its last revision in the old comparison as read-only;
+withdrawn notes disappear from all normal records. Feedback and revision checks
+continue to distinguish explanation text from user approval.
+
+Selecting a record reads its saved SHAs and preserves displayed content until the
+new file list is ready. Labels remain human-readable, with short SHAs in the same
+condition row. A historical badge requires observed evidence that a named ref
+moved; otherwise the entry is simply a fixed version. The menu can resolve the
+original refs again for a latest comparison; missing names require selection.
+The record's explanation button opens saved explanations and original patches
+without requiring the Git objects to still exist. Missing Git objects never turn
+partial captured patches into an apparently complete comparison.
+
+The existing internal notes RPC now supports `action: "catalog"`, search/offset
+and a catalog revision for consistent pagination. `action: "list"` accepts a
+comparison record ID or frozen comparison key and annotates historical revisions.
+No Agent tool was added. The existing read tool accepts optional `fromLabel` and
+`toLabel` in `comparison`; these are display names only, while `fromRef` and
+`toRef` may remain full immutable SHAs. “Copy explanation request” supplies those
+fixed endpoints, labels and scope to paste into the current conversation. It
+neither creates a session nor sends a message.
+
 ## Storage and boundaries
 
 Records live under the project's `stateRoot/change-notes`, keyed by workspace

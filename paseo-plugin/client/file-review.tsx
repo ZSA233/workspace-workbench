@@ -195,7 +195,7 @@ export function FileReviewPanel(props: FilePanelProps) {
   const notes=useDiffNotes(activeSelection,diff,foreground,theme,(anchor,note,data)=>{
     if(!activeSelection)return;
     const snapshot=data.snapshots[note.snapshotId];if(!snapshot)return;
-    openFileReview({...activeSelection,path:anchor.path,oldPath:undefined,changeNoteId:note.id}, {hostWorkspaceId,panelId:'agentId' in props?'workspace-workbench-file-agent':'workspace-workbench-file',...('agentId' in props?{agentId:props.agentId}:{})});
+    openFileReview({...activeSelection,scope:snapshot.scope as FileReviewSelection['scope'],comparison:snapshot.scope==='compare'?snapshot.comparison as FileReviewSelection['comparison']:undefined,commitSha:snapshot.scope==='commit'?snapshot.right||undefined:undefined,baseSha:snapshot.left||undefined,head:snapshot.right||undefined,path:anchor.path,oldPath:snapshot.files.find(f=>f.path===anchor.path)?.oldPath,changeNoteId:note.id}, {hostWorkspaceId,panelId:'agentId' in props?'workspace-workbench-file-agent':'workspace-workbench-file',...('agentId' in props?{agentId:props.agentId}:{})});
   });
   const error = responseErrorLabel(diffQuery.data, diffQuery.error, Boolean(diff), copy);
 

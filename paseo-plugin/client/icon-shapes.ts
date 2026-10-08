@@ -16,6 +16,8 @@ export const iconShapes:Record<string,IconPart[]>={
  FolderTree:[box(3,3,7,5,1),box(14,10,7,5,1),box(14,18,7,4,1),...path(6,8,6,20,14,20),line(6,12,14,12)],
  List:[circle(4,6,1,true),circle(4,12,1,true),circle(4,18,1,true),line(9,6,21,6),line(9,12,21,12),line(9,18,21,18)],
  GitBranch:[circle(6,5,2),circle(6,19,2),circle(18,5,2),line(6,7,6,17),...path(18,7,18,10,15,13,6,13)],
+ Clock:[circle(12,12,9),...path(12,6,12,12,16,14)],
+ Copy:[box(8,8,13,13,2),...path(5,16,3,16,3,3,16,3,16,5)],
  Lock:[box(5,10,14,11,2),...path(8,10,8,6,10,3,14,3,16,6,16,10),line(12,14,12,17)],
  RefreshCw:[...path(20,8,17,4,10,3,5,6,3,12,5,18,11,21,17,19,20,15),...path(20,3,20,8,15,8)],
  Columns2:[box(3,3,18,18,2),line(12,3,12,21)],Rows3:[box(3,3,18,18,2),line(3,9,21,9),line(3,15,21,15)],

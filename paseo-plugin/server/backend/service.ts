@@ -101,6 +101,7 @@ export class Service {
   async handle(method: string, params: Json = {}, signal?: AbortSignal): Promise<Json> {
     if (method === 'notes.read') return this.notes.read(params,signal);
     if (method === 'notes.write') return this.workspaces.mutations.run(()=>this.notes.write(params,params.author));
+    if (method === 'notes.manage') return this.workspaces.mutations.run(()=>this.notes.manage(params));
     if (method === 'notes.feedback') return this.workspaces.mutations.run(()=>this.notes.feedback(params));
     if (method === 'workspace.prepare.task') return params.action === 'status' ? this.preparations.request(params) : this.workspaces.mutations.run(() => this.preparations.request(params));
     if (method === 'workspace.prepare') {

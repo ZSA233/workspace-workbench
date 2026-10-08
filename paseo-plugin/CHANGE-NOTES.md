@@ -68,6 +68,27 @@ The service observes note revisions through the existing version check; no new
 poll loop is added. Opening the explanation menu also refreshes note metadata (no
 Git query). A note failure does not block the Diff or clear successful content.
 
+
+### Editing and deleting in the reader
+
+The explanation's **More** menu provides **Edit explanation** and **Delete
+explanation**. Editing keeps the original author, frozen snapshot and code
+locations, increments the revision, and labels it as edited by the user. Deleting
+asks for confirmation and removes every marker for that explanation; revisions
+remain in storage. It is a withdrawal, not permanent erasure.
+
+In **Details**, each saved question offers edit/delete controls. Editing a question
+reopens confirmation. Deleting hides the question and preserves its history;
+it does not delete the explanation or record approval. These actions use the same
+trusted host UI channel as existing user feedback. The plugin has no separate
+per-person account model: this is shared local user feedback, not user-account ACLs.
+Agent tools cannot invoke these UI management actions.
+
+Writes check explanation and question revisions, use durable request identities,
+and retain input on failure. The active file's unsaved edit can be reopened after
+closing its popup. Management changes only explanation metadata; it does not read
+Git or change code anchors. Archived workspaces must be restored before editing.
+
 ## Storage and boundaries
 
 Records live under the project's `stateRoot/change-notes`, keyed by workspace

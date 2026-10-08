@@ -2,7 +2,7 @@ import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
 export const observerMethods = [
-  "notes.read", "notes.write", "notes.feedback",
+  "notes.read", "notes.write", "notes.feedback", "notes.manage",
   "observer.health",
   "observer.versions",
   "observer.reload",

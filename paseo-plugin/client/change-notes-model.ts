@@ -16,7 +16,7 @@ export function noteCurrent(note:ChangeNote,data:NotesResult,scope:NoteScope,dif
 
 /** User questions reopen confirmation; a read receipt never resolves it. */
 export function noteNeedsConfirmation(note:ChangeNote,data:NotesResult){
- const latest=data.feedback.filter(e=>e.id===note.id&&e.revision===note.revision&&e.action!=='read').at(-1);
+ const latest=data.feedback.filter(e=>e.id===note.id&&e.revision===note.revision&&!e.deleted&&e.action!=='read').at(-1);
  if(latest)return latest.action==='question';
  return note.content.basis!=='requirement'||Boolean(note.content.question);
 }

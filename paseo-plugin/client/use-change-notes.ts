@@ -2,7 +2,7 @@ import {useRef} from 'react';
 import {useRpc} from '@getpaseo/plugin/client';
 import {useQuery,useQueryClient} from '@tanstack/react-query';
 import {changeNotesRpc} from '../shared/change-notes-rpc';
-import type {NotesResult,ChangeNote} from '../shared/change-notes';
+import type {NotesResult,ChangeNote,NoteManagementInput} from '../shared/change-notes';
 import {type NoteScope} from './change-notes-model';
 export {noteCurrent,type NoteScope} from './change-notes-model';
 export function useChangeNotes(scope:NoteScope|undefined,enabled=true){
@@ -13,8 +13,16 @@ export function useChangeNotes(scope:NoteScope|undefined,enabled=true){
   const identity=JSON.stringify([scope?.projectConfig,scope?.workspaceId,scope?.repoPath,note.id,note.revision,action,text]);
   if(!feedbackIds.current.has(identity))feedbackIds.current.set(identity,`user:${Date.now()}:${Math.random()}`);
   const r=await rpc({projectConfig:scope!.projectConfig!,workspaceId:scope!.workspaceId,repoPath:scope!.repoPath,action:'feedback',feedback:{requestId:feedbackIds.current.get(identity)!,id:note.id,revision:note.revision,action,text}});
-  if(!r.ok)throw new Error(r.error?.message||'Save failed');await client.invalidateQueries({queryKey:['change-notes',scope?.projectConfig]});
+  if(!r.ok)throw new Error(r.error?.message||'Save failed');feedbackIds.current.delete(identity);await client.invalidateQueries({queryKey:['change-notes',scope?.projectConfig]});
+ }
+ async function manage(note:ChangeNote,edit:NoteManagementInput){
+  const identity=JSON.stringify([scope?.projectConfig,scope?.workspaceId,scope?.repoPath,note.id,note.revision,edit]);
+  if(!feedbackIds.current.has(identity))feedbackIds.current.set(identity,`manage:${Date.now()}:${Math.random()}`);
+  const r=await rpc({projectConfig:scope!.projectConfig!,workspaceId:scope!.workspaceId,repoPath:scope!.repoPath,action:'manage',management:{...edit,requestId:feedbackIds.current.get(identity)!,id:note.id,revision:note.revision}});
+  if(!r.ok)throw new Error(r.error?.message||'Save failed');
+  feedbackIds.current.delete(identity);
+  await client.invalidateQueries({queryKey:['change-notes',scope?.projectConfig]});
  }
  async function original(note:ChangeNote){const r=await rpc({projectConfig:scope!.projectConfig!,workspaceId:scope!.workspaceId,repoPath:scope!.repoPath,action:'read',snapshotId:note.snapshotId});if(!r.ok)throw new Error(r.error?.message||'Original snapshot unavailable');const snapshot=(r.result as {snapshot:{files:Array<{path:string;patch:string;truncated:boolean}>}}).snapshot;return snapshot.files.filter(f=>!scope?.path||f.path===scope.path).map(f=>f.path+'\n'+f.patch+(f.truncated?'\n[truncated snapshot]':'')).join('\n');}
- return {...query,feedback,original};
+ return {...query,feedback,manage,original};
 }

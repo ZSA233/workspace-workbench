@@ -42,7 +42,7 @@ type SocketRequest = {
 };
 
 const allowedMethods = new Set<string>(observerMethods);
-const versionedMethods = new Set<string>(["notes.read", "notes.write", "notes.feedback", "workspace.environment", "workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
+const versionedMethods = new Set<string>(["notes.read", "notes.write", "notes.feedback", "notes.manage", "workspace.environment", "workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
 const mutationMethods = new Set<string>([
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
   "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete",

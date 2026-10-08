@@ -1,6 +1,6 @@
 /** Layout only: explanation panels never participate in Diff row measurement. */
 export type NoteRect={x:number;y:number;width:number;height:number};
-export type NoteDraft={text:string;kind:'question'|'confirm'|null};
+export type NoteDraft={text:string;kind:'question'|'confirm'|null;management?:import('../shared/change-notes').NoteManagementInput};
 export function notePopoverPlacement(bounds:NoteRect,anchor:NoteRect,height:number,sheet:boolean){
  const margin=8,width=Math.max(0,Math.min(320,bounds.width-margin*2));
  const h=Math.min(height,Math.max(0,bounds.height-margin*2));

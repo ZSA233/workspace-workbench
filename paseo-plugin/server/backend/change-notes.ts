@@ -4,13 +4,13 @@ import {Git} from './git.ts';
 import {hash,stable,WorkbenchError,type Json} from './storage.ts';
 import {writeOperation} from './operation-storage.ts';
 import {workspaceInstanceKey} from '../../shared/workspace-lineage.ts';
-import {noteBatch,noteFeedback,type ChangeNote,type NoteUserEvent} from '../../shared/change-notes.ts';
+import {noteBatch,noteFeedback,noteManagement,type ChangeNote,type NoteUserEvent} from '../../shared/change-notes.ts';
 import {resolveComparison} from './repository-comparison.ts';
 import type {Workspaces} from './workspaces.ts';
 import {validateDiffPath} from './file-diff.ts';
 const LIMIT=2*1024*1024;
 type Snapshot={projectId?:string;id:string;workspaceId:string;instance:string;repoPath:string;scope:string;workingToken?:string;comparison?:Json;left:string|null;right:string|null;files:Json[]};
-type Ledger={schema:1;snapshots:Record<string,Snapshot>;notes:ChangeNote[];history:ChangeNote[];feedback:NoteUserEvent[];requests:Record<string,{digest:string;result:Json}>};
+type Ledger={schema:1;snapshots:Record<string,Snapshot>;notes:ChangeNote[];history:ChangeNote[];feedback:NoteUserEvent[];feedbackHistory?:NoteUserEvent[];requests:Record<string,{digest:string;result:Json}>};
 const empty=():Ledger=>({schema:1,snapshots:{},notes:[],history:[],feedback:[],requests:{}});
 async function load<T>(path:string,fallback?:T):Promise<T>{try{return JSON.parse(await readFile(path,'utf8'));}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT'&&fallback!==undefined)return fallback;throw e;}}
 /** Notes have their own durable publication boundary; no Git mutation or cache invalidation. */
@@ -31,7 +31,7 @@ export class ChangeNotes {
    const offset=Math.max(0,Math.floor(Number(p.offset)||0)),page=all.slice(offset,offset+16);
    const snapshots:Record<string,Snapshot>={};
    for(const id of new Set(page.map(n=>n.snapshotId))){const snapshot=ledger.snapshots?.[id]||await load<Snapshot>(this.snapshotPath(id));snapshots[id]={...snapshot,files:snapshot.files.map(f=>({...f,patch:undefined}))};}
-   return {notes:page,feedback:ledger.feedback.filter(e=>page.some(n=>n.id===e.id)),snapshots,workingToken:this.workingToken(c.path),nextOffset:offset+16<all.length?offset+16:null,revision:hash(stable([ledger.notes,ledger.feedback.length]))};
+   return {notes:page,feedback:ledger.feedback.map(identifiedFeedback).filter(e=>!e.deleted&&page.some(n=>n.id===e.id)),snapshots,workingToken:this.workingToken(c.path),nextOffset:offset+16<all.length?offset+16:null,revision:hash(stable([ledger.notes,ledger.feedback]))};
   }
   if(p.snapshotId){const snapshot=await load<Snapshot>(this.snapshotPath(p.snapshotId));this.check(snapshot,c);return {snapshot};}
   const git=new Git(c.path,this.workspaces.config.gitTimeout,Date.now()+25000,signal,true);
@@ -95,6 +95,35 @@ export class ChangeNotes {
   for(const op of batch.operations){const old=ledger.notes.find(n=>n.id===op.id);if(old)ledger.history.push(old);const note:ChangeNote={id:op.id,revision:op.expectedRevision+1,snapshotId:batch.snapshotId,author,updatedAt:new Date().toISOString(),withdrawn:op.action==='withdraw',content:op.content||old!.content};ledger.notes=ledger.notes.filter(n=>n.id!==op.id);ledger.notes.push(note);result.revisions.push({id:note.id,revision:note.revision});}
   ledger.requests[batch.requestId]={digest:identity,result};await writeOperation(path,ledger);this.revision=String(Date.now())+Math.random();return result;
  }
- async feedback(p:Json):Promise<Json>{const event=noteFeedback.parse(p.feedback),c=await this.context(p),path=this.ledgerPath(c.instance,c.repo.repoPath),ledger=await load(path,empty());const note=ledger.notes.find(n=>n.id===event.id&&!n.withdrawn);if(!note||note.revision!==event.revision)throw new WorkbenchError('notes_revision_conflict','Note changed; read it again');if(event.action!=='read'&&!event.text.trim())throw new WorkbenchError('notes_feedback_required','Text required');const key='user:'+event.requestId,identity=hash(stable(event)),prior=ledger.requests[key];if(prior){if(prior.digest!==identity)throw new WorkbenchError('notes_request_conflict','Request ID reused');return prior.result;}ledger.feedback.push({...event,at:new Date().toISOString()});const result={saved:true};ledger.requests[key]={digest:identity,result};await writeOperation(path,ledger);this.revision=String(Date.now())+Math.random();return result;}
+ async manage(p:Json):Promise<Json>{
+  const edit=noteManagement.parse(p.management),c=await this.context(p);
+  if(c.workspace.state==='removed')throw new WorkbenchError('notes_workspace_removed','Restore the workspace before editing notes');
+  const path=this.ledgerPath(c.instance,c.repo.repoPath),ledger=await load(path,empty());
+  const key='manage:'+edit.requestId,identity=hash(stable(edit)),prior=ledger.requests[key];
+  if(prior){if(prior.digest!==identity)throw new WorkbenchError('notes_request_conflict','Request ID reused');return prior.result;}
+  const note=ledger.notes.find(n=>n.id===edit.id&&!n.withdrawn);
+  if(!note||note.revision!==edit.revision)throw new WorkbenchError('notes_revision_conflict','Explanation changed; reopen it before saving');
+  const at=new Date().toISOString();
+  if(edit.action==='edit'||edit.action==='withdraw'){
+   if(edit.action==='edit'&&(!edit.content.title.trim()||!edit.content.reason.trim()||!edit.content.behavior.trim()||edit.content.basis==='requirement'&&!edit.content.requirement.trim()))throw new WorkbenchError('notes_content_required','Title, reason, behavior and cited requirements must not be blank');
+   ledger.history.push(note);
+   ledger.notes=ledger.notes.map(n=>n.id!==note.id?n:{...note,revision:note.revision+1,updatedAt:at,editedBy:'user',withdrawn:edit.action==='withdraw',content:edit.action==='edit'?{...edit.content,anchors:note.content.anchors}:note.content});
+  }else{
+   // Old feedback gains stable identifiers without discarding historical data.
+   ledger.feedback=ledger.feedback.map(identifiedFeedback);
+   const index=ledger.feedback.findIndex(e=>e.eventId===edit.eventId),event=ledger.feedback[index];
+   if(!event||event.deleted||event.id!==note.id||event.revision!==note.revision||event.action!=='question'||event.version!==edit.expectedVersion)throw new WorkbenchError('notes_feedback_conflict','Question changed; reopen it before saving');
+   if(edit.action==='question-edit'&&!edit.text.trim())throw new WorkbenchError('notes_feedback_required','Question must not be blank');
+   (ledger.feedbackHistory ||= []).push(event);
+   // Move an edited question to the end: new wording requires a fresh answer.
+   ledger.feedback.splice(index,1);
+   ledger.feedback.push({...event,version:event.version!+1,updatedAt:at,deleted:edit.action==='question-delete',text:edit.action==='question-edit'?edit.text:event.text});
+  }
+  const result={saved:true};ledger.requests[key]={digest:identity,result};
+  await writeOperation(path,ledger);this.revision=String(Date.now())+Math.random();return result;
+ }
+ async feedback(p:Json):Promise<Json>{const event=noteFeedback.parse(p.feedback),c=await this.context(p),path=this.ledgerPath(c.instance,c.repo.repoPath),ledger=await load(path,empty());const note=ledger.notes.find(n=>n.id===event.id&&!n.withdrawn);if(!note||note.revision!==event.revision)throw new WorkbenchError('notes_revision_conflict','Note changed; read it again');if(event.action!=='read'&&!event.text.trim())throw new WorkbenchError('notes_feedback_required','Text required');const key='user:'+event.requestId,identity=hash(stable(event)),prior=ledger.requests[key];if(prior){if(prior.digest!==identity)throw new WorkbenchError('notes_request_conflict','Request ID reused');return prior.result;}ledger.feedback=ledger.feedback.map(identifiedFeedback);ledger.feedback.push({...event,eventId:hash(stable(event)),version:1,at:new Date().toISOString()});const result={saved:true};ledger.requests[key]={digest:identity,result};await writeOperation(path,ledger);this.revision=String(Date.now())+Math.random();return result;}
 }
 export function patchLines(patch:string,side:'old'|'new') {const result=new Set<number>();let old=0,next=0,active=false;for(const line of patch.split('\n')){const h=/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);if(h){old=Number(h[1]);next=Number(h[2]);active=true;continue;}if(!active||line.startsWith('\\')||!line)continue;if(line[0]===' '||line[0]==='-'){if(side==='old')result.add(old);old++;}if(line[0]===' '||line[0]==='+'){if(side==='new')result.add(next);next++;}}return result;}
+
+function identifiedFeedback(event:NoteUserEvent,index:number):NoteUserEvent{return {...event,eventId:event.eventId||hash(stable([index,event])),version:event.version||1};}

@@ -99,7 +99,8 @@ Workbench 项目的会话、Worker 和 Reviewer。已有会话会列入覆盖范
 
 从左侧 **会话自动恢复** 入口查看按 Paseo Workspace 分组的会话列表，或点击会话输入区
 上方的恢复状态按钮。这里能看到是否开启、尝试次数、倒计时及停止原因，并可以关闭单个
-会话、停止本次恢复或立即执行已经排队的尝试。Workbench 工具接入和 Worker／Reviewer
+会话、停止本次恢复或点击“立即继续／立即重试”执行已经排队的尝试。页面也展示实际使用的
+恢复方式。Workbench 工具接入和 Worker／Reviewer
 角色另外展示；它们不决定自动恢复的覆盖范围。当前 Paseo 插件接口不支持左侧每条会话的
 自定义徽标，因此第一版提供独立入口和会话内标识。
 
@@ -109,18 +110,25 @@ Workbench 项目的会话、Worker 和 Reviewer。已有会话会列入覆盖范
 Agent；用户新回合、模式变化、权限请求及归档会撤销旧的恢复计划。
 
 只恢复模型过载、明确的临时限流、连接故障及已知由连接故障导致的重试耗尽。额度、认证、
-上下文限制及原因不明的重试耗尽需要用户处理。恢复通过宿主在原 Codex thread 调用
-`turn/start` 并传入 `input: []`，保留上下文、模型与权限。它会建立新的执行尝试，不增加
-用户消息、空白消息或续跑提示词，也不重投整份 handoff。投递前后使用独立的宿主凭据登记
-尝试 ID 和实际回合 ID；结果不确定时只核实凭据，不盲目重发。宿主会拒绝忙碌或状态变化的
-会话，模型执行期间仍不能保证工具操作恰好执行一次。
+上下文限制及原因不明的重试耗尽需要用户处理。**默认恢复方式为发送继续消息，无需修改
+Paseo 宿主或安装补丁**：通过公开消息接口在原会话发送一句 `继续`，不附加系统说明，
+不重投整份 handoff。设置可修改这句消息，或选择“优先原生，缺失时发送继续”。两种方式
+均保留原上下文、模型与权限，发送前重新验证会话及授权；消息方式使用固定消息 ID 和
+历史核实投递。由于宿主没有原子的空闲时发送接口，消息方式仍存在发送前检查与发送之间
+的竞态，`steer` 也可能回退为替换回合；不能保证工具操作恰好执行一次。
 
-当前 Paseo 0.11.0 的公开插件接口无法传递空输入，需安装版本受限的本地宿主兼容桥：
+选择优先原生且接口可用时，宿主在原 Codex thread 调用 `turn/start` 并传入 `input: []`。
+它会建立新的执行尝试，不增加用户消息、空白消息或续跑提示词。投递前后使用独立的宿主
+凭据登记尝试 ID 和实际回合 ID。原生接口不可用时，在投递前选择消息方式；
+已经发起的原生或消息投递遇到超时、断线或结果不确定时，只核实既有投递，不换方式重发。
+
+原生恢复是可选增强。当前 Paseo 0.11.0 的公开插件接口无法传递空输入，使用原生方式需
+安装版本受限的本地宿主兼容桥：
 `node paseo-plugin/scripts/install-native-recovery-host.mjs` 仅检查，附加 `--apply` 才安装。
 安装器只修改已识别的 `@getpaseo/server` 0.11.0 入口，并保留 `.workbench-native-recovery.original`
 备份。宿主必须重新启动才能加载接口；插件 reload 不能更新宿主代码。先结束需要保留的活动
 回合，再执行 `paseo daemon restart --json` 和 `paseo plugin reload workspace-workbench-paseo --json`。
-宿主升级后须重新检查兼容性。接口缺失时恢复服务明确显示不可用，不回退为发送提示词。
+宿主升级后须重新检查兼容性。接口缺失不影响继续消息恢复，也不影响会话列表或状态按钮。
 
 Worker 和 Reviewer 等待恢复时保持原任务和审核轮次，暂停阶段超时计时；恢复后重新验证
 冻结材料、任务范围和 Reviewer 快照，继续使用剩余预算。失败回合的审核候选结果不能作为
@@ -132,8 +140,11 @@ Worker 和 Reviewer 等待恢复时保持原任务和审核轮次，暂停阶段
 不要求项目路径或 Workbench Agent token。
 
 实际宿主验收：`WORKBENCH_LIVE_RECOVERY=1 node paseo-plugin/scripts/verify-live.mjs`。
-它使用隔离 Paseo home、注册表和本地 Codex app-server 协议替身，验证故障、无提示词恢复及
-插件重载；不会调用真实模型或重载日常插件。运行
+它使用隔离 Paseo home、注册表和本地 Codex app-server 协议替身，验证默认继续消息、
+可选原生恢复和插件重载；不会调用真实模型或重载日常插件。
+另运行 `WORKBENCH_LIVE_RECOVERY=1 WORKBENCH_LIVE_RECOVERY_NO_NATIVE=1 node paseo-plugin/scripts/verify-live.mjs`
+可在隔离进程中加载原始 Paseo 会话处理代码，验证未安装原生接口时的自动兜底；不会修改
+本机已安装的宿主文件。运行
 `WORKBENCH_UI_RECOVERY_ONLY=1 npm --prefix paseo-plugin run test:plugin-ui` 可自动启动
 同样的隔离宿主，检查实际设置页、等待状态、控制按钮和会话输入区入口，完成后关闭隔离宿主。
 `node paseo-plugin/scripts/verify-native-codex-retry.mjs` 另用实际 Codex app-server、隔离

@@ -148,6 +148,10 @@ exec '${actualGit}' "$@"
   env.PATH=`${bin}:${env.PATH || ''}`;
 }
 delete env.WORKSPACE_WORKBENCH_CONFIG;
+if (process.env.WORKBENCH_LIVE_RECOVERY_NO_NATIVE === "1") {
+  if (process.env.WORKBENCH_LIVE_RECOVERY !== "1") throw new Error("unpatched_host_requires_recovery_fixture");
+  env.NODE_OPTIONS += ` --import=${join(plugin, "scripts/fixtures/unpatched-paseo.mjs")}`;
+}
 const cli = process.env.PASEO_CLI || "paseo";
 const daemon = spawn(
   cli,

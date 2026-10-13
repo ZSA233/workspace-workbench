@@ -15,6 +15,8 @@ export function registerSessionRecovery(server: PluginServerContext, host: HostC
   let removeCoordinator = () => {};
   let lastError = "recovery_starting";
   let nextBootAt = 0, warnedError = "";
+  let nativeAvailable = false;
+  let nativeProbeAt = 0;
   let scanAt = 0;
   const workspaceNames = new Map<string, string>();
   async function nativeRpc(input: unknown): Promise<unknown> {
@@ -27,6 +29,13 @@ export function registerSessionRecovery(server: PluginServerContext, host: HostC
     const value = (result as { receipt?: unknown })?.receipt;
     return value == null ? null : nativeReceiptSchema.parse(value);
   };
+  async function probeNative(): Promise<void> {
+    nativeProbeAt = Date.now();
+    try {
+      const capability = await nativeRpc({ action: "capabilities" }) as { version?: number; emptyInput?: boolean; receipts?: boolean };
+      nativeAvailable = capability.version === 1 && Boolean(capability.emptyInput && capability.receipts);
+    } catch { nativeAvailable = false; }
+  }
   async function remember(agent: PaseoAgent): Promise<void> {
     if (!controller || agent.provider !== "codex") return;
     controller.register(agent, agent.workspaceId ? workspaceNames.get(agent.workspaceId) : undefined);
@@ -66,10 +75,16 @@ export function registerSessionRecovery(server: PluginServerContext, host: HostC
     booting = true;
     let store: RecoveryDiskStore | undefined;
     try {
-      const capability = await nativeRpc({ action: "capabilities" }) as { version?: number; emptyInput?: boolean; receipts?: boolean };
-      if (capability.version !== 1 || !capability.emptyInput || !capability.receipts) throw new Error("native_recovery_host_unavailable");
+      // Native recovery is optional. An ordinary plugin installation can always
+      // recover through the public message API without modifying the host.
+      await probeNative();
       const location = recoveryStorageLocation(); store = new RecoveryDiskStore(location.directory, location.serverId);
       const candidate = new SessionRecoveryController({ store, review, api: () => host.api(),
+        nativeAvailable: () => nativeAvailable,
+        send: (agentId, message, messageId) => host.run(async (_api, client) => {
+          if (!client.sendMessage) throw new Error("recovery_send_unavailable");
+          await client.sendMessage(agentId, message, { messageId, activeTurnBehavior: "steer" });
+        }),
         retry: async attempt => receiptFrom(await nativeRpc({ action: "start", ...attempt })),
         receipt: async (agentId, attemptId) => receiptFrom(await nativeRpc({ action: "read", agentId, attemptId })),
       });
@@ -80,7 +95,7 @@ export function registerSessionRecovery(server: PluginServerContext, host: HostC
       await candidate.setPolicy(policy.status === "ready" ? policy.values : null);
       await scan(); lastError = "";
     } catch (error) {
-      lastError = controller ? (error instanceof Error ? error.message : "recovery_initialization_failed") : "native_recovery_host_unavailable";
+      lastError = error instanceof Error ? error.message : "recovery_initialization_failed";
       if (!controller) store?.close();
       nextBootAt = Date.now() + 5000;
       if (warnedError !== lastError) { console.warn("workbench_recovery_unavailable", lastError); warnedError = lastError; }
@@ -125,6 +140,7 @@ export function registerSessionRecovery(server: PluginServerContext, host: HostC
       if (input.action === "retryNow") await controller.retryNow(input.agentId);
     }
     return { ok: Boolean(controller && !disposed), available: controller?.isAvailable() || false,
+      nativeAvailable,
       policy: controller?.getPolicy() || recoveryPolicySchema.parse({}),
       sessions: controller?.list(input.action === "list" ? undefined : input.agentId) || [],
       ...(lastError ? { error: lastError } : {}) };
@@ -136,6 +152,7 @@ export function registerSessionRecovery(server: PluginServerContext, host: HostC
     void (async () => {
       await boot();
       if (controller && !disposed) {
+        if (Date.now() - nativeProbeAt >= 30000) await probeNative();
         if (Date.now() - scanAt >= 60000) await scan().catch(() => {});
         await controller.tick();
       }

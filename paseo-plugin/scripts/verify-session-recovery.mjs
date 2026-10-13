@@ -12,9 +12,18 @@ export async function verifySessionRecovery({ client, root, wait, report, reload
     const saved = await client.invokePluginRpc(pluginId, "settings.workspace-workbench-recovery.write", { revision: old.revision, values: { ...old.values, ...patch } });
     assert.equal(saved.status, "saved"); return saved.values;
   };
-  await wait(async () => (await rpc({ action: "list" })).available);
+  const initial = await wait(async () => { const result = await rpc({ action: "list" }); return result.available ? result : null; });
+  if (process.env.WORKBENCH_LIVE_RECOVERY_NO_NATIVE === "1") assert.equal(initial.nativeAvailable, false);
+  let actualNative = false;
+  try {
+    const capability = await client.invokePluginRpc(pluginId, "workspace.workbench.nativeRecovery.v1", { action: "capabilities" });
+    actualNative = capability.version === 1 && capability.emptyInput && capability.receipts;
+  } catch (error) { report.nativeProbeError = error.message; }
+  if (actualNative && !initial.nativeAvailable) await wait(async () => (await rpc({ action: "list" })).nativeAvailable);
+  initial.nativeAvailable = actualNative;
   const defaults = await readPolicy();
   assert.equal(defaults.values.intervalSeconds, 10); assert.equal(defaults.values.maxDurationMinutes, 60); assert.equal(defaults.values.enabled, true);
+  assert.equal(defaults.values.method, "continue"); assert.equal(defaults.values.continueMessage, "继续");
   const cwd = join(root, "outside-workbench"); mkdirSync(cwd);
   const create = async (scenario, title = scenario) => {
     const snapshot = await client.createAgent({ config: { provider: "codex", model: "recovery-fixture", thinkingOptionId: "low", cwd, modeId: "auto", featureValues: { plan_mode: false } }, title });
@@ -29,18 +38,36 @@ export async function verifySessionRecovery({ client, root, wait, report, reload
     const threadId = snapshot.agent.runtimeInfo?.sessionId || snapshot.agent.persistence?.sessionId;
     return JSON.parse(readFileSync(join(root, "recovery-codex", `${threadId}.json`), "utf8"));
   };
-  const first = await create("CAPACITY_ONCE", "Capacity outside Workbench");
-  const waiting = await wait(async () => { const s = await state(first); return s.status === "waiting" ? s : null; });
+  const defaultFirst = await create("CAPACITY_ONCE", "Default continue recovery outside Workbench");
+  const waiting = await wait(async () => { const s = await state(defaultFirst); return s.status === "waiting" ? s : null; });
   assert.equal(waiting.connectedToWorkbench, false); assert.ok(waiting.nextAttemptAt - Date.now() <= 12000);
+  assert.equal(waiting.deliveryKind, "message");
+  await rpc({ action: "retryNow", agentId: defaultFirst });
+  await wait(async () => { const s = await state(defaultFirst); if (["stopped", "paused", "uncertain"].includes(s.status)) throw new Error(`continue_recovery_failed: ${s.reason}`); return s.status === "succeeded"; });
+  const defaultThread = await threads(defaultFirst);
+  assert.equal(defaultThread.turns.length, 2);
+  assert.equal(defaultThread.inputs[1].length, 1);
+  assert.equal(defaultThread.inputs[1][0].type, "text"); assert.equal(defaultThread.inputs[1][0].text, "继续");
+  const defaultTimeline = await client.fetchAgentTimeline(defaultFirst, { direction: "tail", limit: 100 });
+  assert.deepEqual(defaultTimeline.entries.filter(entry => entry.item.type === "user_message").map(entry => entry.item.text), ["CAPACITY_ONCE", "继续"]);
+  report.checks.push("actual host defaults to a single 继续 message; no system prompt or host patch is required");
+
+  await policy({ method: "auto" });
+  const first = await create("CAPACITY_ONCE", "Preferred recovery outside Workbench");
+  await wait(async () => (await state(first)).status === "waiting");
   await rpc({ action: "retryNow", agentId: first });
   const completed = await wait(async () => { const s = await state(first); if (["stopped", "paused"].includes(s.status)) throw new Error(`native_recovery_failed: ${s.reason}`); return s.status === "succeeded" ? s : null; });
   assert.equal(completed.attempt, 1);
   const thread = await threads(first); assert.equal(thread.turns.length, 2);
-  assert.deepEqual(thread.inputs[1], []);
-  assert.equal(thread.turns.flatMap(turn => turn.items).filter(item => item.type === "userMessage").length, 1);
+  assert.equal(completed.deliveryKind, initial.nativeAvailable ? "native" : "message");
+  if (initial.nativeAvailable) assert.deepEqual(thread.inputs[1], []);
+  else { assert.equal(thread.inputs[1].length, 1); assert.equal(thread.inputs[1][0].text, "继续"); }
+  assert.equal(thread.turns.flatMap(turn => turn.items).filter(item => item.type === "userMessage").length, initial.nativeAvailable ? 1 : 2);
   const timeline = await client.fetchAgentTimeline(first, { direction: "tail", limit: 100 });
-  assert.equal(timeline.entries.filter(entry => entry.item.type === "user_message").length, 1);
-  report.checks.push("actual host recovered an unregistered Codex capacity failure with empty input; native and Paseo history gained no user message");
+  assert.equal(timeline.entries.filter(entry => entry.item.type === "user_message").length, initial.nativeAvailable ? 1 : 2);
+  report.checks.push(initial.nativeAvailable
+    ? "actual host prefers empty-input native recovery when installed; native and Paseo history gained no user message"
+    : "actual host without the native interface automatically falls back to 继续 and retains the original session");
 
   await policy({ intervalSeconds: 1, maxDurationMinutes: null });
   const network = await create("NETWORK_ONCE");
@@ -74,6 +101,7 @@ export async function verifySessionRecovery({ client, root, wait, report, reload
   await rpc({ action: "setEnabled", agentId: canceled, enabled: false });
   assert.equal((await state(canceled)).enabled, false);
   report.checks.push("actual host cancels pending recovery on new user work, honors manual stop and persists a per-session disable");
-  await policy({ enabled: true, intervalSeconds: 10, maxDurationMinutes: 60 });
-  report.recoverySessions = { first, network, quota, restored, manual, canceled };
+  await policy({ enabled: true, method: "continue", continueMessage: "继续", intervalSeconds: 10, maxDurationMinutes: 60 });
+  report.recoverySessions = { defaultFirst, first, network, quota, restored, manual, canceled };
+  report.nativeAvailable = initial.nativeAvailable;
 }

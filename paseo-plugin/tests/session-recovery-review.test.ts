@@ -21,20 +21,20 @@ import { installRecoveryCoordinator } from "../server/session-recovery/current.t
 import type { RecoveryRecord } from "../server/session-recovery/store.ts";
 import { withReviewTransitionLock } from "../server/review-state-transitions.ts";
 
-async function fixture(role: "worker" | "reviewer", run: (f: Awaited<ReturnType<typeof prepare>>) => Promise<void>) {
+async function fixture(role: "worker" | "reviewer", run: (f: Awaited<ReturnType<typeof prepare>>) => Promise<void>, method: "continue" | "auto" = "continue") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "workbench-recovery-review-")));
   const config = join(root, "project.json");
   writeFileSync(config, JSON.stringify({ sourceRoot: root, workspaceRoot: root, stateRoot: join(root, "state") }));
   const saved = { config: process.env.WORKSPACE_WORKBENCH_CONFIG, registry: process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY };
   process.env.WORKSPACE_WORKBENCH_CONFIG = config; process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = join(root, "no-registry.json");
-  try { await withProject({ projectConfig: config }, async () => { const f = await prepare(root, config, role); try { await run(f); } finally { f.remove(); await f.controller.close(); } }); }
+  try { await withProject({ projectConfig: config }, async () => { const f = await prepare(root, config, role, method); try { await run(f); } finally { f.remove(); await f.controller.close(); } }); }
   finally {
     if (saved.config === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = saved.config;
     if (saved.registry === undefined) delete process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY; else process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = saved.registry;
     rmSync(root, { recursive: true, force: true });
   }
 }
-async function prepare(root: string, config: string, role: "worker" | "reviewer") {
+async function prepare(root: string, config: string, role: "worker" | "reviewer", method: "continue" | "auto") {
   const git = (args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
   git(["init", "-q"]); git(["config", "user.email", "fixture@example.invalid"]); git(["config", "user.name", "Fixture"]);
   writeFileSync(join(root, "README.md"), "before\n"); git(["add", "README.md"]); git(["commit", "-qm", "initial"]);
@@ -67,6 +67,12 @@ async function prepare(root: string, config: string, role: "worker" | "reviewer"
   const receipts = new Map<string, import("../server/session-recovery/native-contract.ts").NativeReceipt>();
   const controller = new SessionRecoveryController({ api: async () => api, review: bridge,
     store: { load: () => records, save: rows => { records = structuredClone(rows); }, close() {} }, random: () => 0,
+    send: async (_agentId, message, messageId) => {
+      assert.equal(message, "继续");
+      entries.push({ turnId: "resumed-turn", item: { type: "user_message", clientMessageId: messageId } });
+      agent.lastUserMessageAt = "recovery-message";
+      agent.activeTurn = { turnId: "resumed-turn", startedAt: null }; agent.status = "running";
+    },
     receipt: async (_id, attemptId) => receipts.get(attemptId) || null,
     retry: async ({ agentId, attemptId }) => {
        agent.activeTurn = { turnId: "resumed-turn", startedAt: null }; agent.status = "running";
@@ -74,7 +80,7 @@ async function prepare(root: string, config: string, role: "worker" | "reviewer"
       receipts.set(attemptId, receipt); return receipt;
     },
   });
-  controller.register(agent); await controller.setPolicy(recoveryPolicySchema.parse({}));
+  controller.register(agent); await controller.setPolicy(recoveryPolicySchema.parse({ method }));
   const remove = installRecoveryCoordinator(controller);
   return { controller, agent, session, lifecycle, bridge, remove, api,
     current: () => readSession(workspaceId, session.id)!,
@@ -84,7 +90,7 @@ async function prepare(root: string, config: string, role: "worker" | "reviewer"
 }
 const failure = { message: "Selected model is at capacity. Please try a different model." };
 
-test("Worker failure and report finalization share recovery admission and resume in the same round", async () => {
+for (const method of ["continue", "auto"] as const) test(`Worker failure and report finalization share ${method} recovery admission and resume in the same round`, async () => {
   await fixture("worker", async f => {
     writeReviewState(reportKey(f.agent.id), { workspaceId: f.session.workspaceId, turnId: "failed-turn", report: { status: "ready_for_review" } });
     assert.equal(await f.controller.claimFailure(f.agent.id, "failed-turn", failure), true);
@@ -93,10 +99,10 @@ test("Worker failure and report finalization share recovery admission and resume
     assert.ok(readReviewState<{ consumedAt?: string }>(reportKey(f.agent.id))?.consumedAt);
     await f.start(); assert.equal(f.current().status, "waiting_execution"); assert.equal(f.current().executionTurnId, "resumed-turn");
     assert.equal(f.current().round, 1); assert.equal(f.current().handoffHash, f.session.handoffHash);
-  });
+  }, method);
 });
 
-test("Reviewer recovery discards the failed candidate, preserves authorization and freezes the timeout budget", async () => {
+for (const method of ["continue", "auto"] as const) test(`Reviewer ${method} recovery discards the failed candidate, preserves authorization and freezes the timeout budget`, async () => {
   await fixture("reviewer", async f => {
     assert.equal(await f.controller.claimFailure(f.agent.id, "failed-turn", failure), true);
     let session = f.current(); assert.equal(session.status, "waiting_recovery"); assert.equal(session.pendingReviewerResult, null);
@@ -108,7 +114,7 @@ test("Reviewer recovery discards the failed candidate, preserves authorization a
     assert.ok(reviewPhaseDeadline(session)! <= Date.now() + remaining + 100);
     assert.equal(readReviewState<{ token: string }>(authKey(session.id))?.token, "same-readonly-token");
     assert.equal(session.latestResult, null); assert.equal(session.pendingReviewerResult, null);
-  });
+  }, method);
 });
 
 test("a changed Reviewer snapshot prevents continuation and revokes the candidate", async () => {

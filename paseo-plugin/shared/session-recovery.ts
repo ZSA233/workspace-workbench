@@ -3,6 +3,8 @@ import { z } from "zod";
 
 export const recoveryPolicySchema = z.object({
   enabled: z.boolean().default(true),
+  method: z.enum(["continue", "auto"]).default("continue"),
+  continueMessage: z.string().trim().min(1).max(2000).default("继续"),
   intervalSeconds: z.number().int().min(1).max(3600).default(10),
   maxDurationMinutes: z.number().int().min(1).max(10080).nullable().default(60),
   enabledByAgent: z.record(z.string(), z.boolean()).default({}),
@@ -18,6 +20,7 @@ export const recoverySessionSchema = z.object({
   enabled: z.boolean(), override: z.boolean().nullable(), status: recoveryStatusSchema,
   attempt: z.number().int().nonnegative(), nextAttemptAt: z.number().nullable(), deadlineAt: z.number().nullable(),
   reason: z.string().nullable(), updatedAt: z.number(),
+  deliveryKind: z.enum(["message", "native"]).default("message"),
 });
 export type RecoverySession = z.output<typeof recoverySessionSchema>;
 export const sessionRecoveryRpc = defineRpc({
@@ -30,7 +33,7 @@ export const sessionRecoveryRpc = defineRpc({
     z.object({ action: z.literal("retryNow"), agentId: z.string().min(1) }),
   ]),
   output: z.object({ ok: z.boolean(), sessions: z.array(recoverySessionSchema), policy: recoveryPolicySchema,
-    available: z.boolean(), error: z.string().optional() }),
+    available: z.boolean(), nativeAvailable: z.boolean().default(false), error: z.string().optional() }),
 });
 
 export function recoveryStatusLabel(session: Pick<RecoverySession, "status" | "attempt" | "enabled">, english = false): string {
@@ -48,7 +51,7 @@ export function recoveryStatusLabel(session: Pick<RecoverySession, "status" | "a
 
 export function recoveryReasonLabel(reason: string, english = false): string {
   const reasons: Record<string, [string, string]> = {
-    native_recovery_host_unavailable: ["宿主尚未加载原生恢复接口；不会发送续跑提示词", "The host has not loaded native recovery; no continuation prompt will be sent"],
+    native_recovery_host_unavailable: ["原生接口不可用，需核实此前尝试的投递结果", "Native recovery is unavailable; the previous attempt needs verification"],
     native_recovery_session_changed_or_busy: ["会话已变化或正在运行，未发起原生恢复", "The session changed or is busy; native recovery was not started"],
     native_recovery_session_changed: ["模型、模式或用户消息已变化，未发起原生恢复", "The model, mode or user input changed; native recovery was not started"],
     native_recovery_terminal_unconfirmed: ["恢复回合的结束状态待核实；不会重复投递", "The recovery turn's outcome needs verification; it will not be replayed"],

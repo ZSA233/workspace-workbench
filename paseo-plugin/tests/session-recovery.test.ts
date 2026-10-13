@@ -16,7 +16,7 @@ class MemoryStore implements RecoveryStorage {
   save(records: RecoveryRecord[]) { this.records = structuredClone(records); }
   close() {}
 }
-function harness(options: { store?: MemoryStore; review?: RecoveryReviewBridge; throwSend?: boolean } = {}) {
+function harness(options: { store?: MemoryStore; review?: RecoveryReviewBridge; throwSend?: boolean; nativeAvailable?: boolean; throwAfterAcceptance?: boolean } = {}) {
   let now = 1000000;
   const agent = {
     id: "codex-one", provider: "codex", workspaceId: "workspace-one", cwd: "/test/project", title: "Test session",
@@ -25,11 +25,21 @@ function harness(options: { store?: MemoryStore; review?: RecoveryReviewBridge; 
     pendingPermissions: [], labels: {}, activeTurn: null, archivedAt: null, persistence: { provider: "codex", sessionId: "thread-one" },
   } as unknown as PaseoAgent;
   const entries: Array<{ turnId: string; item: { type: string; text?: string; clientMessageId?: string; message?: string } }> = [];
-  const sent: Array<{ agentId: string; messageId: string }> = [];
+  const sent: Array<{ agentId: string; messageId: string; message?: string }> = [];
   const receipts = new Map<string, import("../server/session-recovery/native-contract.ts").NativeReceipt>();
   const api = { agents: { ref: () => ({ refresh: async () => ({ agent: structuredClone(agent) }), timeline: { refetch: async () => ({ entries: structuredClone(entries) }) } }) } } as unknown as PaseoApi;
   const store = options.store || new MemoryStore();
   const create = () => new SessionRecoveryController({ store, review: options.review, api: async () => api, now: () => now, random: () => 0,
+    nativeAvailable: () => options.nativeAvailable ?? true,
+    send: async (agentId, message, messageId) => {
+      sent.push({ agentId, messageId, message });
+      if (options.throwSend) throw new Error("Connection lost after possible acceptance");
+      const turnId = `recovery-turn-${sent.length}`;
+      entries.push({ turnId, item: { type: "user_message", text: message, clientMessageId: messageId } });
+      agent.lastUserMessageAt = `recovery-message-${sent.length}`;
+      agent.status = "running"; agent.activeTurn = { turnId, startedAt: null };
+      if (options.throwAfterAcceptance) throw new Error("response lost after acceptance");
+    },
     receipt: async (_agentId, attemptId) => receipts.get(attemptId) || null,
     retry: async ({ agentId, attemptId: messageId }) => {
       sent.push({ agentId, messageId });
@@ -44,7 +54,7 @@ function harness(options: { store?: MemoryStore; review?: RecoveryReviewBridge; 
   const controller = create();
   controller.register(agent);
   return { agent, entries, sent, receipts, controller, store, create, now: () => now, advance: (ms: number) => { now += ms; },
-    enable: async (patch = {}) => controller.setPolicy(recoveryPolicySchema.parse(patch)),
+    enable: async (patch = {}) => controller.setPolicy(recoveryPolicySchema.parse({ method: "auto", ...patch })),
     start: async () => controller.turnStarted(agent.id, agent.activeTurn?.turnId || null),
   };
 }
@@ -58,8 +68,98 @@ test("error classification permits transient failures and rejects quota, authent
 });
 
 test("default settings cover all sessions with ten-second interval and a one-hour budget", () => {
-  assert.deepEqual(recoveryPolicySchema.parse({}), { enabled: true, intervalSeconds: 10, maxDurationMinutes: 60, enabledByAgent: {} });
+  assert.deepEqual(recoveryPolicySchema.parse({}), { enabled: true, method: "continue", continueMessage: "继续", intervalSeconds: 10, maxDurationMinutes: 60, enabledByAgent: {} });
   assert.equal(recoveryPolicySchema.safeParse({ intervalSeconds: 0 }).success, false);
+  assert.equal(recoveryPolicySchema.safeParse({ continueMessage: "  " }).success, false);
+});
+
+test("default recovery sends only 继续 even when native recovery is installed", async () => {
+  const h = harness(); await h.controller.setPolicy(recoveryPolicySchema.parse({}));
+  await h.controller.claimFailure(h.agent.id, "original-turn", capacity);
+  h.advance(10000); await h.controller.tick(); await h.start();
+  assert.equal(h.sent.length, 1); assert.equal(h.sent[0].message, "继续");
+  assert.equal(h.entries[0].item.text, "继续"); assert.equal(h.controller.list()[0].deliveryKind, "message");
+  assert.equal(h.controller.list()[0].status, "running");
+  await h.controller.close();
+});
+
+test("prefer-native recovers without a patch through the configured continue message", async () => {
+  const h = harness({ nativeAvailable: false }); await h.enable({ continueMessage: "请继续" });
+  assert.equal(h.controller.isAvailable(), true); assert.equal(h.controller.isNativeAvailable(), false);
+  await h.controller.claimFailure(h.agent.id, "original-turn", capacity); await h.controller.retryNow(h.agent.id);
+  assert.equal(h.sent[0].message, "请继续"); assert.equal(h.receipts.size, 0);
+  assert.equal(h.controller.list()[0].status, "running");
+  const deadline = h.controller.list()[0].deadlineAt;
+  h.agent.activeTurn = null; h.agent.status = "error";
+  await h.controller.turnEnded(h.agent.id, "recovery-turn-1", { kind: "failed", error: capacity });
+  assert.equal(h.controller.list()[0].deadlineAt, deadline);
+  h.advance(10000); await h.controller.tick();
+  assert.equal(h.sent.length, 2); assert.equal(h.sent[1].message, "请继续"); assert.equal(h.controller.list()[0].attempt, 2);
+  await h.controller.close();
+});
+
+test("changing recovery method affects queued work and preserves the episode budget", async () => {
+  const h = harness(); await h.enable(); await h.controller.claimFailure(h.agent.id, "original-turn", capacity);
+  const deadline = h.controller.list()[0].deadlineAt;
+  await h.enable({ method: "continue" }); await h.controller.retryNow(h.agent.id);
+  assert.equal(h.sent[0].message, "继续"); assert.equal(h.controller.list()[0].deadlineAt, deadline);
+  h.agent.activeTurn = null; h.agent.status = "error";
+  await h.controller.turnEnded(h.agent.id, "recovery-turn-1", { kind: "failed", error: capacity });
+  await h.enable(); await h.controller.retryNow(h.agent.id);
+  assert.equal(h.sent[1].message, undefined); assert.equal(h.controller.list()[0].deliveryKind, "native");
+  assert.equal(h.controller.list()[0].deadlineAt, deadline); assert.equal(h.controller.list()[0].attempt, 2);
+  await h.controller.close();
+});
+
+test("a native dispatch timeout never falls back to a continue message", async () => {
+  const h = harness({ throwSend: true }); await h.enable();
+  await h.controller.claimFailure(h.agent.id, "original-turn", capacity); await h.controller.retryNow(h.agent.id);
+  await h.enable({ method: "continue" }); h.advance(10000); await h.controller.tick();
+  assert.equal(h.sent.length, 1); assert.equal(h.sent[0].message, undefined);
+  assert.equal(h.controller.list()[0].deliveryKind, "native"); assert.equal(h.controller.list()[0].status, "uncertain");
+  await h.controller.close();
+});
+
+test("continue delivery accepted before a timeout is verified after reload without sending again", async () => {
+  const h = harness({ throwAfterAcceptance: true }); await h.enable({ method: "continue" });
+  await h.controller.claimFailure(h.agent.id, "original-turn", capacity); await h.controller.retryNow(h.agent.id);
+  assert.equal(h.controller.list()[0].status, "uncertain"); await h.controller.close();
+  const next = h.create(); await next.setPolicy(recoveryPolicySchema.parse({ method: "auto" }));
+  h.advance(5000); await next.tick();
+  assert.equal(next.list()[0].status, "running"); assert.equal(next.list()[0].deliveryKind, "message");
+  assert.equal(h.sent.length, 1); await next.close();
+});
+
+test("unconfirmed continue delivery remains uncertain and cannot be manually or automatically replayed", async () => {
+  const h = harness({ throwSend: true, nativeAvailable: false }); await h.enable();
+  await h.controller.claimFailure(h.agent.id, "original-turn", capacity); await h.controller.retryNow(h.agent.id);
+  assert.equal(h.sent[0].message, "继续"); assert.equal(h.controller.list()[0].status, "uncertain");
+  await assert.rejects(h.controller.retryNow(h.agent.id), /not_waiting/);
+  await h.controller.close(); const next = h.create(); await next.setPolicy(recoveryPolicySchema.parse({}));
+  h.advance(100000); await next.tick(); assert.equal(next.list()[0].status, "uncertain"); assert.equal(h.sent.length, 1);
+  await next.close();
+});
+
+test("stopping continue recovery before a missed start never re-arms its eventual failed turn", async () => {
+  const h = harness({ throwAfterAcceptance: true }); await h.enable({ method: "continue" });
+  await h.controller.claimFailure(h.agent.id, "original-turn", capacity); await h.controller.retryNow(h.agent.id);
+  await h.controller.cancel(h.agent.id);
+  h.agent.activeTurn = null; h.agent.status = "error";
+  await h.controller.turnEnded(h.agent.id, "recovery-turn-1", { kind: "failed", error: capacity });
+  h.advance(10000); await h.controller.tick(); assert.equal(h.controller.list()[0].status, "stopped"); assert.equal(h.sent.length, 1);
+  await h.controller.close();
+});
+
+for (const change of ["newMessage", "stop", "permission", "archive", "quota"] as const) test(`continue fallback respects ${change} cancellation`, async () => {
+  const h = harness({ nativeAvailable: false }); await h.enable();
+  await h.controller.claimFailure(h.agent.id, "original-turn", capacity);
+  if (change === "newMessage") h.agent.lastUserMessageAt = "manual-user-message";
+  if (change === "stop") await h.controller.cancel(h.agent.id);
+  if (change === "permission") h.agent.pendingPermissions = [{ id: "p" }] as never;
+  if (change === "archive") h.agent.archivedAt = "archived";
+  if (change === "quota") await h.controller.turnEnded(h.agent.id, "quota-turn", { kind: "failed", error: { message: "Quota exceeded" } });
+  h.advance(10000); await h.controller.tick(); assert.equal(h.sent.length, 0);
+  await h.controller.close();
 });
 
 test("registration does not resume historical errors; new failure waits and retries without a user message", async () => {
@@ -166,9 +266,9 @@ test("multiple sessions keep independent recovery identities and dispatch once e
   const sent: Array<{ id: string; messageId: string }> = [];
   const api = { agents: { ref: (id: string) => ({ refresh: async () => ({ agent: structuredClone(agents.get(id)) }) }) } } as unknown as PaseoApi;
   const controller = new SessionRecoveryController({ api: async () => api, store: new MemoryStore(), now: () => now, random: () => 0,
-    receipt: async () => null, retry: async ({ agentId: id, attemptId: messageId }) => { sent.push({ id, messageId }); return { agentId: id, attemptId: messageId, status: "accepted", turnId: `turn-${id}`, outcome: null, error: null }; } });
+    send: async () => { throw new Error("unexpected_message"); }, receipt: async () => null, retry: async ({ agentId: id, attemptId: messageId }) => { sent.push({ id, messageId }); return { agentId: id, attemptId: messageId, status: "accepted", turnId: `turn-${id}`, outcome: null, error: null }; } });
   for (const agent of agents.values()) controller.register(agent);
-  await controller.setPolicy(recoveryPolicySchema.parse({}));
+  await controller.setPolicy(recoveryPolicySchema.parse({ method: "auto" }));
   await Promise.all([...agents.keys()].map(id => controller.claimFailure(id, `failed-${id}`, capacity)));
   now += 10000; await Promise.all([controller.tick(), controller.tick()]);
   assert.deepEqual(sent.map(s => s.id).sort(), [...agents.keys()].sort()); assert.equal(new Set(sent.map(s => s.messageId)).size, 3);
@@ -185,7 +285,7 @@ test("non-recoverable errors expose their stop reason without dispatching", asyn
 test("unloading does not change a confirmed running turn into another dispatch", async () => {
   const h = harness(); await h.enable(); await h.controller.claimFailure(h.agent.id, "original-turn", capacity);
   await h.controller.retryNow(h.agent.id); await h.start(); await h.controller.close();
-  const next = h.create(); await next.setPolicy(recoveryPolicySchema.parse({})); h.advance(10000); await next.tick();
+  const next = h.create(); await next.setPolicy(recoveryPolicySchema.parse({ method: "auto" })); h.advance(10000); await next.tick();
   assert.equal(h.sent.length, 1); assert.equal(next.list()[0].status, "running"); await next.close();
 });
 
@@ -241,9 +341,9 @@ test("read-only verification outage pauses without spending attempts or replayin
 test("reload preserves waiting budgets and does not automatically replay an unconfirmed send", async () => {
   const h = harness({ throwSend: true }); await h.enable(); await h.controller.claimFailure(h.agent.id, "original-turn", capacity);
   const deadline = h.controller.list()[0].deadlineAt; await h.controller.close();
-  const next = h.create(); await next.setPolicy(recoveryPolicySchema.parse({})); h.advance(10000); await next.tick();
+  const next = h.create(); await next.setPolicy(recoveryPolicySchema.parse({ method: "auto" })); h.advance(10000); await next.tick();
   assert.equal(h.sent.length, 1); assert.equal(next.list()[0].deadlineAt, deadline); await next.close();
-  const last = h.create(); await last.setPolicy(recoveryPolicySchema.parse({})); h.advance(10000); await last.tick();
+  const last = h.create(); await last.setPolicy(recoveryPolicySchema.parse({ method: "auto" })); h.advance(10000); await last.tick();
   assert.equal(h.sent.length, 1); assert.equal(last.list()[0].status, "uncertain"); await last.close();
 });
 

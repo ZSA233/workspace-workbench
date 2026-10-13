@@ -18,8 +18,10 @@ export interface RecoveryReviewBridge {
 const noReview: RecoveryReviewBridge = { inspect: async () => null, suspend: async () => {}, resume: async () => {}, stop: async () => {} };
 type Dependencies = {
   api(): Promise<PaseoApi>;
-  retry(attempt: NativeAttempt): Promise<NativeReceipt | null>;
-  receipt(agentId: string, attemptId: string): Promise<NativeReceipt | null>;
+  send(agentId: string, message: string, messageId: string): Promise<void>;
+  retry?(attempt: NativeAttempt): Promise<NativeReceipt | null>;
+  receipt?(agentId: string, attemptId: string): Promise<NativeReceipt | null>;
+  nativeAvailable?(): boolean;
   store: RecoveryStorage;
   review?: RecoveryReviewBridge;
   now?: () => number;
@@ -57,6 +59,8 @@ export class SessionRecoveryController {
   }
   enabled(agentId: string): boolean { return this.available && (this.policy.enabledByAgent[agentId] ?? this.policy.enabled); }
   getPolicy(): RecoveryPolicy { return structuredClone(this.policy); }
+  isNativeAvailable(): boolean { return Boolean(this.deps.retry && this.deps.receipt && (this.deps.nativeAvailable?.() ?? true)); }
+  private deliveryKind(): "message" | "native" { return this.policy.method === "auto" && this.isNativeAvailable() ? "native" : "message"; }
   isAvailable(): boolean { return this.available && !this.closed; }
   async setPolicy(policy: RecoveryPolicy | null): Promise<void> {
     this.available = policy !== null;
@@ -93,6 +97,7 @@ export class SessionRecoveryController {
       connectedToWorkbench: r.connectedToWorkbench, enabled: this.enabled(r.agentId), override: this.policy.enabledByAgent[r.agentId] ?? null,
       status: !this.isAvailable() ? "unavailable" : !this.enabled(r.agentId) && !activeStatuses.has(r.status) ? "off" : r.status,
       attempt: r.attempt, nextAttemptAt: r.nextAttemptAt, deadlineAt: r.deadlineAt, reason: r.reason, updatedAt: r.updatedAt,
+      deliveryKind: r.messageId ? r.deliveryKind : this.deliveryKind(),
     }));
   }
   private expired(record: RecoveryRecord): boolean { return record.deadlineAt !== null && this.now() >= record.deadlineAt; }
@@ -174,6 +179,7 @@ export class SessionRecoveryController {
   }
   private async delivery(api: PaseoApi, record: RecoveryRecord): Promise<{ found: boolean; turnId: string | null; newerUser: boolean; outcome?: NativeOutcome | null }> {
     if (record.deliveryKind === "native") {
+      if (!this.deps.receipt) throw new Error("native_recovery_host_unavailable");
       const receipt = record.messageId ? await this.deps.receipt(record.agentId, record.messageId) : null;
       const agent = (await api.agents.ref(record.agentId).refresh())?.agent;
       if (!agent) throw new Error("session_verification_unavailable");
@@ -308,10 +314,23 @@ export class SessionRecoveryController {
         r.deadlineAt = this.policy.maxDurationMinutes === null ? null : r.firstFailureAt! + this.policy.maxDurationMinutes * 60000;
         if (this.expired(r)) { await this.stop(r, "recovery_time_limit"); return; }
         const sending: RecoveryRecord = { ...r, status: "sending", attempt: r.attempt + 1,
-          deliveryKind: "native", messageId: `workbench-recovery:${r.episodeId}:${r.attempt + 1}`, attemptStartedAt: this.now(), nextAttemptAt: null };
+          deliveryKind: this.deliveryKind(), messageId: `workbench-recovery:${r.episodeId}:${r.attempt + 1}`, attemptStartedAt: this.now(), nextAttemptAt: null };
         this.persist(sending);
         try {
-          const receipt = await this.deps.retry({ agentId, attemptId: sending.messageId!, identity: sending.identity!, lastUserMessageAt: sending.lastUserMessageAt, failedTurnId: sending.failedTurnId! });
+          if (sending.deliveryKind === "message") {
+            await this.deps.send(agentId, this.policy.continueMessage, sending.messageId!);
+            if (this.closed) return;
+            this.persist({ ...sending, status: "uncertain", reason: "awaiting_turn_identity" });
+            const proof = await this.delivery(api, sending);
+            if (proof.newerUser) { await this.stop(sending, "new_user_message"); return; }
+            if (proof.found && proof.turnId) {
+              const snapshot = (await api.agents.ref(agentId).refresh())?.agent;
+              if (snapshot) sending.lastUserMessageAt = snapshot.lastUserMessageAt;
+              await this.acceptStarted(sending, proof.turnId);
+            }
+            return;
+          }
+          const receipt = await this.deps.retry!({ agentId, attemptId: sending.messageId!, identity: sending.identity!, lastUserMessageAt: sending.lastUserMessageAt, failedTurnId: sending.failedTurnId! });
           if (this.closed) return;
           if (receipt?.status === "rejected") { await this.stop(sending, receipt.error || "native_recovery_rejected"); return; }
           if (receipt?.turnId && ["accepted", "finished"].includes(receipt.status)) await this.acceptStarted(sending, receipt.turnId);

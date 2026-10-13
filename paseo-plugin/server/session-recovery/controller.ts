@@ -1,11 +1,13 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
 import { recoveryPolicySchema, type RecoveryPolicy, type RecoverySession } from "../../shared/session-recovery.ts";
 import { actualPlanningState } from "../execution-policy.ts";
 import { recoverableFailure, type RecoveryFailure } from "./errors.ts";
 import type { RecoveryRecord, RecoveryStorage } from "./store.ts";
+import { recoveryIdentity } from "./identity.ts";
+import type { NativeAttempt, NativeReceipt, NativeOutcome } from "./native-contract.ts";
+export { recoveryIdentity } from "./identity.ts";
 
-export const recoveryPrompt = "<paseo-system>\nThe previous turn stopped because of a temporary service or connection failure. Continue the last unfinished request using this conversation's history and current work state. Check completed operations and tool results before acting; do not replay completed changes or the original handoff. Follow the user's latest instructions, current planning mode, permissions and existing task scope. If work is already complete or needs user input, report that and stop.\n</paseo-system>";
 const activeStatuses = new Set(["waiting", "sending", "running", "paused", "uncertain"]);
 export interface RecoveryReviewBridge {
   inspect(agent: PaseoAgent): Promise<string | null>;
@@ -16,22 +18,13 @@ export interface RecoveryReviewBridge {
 const noReview: RecoveryReviewBridge = { inspect: async () => null, suspend: async () => {}, resume: async () => {}, stop: async () => {} };
 type Dependencies = {
   api(): Promise<PaseoApi>;
-  send(agentId: string, message: string, messageId: string): Promise<void>;
+  retry(attempt: NativeAttempt): Promise<NativeReceipt | null>;
+  receipt(agentId: string, attemptId: string): Promise<NativeReceipt | null>;
   store: RecoveryStorage;
   review?: RecoveryReviewBridge;
   now?: () => number;
   random?: () => number;
 };
-export function recoveryIdentity(agent: PaseoAgent): string {
-  return createHash("sha256").update(JSON.stringify({
-    id: agent.id, provider: agent.provider, cwd: agent.cwd, workspace: agent.workspaceId || null,
-    session: agent.persistence?.sessionId || agent.runtimeInfo?.sessionId || null,
-    mode: agent.currentModeId, planning: actualPlanningState(agent), model: agent.model || null, runtimeModel: agent.runtimeInfo?.model || null,
-    thinking: agent.thinkingOptionId || null, effectiveThinking: agent.effectiveThinkingOptionId || null,
-    features: agent.features?.map(f => [f.id, f.value]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
-    labels: Object.entries(agent.labels || {}).filter(([key]) => key.startsWith("workspace-workbench.") && !key.startsWith("workspace-workbench.recovery")).sort(),
-  })).digest("hex");
-}
 function confirmedMode(agent: PaseoAgent): boolean {
   return Boolean(agent.currentModeId && actualPlanningState(agent) !== "unknown");
 }
@@ -82,7 +75,7 @@ export class SessionRecoveryController {
     const record: RecoveryRecord = previous ? { ...previous } : {
       agentId: agent.id, status: "ready", attempt: 0, nextAttemptAt: null, deadlineAt: null, reason: null,
       updatedAt: this.now(), episodeId: null, firstFailureAt: null, failedTurnId: null, recoveryTurnId: null,
-      messageId: null, attemptStartedAt: null, identity: null, lastUserMessageAt: null, taskGuard: null,
+      messageId: null, attemptStartedAt: null, deliveryKind: "native", identity: null, lastUserMessageAt: null, taskGuard: null,
       workspaceId: null, workspaceName: "", title: "", role: null, connectedToWorkbench: false, archived: false,
     };
     record.workspaceId = agent.workspaceId || null; record.workspaceName = workspaceName || record.workspaceName || agent.cwd;
@@ -179,7 +172,15 @@ export class SessionRecoveryController {
       return true;
     });
   }
-  private async delivery(api: PaseoApi, record: RecoveryRecord): Promise<{ found: boolean; turnId: string | null; newerUser: boolean }> {
+  private async delivery(api: PaseoApi, record: RecoveryRecord): Promise<{ found: boolean; turnId: string | null; newerUser: boolean; outcome?: NativeOutcome | null }> {
+    if (record.deliveryKind === "native") {
+      const receipt = record.messageId ? await this.deps.receipt(record.agentId, record.messageId) : null;
+      const agent = (await api.agents.ref(record.agentId).refresh())?.agent;
+      if (!agent) throw new Error("session_verification_unavailable");
+      const known = receipt && ["accepted", "finished"].includes(receipt.status) && receipt.turnId;
+      return { found: Boolean(known), turnId: known ? receipt!.turnId : null,
+        newerUser: agent.lastUserMessageAt !== record.lastUserMessageAt, outcome: receipt?.outcome };
+    }
     const history = await api.agents.ref(record.agentId).timeline.refetch({ direction: "tail", limit: 200 });
     let found = false, turnId: string | null = null, newerUser = false;
     for (const entry of history.entries) {
@@ -220,6 +221,9 @@ export class SessionRecoveryController {
             if (snapshot) r.lastUserMessageAt = snapshot.lastUserMessageAt;
             await this.acceptStarted(r, turnId); return;
           }
+          if (r.deliveryKind === "native" && !proof.newerUser) {
+            this.persist({ ...r, status: "uncertain", reason: "awaiting_turn_identity" }); return;
+          }
         } catch { this.persist({ ...r, status: "uncertain", reason: "delivery_verification_unavailable" }); return; }
       }
       if (activeStatuses.has(r.status)) await this.stop(r, "new_user_turn");
@@ -252,7 +256,18 @@ export class SessionRecoveryController {
           if (r.identity !== recoveryIdentity(agent)) { await this.stop(r, "session_identity_or_mode_changed"); return; }
           if (proof.newerUser) { await this.stop(r, "new_user_message"); return; }
           if (proof.found && proof.turnId) {
+            if (proof.outcome) {
+              if (r.status !== "running") await this.review.resume(r, proof.turnId);
+              this.persist({ ...r, recoveryTurnId: proof.turnId, status: "running" });
+              const outcome = proof.outcome, turnId = proof.turnId;
+              queueMicrotask(() => { void this.turnEnded(agentId, turnId, outcome).catch(() => {}); });
+              return;
+            }
             if (agent.activeTurn?.turnId === proof.turnId && r.status !== "running") { r.lastUserMessageAt = agent.lastUserMessageAt; await this.acceptStarted(r, proof.turnId); }
+            if (r.deliveryKind === "native") {
+              if (!agent.activeTurn) this.persist({ ...this.records.get(agentId)!, status: "uncertain", reason: "native_recovery_terminal_unconfirmed" });
+              return; // Native receipts own terminal evidence, including across reload.
+            }
             // A terminal lifecycle event may have been lost during reload. Only
             // explicit terminal history evidence may continue the recovery chain.
             const history = await api.agents.ref(agentId).timeline.refetch({ direction: "tail", limit: 200 });
@@ -293,13 +308,18 @@ export class SessionRecoveryController {
         r.deadlineAt = this.policy.maxDurationMinutes === null ? null : r.firstFailureAt! + this.policy.maxDurationMinutes * 60000;
         if (this.expired(r)) { await this.stop(r, "recovery_time_limit"); return; }
         const sending: RecoveryRecord = { ...r, status: "sending", attempt: r.attempt + 1,
-          messageId: `workbench-recovery:${r.episodeId}:${r.attempt + 1}`, attemptStartedAt: this.now(), nextAttemptAt: null };
+          deliveryKind: "native", messageId: `workbench-recovery:${r.episodeId}:${r.attempt + 1}`, attemptStartedAt: this.now(), nextAttemptAt: null };
         this.persist(sending);
         try {
-          await this.deps.send(agentId, recoveryPrompt, sending.messageId!);
-          if (!this.closed) this.persist({ ...sending, status: "uncertain", reason: "awaiting_turn_identity" });
-        } catch {
-          if (!this.closed) this.persist({ ...sending, status: "uncertain", reason: "delivery_outcome_unknown" });
+          const receipt = await this.deps.retry({ agentId, attemptId: sending.messageId!, identity: sending.identity!, lastUserMessageAt: sending.lastUserMessageAt, failedTurnId: sending.failedTurnId! });
+          if (this.closed) return;
+          if (receipt?.status === "rejected") { await this.stop(sending, receipt.error || "native_recovery_rejected"); return; }
+          if (receipt?.turnId && ["accepted", "finished"].includes(receipt.status)) await this.acceptStarted(sending, receipt.turnId);
+          else this.persist({ ...sending, status: "uncertain", reason: "awaiting_turn_identity" });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "delivery_outcome_unknown";
+          if (!this.closed && /native_recovery_session_changed|native_recovery_session_unavailable|native_recovery_attempt_conflict/.test(reason)) await this.stop(sending, reason);
+          else if (!this.closed) this.persist({ ...this.records.get(agentId)!, status: "uncertain", reason: "delivery_outcome_unknown" });
         }
       } catch (error) {
         if (!this.closed) {

@@ -48,6 +48,10 @@ export function recoveryStatusLabel(session: Pick<RecoverySession, "status" | "a
 
 export function recoveryReasonLabel(reason: string, english = false): string {
   const reasons: Record<string, [string, string]> = {
+    native_recovery_host_unavailable: ["宿主尚未加载原生恢复接口；不会发送续跑提示词", "The host has not loaded native recovery; no continuation prompt will be sent"],
+    native_recovery_session_changed_or_busy: ["会话已变化或正在运行，未发起原生恢复", "The session changed or is busy; native recovery was not started"],
+    native_recovery_session_changed: ["模型、模式或用户消息已变化，未发起原生恢复", "The model, mode or user input changed; native recovery was not started"],
+    native_recovery_terminal_unconfirmed: ["恢复回合的结束状态待核实；不会重复投递", "The recovery turn's outcome needs verification; it will not be replayed"],
     stopped_by_user: ["已手动停止本次恢复", "This recovery was stopped manually"],
     automatic_recovery_disabled: ["自动恢复已关闭", "Automatic recovery was disabled"],
     recovery_time_limit: ["已达到本次恢复的最长时间", "The recovery time limit was reached"],

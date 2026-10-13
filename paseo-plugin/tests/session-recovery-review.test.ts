@@ -64,11 +64,14 @@ async function prepare(root: string, config: string, role: "worker" | "reviewer"
   });
   if (role === "reviewer") writeReviewState(authKey(session.id), { token: "same-readonly-token", workspaceId, reviewerAgentId: agent.id });
   let records: RecoveryRecord[] = [];
+  const receipts = new Map<string, import("../server/session-recovery/native-contract.ts").NativeReceipt>();
   const controller = new SessionRecoveryController({ api: async () => api, review: bridge,
     store: { load: () => records, save: rows => { records = structuredClone(rows); }, close() {} }, random: () => 0,
-    send: async (_id, _prompt, messageId) => {
-      agent.lastUserMessageAt = "recovery"; agent.activeTurn = { turnId: "resumed-turn", startedAt: null }; agent.status = "running";
-      entries.push({ turnId: "resumed-turn", item: { type: "user_message", clientMessageId: messageId } });
+    receipt: async (_id, attemptId) => receipts.get(attemptId) || null,
+    retry: async ({ agentId, attemptId }) => {
+       agent.activeTurn = { turnId: "resumed-turn", startedAt: null }; agent.status = "running";
+      const receipt = { agentId, attemptId, status: "accepted" as const, turnId: "resumed-turn", outcome: null, error: null };
+      receipts.set(attemptId, receipt); return receipt;
     },
   });
   controller.register(agent); await controller.setPolicy(recoveryPolicySchema.parse({}));

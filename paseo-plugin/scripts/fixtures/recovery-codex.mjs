@@ -40,7 +40,8 @@ createInterface({ input: process.stdin }).on("line", line => {
       current = read(params.threadId);
       const text = (params.input || []).filter(item => item.type === "text").map(item => item.text).join("\n");
       if (!current.scenario) current.scenario = text;
-      const turn = { id: randomUUID(), items: [{ id: randomUUID(), type: "userMessage", content: [{ type: "text", text }] }], status: "inProgress", error: null };
+      const turn = { id: randomUUID(), items: params.input?.length ? [{ id: randomUUID(), type: "userMessage", content: [{ type: "text", text }] }] : [], status: "inProgress", error: null };
+      current.inputs ||= []; current.inputs.push(params.input || []);
       current.turns.push(turn); save(current); reply({ turn });
       setTimeout(() => notify("turn/started", { threadId: current.id, turn }), 25);
       setTimeout(() => {

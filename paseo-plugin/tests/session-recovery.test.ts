@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
 import { recoveryPolicySchema } from "../shared/session-recovery.ts";
 import { recoverableFailure } from "../server/session-recovery/errors.ts";
-import { recoveryPrompt, SessionRecoveryController, type RecoveryReviewBridge } from "../server/session-recovery/controller.ts";
+import { SessionRecoveryController, type RecoveryReviewBridge } from "../server/session-recovery/controller.ts";
 import { RecoveryDiskStore, type RecoveryRecord, type RecoveryStorage } from "../server/session-recovery/store.ts";
 
 const capacity = { message: "Selected model is at capacity. Please try a different model." };
@@ -25,21 +25,25 @@ function harness(options: { store?: MemoryStore; review?: RecoveryReviewBridge; 
     pendingPermissions: [], labels: {}, activeTurn: null, archivedAt: null, persistence: { provider: "codex", sessionId: "thread-one" },
   } as unknown as PaseoAgent;
   const entries: Array<{ turnId: string; item: { type: string; text?: string; clientMessageId?: string; message?: string } }> = [];
-  const sent: Array<{ agentId: string; message: string; messageId: string }> = [];
+  const sent: Array<{ agentId: string; messageId: string }> = [];
+  const receipts = new Map<string, import("../server/session-recovery/native-contract.ts").NativeReceipt>();
   const api = { agents: { ref: () => ({ refresh: async () => ({ agent: structuredClone(agent) }), timeline: { refetch: async () => ({ entries: structuredClone(entries) }) } }) } } as unknown as PaseoApi;
   const store = options.store || new MemoryStore();
   const create = () => new SessionRecoveryController({ store, review: options.review, api: async () => api, now: () => now, random: () => 0,
-    send: async (agentId, message, messageId) => {
-      sent.push({ agentId, message, messageId });
+    receipt: async (_agentId, attemptId) => receipts.get(attemptId) || null,
+    retry: async ({ agentId, attemptId: messageId }) => {
+      sent.push({ agentId, messageId });
       if (options.throwSend) throw new Error("Connection lost after possible acceptance");
       const turnId = `recovery-turn-${sent.length}`;
-      entries.push({ turnId, item: { type: "user_message", text: message, clientMessageId: messageId } });
-      agent.status = "running"; agent.activeTurn = { turnId, startedAt: null }; agent.lastUserMessageAt = `recovery-user-time-${sent.length}`;
+      const receipt = { agentId, attemptId: messageId, status: "accepted" as const, turnId, outcome: null, error: null };
+      receipts.set(messageId, receipt);
+      agent.status = "running"; agent.activeTurn = { turnId, startedAt: null };
+      return receipt;
     },
   });
   const controller = create();
   controller.register(agent);
-  return { agent, entries, sent, controller, store, create, now: () => now, advance: (ms: number) => { now += ms; },
+  return { agent, entries, sent, receipts, controller, store, create, now: () => now, advance: (ms: number) => { now += ms; },
     enable: async (patch = {}) => controller.setPolicy(recoveryPolicySchema.parse(patch)),
     start: async () => controller.turnStarted(agent.id, agent.activeTurn?.turnId || null),
   };
@@ -58,13 +62,13 @@ test("default settings cover all sessions with ten-second interval and a one-hou
   assert.equal(recoveryPolicySchema.safeParse({ intervalSeconds: 0 }).success, false);
 });
 
-test("registration does not resume historical errors; new failure waits and sends only a continuation", async () => {
+test("registration does not resume historical errors; new failure waits and retries without a user message", async () => {
   const h = harness(); await h.enable();
   await h.controller.tick(); assert.equal(h.sent.length, 0);
   assert.equal(await h.controller.claimFailure(h.agent.id, "original-turn", capacity), true);
   h.advance(9999); await h.controller.tick(); assert.equal(h.sent.length, 0);
   h.advance(1); await h.controller.tick(); assert.equal(h.sent.length, 1);
-  assert.equal(h.sent[0].message, recoveryPrompt);
+  assert.equal(h.entries.length, 0);
   await h.start(); assert.equal(h.controller.list()[0].status, "running");
   assert.equal(h.controller.list()[0].attempt, 1);
   h.agent.activeTurn = null; h.agent.status = "idle";
@@ -84,7 +88,7 @@ test("a transient Review resume failure is reconciled without redelivering the a
   let resumed = 0;
   const review: RecoveryReviewBridge = { inspect: async () => "task", suspend: async () => {}, stop: async () => {}, resume: async () => { if (++resumed === 1) throw new Error("runtime_unavailable"); } };
   const h = harness({ review }); await h.enable(); await h.controller.claimFailure(h.agent.id, "original-turn", capacity);
-  await h.controller.retryNow(h.agent.id); await h.start();
+  await h.controller.retryNow(h.agent.id);
   assert.equal(h.controller.list()[0].status, "uncertain");
   h.advance(5000); await h.controller.tick();
   assert.equal(resumed, 2); assert.equal(h.controller.list()[0].status, "running"); assert.equal(h.sent.length, 1);
@@ -162,7 +166,7 @@ test("multiple sessions keep independent recovery identities and dispatch once e
   const sent: Array<{ id: string; messageId: string }> = [];
   const api = { agents: { ref: (id: string) => ({ refresh: async () => ({ agent: structuredClone(agents.get(id)) }) }) } } as unknown as PaseoApi;
   const controller = new SessionRecoveryController({ api: async () => api, store: new MemoryStore(), now: () => now, random: () => 0,
-    send: async (id, _prompt, messageId) => { sent.push({ id, messageId }); } });
+    receipt: async () => null, retry: async ({ agentId: id, attemptId: messageId }) => { sent.push({ id, messageId }); return { agentId: id, attemptId: messageId, status: "accepted", turnId: `turn-${id}`, outcome: null, error: null }; } });
   for (const agent of agents.values()) controller.register(agent);
   await controller.setPolicy(recoveryPolicySchema.parse({}));
   await Promise.all([...agents.keys()].map(id => controller.claimFailure(id, `failed-${id}`, capacity)));
@@ -183,6 +187,18 @@ test("unloading does not change a confirmed running turn into another dispatch",
   await h.controller.retryNow(h.agent.id); await h.start(); await h.controller.close();
   const next = h.create(); await next.setPolicy(recoveryPolicySchema.parse({})); h.advance(10000); await next.tick();
   assert.equal(h.sent.length, 1); assert.equal(next.list()[0].status, "running"); await next.close();
+});
+
+for (const kind of ["completed", "failed"] as const) test(`native receipt reconciles a missed ${kind} event without adding a message`, async () => {
+  const h = harness(); await h.enable(); await h.controller.claimFailure(h.agent.id, "original-turn", capacity);
+  await h.controller.retryNow(h.agent.id);
+  const attempt = h.sent[0].messageId, original = h.receipts.get(attempt)!;
+  h.receipts.set(attempt, { ...original, status: "finished", outcome: { kind, ...(kind === "failed" ? { error: capacity } : {}) } });
+  h.agent.activeTurn = null; h.agent.status = kind === "failed" ? "error" : "idle";
+  h.advance(5000); await h.controller.tick(); await new Promise(r => setImmediate(r));
+  assert.equal(h.controller.list()[0].status, kind === "failed" ? "waiting" : "succeeded");
+  assert.equal(h.sent.length, 1); assert.equal(h.entries.length, 0); assert.equal(h.controller.list()[0].attempt, 1);
+  await h.controller.close();
 });
 
 for (const mutation of ["newMessage", "mode", "planning", "model", "requestedModel", "permission", "archive", "closed", "busy"] as const) {

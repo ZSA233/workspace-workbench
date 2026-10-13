@@ -12,6 +12,7 @@ export const recoveryRecordSchema = z.object({
   reason: z.string().nullable(), updatedAt: z.number(), episodeId: z.string().nullable(), firstFailureAt: z.number().nullable(),
   failedTurnId: z.string().nullable(), recoveryTurnId: z.string().nullable(), messageId: z.string().nullable(),
   attemptStartedAt: z.number().nullable().default(null),
+  deliveryKind: z.enum(["message", "native"]).default("message"),
   identity: z.string().nullable(), lastUserMessageAt: z.string().nullable(), taskGuard: z.string().nullable(),
 }).passthrough();
 export type RecoveryRecord = z.output<typeof recoveryRecordSchema>;

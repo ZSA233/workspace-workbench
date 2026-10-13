@@ -7,14 +7,26 @@ import type { HostConnection } from "../host-connection.ts";
 import { SessionRecoveryController, type RecoveryReviewBridge } from "./controller.ts";
 import { installRecoveryCoordinator } from "./current.ts";
 import { RecoveryDiskStore, recoveryStorageLocation } from "./store.ts";
+import { nativeRecoveryMethod, nativeReceiptSchema } from "./native-contract.ts";
 
 export function registerSessionRecovery(server: PluginServerContext, host: HostConnection, review: RecoveryReviewBridge): () => Promise<void> {
   const settings = server.registerSettings(recoverySettings);
   let controller: SessionRecoveryController | null = null, disposed = false, booting = false;
   let removeCoordinator = () => {};
   let lastError = "recovery_starting";
+  let nextBootAt = 0, warnedError = "";
   let scanAt = 0;
   const workspaceNames = new Map<string, string>();
+  async function nativeRpc(input: unknown): Promise<unknown> {
+    return host.run(async (_api, client) => {
+      if (!client.invokePluginRpc) throw new Error("native_recovery_host_unavailable");
+      return client.invokePluginRpc("workspace-workbench-paseo", nativeRecoveryMethod, input);
+    });
+  }
+  const receiptFrom = (result: unknown) => {
+    const value = (result as { receipt?: unknown })?.receipt;
+    return value == null ? null : nativeReceiptSchema.parse(value);
+  };
   async function remember(agent: PaseoAgent): Promise<void> {
     if (!controller || agent.provider !== "codex") return;
     controller.register(agent, agent.workspaceId ? workspaceNames.get(agent.workspaceId) : undefined);
@@ -50,16 +62,16 @@ export function registerSessionRecovery(server: PluginServerContext, host: HostC
     scanAt = Date.now(); lastError = "";
   }
   async function boot(): Promise<void> {
-    if (disposed || booting || controller) return;
+    if (disposed || booting || controller || Date.now() < nextBootAt) return;
     booting = true;
     let store: RecoveryDiskStore | undefined;
     try {
+      const capability = await nativeRpc({ action: "capabilities" }) as { version?: number; emptyInput?: boolean; receipts?: boolean };
+      if (capability.version !== 1 || !capability.emptyInput || !capability.receipts) throw new Error("native_recovery_host_unavailable");
       const location = recoveryStorageLocation(); store = new RecoveryDiskStore(location.directory, location.serverId);
       const candidate = new SessionRecoveryController({ store, review, api: () => host.api(),
-        send: (agentId, message, messageId) => host.run(async (_api, client) => {
-          if (!client.sendMessage) throw new Error("recovery_send_unavailable");
-          await client.sendMessage(agentId, message, { messageId, activeTurnBehavior: "steer" });
-        }),
+        retry: async attempt => receiptFrom(await nativeRpc({ action: "start", ...attempt })),
+        receipt: async (agentId, attemptId) => receiptFrom(await nativeRpc({ action: "read", agentId, attemptId })),
       });
       if (disposed) { await candidate.close(); return; }
       controller = candidate; removeCoordinator = installRecoveryCoordinator(candidate);
@@ -68,9 +80,10 @@ export function registerSessionRecovery(server: PluginServerContext, host: HostC
       await candidate.setPolicy(policy.status === "ready" ? policy.values : null);
       await scan(); lastError = "";
     } catch (error) {
-      lastError = error instanceof Error ? error.message : "recovery_initialization_failed";
+      lastError = controller ? (error instanceof Error ? error.message : "recovery_initialization_failed") : "native_recovery_host_unavailable";
       if (!controller) store?.close();
-      console.warn("workbench_recovery_unavailable", lastError);
+      nextBootAt = Date.now() + 5000;
+      if (warnedError !== lastError) { console.warn("workbench_recovery_unavailable", lastError); warnedError = lastError; }
     } finally { booting = false; }
   }
   const unsubscribeSettings = settings.subscribe(async state => {

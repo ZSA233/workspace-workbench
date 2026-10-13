@@ -201,6 +201,18 @@ approved isolated Playwright harness. It did not reload the daily plugin, publis
 an artifact or alter ordinary project workspaces.
 # Codex session auto recovery (2026-10-13)
 
+Native recovery follow-up replaces the continuation prompt with host-owned
+`turn/start` / `input: []`. Recovery creates an execution attempt without adding a
+user message or blank message. Durable host receipts associate attempt IDs with
+actual turns and terminal outcomes; uncertain attempts are never replayed. A
+version-checked installer adds the local bridge to Paseo 0.11.0 and backs up the
+original entrypoint. Loading it requires a daemon restart. Missing capability
+disables recovery with a visible reason instead of falling back to a prompt.
+Follow-up validation: typecheck, 588 plugin tests (51 recovery regressions), actual
+isolated Paseo host and rendered UI checks passed. Actual Codex 0.161.0 with a
+loopback Responses fixture also recovered with unchanged model input and no new
+user message. None of these checks called a real model.
+
 - Covers all ordinary Codex sessions on the local Paseo service, including sessions
   outside registered Workbench projects. Defaults to a ten-second retry interval
   plus up to two seconds of jitter and a one-hour episode budget; settings support
@@ -209,11 +221,11 @@ an artifact or alter ordinary project workspaces.
   immediate retry and delivery-verification state. Existing Workbench tool access
   and task roles remain separate from recovery coverage. Individual sidebar-row
   badges require a Paseo extension point and are not part of this plugin change.
-- Persists generation-owned recovery journals under the isolated host home and
+- Persists generation-owned recovery journals under the current host home and
   never automatically replays uncertain delivery. Recovery continues the original
-  conversation without resending the initial handoff, changing models or changing
-  planning/permission settings. The host's non-atomic send interface still leaves
-  a narrow user-input race; tool execution is not guaranteed exactly once.
+  conversation with native empty input without resending the initial handoff,
+  changing models or changing planning/permission settings. The host rejects busy
+  or changed sessions; tool execution is not guaranteed exactly once.
 - Worker/Reviewer integration retains the review round and frozen task, discards
   failed-turn candidates and preserves remaining execution timeout budgets.
 - Verification uses the actual isolated Paseo host with a deterministic local

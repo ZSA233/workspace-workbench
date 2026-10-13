@@ -33,11 +33,14 @@ export async function verifySessionRecovery({ client, root, wait, report, reload
   const waiting = await wait(async () => { const s = await state(first); return s.status === "waiting" ? s : null; });
   assert.equal(waiting.connectedToWorkbench, false); assert.ok(waiting.nextAttemptAt - Date.now() <= 12000);
   await rpc({ action: "retryNow", agentId: first });
-  const completed = await wait(async () => { const s = await state(first); return s.status === "succeeded" ? s : null; });
+  const completed = await wait(async () => { const s = await state(first); if (["stopped", "paused"].includes(s.status)) throw new Error(`native_recovery_failed: ${s.reason}`); return s.status === "succeeded" ? s : null; });
   assert.equal(completed.attempt, 1);
   const thread = await threads(first); assert.equal(thread.turns.length, 2);
-  assert.match(thread.turns[1].items[0].content[0].text, /Continue the last unfinished request/);
-  report.checks.push("actual host recovered an unregistered Codex capacity failure in the original session using one continuation");
+  assert.deepEqual(thread.inputs[1], []);
+  assert.equal(thread.turns.flatMap(turn => turn.items).filter(item => item.type === "userMessage").length, 1);
+  const timeline = await client.fetchAgentTimeline(first, { direction: "tail", limit: 100 });
+  assert.equal(timeline.entries.filter(entry => entry.item.type === "user_message").length, 1);
+  report.checks.push("actual host recovered an unregistered Codex capacity failure with empty input; native and Paseo history gained no user message");
 
   await policy({ intervalSeconds: 1, maxDurationMinutes: null });
   const network = await create("NETWORK_ONCE");

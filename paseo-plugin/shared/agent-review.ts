@@ -172,7 +172,7 @@ export const reviewEventSchema = z.object({
     "started", "execution_turn_ended", "ready_for_review", "review_queued",
     "reviewer_created", "review_started", "review_candidate", "review_result", "repair_requested",
     "repair_sent", "paused", "resumed", "stopped", "failed", "blocked",
-    "expired", "finished",
+    "expired", "finished", "recovery_waiting", "recovery_resumed",
   ]),
   /** Stable localization key for system events. Older records may omit it. */
   messageKey: z.string().trim().min(1).optional(),
@@ -184,7 +184,7 @@ export type ReviewEvent = z.infer<typeof reviewEventSchema>;
 
 export const reviewSessionStatusSchema = z.enum([
   "waiting_execution", "ready_for_review", "queued", "reviewing", "changes_requested",
-  "fixing", "approved", "blocked", "failed", "stopping", "stopped", "limit_reached",
+  "fixing", "approved", "blocked", "failed", "stopping", "stopped", "limit_reached", "waiting_recovery",
 ]);
 
 export const reviewSessionSchema = z.object({
@@ -230,6 +230,10 @@ export const reviewSessionSchema = z.object({
   reviewerModelId: z.string().trim().min(1).nullable().default(null),
   reviewerTurnId: z.string().trim().min(1).nullable(),
   status: reviewSessionStatusSchema,
+  recovery: z.object({ agentId: z.string(), failedTurnId: z.string(),
+    priorStatus: z.enum(["waiting_execution", "fixing", "reviewing"]), suspendedAt: z.number(), remainingMs: z.number().nullable(),
+  }).nullable().optional(),
+  phaseDeadlineAt: z.number().nullable().optional(),
   round: z.number().int().nonnegative(),
   maxRounds: z.number().int().positive(),
   snapshotId: z.string().nullable(),

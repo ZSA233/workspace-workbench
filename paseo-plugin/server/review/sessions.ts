@@ -7,6 +7,7 @@ import { authKey, reportKey, turnKey } from './identity.ts';
 import type { ReviewInfrastructure } from './infrastructure.ts';
 import type { ReviewSettings } from './settings.ts';
 import type { ReviewWorkspaceState } from './types.ts';
+import { cancelSessionRecovery } from '../session-recovery/current.ts';
 type Dependencies = {
     settings: Pick<ReviewSettings, "preferenceLayers">;
     storage: Pick<ReviewInfrastructure["storage"], "getAgentBinding" | "readSession" | "persistSession" | "removeReviewState" | "sessionIndex" | "readReviewState" | "sessionKey" | "indexKey" | "forgetReviewWorkspace" | "digest">;
@@ -54,6 +55,8 @@ export class ReviewSessions {
         return this.handoffSnapshot(handoff);
     }
     async prepareSessionSupplement(workspaceId: string): Promise<void> {
+        const pendingRecovery = this.deps.storage.readSession(workspaceId);
+        if (pendingRecovery?.status === "waiting_recovery" && pendingRecovery.recovery) await cancelSessionRecovery(pendingRecovery.recovery.agentId, "task_materials_changed");
         await withReviewTransitionLock(workspaceId, async () => {
             const session = this.deps.storage.readSession(workspaceId);
             if (!session)
@@ -224,5 +227,5 @@ export class ReviewSessions {
             return packetCriteria;
         return (session.handoff?.acceptance || []).map((text, index) => ({ id: `AC-${index + 1}`, text, required: true }));
     }
-    activeReviewStatuses = ["waiting_execution", "ready_for_review", "queued", "reviewing", "changes_requested", "fixing", "stopping"] as const;
+    activeReviewStatuses = ["waiting_execution", "ready_for_review", "queued", "reviewing", "changes_requested", "fixing", "stopping", "waiting_recovery"] as const;
 }

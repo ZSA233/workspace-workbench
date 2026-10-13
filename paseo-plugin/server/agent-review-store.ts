@@ -11,7 +11,7 @@ const now = () => new Date().toISOString();
 const epoch = randomUUID();
 const revisions = new Map<string, number>();
 const activeSessions = new Map<string, Map<string, ReviewSession>>();
-const isActive = (session: ReviewSession) => ["queued", "reviewing", "stopping"].includes(session.status);
+const isActive = (session: ReviewSession) => ["queued", "reviewing", "stopping", "waiting_recovery"].includes(session.status);
 export function activeReviewSessions(): ReviewSession[] {
   const project = currentProject(); if (!project) return [];
   let active = activeSessions.get(project.configPath);
@@ -100,4 +100,3 @@ export function storedReviewSessions(): ReviewSession[] {
       });
   } catch { return []; }
 }
-

@@ -2,6 +2,7 @@ import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/c
 import { Platform, Text, View } from "react-native";
 import { useEffect, useSyncExternalStore } from "react";
 import { contextSurfacePrefix, createOpenGuard, workbenchDestination } from "./client/open-workbench";
+import { registerRecoveryClient } from "./client/session-recovery";
 
 import { clearFileReviews, configureFileReviewOpener, openFileReview } from "./client/file-review-store";
 import { copy, getWorkbenchCopy } from "./shared/copy";
@@ -30,6 +31,7 @@ export default function contribute(client: PluginClientContext) {
 }
 
 function contributeClient(client: PluginClientContext) {
+  const cleanupRecovery = registerRecoveryClient(client);
   const workspaceApi = ((client as unknown as { paseo?: { workspaces?: WorkspaceApiCompatibility } }).paseo)?.workspaces;
   function registerPanel(panel: Parameters<PluginClientContext["addWorkspacePanel"]>[0]) {
     reportNativeDiagnostic("registration-before", { stage: `panel:${panel.id}` });
@@ -272,6 +274,7 @@ function contributeClient(client: PluginClientContext) {
 
   console.info(`[workbench/${INITIALIZATION_REVISION}] registered`, platform);
   return () => {
+    cleanupRecovery();
     disposed = true;
     removeNativeRenderErrorHook();
     configureNativeDiagnosticReporter(null);

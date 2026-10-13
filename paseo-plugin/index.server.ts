@@ -15,6 +15,7 @@ import { coordinatorReview,sessionOperation } from "./shared/session-tools";
 import { workspaceAddRepositories,workspaceCreate,workspaceOperationStatus,workspacePreview } from "./shared/workspace-operations";
 
 import { registerAgentIntegration } from "./server/agent-integration";
+import { registerSessionRecovery } from "./server/session-recovery/register";
 import { handleAgentStatus,handleWorkspaceBinding } from "./server/agent-provider";
 import {
 handleCoordinatorReview,
@@ -31,6 +32,7 @@ handleReviewSessionStart,
 handleReviewSettingsGet,
 handleReviewSettingsUpdate,
 registerReviewLifecycle,
+sessionRecoveryReviewBridge,
 } from "./server/agent-review";
 import { handleAgentSessionProviders,handleAgentSessionSettingsGet,handleAgentSessionSettingsUpdate } from "./server/agent-session";
 import { listArtifacts,registerArtifact } from "./server/artifacts";
@@ -145,6 +147,7 @@ export default function contribute(server: PluginServerContext) {
   withHost.handle(executionReport, (input, context) => withProject(input, () => handleExecutionReportRpc(input, context)));
   withHost.handle(reviewerRead, (input, context) => withProject(input, () => handleReviewerReadRpc(input, context)));
   withHost.handle(reviewerResult, (input, context) => withProject(input, () => handleReviewerResultRpc(input, context)));
+  const cleanupRecovery = registerSessionRecovery(measured, host, sessionRecoveryReviewBridge(host));
   const cleanupAgents = registerAgentIntegration(withHost, () => host.api());
   // Review lifecycle hooks are opt-in.  Git observation and Workspace
   // creation must never start, steer or repair an Agent implicitly.
@@ -207,5 +210,5 @@ export default function contribute(server: PluginServerContext) {
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
   withHost.handle(workspaceLifecycle, (input, context) => withProject(input, () => handleWorkspaceLifecycle(input, context)));
-  return async () => { cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); await Promise.all([gateway.close(), closeBackends(), host.close()]); setMcpGateway(null); };
+  return async () => { await cleanupRecovery(); cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); await Promise.all([gateway.close(), closeBackends(), host.close()]); setMcpGateway(null); };
 }

@@ -193,12 +193,12 @@ export class ReviewRequests {
                         const execution = session.executionAgentId ? await context.paseo.agents.ref(session.executionAgentId).refresh() : null;
                         if (!execution?.agent || execution.agent.archivedAt || !this.deps.authorization.runtimeAgentCwdMatches(runtime, execution.agent.cwd))
                             throw new Error("execution_agent_identity_changed");
-                        const resumed = this.deps.storage.persistSession({ ...session, status: "waiting_execution", lastError: null }, { kind: "resumed", summary: "Waiting for a new execution report; no task was resent", details: { phase: "waiting_execution" } });
+                        const resumed = this.deps.storage.persistSession({ ...session, status: "waiting_execution", recovery: null, phaseDeadlineAt: null, lastError: null }, { kind: "resumed", summary: "Waiting for a new execution report; no task was resent", details: { phase: "waiting_execution" } });
                         return { ok: true, session: resumed };
                     }
                     if (session.roundTarget === "coordinator")
                         this.deps.storage.removeReviewState(authKey(session.id));
-                    const resumed = this.deps.storage.persistSession({ ...session, status: "queued", lastError: null,
+                    const resumed = this.deps.storage.persistSession({ ...session, status: "queued", recovery: null, phaseDeadlineAt: null, lastError: null,
                         ...(session.roundTarget === "coordinator" ? { coordinator: null, reviewerAgentId: null, reviewerTurnId: null, pendingReviewerResult: null } : {}),
                     }, { kind: "resumed", summary: "Review resumed", details: {} });
                     return { ok: true, session: await this.deps.dispatch.startReviewer(resumed, context) };

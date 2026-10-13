@@ -18,6 +18,7 @@ import type { ReviewSessions } from './sessions.ts';
 import type { ReviewSettings } from './settings.ts';
 import type { ReviewTransitions } from './transitions.ts';
 import type { ReviewAuth, Runtime } from './types.ts';
+import { claimSessionRecovery, cancelSessionRecovery } from '../session-recovery/current.ts';
 type Dependencies = {
     settings: Pick<ReviewSettings, "projectConfigRaw">;
     sessions: Pick<ReviewSessions, "acceptanceCriteriaFor">;
@@ -258,13 +259,15 @@ export class ReviewDispatch {
         return active;
     }
     monitorReviewer(handle: PaseoAgentHandle, session: ReviewSession, context: AgentContext): void {
-        const monitorKey = `${session.id}:${session.round}:${handle.id}`;
+        const monitorKey = `${session.id}:${session.round}:${handle.id}:${session.reviewerTurnId}`;
         if (this.reviewerMonitors.has(monitorKey))
             return;
         this.reviewerMonitors.add(monitorKey);
-        void handle.waitForFinish(session.preferences.reviewerTimeoutMs).then(async (result) => {
+        const budget = () => session.phaseDeadlineAt == null ? session.preferences.reviewerTimeoutMs : Math.max(1, session.phaseDeadlineAt - Date.now());
+        void handle.waitForFinish(budget()).then(async (result) => {
+            if (["error", "failed"].includes(result.status) && await claimSessionRecovery(handle.id, session.reviewerTurnId, { message: result.error || "Unknown Reviewer failure" })) return;
             let latest = this.deps.storage.readSession(session.workspaceId, session.id);
-            if (!latest || latest.status !== "reviewing" || latest.reviewerAgentId !== handle.id)
+            if (!latest || latest.status !== "reviewing" || latest.reviewerAgentId !== handle.id || latest.reviewerTurnId !== session.reviewerTurnId)
                 return;
             let observed = result;
             if (result.status === "timeout") {
@@ -272,9 +275,10 @@ export class ReviewDispatch {
                 if (active === null)
                     return;
                 if (active) {
-                    observed = await handle.waitForFinish(session.preferences.reviewerTimeoutMs);
+                    observed = await handle.waitForFinish(budget());
+                    if (["error", "failed"].includes(observed.status) && await claimSessionRecovery(handle.id, session.reviewerTurnId, { message: observed.error || "Unknown Reviewer failure" })) return;
                     latest = this.deps.storage.readSession(session.workspaceId, session.id);
-                    if (!latest || latest.status !== "reviewing" || latest.reviewerAgentId !== handle.id)
+                    if (!latest || latest.status !== "reviewing" || latest.reviewerAgentId !== handle.id || latest.reviewerTurnId !== session.reviewerTurnId)
                         return;
                     if (observed.status === "timeout") {
                         const stillActive = await reviewerTurnIsActive(handle, latest);
@@ -313,9 +317,10 @@ export class ReviewDispatch {
             }
             const diagnostic = parsed.success ? "" : parsed.error.issues.map((issue) => issue.path.join(".")).join(", ");
             this.deps.storage.persistSession({ ...latest, status: "failed", lastError: { code: "reviewer_invalid_result", message: "Reviewer finished without a valid structured result" } }, { kind: "failed", summary: "Reviewer returned an invalid result", details: { diagnostic } });
-        }).catch((error) => {
+        }).catch(async (error) => {
+            if (await claimSessionRecovery(handle.id, session.reviewerTurnId, { message: error instanceof Error ? error.message : String(error) }).catch(() => false)) return;
             const latest = this.deps.storage.readSession(session.workspaceId, session.id);
-            if (latest && latest.status === "reviewing")
+            if (latest && latest.status === "reviewing" && latest.reviewerTurnId === session.reviewerTurnId)
                 this.deps.storage.persistSession({ ...latest, status: "failed", lastError: errorInfo(error, "Reviewer turn failed") }, { kind: "failed", summary: "Reviewer turn failed", details: errorInfo(error) });
         }).finally(() => { this.reviewerMonitors.delete(monitorKey); });
     }
@@ -404,7 +409,7 @@ export class ReviewDispatch {
         if (!findings.length)
             throw new Error("review_repair_findings_missing");
         const messageId = this.deps.storage.digest({ sessionId: session.id, round: session.round, snapshotId: session.snapshotId, diffId: session.diffId, findingIds: findings.map((finding) => finding.id) });
-        const pending = this.deps.storage.persistSession({ ...session, status: "fixing", pendingOperation: { kind: "send_repair", requestId: messageId, messageId, createdAt: this.deps.clock.now() } }, { kind: "repair_requested", summary: "Repair requested from the execution Agent", details: { findingIds: findings.map((finding) => finding.id), snapshotId: session.snapshotId, diffId: session.diffId } });
+        const pending = this.deps.storage.persistSession({ ...session, status: "fixing", phaseDeadlineAt: Date.now() + session.preferences.repairTimeoutMs, recovery: null, pendingOperation: { kind: "send_repair", requestId: messageId, messageId, createdAt: this.deps.clock.now() } }, { kind: "repair_requested", summary: "Repair requested from the execution Agent", details: { findingIds: findings.map((finding) => finding.id), snapshotId: session.snapshotId, diffId: session.diffId } });
         const prompt = [
             ...(session.materials ? [`Read required handoff materials ${JSON.stringify(session.materials)} using workbench_handoff_read; include materialsVersion=${session.materials.version} in the execution report.`] : []),
             "Workspace Workbench repair handoff",
@@ -427,6 +432,9 @@ export class ReviewDispatch {
         return this.deps.storage.persistSession({ ...pending, pendingOperation: null }, { kind: "repair_sent", summary: "Repair handoff sent to the same execution Agent", details: { agentId: session.executionAgentId, messageId, findingIds: findings.map((finding) => finding.id) } });
     }
     async cancelAgentIfSupported(context: AgentContext, agentId: string): Promise<void> {
+        // This can run under the review lock; the recovery bridge takes that
+        // same lock, so do not recursively await cancellation here.
+        void cancelSessionRecovery(agentId, "stopped_by_user").catch(() => {});
         const candidate = context.paseo as PaseoApi & {
             cancelAgent?: (id: string) => Promise<void>;
         };
@@ -459,6 +467,13 @@ export class ReviewDispatch {
     async stopReview(session: ReviewSession, context: AgentContext): Promise<ReviewSession> {
         if (["approved", "blocked", "failed", "stopped", "limit_reached"].includes(session.status))
             return session;
+        if (session.status === "waiting_recovery" && session.recovery) {
+            void cancelSessionRecovery(session.recovery.agentId, "stopped_by_user").catch(() => {});
+            this.deps.storage.removeReviewState(authKey(session.id));
+            return this.deps.storage.persistSession({ ...session, status: "stopped", recovery: null, pendingReviewerResult: null,
+                coordinator: session.coordinator ? { ...session.coordinator, phase: "revoked" } : null,
+                stopAgentIds: [], pendingOperation: null, lastError: null }, { kind: "stopped", summary: "Pending session recovery stopped", details: {} });
+        }
         if (session.roundTarget === "coordinator" && session.status !== "fixing") {
             this.deps.storage.removeReviewState(authKey(session.id));
             return this.deps.storage.persistSession({ ...session, status: "stopped", pendingReviewerResult: null,

@@ -9,6 +9,7 @@ import type { ReviewMaterials } from './materials.ts';
 import type { ReviewSessions } from './sessions.ts';
 import type { ReviewSettings } from './settings.ts';
 import type { ExecutionReportRecord, ReviewAuth } from './types.ts';
+import { claimSessionRecovery } from '../session-recovery/current.ts';
 type Dependencies = {
     authorization: Pick<ReviewAuthorization, "validateReportMaterials" | "currentRuntime" | "validateExecutionToken" | "runtimeAgentCwdMatches" | "reviewerContextMatches" | "runtimeIdentity" | "runtimeIdentityFromSnapshot" | "safeRelativePath">;
     settings: Pick<ReviewSettings, "preferenceLayers">;
@@ -51,7 +52,7 @@ export class ReviewTransitions {
             return this.deps.storage.persistSession({ ...session, status: "blocked", lastError: { code: "repair_no_progress", message: "修复后代码快照没有变化" } }, { kind: "blocked", summary: "Repair produced no new code snapshot", details: { snapshotId: snapshot.snapshotId, diffId: snapshot.diffId } });
         }
         session = this.deps.storage.persistSession({ ...session, executionTurnId: input.executionTurnId }, { kind: "execution_turn_ended", summary: "Execution turn completed", details: { turnId: input.executionTurnId, executionAgentId: input.executionAgentId } });
-        session = { ...session, materials: this.deps.storage.getAgentBinding(input.workspaceId)?.handoffBundle, status: "ready_for_review", coordinator: null, roundTarget: session.preferences.reviewerTarget, executionTurnId: input.executionTurnId, round: Math.max(1, session.round + (session.status === "fixing" ? 1 : 0)), snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, snapshot, latestResult: null, pendingOperation: null, lastError: null };
+        session = { ...session, materials: this.deps.storage.getAgentBinding(input.workspaceId)?.handoffBundle, status: "ready_for_review", recovery: null, phaseDeadlineAt: null, coordinator: null, roundTarget: session.preferences.reviewerTarget, executionTurnId: input.executionTurnId, round: Math.max(1, session.round + (session.status === "fixing" ? 1 : 0)), snapshotId: snapshot.snapshotId, diffId: snapshot.diffId, snapshot, latestResult: null, pendingOperation: null, lastError: null };
         session = this.deps.storage.persistSession(session, { kind: "ready_for_review", summary: input.report.summary, details: { executionAgentId: input.executionAgentId, turnId: input.executionTurnId, changes: input.report.changes, tests: input.report.tests, knownLimitations: input.report.knownLimitations, snapshotId: snapshot.snapshotId, diffId: snapshot.diffId } });
         if (session.preferences.mode === "automatic")
             return this.deps.dispatch.startReviewer(session, context);
@@ -64,10 +65,12 @@ export class ReviewTransitions {
         turnId: string | null;
         outcome: {
             kind: string;
+            error?: { message: string; code?: string };
         };
     }, context: AgentContext): Promise<void> {
         if (!event.turnId)
             return;
+        if (event.outcome.kind === "failed" && event.outcome.error && await claimSessionRecovery(event.agent.id, event.turnId, event.outcome.error)) return;
         this.deps.storage.writeReviewState(turnKey(event.agent.id, event.turnId), { outcome: event.outcome.kind, endedAt: this.deps.clock.now() });
         const pending = this.deps.storage.readReviewState<ExecutionReportRecord>(reportKey(event.agent.id));
         if (!pending || pending.consumedAt || pending.turnId !== event.turnId)

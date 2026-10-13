@@ -15,6 +15,7 @@ type TimelineRole = "execution" | "reviewer" | "repair" | "system";
 
 const statusCopyKeys: Partial<Record<ReviewStatus, keyof WorkbenchCopy>> = {
   waiting_execution: "reviewStatusWaitingExecution",
+  waiting_recovery: "reviewStatusWaitingRecovery",
   ready_for_review: "reviewStatusReady",
   queued: "reviewStatusQueued",
   reviewing: "reviewStatusReviewing",
@@ -47,6 +48,8 @@ const eventCopyKeys: Record<ReviewEvent["kind"], keyof WorkbenchCopy> = {
   blocked: "reviewEventBlocked",
   expired: "reviewEventExpired",
   finished: "reviewEventFinished",
+  recovery_waiting: "reviewEventRecoveryWaiting",
+  recovery_resumed: "reviewEventRecoveryResumed",
 };
 
 function statusLabel(status: ReviewStatus, copy: WorkbenchCopy): string {
@@ -346,7 +349,7 @@ export function AgentReviewView({
       </Pressable>
     </View>;
   }
-  const active = ["queued", "reviewing", "fixing", "stopping"].includes(session.status);
+  const active = ["queued", "reviewing", "fixing", "stopping", "waiting_recovery"].includes(session.status);
   const canReview = session.status === "ready_for_review";
   const canManualStart = session.status === "waiting_execution";
   const canRepair = session.status === "changes_requested";

@@ -12,6 +12,7 @@ import { orchestrate } from "./orchestrator.ts";
 import { liveAgentIdentity, type AgentIdentity } from "./agent-identity.ts";
 import { allAgentBindings, getAgentBinding, putAgentBinding, type AgentBinding } from "./agent-store.ts";
 import { getMcpGateway, mcpGatewayConfig } from "./mcp-gateway.ts";
+import { claimSessionRecovery } from "./session-recovery/current.ts";
 
 function bridgeConfig(configPath: string): { enabled: true } | null {
   try {
@@ -160,7 +161,10 @@ export function registerAgentIntegration(server: PluginServerContext, currentApi
     }); } catch { /* Optional display metadata never blocks a turn. */ }
   }
   cleanups.push(server.on("agent.turn_started", (event, context) => { rememberTitle(event.agent); return notify(event.agent.id, "running", event.turnId || "started", context); }));
-  cleanups.push(server.on("agent.turn_ended", (event, context) => notify(event.agent.id, event.outcome.kind === "completed" ? "turn-ended" : event.outcome.kind, event.turnId || "ended", context)));
+  cleanups.push(server.on("agent.turn_ended", async (event, context) => {
+    const recovering = event.outcome.kind === "failed" && await claimSessionRecovery(event.agent.id, event.turnId, event.outcome.error);
+    return notify(event.agent.id, recovering ? "waiting-recovery" : event.outcome.kind === "completed" ? "turn-ended" : event.outcome.kind, event.turnId || "ended", context);
+  }));
   cleanups.push(server.on("agent.permission_requested", (event, context) => notify(event.agent.id, "permission", digest(event.request), context)));
   cleanups.push(server.on("agent.permission_resolved", (event, context) => notify(event.agent.id, "running", event.requestId, context)));
   // Any next lifecycle event retries pending notifications from the same worker.

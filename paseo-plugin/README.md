@@ -91,6 +91,44 @@ detached HEAD 的子仓逐个选择是否从当前提交创建分支。选择保
 认领时 HEAD；detached 提交在移除 worktree 前保存到明确的 Git 引用，预览会列出引用。
 任何新增提交、修改或未知容器文件仍会阻止清理。
 
+## Codex 会话自动恢复
+
+插件启用后，同一个 Paseo 服务中的所有普通 Codex 会话默认开启自动恢复，包括未登记
+Workbench 项目的会话、Worker 和 Reviewer。已有会话会列入覆盖范围；不会自动唤醒此前
+失败、关闭或归档的历史会话，而是从新发生的失败开始处理。
+
+从左侧 **会话自动恢复** 入口查看按 Paseo Workspace 分组的会话列表，或点击会话输入区
+上方的恢复状态按钮。这里能看到是否开启、尝试次数、倒计时及停止原因，并可以关闭单个
+会话、停止本次恢复或立即执行已经排队的尝试。Workbench 工具接入和 Worker／Reviewer
+角色另外展示；它们不决定自动恢复的覆盖范围。当前 Paseo 插件接口不支持左侧每条会话的
+自定义徽标，因此第一版提供独立入口和会话内标识。
+
+默认在明确失败后等待 **10 秒，附加 0～2 秒随机延迟**，本轮恢复最长 **1 小时**。
+设置页支持修改间隔、最长时间，或选择“持续重试直到手动停止”；单会话开关优先于全局
+默认。新恢复回合不会重置本轮时间预算。关闭自动恢复或停止本次恢复不会中断已经运行的
+Agent；用户新回合、模式变化、权限请求及归档会撤销旧的恢复计划。
+
+只恢复模型过载、明确的临时限流、连接故障及已知由连接故障导致的重试耗尽。额度、认证、
+上下文限制及原因不明的重试耗尽需要用户处理。恢复是在原会话发送一条续跑提示，保留历史、
+模型与权限，不重投整份 handoff。发送结果不确定时停止自动投递并核实历史，不盲目重发。
+宿主目前没有原子的“仅空闲且状态未变化时发送”接口，发送前复查仍存在极短竞态，不能保证
+工具操作恰好执行一次。
+
+Worker 和 Reviewer 等待恢复时保持原任务和审核轮次，暂停阶段超时计时；恢复后重新验证
+冻结材料、任务范围和 Reviewer 快照，继续使用剩余预算。失败回合的审核候选结果不能作为
+批准依据。首次 handoff 投递不确定时不会自动恢复或重投。
+
+恢复设置使用独立的 host 级 `workspace-workbench-recovery` 设置；状态在当前
+`PASEO_HOME/workspace-workbench/recovery/` 下按服务身份隔离。全局 RPC
+`workspace.workbench.recovery` 提供 `list`、`get`、`setEnabled`、`cancel` 和 `retryNow`，
+不要求项目路径或 Workbench Agent token。
+
+实际宿主验收：`WORKBENCH_LIVE_RECOVERY=1 node paseo-plugin/scripts/verify-live.mjs`。
+它使用隔离 Paseo home、注册表和本地 Codex app-server 协议替身，验证故障、原会话续跑及
+插件重载；不会调用真实模型或重载日常插件。运行
+`WORKBENCH_UI_RECOVERY_ONLY=1 npm --prefix paseo-plugin run test:plugin-ui` 可自动启动
+同样的隔离宿主，检查实际设置页、等待状态、控制按钮和会话输入区入口，完成后关闭隔离宿主。
+
 ## 运行时和交接
 
 Workspace 创建与 Agent 交接是两个独立动作。`workbench_workspace_create` 只创建或恢复

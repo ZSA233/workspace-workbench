@@ -199,3 +199,29 @@ retained rather than increasing a fixed global session ceiling.
 Browser-plugin discovery returned no connected browsers; web verification used the
 approved isolated Playwright harness. It did not reload the daily plugin, publish
 an artifact or alter ordinary project workspaces.
+# Codex session auto recovery (2026-10-13)
+
+- Covers all ordinary Codex sessions on the local Paseo service, including sessions
+  outside registered Workbench projects. Defaults to a ten-second retry interval
+  plus up to two seconds of jitter and a one-hour episode budget; settings support
+  a custom interval/duration, unlimited retries and per-session enablement.
+- Adds a global grouped session list and composer status pills with cancellation,
+  immediate retry and delivery-verification state. Existing Workbench tool access
+  and task roles remain separate from recovery coverage. Individual sidebar-row
+  badges require a Paseo extension point and are not part of this plugin change.
+- Persists generation-owned recovery journals under the isolated host home and
+  never automatically replays uncertain delivery. Recovery continues the original
+  conversation without resending the initial handoff, changing models or changing
+  planning/permission settings. The host's non-atomic send interface still leaves
+  a narrow user-input race; tool execution is not guaranteed exactly once.
+- Worker/Reviewer integration retains the review round and frozen task, discards
+  failed-turn candidates and preserves remaining execution timeout budgets.
+- Verification uses the actual isolated Paseo host with a deterministic local
+  Codex app-server protocol fixture, plus rendered web UI checks. These tests do
+  not constitute real Codex model or native Android/iOS device evidence and do not
+  reload the user's normal plugin.
+- Final validation: `npm --prefix paseo-plugin run typecheck` and
+  `npm --prefix paseo-plugin test` passed (573 tests, including 36 recovery
+  regressions). `WORKBENCH_UI_RECOVERY_ONLY=1 npm --prefix paseo-plugin run test:plugin-ui`
+  passed actual-host recovery/reload/lifecycle checks and all four rendered UI
+  checks, with no browser page errors.

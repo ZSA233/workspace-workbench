@@ -15,7 +15,7 @@ const plugin = resolve(import.meta.dirname, '..'), root = resolve(plugin, '..');
 const output = resolve(process.env.WORKBENCH_VERIFY_OUTPUT || join(root, '.local/verification/ui'));
 mkdirSync(output, { recursive: true });
 const child = spawn(process.execPath, [join(plugin, 'scripts/verify-live.mjs')], {
-  cwd: root, env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_VERIFY_OUTPUT: output }, stdio: ['ignore','pipe','pipe'],
+  cwd: root, env: { ...process.env, ...(process.env.WORKBENCH_UI_RECOVERY_ONLY ? { WORKBENCH_LIVE_RECOVERY: '1' } : {}), WORKBENCH_LIVE_UI: '1', WORKBENCH_VERIFY_OUTPUT: output }, stdio: ['ignore','pipe','pipe'],
 });
 let logs = '', ui, browser, observerClient;
 const exited = new Promise(resolveExit => child.once('exit', code => resolveExit(code)));
@@ -32,6 +32,15 @@ const report = { kind: 'actual-paseo-headless-ui', checks: [], screenshots: [], 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 try {
   ui = await ready;
+  if (process.env.WORKBENCH_UI_RECOVERY_ONLY) {
+    const result = await exec(process.execPath, [join(plugin, 'scripts/verify-recovery-ui.mjs')], {
+      cwd: root, env: { ...process.env, WORKBENCH_RECOVERY_UI_URL: ui.url, WORKBENCH_RECOVERY_UI_PROJECT: ui.project, WORKBENCH_VERIFY_OUTPUT: output },
+      timeout: 180_000, maxBuffer: 1024 * 1024,
+    });
+    const proof = JSON.parse(result.stdout);
+    assert.equal(proof.ok, true);
+    Object.assign(report, proof);
+  } else {
   observerClient = new DaemonClient({ url: `ws://${new URL(ui.url).host}/ws`, clientId: 'workbench-ui-observation-proof', clientType: 'mcp', reconnect: { enabled: false }, webSocketFactory: (url, options) => new WebSocket(url, options?.protocols, { headers: options?.headers }) });
   await observerClient.connect();
   browser = await chromium.launch({ headless: true });
@@ -392,6 +401,7 @@ try {
   report.checks.push('file clicks met the latency target under three concurrent observation readers; blur cleared busy indicators');
   assert.deepEqual(report.pageErrors,[]);
   report.ok=true;
+  }
 } catch(error) {
   report.ok=false;report.error=error.message;
   if (error.stdout || error.stderr || error.killed) report.commandFailure = { stdout: error.stdout, stderr: error.stderr, code: error.code, signal: error.signal, killed: error.killed };

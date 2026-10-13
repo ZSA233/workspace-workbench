@@ -1,0 +1,55 @@
+/** Rendered UI verification against an already-running, isolated verify-live host. */
+import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { chromium } from "playwright";
+import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import WebSocket from "ws";
+
+const url = process.env.WORKBENCH_RECOVERY_UI_URL, project = process.env.WORKBENCH_RECOVERY_UI_PROJECT;
+if (!url || !project || !/^\/(?:private\/)?tmp\/wb-live-[^/]+\/a$/.test(project) || new URL(url).hostname !== "127.0.0.1") throw new Error("isolated_recovery_ui_target_required");
+const output = resolve(process.env.WORKBENCH_VERIFY_OUTPUT || ".local/verification/session-recovery-ui"); mkdirSync(output, { recursive: true });
+const client = new DaemonClient({ url: `ws://${new URL(url).host}/ws`, clientId: "recovery-ui-verification", clientType: "mcp", reconnect: { enabled: false }, webSocketFactory: (address, options) => new WebSocket(address, options?.protocols, { headers: options?.headers }) });
+const report = { kind: "actual-paseo-recovery-ui", checks: [], screenshots: [], pageErrors: [] };
+let browser;
+try {
+  await client.connect(); browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } });
+  page.on("pageerror", error => report.pageErrors.push(error.message));
+  const shot = async name => { await page.screenshot({ path: join(output, name), fullPage: true }); report.screenshots.push(name); };
+  const rpc = input => client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.recovery", input);
+  const wait = async check => { const until = Date.now() + 25000; while (Date.now() < until) { if (await check()) return; await new Promise(r => setTimeout(r, 250)); } throw new Error("recovery_ui_timeout"); };
+  await page.goto(url);
+  await page.getByText(/^(Session auto recovery|会话自动恢复)$/).first().click({ timeout: 30000 });
+  await page.getByTestId("session-recovery-panel").waitFor();
+  await page.getByTestId("recovery-interval").waitFor();
+  assert.equal(await page.getByTestId("recovery-interval").inputValue(), "10");
+  assert.equal(await page.getByTestId("recovery-duration").inputValue(), "60");
+  await shot("01-global-recovery.png"); report.checks.push("global recovery entry is available without selecting a registered project and shows the ten-second / one-hour defaults");
+  await page.getByTestId("recovery-interval").fill("30"); await page.getByTestId("recovery-duration").fill("5"); await page.getByTestId("recovery-save").click();
+  await wait(async () => { const result = await rpc({ action: "list" }); return result.policy.intervalSeconds === 30 && result.policy.maxDurationMinutes === 5; });
+  await page.getByTestId("recovery-unlimited").click(); await page.getByTestId("recovery-save").click();
+  await wait(async () => (await rpc({ action: "list" })).policy.maxDurationMinutes === null);
+  report.checks.push("rendered settings save a custom retry interval, duration and unlimited mode through the actual host");
+  const agent = await client.createAgent({ config: { provider: "codex", model: "recovery-fixture", thinkingOptionId: "low", cwd: join(dirname(project), "outside-workbench"), modeId: "auto", featureValues: { plan_mode: false } }, title: "UI recovery waiting" });
+  await client.sendMessage(agent.id, "ALWAYS_CAPACITY_UI", { messageId: "ui-original" });
+  await wait(async () => (await rpc({ action: "get", agentId: agent.id })).sessions[0]?.status === "waiting");
+  await page.getByTestId("recovery-search").fill("UI recovery waiting");
+  const row = page.getByTestId(`recovery-session-${agent.id}`); await row.waitFor();
+  await row.getByTestId("recovery-countdown").waitFor(); await shot("02-waiting-recovery.png");
+  await row.getByRole("button", { name: /^(Stop this recovery|停止本次恢复)$/ }).click();
+  await wait(async () => (await rpc({ action: "get", agentId: agent.id })).sessions[0]?.status === "stopped");
+  await row.getByRole("button", { name: /^(Disable for this session|关闭此会话自动恢复)$/ }).click();
+  await wait(async () => (await rpc({ action: "get", agentId: agent.id })).sessions[0]?.enabled === false);
+  report.checks.push("the grouped searchable session list displays the countdown and its stop / per-session disable controls work");
+  await row.getByRole("button", { name: /^(Open session|打开会话)$/ }).click();
+  await page.getByText(/^(Auto recovery disabled|自动恢复已关闭)$/).filter({ visible: true }).first().waitFor({ timeout: 25000 });
+  await page.getByText(/^(Auto recovery disabled|自动恢复已关闭)$/).filter({ visible: true }).first().click();
+  await page.getByTestId("session-recovery-panel").waitFor();
+  await page.waitForFunction(() => { let element = document.querySelector('[data-testid="session-recovery-panel"]'); while (element) { if (Number(getComputedStyle(element).opacity) < 0.99) return false; element = element.parentElement; } return true; });
+  await shot("03-session-recovery-pill.png");
+  report.checks.push("the native session composer displays a recovery status pill and opens the session-specific controls");
+  assert.deepEqual(report.pageErrors, []);
+  report.ok = true;
+} catch (error) { report.ok = false; report.error = error.message; process.exitCode = 1; }
+finally { await browser?.close(); await client.close(); writeFileSync(join(output, "report.json"), JSON.stringify(report, null, 2)); console.log(JSON.stringify(report, null, 2)); }

@@ -5,7 +5,7 @@ import { createPaseoApi } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { nativeWebSocketFactory } from "@getpaseo/client/internal/daemon-client-websocket-transport";
 
-type Client = Pick<DaemonClient, "connect" | "close" | "getConnectionState"> & Partial<Pick<DaemonClient, "buildAgentForkContext">>;
+type Client = Pick<DaemonClient, "connect" | "close" | "getConnectionState"> & Partial<Pick<DaemonClient, "buildAgentForkContext" | "sendMessage" | "invokePluginRpc">>;
 type Managed = { client: Client; api: PaseoApi; endpoint: string };
 type Factory = (endpoint: string) => Managed;
 

@@ -1,6 +1,9 @@
 import {createReviewLifecycle} from './review/lifecycle.ts';
+import { createReviewRecoveryBridge } from './review/session-recovery.ts';
+import type { HostConnection } from './host-connection.ts';
 export {readReviewSession} from './agent-review-store.ts';
 const lifecycle=createReviewLifecycle();
+export const sessionRecoveryReviewBridge = (host: HostConnection) => createReviewRecoveryBridge(lifecycle, host);
 export const prepareSessionSupplement=lifecycle.sessions.prepareSessionSupplement.bind(lifecycle.sessions);
 export type {ReviewWorkspaceState} from './review/types.ts';
 export const getReviewWorkspaceState=lifecycle.sessions.getReviewWorkspaceState.bind(lifecycle.sessions);

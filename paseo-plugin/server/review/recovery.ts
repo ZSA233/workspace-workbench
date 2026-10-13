@@ -12,6 +12,7 @@ import { authKey, errorInfo, turnKey } from './identity.ts';
 import type { ReviewInfrastructure } from './infrastructure.ts';
 import type { ReviewTransitions } from './transitions.ts';
 import type { ReviewAuth } from './types.ts';
+import { claimSessionRecovery } from '../session-recovery/current.ts';
 type Dependencies = {
     dispatch: Pick<ReviewDispatch, "recoverReviewerMonitor" | "cancelAgentIfSupported">;
     authorization: Pick<ReviewAuthorization, "authorizeReviewCaller" | "currentRuntime" | "runtimeIdentity" | "runtimeIdentityFromSnapshot" | "pathWithin">;
@@ -122,7 +123,7 @@ export class ReviewRecovery {
             for (const project of this.deps.projects.registeredProjects())
                 await this.deps.projects.withProject({ projectConfig: project.configPath }, () => {
                     for (const session of this.deps.storage.activeReviewSessions())
-                        if (session.roundTarget === "coordinator" && ["queued", "reviewing"].includes(session.status))
+                        if (session.roundTarget === "coordinator" && ["queued", "reviewing", "waiting_recovery"].includes(session.status))
                             candidates.push({ config: project.configPath, session });
                 });
             candidates.sort((a, b) => (a.session.coordinator?.queuedAt || "").localeCompare(b.session.coordinator?.queuedAt || ""));
@@ -215,6 +216,7 @@ export class ReviewRecovery {
     registerReviewLifecycle(server: PluginServerContext): () => void {
         const cleanup = server.on("agent.turn_ended", async (event, context) => {
             this.coordinatorContext = context;
+            if (event.outcome.kind === "failed" && await claimSessionRecovery(event.agent.id, event.turnId, event.outcome.error)) return;
             for (const project of this.deps.projects.registeredProjects()) {
                 try {
                     await this.deps.projects.withProject({ projectConfig: project.configPath }, async () => {

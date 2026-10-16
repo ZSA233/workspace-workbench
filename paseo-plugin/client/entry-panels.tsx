@@ -14,7 +14,7 @@ function reportStaticPanelLoad(): void {
   reportNativeDiagnostic("panel-module-static-loaded", { exports: "deferred", generation: CLIENT_GENERATION });
 }
 
-function DeferredPanel({ name, loader, exportName, props }: DeferredProps) {
+export function DeferredPanel({ name, loader, exportName, props }: DeferredProps) {
   const [component, setComponent] = useState<ComponentType<any> | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {

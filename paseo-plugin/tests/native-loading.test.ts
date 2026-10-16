@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import vm from "node:vm";
 import { createOpenGuard, workbenchDestination } from "../client/open-workbench.ts";
-import { atInitializationStage } from "../client/initialization.ts";
+import { atInitializationStage, INITIALIZATION_REVISION } from "../client/initialization.ts";
 
 const require = createRequire(import.meta.url);
 const read = (name: string) => readFileSync(require.resolve(name), "utf8");
@@ -32,7 +32,7 @@ test("initialization isolates UI imports, uses a built-in icon and preserves fai
   const previous = console.error;
   console.error = () => {};
   try {
-    assert.throws(() => atInitializationStage("panel-module", () => { calls++; throw new TypeError("prototype unavailable"); }), /init-v17-concurrent-query-polling\/panel-module.*prototype/);
+    assert.throws(() => atInitializationStage("panel-module", () => { calls++; throw new TypeError("prototype unavailable"); }), error => String(error).includes(`${INITIALIZATION_REVISION}/panel-module`) && String(error).includes("prototype"));
     assert.equal(atInitializationStage("panel-module", () => { calls++; return "recovered"; }), "recovered");
     assert.equal(calls, 2);
   } finally { console.error = previous; }

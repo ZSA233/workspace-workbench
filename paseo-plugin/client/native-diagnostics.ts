@@ -57,6 +57,8 @@ export function installNativeRenderErrorHook(): () => void {
       };
       const pending = reporter?.(event);
       if (pending && typeof (pending as Promise<void>).catch === "function") void (pending as Promise<void>).catch(() => {});
+    } catch {
+      // The host RPC can throw synchronously while a client is disconnecting.
     } finally {
       reporting = false;
     }
@@ -73,7 +75,8 @@ export function installNativeRenderErrorHook(): () => void {
       setGlobalHandler?: (handler: (error: unknown, isFatal?: boolean) => void) => void;
     };
   }).ErrorUtils;
-  const previousGlobalHandler = errorUtils?.getGlobalHandler?.();
+  let previousGlobalHandler: ((error: unknown, isFatal?: boolean) => void) | undefined;
+  try { previousGlobalHandler = errorUtils?.getGlobalHandler?.(); } catch { /* optional native hook */ }
   const globalHandler = (error: unknown, isFatal?: boolean) => {
     capture(`${error instanceof Error ? error.message : String(error)}${isFatal ? "\n[fatal]" : ""}${error instanceof Error && error.stack ? `\n${error.stack}` : ""}`);
     previousGlobalHandler?.(error, isFatal);

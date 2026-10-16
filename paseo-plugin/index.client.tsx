@@ -7,7 +7,7 @@ import { registerRecoveryClient } from "./client/session-recovery";
 import { clearFileReviews, configureFileReviewOpener, openFileReview } from "./client/file-review-store";
 import { copy, getWorkbenchCopy } from "./shared/copy";
 import { FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel } from "./client/entry-panels";
-import { atInitializationStage, INITIALIZATION_REVISION } from "./client/initialization";
+import { atInitializationStage, createRegistrationScope, INITIALIZATION_REVISION, type RegistrationScope } from "./client/initialization";
 import { localeFromHostProps } from "./client/i18n";
 import { clientDiagnostic } from "./shared/client-diagnostics";
 import { nativeComponentInventory } from "./client/native-components";
@@ -27,53 +27,54 @@ type WorkspaceApiCompatibility = {
 };
 
 export default function contribute(client: PluginClientContext) {
-  return atInitializationStage("registration", () => contributeClient(client));
+  const scope = createRegistrationScope(reportNativeDiagnostic);
+  const platform = Platform.OS || "unknown";
+  configureNativeDiagnosticReporter({ platform, report: event => client.rpc(clientDiagnostic, event).then(() => {}) });
+  scope.own("diagnostics", () => configureNativeDiagnosticReporter(null));
+  try {
+    return atInitializationStage("registration", () => {
+      if (platform !== "web") {
+        scope.optional("native-render-error-hook", installNativeRenderErrorHook);
+        scope.optional("native-component-inventory", () => { reportNativeDiagnostic("registration-components", nativeComponentInventory()); return () => {}; });
+      }
+      contributeClient(client, scope, platform);
+      scope.optional("recovery", () => registerRecoveryClient(client));
+      console.info(`[workbench/${INITIALIZATION_REVISION}] registered`, platform);
+      return scope.close;
+    });
+  } catch (error) { scope.close(); throw error; }
 }
 
-function contributeClient(client: PluginClientContext) {
-  const cleanupRecovery = registerRecoveryClient(client);
+function contributeClient(client: PluginClientContext, scope: RegistrationScope, platform: string) {
   const workspaceApi = ((client as unknown as { paseo?: { workspaces?: WorkspaceApiCompatibility } }).paseo)?.workspaces;
   function registerPanel(panel: Parameters<PluginClientContext["addWorkspacePanel"]>[0]) {
-    reportNativeDiagnostic("registration-before", { stage: `panel:${panel.id}` });
-    const cleanup = atInitializationStage(`panel:${panel.id}`, () => client.addWorkspacePanel(panel));
-    reportNativeDiagnostic("registration-after", { stage: `panel:${panel.id}` });
-    return cleanup;
+    return scope.register(`panel:${panel.id}`, () => client.addWorkspacePanel(panel));
   }
   function registerOptionalPanel(panel: Parameters<PluginClientContext["addWorkspacePanel"]>[0]) {
-    try {
-      return registerPanel(panel);
-    } catch (error) {
-      // A host may not expose a secondary panel location or its icon registry
-      // on every platform. Keep the core Workbench surface usable and leave a
-      // diagnostic instead of failing plugin initialization globally.
-      console.error("workbench_optional_panel_registration_failed", panel.id, error);
-      reportNativeDiagnostic("registration-failed", { stage: `panel:${panel.id}`, message: error instanceof Error ? error.message : String(error) });
-      return () => {};
-    }
+    // Secondary panel locations need not be available on every host.
+    return scope.optional(`panel:${panel.id}`, () => client.addWorkspacePanel(panel));
   }
   function registerCommand(command: Parameters<PluginClientContext["addCommandCenterItem"]>[0]) {
-    reportNativeDiagnostic("registration-before", { stage: `command:${command.id}` });
-    const cleanup = atInitializationStage(`command:${command.id}`, () => client.addCommandCenterItem(command));
-    reportNativeDiagnostic("registration-after", { stage: `command:${command.id}` });
-    return cleanup;
-  }
-  const platform: string = atInitializationStage("platform", () => Platform.OS);
-  let removeNativeRenderErrorHook = () => {};
-  if (platform !== "web") {
-    configureNativeDiagnosticReporter({
-      platform,
-      report(event) {
-        void client.rpc(clientDiagnostic, event).catch(() => {});
-      },
-    });
-    removeNativeRenderErrorHook = installNativeRenderErrorHook();
-    reportNativeDiagnostic("registration-components", nativeComponentInventory());
+    return scope.register(`command:${command.id}`, () => client.addCommandCenterItem(command));
   }
   const openGuard = createOpenGuard();
   const contextSurfaces = new Map<string, () => void>();
   let surfaceContext: { workspaceId: string; agentId?: string; key: string } | null = null;
   const surfaceListeners = new Set<() => void>();
   let surfaceMounts = 0;
+  let disposed = false;
+  const headerButtons = new Map<string, { remove(): void }>();
+  scope.own("workspace-state", () => {
+    disposed = true;
+    clearWorkbenchWorkspaceSnapshots();
+    surfaceContext = null;
+    surfaceListeners.clear();
+    for (const cleanup of contextSurfaces.values()) cleanup();
+    contextSurfaces.clear();
+    for (const workspaceId of headerButtons.keys()) {
+      try { removeHeaderButton(workspaceId); } catch (error) { scope.failure("header:cleanup", error); }
+    }
+  });
   function ContextualSurface(props: PluginSurfaceProps) {
     reportNativeDiagnostic("contextual-surface-entry", { hostId: props.host.id });
     const context = useSyncExternalStore((listener) => { surfaceListeners.add(listener); return () => { surfaceListeners.delete(listener); }; }, () => surfaceContext, () => surfaceContext);
@@ -111,62 +112,51 @@ function contributeClient(client: PluginClientContext) {
     const copy = getWorkbenchCopy(localeFromHostProps(props));
     return <View style={{ flex: 1 }}><Text style={{ padding: 12, color: props.theme.colors.statusWarning }}>{copy.openFailed}</Text><WorkbenchSurfacePanel {...props} /></View>;
   }
-  reportNativeDiagnostic("registration-before", { stage: "surface" });
-  const surfaceCleanup = atInitializationStage("surface", () => client.addSurface(observerSurfaceId, ContextualSurface));
-  reportNativeDiagnostic("registration-after", { stage: "surface" });
-  reportNativeDiagnostic("registration-before", { stage: "failure-surface" });
-  const failureCleanup = atInitializationStage("failure-surface", () => client.addSurface("workspace-workbench-open-failed", FailureSurface));
-  reportNativeDiagnostic("registration-after", { stage: "failure-surface" });
-  reportNativeDiagnostic("registration-before", { stage: "sidebar" });
-  const sidebarCleanup = atInitializationStage("sidebar", () => client.addSidebarItem({
+  scope.register("surface", () => client.addSurface(observerSurfaceId, ContextualSurface));
+  scope.register("failure-surface", () => client.addSurface("workspace-workbench-open-failed", FailureSurface));
+  scope.register("sidebar", () => client.addSidebarItem({
     id: "workspace-workbench-sidebar",
     title: "Workspace Workbench",
     icon: "GitBranch",
     surface: observerSurfaceId,
   }));
-  reportNativeDiagnostic("registration-after", { stage: "sidebar" });
-  const panelCleanups = [
-    surfaceCleanup,
-    failureCleanup,
-    sidebarCleanup,
-    registerPanel({
-      id: "workspace-workbench-workspace",
-      title: "Workspace Workbench",
-      icon: "GitBranch",
-      context: "workspace",
-      locations: ["explorer"],
-      Component: WorkbenchPanel,
-    }),
-    registerPanel({
-      id: "workspace-workbench-agent",
-      title: "Workspace Workbench",
-      icon: "GitBranch",
-      context: "agent",
-      locations: ["explorer"],
-      Component: WorkbenchPanel,
-    }),
-    registerOptionalPanel({
-      id: "workspace-workbench-file",
-      title: "Workspace Changes",
-      // GitBranch is available in the native icon registry. Keep the
-      // registration icon conservative; the panel itself still renders the
-      // detailed diff UI after it has opened.
-      icon: "GitBranch",
-      context: "workspace",
-      locations: ["workspace"],
-      Component: FileReviewPanel,
-    }),
-    registerOptionalPanel({
-      id: "workspace-workbench-file-agent",
-      title: "Workspace Changes",
-      icon: "GitBranch",
-      context: "agent",
-      locations: ["workspace"],
-      Component: FileReviewPanel,
-    }),
-  ];
+  registerPanel({
+    id: "workspace-workbench-workspace",
+    title: "Workspace Workbench",
+    icon: "GitBranch",
+    context: "workspace",
+    locations: ["explorer"],
+    Component: WorkbenchPanel,
+  });
+  registerPanel({
+    id: "workspace-workbench-agent",
+    title: "Workspace Workbench",
+    icon: "GitBranch",
+    context: "agent",
+    locations: ["explorer"],
+    Component: WorkbenchPanel,
+  });
+  registerOptionalPanel({
+    id: "workspace-workbench-file",
+    title: "Workspace Changes",
+    // GitBranch is available in the native icon registry. Keep the
+    // registration icon conservative; the panel itself still renders the
+    // detailed diff UI after it has opened.
+    icon: "GitBranch",
+    context: "workspace",
+    locations: ["workspace"],
+    Component: FileReviewPanel,
+  });
+  registerOptionalPanel({
+    id: "workspace-workbench-file-agent",
+    title: "Workspace Changes",
+    icon: "GitBranch",
+    context: "agent",
+    locations: ["workspace"],
+    Component: FileReviewPanel,
+  });
 
-  const removeFileReviewOpener = configureFileReviewOpener((request) => {
+  scope.register("file-review-opener", () => configureFileReviewOpener((request) => {
     if (!request.hostWorkspaceId && request.directory && request.selection) {
       const selection = request.selection;
       if (!workspaceApi?.open) {
@@ -185,15 +175,12 @@ function contributeClient(client: PluginClientContext) {
       ...(request.agentId ? { agentId: request.agentId } : {}),
     };
     client.openPanel(request.panelId, options);
-  });
+  }));
 
   // Workspace panels are discoverable from Paseo's Explorer tab menu, but the
   // host does not pin third-party panels beside its built-in Files/Changes
   // tabs. Add a small workspace-header entry so the panel remains one click
   // away without registering a full-screen surface.
-  const headerButtons = new Map<string, { remove(): void }>();
-  let disposed = false;
-
   const removeHeaderButton = (workspaceId: string) => {
     if (surfaceContext?.workspaceId === workspaceId) { surfaceContext = null; surfaceListeners.forEach((listener) => listener()); }
     for (const [id, cleanup] of contextSurfaces) {
@@ -201,15 +188,15 @@ function contributeClient(client: PluginClientContext) {
     }
     const registration = headerButtons.get(workspaceId);
     if (!registration) return;
-    registration.remove();
     headerButtons.delete(workspaceId);
+    registration.remove();
   };
 
   const addHeaderButton = (workspaceId: string) => {
     if (disposed || headerButtons.has(workspaceId)) return;
     headerButtons.set(
       workspaceId,
-      atInitializationStage("header", () => client.addHeaderButton({
+      scope.step("header", () => client.addHeaderButton({
         id: "workspace-workbench",
         workspaceId,
         button: {
@@ -227,9 +214,9 @@ function contributeClient(client: PluginClientContext) {
     );
   };
 
-  let unsubscribeWorkspaces = () => {};
   if (workspaceApi?.subscribe) {
-    unsubscribeWorkspaces = atInitializationStage("workspace-subscription", () => workspaceApi.subscribe!((update) => {
+    scope.register("workspace-subscription", () => workspaceApi.subscribe!((update) => {
+      if (disposed) return;
       if (update.kind === "upsert" && update.workspace) {
         addHeaderButton(update.workspace.id);
         if (update.workspace.directory) setWorkbenchWorkspaceSnapshot({ id: update.workspace.id, directory: update.workspace.directory, name: update.workspace.name || update.workspace.id });
@@ -259,36 +246,16 @@ function contributeClient(client: PluginClientContext) {
       });
   } else markWorkbenchWorkspaceSnapshotsReady(false);
 
-  const commandCleanups = [
-    registerCommand({
-      id: "open-workspace-workbench",
-      title: "Open Workspace Workbench",
-      icon: "GitBranch",
-      keywords: ["workspace", "git", "branch", "review", "changes"],
-      context: "workspace",
-      onSelect({ workspace }) {
-        openWorkbench(workspace.id);
-      },
-    }),
-  ];
+  registerCommand({
+    id: "open-workspace-workbench",
+    title: "Open Workspace Workbench",
+    icon: "GitBranch",
+    keywords: ["workspace", "git", "branch", "review", "changes"],
+    context: "workspace",
+    onSelect({ workspace }) {
+      openWorkbench(workspace.id);
+    },
+  });
 
-  console.info(`[workbench/${INITIALIZATION_REVISION}] registered`, platform);
-  return () => {
-    cleanupRecovery();
-    disposed = true;
-    removeNativeRenderErrorHook();
-    configureNativeDiagnosticReporter(null);
-    clearWorkbenchWorkspaceSnapshots();
-    surfaceContext = null;
-    surfaceListeners.clear();
-    for (const cleanup of contextSurfaces.values()) cleanup();
-    contextSurfaces.clear();
-    removeFileReviewOpener();
-    for (const cleanup of panelCleanups) cleanup();
-    for (const cleanup of commandCleanups) cleanup();
-    unsubscribeWorkspaces();
-    for (const workspaceId of headerButtons.keys()) {
-      removeHeaderButton(workspaceId);
-    }
-  };
+  scope.own("workspace-lifetime", () => { disposed = true; });
 }

@@ -7,14 +7,26 @@ import android.content.Intent
 import android.net.Uri
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.ConsoleMessage
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.ValueCallback
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.view.ViewGroup
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 
-class WebSession(private val activity: Activity, private val prefs: ShellPreferences) {
+class WebSession(private val activity: Activity, private val prefs: ShellPreferences,
+    private val diagnostics: Diagnostics,
+    private val unavailable: (String) -> Unit,
+    private val chooseFiles: (ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams) -> Boolean) {
     val bundle = WebBundle(activity.assets)
     val webView: WebView = WebView(activity)
+    var destroyed = false
+        private set
 
     @SuppressLint("SetJavaScriptEnabled")
     fun start() {
@@ -29,6 +41,8 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
             setSupportMultipleWindows(false)
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING))
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, false)
         webView.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 bundle.intercept(request.url, request.isForMainFrame)
@@ -43,8 +57,29 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
             override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
                 prefs.route = url
             }
+            override fun onPageFinished(view: WebView, url: String) { diagnostics.record("page_loaded") }
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame) { diagnostics.record("page_load_failed"); unavailable("page_load_failed") }
+            }
+            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                if (request.isForMainFrame) { diagnostics.record("page_resource_missing"); unavailable("page_resource_missing") }
+            }
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                diagnostics.record(if (detail.didCrash()) "renderer_crashed" else "renderer_reclaimed")
+                destroy()
+                unavailable("renderer_gone")
+                return true
+            }
         }
-        webView.webChromeClient = WebChromeClient()
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean =
+                chooseFiles(callback, params)
+            override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) diagnostics.record("page_console_error")
+                return true
+            }
+        }
+        diagnostics.record("page_opened")
         webView.loadUrl(PageOrigin.BASE + prefs.route)
     }
 
@@ -55,6 +90,9 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
     }
 
     fun destroy() {
+        if (destroyed) return
+        destroyed = true
+        (webView.parent as? ViewGroup)?.removeView(webView)
         webView.stopLoading()
         webView.removeAllViews()
         webView.destroy()

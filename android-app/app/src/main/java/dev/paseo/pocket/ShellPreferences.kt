@@ -13,4 +13,7 @@ class ShellPreferences(context: Context) {
     var dockFraction: Float
         get() = prefs.getFloat("dockFraction", .68f).coerceIn(0f, 1f)
         set(value) { prefs.edit().putFloat("dockFraction", value.coerceIn(0f, 1f)).apply() }
+    var appearance: String
+        get() = prefs.getString("appearance", "system") ?: "system"
+        set(value) { require(value in setOf("system", "light", "dark")); prefs.edit().putString("appearance", value).apply() }
 }

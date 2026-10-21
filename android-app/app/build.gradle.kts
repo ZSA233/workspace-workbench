@@ -33,6 +33,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    // AAPT's default !_* directory rule silently drops Expo's complete JS/font tree.
+    androidResources { ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:CVS:thumbs.db:picasa.ini:*~" }
     lint { abortOnError = true }
     testOptions { unitTests.isReturnDefaultValues = true }
 }

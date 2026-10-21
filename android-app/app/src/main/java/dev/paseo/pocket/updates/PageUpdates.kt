@@ -13,7 +13,8 @@ data class UpdateStatus(val kind: String = "idle", val candidate: PackageMetadat
     val readyId: String? = null, val downloaded: Long = 0, val total: Long = -1, val failure: String? = null)
 
 /** One lifecycle-owned worker; no timers or automatic update requests. */
-class PageUpdates(context: Context, private val diagnostics: Diagnostics) : AutoCloseable {
+class PageUpdates(context: Context, private val diagnostics: Diagnostics,
+    val gate: UpdateGate = UpdateGate()) : AutoCloseable {
     val trust = PackageTrust.parse(JSONObject(context.assets.open("paseo/_trust.json").bufferedReader().use { it.readText() }))
     val store = BundleStore(File(context.filesDir, "pages"), trust,
         VerifiedBundle.parse(JSONObject(context.assets.open("paseo/_workbench.json").bufferedReader().use { it.readText() }), trust))
@@ -25,6 +26,7 @@ class PageUpdates(context: Context, private val diagnostics: Diagnostics) : Auto
     private var token = 0
     private var closed = false
     private var cancellation: TransferCancellation? = null
+    private var release: (() -> Unit)? = null
     var status = UpdateStatus()
         private set
     var listener: ((UpdateStatus) -> Unit)? = null
@@ -41,11 +43,16 @@ class PageUpdates(context: Context, private val diagnostics: Diagnostics) : Auto
         }
     }
 
-    private fun publish(next: UpdateStatus) { status = next; listener?.invoke(next) }
+    private fun publish(next: UpdateStatus) {
+        status = next
+        if (!busy()) { val done = release; release = null; done?.invoke() }
+        listener?.invoke(next)
+    }
     private fun busy() = status.kind in setOf("checking", "downloading", "verifying", "applying")
 
     private fun run(initial: UpdateStatus, work: (TransferCancellation, (UpdateStatus) -> Unit) -> Unit) {
         if (closed || busy()) return
+        release = gate.acquire(UpdateGate.Target.WEB) ?: return
         val run = ++token
         val cancel = TransferCancellation(); cancellation = cancel
         publish(initial)
@@ -99,5 +106,8 @@ class PageUpdates(context: Context, private val diagnostics: Diagnostics) : Auto
         if (busy()) return
         if (status.kind != "ready") { token++; publish(UpdateStatus()) }
     }
-    override fun close() { closed = true; listener = null; cancellation?.cancel(); executor.shutdown() }
+    override fun close() {
+        closed = true; listener = null; cancellation?.cancel(); executor.shutdown()
+        val done = release; release = null; done?.invoke()
+    }
 }

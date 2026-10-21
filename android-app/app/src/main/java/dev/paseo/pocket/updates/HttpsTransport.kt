@@ -44,24 +44,28 @@ class HttpsTransport(private val factory: (URL) -> HttpsURLConnection = { it.ope
         throw UpdateFailure("network_failed")
     }
 
-    fun metadata(address: String, cancellation: TransferCancellation): String {
+    fun metadata(address: String, cancellation: TransferCancellation, limit: Long = PackageLimits.METADATA): String {
         val connection = open(address, cancellation)
         return try {
-            LimitedInput(connection.inputStream, PackageLimits.METADATA, cancellation::check).use { it.readBytes().toString(Charsets.UTF_8) }
+            LimitedInput(connection.inputStream, limit, cancellation::check).use { it.readBytes().toString(Charsets.UTF_8) }
         } finally { connection.disconnect(); cancellation.detach() }
     }
 
     fun download(metadata: PackageMetadata, destination: File, cancellation: TransferCancellation, progress: (Long, Long) -> Unit) {
-        val connection = open(metadata.tarball, cancellation)
+        downloadFile(metadata.tarball, destination, PackageLimits.ARCHIVE, cancellation, progress)
+    }
+
+    fun downloadFile(address: String, destination: File, limit: Long, cancellation: TransferCancellation, progress: (Long, Long) -> Unit) {
+        val connection = open(address, cancellation)
         try {
             val length = connection.contentLengthLong
-            ensure(length <= PackageLimits.ARCHIVE, "size_limit")
+            ensure(length <= limit, "size_limit")
             ensure(!destination.exists() && destination.createNewFile(), "storage_failed")
             connection.inputStream.use { input -> destination.outputStream().use { output ->
                 val buffer = ByteArray(32 * 1024); var bytes = 0L; var lastReport = 0L
                 while (true) {
                     cancellation.check(); val n = input.read(buffer); if (n < 0) break
-                    bytes += n; ensure(bytes <= PackageLimits.ARCHIVE, "size_limit")
+                    bytes += n; ensure(bytes <= limit, "size_limit")
                     output.write(buffer, 0, n)
                     val now = System.nanoTime()
                     if (now - lastReport >= 250_000_000) { progress(bytes, length); lastReport = now }

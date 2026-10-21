@@ -8,6 +8,11 @@ val signing = Properties().apply { if (signingFile.isFile) signingFile.inputStre
 val appVersion = Properties().apply { rootProject.file("version.properties").inputStream().use(::load) }
 val appVersionName = appVersion.getProperty("versionName")
 val appVersionCode = appVersion.getProperty("versionCode").toInt()
+val releaseRepository = providers.environmentVariable("PASEO_POCKET_UPDATE_REPOSITORY")
+    .orElse(providers.environmentVariable("GITHUB_REPOSITORY")).orElse("ZSA233/workspace-workbench").get()
+require(Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+").matches(releaseRepository)) { "Invalid Pocket update repository" }
+val releaseCertificate = rootProject.file("signing-certificate.sha256").readText().trim()
+require(Regex("[a-f0-9]{64}").matches(releaseCertificate)) { "Invalid Pocket update certificate" }
 val isolatedQa = providers.gradleProperty("pocketTestPackage").orNull?.let {
     require(it == "dev.paseo.pocket.qa") { "Only the isolated QA package is supported" }
     true
@@ -24,6 +29,8 @@ android {
         targetSdk = 37
         versionCode = appVersionCode
         versionName = appVersionName
+        buildConfigField("String", "UPDATE_REPOSITORY", "\"$releaseRepository\"")
+        buildConfigField("String", "UPDATE_CERTIFICATE_SHA256", "\"$releaseCertificate\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     if (signing.isNotEmpty()) signingConfigs.create("persistent") {

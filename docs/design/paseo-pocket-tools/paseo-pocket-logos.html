@@ -1,0 +1,88 @@
+<div id="pocket-logo-draft" aria-label="Paseo Pocket Logo 方向比较">
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute;overflow:hidden">
+    <defs>
+      <symbol id="pl-route" viewBox="0 0 64 64"><path d="M18 50h18a12 12 0 0 0 0-24h-8a7 7 0 0 1 0-14h18" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="50" r="4" fill="currentColor"/><circle cx="46" cy="12" r="4" fill="currentColor"/></symbol>
+      <symbol id="pl-pocket" viewBox="0 0 64 64"><path d="M16 14h32v19c0 10-8 17-16 20-8-3-16-10-16-20V14Z" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><path d="m25 25 6 6-6 6" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="39" cy="37" r="2.5" fill="currentColor"/></symbol>
+      <symbol id="pl-portal" viewBox="0 0 64 64"><path d="M23 42h-5a6 6 0 0 1-6-6V18a6 6 0 0 1 6-6h18a6 6 0 0 1 6 6v5M41 22h5a6 6 0 0 1 6 6v18a6 6 0 0 1-6 6H28a6 6 0 0 1-6-6v-5M24 40l16-16" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    </defs>
+  </svg>
+  <div class="pl-grid">
+    <section class="pl-option" data-logo="route" aria-label="路径标志">
+      <header><strong>路径</strong><span>行进 · 连接</span></header>
+      <div class="pl-hero"><svg class="pl-outline" role="img" aria-label="路径标志轮廓" viewBox="0 0 64 64"><use href="#pl-route"/></svg></div>
+      <div class="pl-app-example"><span class="pl-launcher"><svg aria-hidden="true" viewBox="0 0 64 64"><use href="#pl-route"/></svg></span><span class="pl-app-name">Paseo<br>Pocket</span></div>
+      <div class="pl-sizes" aria-label="路径标志小尺寸表现"><span><svg width="32" height="32" viewBox="0 0 64 64" aria-hidden="true"><use href="#pl-route"/></svg><small>32</small></span><span><svg width="24" height="24" viewBox="0 0 64 64" aria-hidden="true"><use href="#pl-route"/></svg><small>24</small></span><span><svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><use href="#pl-route"/></svg><small>16 px</small></span></div>
+      <button class="pl-select cursor-interaction" type="button" aria-pressed="false" aria-label="偏好路径标志">偏好这个方向</button>
+    </section>
+    <section class="pl-option" data-logo="pocket" aria-label="口袋标志">
+      <header><strong>口袋</strong><span>随身 · 终端</span></header>
+      <div class="pl-hero"><svg class="pl-outline" role="img" aria-label="口袋标志轮廓" viewBox="0 0 64 64"><use href="#pl-pocket"/></svg></div>
+      <div class="pl-app-example"><span class="pl-launcher"><svg aria-hidden="true" viewBox="0 0 64 64"><use href="#pl-pocket"/></svg></span><span class="pl-app-name">Paseo<br>Pocket</span></div>
+      <div class="pl-sizes" aria-label="口袋标志小尺寸表现"><span><svg width="32" height="32" viewBox="0 0 64 64" aria-hidden="true"><use href="#pl-pocket"/></svg><small>32</small></span><span><svg width="24" height="24" viewBox="0 0 64 64" aria-hidden="true"><use href="#pl-pocket"/></svg><small>24</small></span><span><svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><use href="#pl-pocket"/></svg><small>16 px</small></span></div>
+      <button class="pl-select cursor-interaction" type="button" aria-pressed="false" aria-label="偏好口袋标志">偏好这个方向</button>
+    </section>
+    <section class="pl-option" data-logo="portal" aria-label="叠窗标志">
+      <header><strong>叠窗</strong><span>手机 · 远端工作区</span></header>
+      <div class="pl-hero"><svg class="pl-outline" role="img" aria-label="叠窗标志轮廓" viewBox="0 0 64 64"><use href="#pl-portal"/></svg></div>
+      <div class="pl-app-example"><span class="pl-launcher"><svg aria-hidden="true" viewBox="0 0 64 64"><use href="#pl-portal"/></svg></span><span class="pl-app-name">Paseo<br>Pocket</span></div>
+      <div class="pl-sizes" aria-label="叠窗标志小尺寸表现"><span><svg width="32" height="32" viewBox="0 0 64 64" aria-hidden="true"><use href="#pl-portal"/></svg><small>32</small></span><span><svg width="24" height="24" viewBox="0 0 64 64" aria-hidden="true"><use href="#pl-portal"/></svg><small>24</small></span><span><svg width="16" height="16" viewBox="0 0 64 64" aria-hidden="true"><use href="#pl-portal"/></svg><small>16 px</small></span></div>
+      <button class="pl-select cursor-interaction" type="button" aria-pressed="false" aria-label="偏好叠窗标志">偏好这个方向</button>
+    </section>
+  </div>
+  <div class="pl-selection" aria-live="polite"></div>
+</div>
+<style>
+  #pocket-logo-draft { --pl-ink:light-dark(#202a26,#edf2ef);--pl-muted:light-dark(#68746d,#b0bcb5);--pl-surface:light-dark(#f1f4f2,#262f2b);--pl-line:light-dark(#dbe3de,#414f47);--pl-brand:light-dark(#356d5d,#a4ceba);--pl-icon-bg:light-dark(#356d5d,#a4ceba);--pl-icon-ink:light-dark(#fff,#16392c);color:var(--pl-ink);font:400 14px/1.5 system-ui,"PingFang SC",sans-serif; }
+  #pocket-logo-draft * { box-sizing:border-box; }
+  #pocket-logo-draft .pl-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px; }
+  #pocket-logo-draft .pl-option { min-width:0;display:flex;flex-direction:column;gap:18px; }
+  #pocket-logo-draft header { display:flex;flex-direction:column;gap:4px; }
+  #pocket-logo-draft header strong { font-size:16px;font-weight:500; }
+  #pocket-logo-draft header span { font-size:12px;color:var(--pl-muted); }
+  #pocket-logo-draft .pl-hero { display:grid;place-items:center;min-height:126px;background:var(--pl-surface);border-radius:20px;color:var(--pl-brand); }
+  #pocket-logo-draft .pl-outline { width:84px;height:84px; }
+  #pocket-logo-draft .pl-app-example { display:flex;align-items:center;gap:12px; }
+  #pocket-logo-draft .pl-launcher { width:56px;height:56px;border-radius:17px;display:grid;place-items:center;flex:none;background:var(--pl-icon-bg);color:var(--pl-icon-ink); }
+  #pocket-logo-draft .pl-launcher svg { width:40px;height:40px; }
+  #pocket-logo-draft .pl-app-name { font-weight:500;line-height:1.4; }
+  #pocket-logo-draft .pl-sizes { min-height:60px;display:flex;align-items:start;gap:24px;color:var(--pl-brand); }
+  #pocket-logo-draft .pl-sizes>span { display:grid;grid-template-rows:32px auto;justify-items:center;align-items:center;gap:6px; }
+  #pocket-logo-draft small { font-size:12px;color:var(--pl-muted);white-space:nowrap; }
+  #pocket-logo-draft .pl-select { min-height:44px;width:100%;padding:9px 12px;border:1px solid var(--pl-line);border-radius:12px;background:transparent;color:var(--pl-ink);font:inherit; }
+  #pocket-logo-draft .pl-select[aria-pressed="true"] { background:var(--pl-icon-bg);color:var(--pl-icon-ink);border-color:transparent; }
+  #pocket-logo-draft .pl-selection { min-height:30px;padding-top:10px;font-size:12px;color:var(--pl-muted); }
+  @media(max-width:540px) {
+    #pocket-logo-draft .pl-grid { grid-template-columns:1fr;gap:28px; }
+    #pocket-logo-draft .pl-option { display:grid;grid-template-columns:96px minmax(0,1fr);column-gap:20px;row-gap:12px; }
+    #pocket-logo-draft header { grid-column:1 / -1; }
+    #pocket-logo-draft .pl-hero { grid-row:2 / 4;min-height:128px;border-radius:18px; }
+    #pocket-logo-draft .pl-outline { width:74px;height:74px; }
+    #pocket-logo-draft .pl-app-example { gap:10px; }
+    #pocket-logo-draft .pl-launcher { width:46px;height:46px;border-radius:14px; }
+    #pocket-logo-draft .pl-launcher svg { width:34px;height:34px; }
+    #pocket-logo-draft .pl-sizes { min-height:60px;gap:20px; }
+    #pocket-logo-draft .pl-select { grid-column:1 / -1; }
+  }
+</style>
+<script>
+(() => {
+  const root=document.getElementById('pocket-logo-draft');
+  const names={route:'路径',pocket:'口袋',portal:'叠窗'};
+  let selected=null;
+  function render(value) {
+    selected=Object.hasOwn(names,value)?value:null;
+    root.querySelectorAll('.pl-option').forEach(option=>{
+      const button=option.querySelector('.pl-select'),active=option.dataset.logo===selected;
+      button.setAttribute('aria-pressed',String(active));
+      button.textContent=active?'当前偏好':'偏好这个方向';
+    });
+    root.querySelector('.pl-selection').textContent=selected?'草图偏好：'+names[selected]:'';
+  }
+  render(window.openai?.widgetState?.modelContent?.logo);
+  root.querySelectorAll('.pl-option').forEach(option=>option.querySelector('.pl-select').addEventListener('click',()=>{
+    render(option.dataset.logo);
+    if(window.openai?.setWidgetState)Promise.resolve(window.openai.setWidgetState({modelContent:{logo:selected},privateContent:null})).catch(()=>{});
+  }));
+  window.addEventListener('openai:set_globals',event=>render(event.detail?.globals?.widgetState?.modelContent?.logo));
+})();
+</script>

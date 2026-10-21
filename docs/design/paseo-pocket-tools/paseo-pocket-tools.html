@@ -1,0 +1,253 @@
+<div id="pocket-tools-draft" aria-label="Paseo Pocket 悬浮工具设计">
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute;overflow:hidden">
+    <defs>
+      <symbol id="pt-route" viewBox="0 0 64 64"><path d="M18 50h18a12 12 0 0 0 0-24h-8a7 7 0 0 1 0-14h18" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="50" r="4" fill="currentColor"/><circle cx="46" cy="12" r="4" fill="currentColor"/></symbol>
+      <symbol id="pt-pocket" viewBox="0 0 64 64"><path d="M16 14h32v19c0 10-8 17-16 20-8-3-16-10-16-20V14Z" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><path d="m25 25 6 6-6 6" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="39" cy="37" r="2.5" fill="currentColor"/></symbol>
+      <symbol id="pt-portal" viewBox="0 0 64 64"><path d="M23 42h-5a6 6 0 0 1-6-6V18a6 6 0 0 1 6-6h18a6 6 0 0 1 6 6v5M41 22h5a6 6 0 0 1 6 6v18a6 6 0 0 1-6 6H28a6 6 0 0 1-6-6v-5M24 40l16-16" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    </defs>
+  </svg>
+  <div class="viz-carousel viz-dotted-background" aria-label="悬浮工具方案" data-previous-label="上一种" data-next-label="下一种">
+    <section data-variant="贴边半屏面板" aria-label="贴边短柄与四格面板">
+      <div class="pt-stage"><span class="pt-caption">交互草图 · 示例数据</span><article class="pt-phone" data-kind="edge" data-open="true" aria-label="贴边半屏面板预览"></article></div>
+    </section>
+    <section data-variant="就近工具卡" aria-label="悬浮方钮与就近工具卡" hidden>
+      <div class="pt-stage"><span class="pt-caption">交互草图 · 示例数据</span><article class="pt-phone" data-kind="card" data-open="true" aria-label="就近工具卡预览"></article></div>
+    </section>
+    <section data-variant="清晰列表面板" aria-label="工具胶囊与分组列表" hidden>
+      <div class="pt-stage"><span class="pt-caption">交互草图 · 示例数据</span><article class="pt-phone" data-kind="list" data-open="true" aria-label="清晰列表面板预览"></article></div>
+    </section>
+  </div>
+  <template id="pt-phone-content">
+    <header class="pt-status"><span>9:41</span><span class="pt-status-icons"><i data-lucide="wifi" aria-hidden="true"></i><i data-lucide="battery-full" aria-hidden="true"></i></span></header>
+    <div class="pt-appbar"><span class="pt-icon"><i data-lucide="menu" aria-hidden="true"></i></span><div class="pt-title"><strong>修复登录接口</strong><small>api-service · 开发主机</small></div><span class="pt-icon"><i data-lucide="panel-right" aria-hidden="true"></i></span></div>
+    <div class="pt-chat">
+      <div class="pt-user">继续检查接口测试。</div>
+      <div class="pt-answer"><p>接口测试已通过，接下来核对错误处理。</p><div class="pt-check"><i data-lucide="check" aria-hidden="true"></i><span>身份校验</span></div><div class="pt-check"><i data-lucide="check" aria-hidden="true"></i><span>超时与重试分支</span></div><div class="pt-code"><span>tests/auth.test.ts</span><span>8 passed · 0 failed</span></div><small>刚刚</small></div>
+    </div>
+    <div class="pt-composer"><textarea aria-label="示例会话草稿" spellcheck="false">先保留这段未发送的内容</textarea><div class="pt-compose-bottom"><span class="pt-icon"><i data-lucide="plus" aria-hidden="true"></i></span><small>Codex · 默认</small><span class="pt-send"><i data-lucide="arrow-up" aria-hidden="true"></i></span></div></div>
+    <button class="pt-float cursor-interaction" type="button" aria-label="打开工具" aria-expanded="true"><span class="pt-float-face"><svg class="pt-mark" aria-hidden="true" viewBox="0 0 64 64"><use data-logo href="#pt-route"/></svg><span class="pt-float-word">工具</span></span></button>
+    <div class="pt-overlay">
+      <button class="pt-scrim cursor-interaction" aria-label="关闭工具" type="button"></button>
+      <section class="pt-menu" role="dialog" aria-label="Paseo Pocket 工具">
+        <div class="pt-grab" aria-hidden="true"></div>
+        <header class="pt-menu-header"><div class="pt-menu-brand"><svg class="pt-brand-mark" viewBox="0 0 64 64" aria-hidden="true"><use data-logo href="#pt-route"/></svg><span><strong>工具</strong><small>Paseo Pocket</small></span></div><button class="pt-close pt-icon-button cursor-interaction" type="button" aria-label="关闭面板"><i data-lucide="x" aria-hidden="true"></i></button></header>
+        <div class="pt-actions">
+          <button class="pt-action cursor-interaction" data-action="appearance" type="button"><span class="pt-action-icon"><i data-lucide="palette" aria-hidden="true"></i></span><span class="pt-action-copy"><strong>外观</strong><small data-theme-label>跟随系统</small></span><span class="pt-row-arrow"><i data-lucide="chevron-right" aria-hidden="true"></i></span></button>
+          <button class="pt-action cursor-interaction" data-action="version" type="button"><span class="pt-action-icon"><i data-lucide="package-check" aria-hidden="true"></i></span><span class="pt-action-copy"><strong>网页版本</strong><small>0.12.0 · 手动更新</small></span><span class="pt-row-arrow"><i data-lucide="chevron-right" aria-hidden="true"></i></span></button>
+          <button class="pt-action cursor-interaction" data-action="source" type="button"><span class="pt-action-icon"><i data-lucide="cloud-download" aria-hidden="true"></i></span><span class="pt-action-copy"><strong>更新来源</strong><small data-source-label>官方</small></span><span class="pt-row-arrow"><i data-lucide="chevron-right" aria-hidden="true"></i></span></button>
+          <button class="pt-action cursor-interaction" data-action="cache" type="button"><span class="pt-action-icon"><i data-lucide="hard-drive" aria-hidden="true"></i></span><span class="pt-action-copy"><strong>缓存与诊断</strong><small>保留主机配对</small></span><span class="pt-row-arrow"><i data-lucide="chevron-right" aria-hidden="true"></i></span></button>
+        </div>
+        <div class="pt-detail" hidden></div>
+      </section>
+    </div>
+    <footer class="pt-system-gesture" aria-hidden="true"><span></span></footer>
+  </template>
+</div>
+<style>
+  #pocket-tools-draft .pt-stage { min-height:760px;display:grid;align-content:start;justify-items:center;gap:16px;padding:20px 10px 30px; }
+  #pocket-tools-draft .pt-caption { color:light-dark(#686f71,#aab3b5);font:400 12px/1.5 system-ui,sans-serif; }
+  #pocket-tools-draft .pt-phone { --pt-bg:light-dark(#fafbfa,#141817);--pt-surface:light-dark(#fff,#202624);--pt-soft:light-dark(#f1f4f2,#2b3330);--pt-line:light-dark(#e0e5e2,#3b4540);--pt-ink:light-dark(#202a26,#edf2ef);--pt-muted:light-dark(#737c77,#adb8b1);--pt-accent:light-dark(#356d5d,#a4ceba);--pt-on:light-dark(#fff,#16392c);--pt-shadow:light-dark(#15271a19,#00000045);width:100%;max-width:356px;height:658px;position:relative;display:flex;flex-direction:column;border:1px solid var(--pt-line);border-radius:30px;overflow:hidden;background:var(--pt-bg);color:var(--pt-ink);box-shadow:0 14px 40px var(--pt-shadow);font:400 14px/1.6 system-ui,"PingFang SC",sans-serif; }
+  #pocket-tools-draft .pt-phone * { box-sizing:border-box; }
+  #pocket-tools-draft .pt-phone [hidden] { display:none!important; }
+  #pocket-tools-draft .pt-phone button,#pocket-tools-draft .pt-phone textarea,#pocket-tools-draft .pt-phone input { font:inherit;color:inherit; }
+  #pocket-tools-draft .pt-phone button { -webkit-tap-highlight-color:transparent; }
+  #pocket-tools-draft .pt-phone strong { font-weight:500; }
+  #pocket-tools-draft .pt-phone small { font-size:12px;color:var(--pt-muted); }
+  #pocket-tools-draft .pt-status { height:34px;padding:8px 22px 2px;display:flex;align-items:center;justify-content:space-between;flex:none;font-size:12px;font-weight:500; }
+  #pocket-tools-draft .pt-status-icons { display:flex;align-items:center;gap:7px; }
+  #pocket-tools-draft .pt-status-icons svg { width:15px;height:15px; }
+  #pocket-tools-draft .pt-appbar { display:flex;align-items:center;gap:14px;padding:10px 16px 12px;border-bottom:1px solid var(--pt-line); }
+  #pocket-tools-draft .pt-icon { display:flex;align-items:center;color:var(--pt-muted);flex:none; }
+  #pocket-tools-draft .pt-icon svg { width:20px;height:20px; }
+  #pocket-tools-draft .pt-title { flex:1;min-width:0;display:flex;flex-direction:column; }
+  #pocket-tools-draft .pt-title strong { white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+  #pocket-tools-draft .pt-chat { padding:24px 18px;flex:1;min-height:0; }
+  #pocket-tools-draft .pt-user { margin-left:auto;max-width:87%;width:fit-content;background:var(--pt-soft);border-radius:15px 15px 4px 15px;padding:10px 14px; }
+  #pocket-tools-draft .pt-answer { margin-top:24px; }
+  #pocket-tools-draft .pt-answer p { margin:0 0 16px; }
+  #pocket-tools-draft .pt-check { display:flex;align-items:center;gap:9px;margin:7px 0; }
+  #pocket-tools-draft .pt-check svg { width:15px;height:15px;color:var(--pt-accent); }
+  #pocket-tools-draft .pt-code { display:flex;flex-direction:column;gap:5px;padding:14px;margin:17px 0 10px;background:var(--pt-soft);border-radius:10px;font:400 12px/1.6 ui-monospace,monospace; }
+  #pocket-tools-draft .pt-code span:last-child { color:var(--pt-accent); }
+  #pocket-tools-draft .pt-composer { flex:none;margin:0 12px 8px;padding:10px 12px 8px;border:1px solid var(--pt-line);border-radius:20px;background:var(--pt-surface); }
+  #pocket-tools-draft .pt-composer textarea { display:block;width:100%;height:48px;padding:0;resize:none;border:0;background:transparent;font-size:16px; }
+  #pocket-tools-draft .pt-compose-bottom { display:flex;align-items:center;gap:12px; }
+  #pocket-tools-draft .pt-send { margin-left:auto;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--pt-soft);color:var(--pt-muted); }
+  #pocket-tools-draft .pt-send svg { width:17px;height:17px; }
+  #pocket-tools-draft .pt-system-gesture { height:20px;display:grid;place-items:center;flex:none;background:var(--pt-bg);z-index:15; }
+  #pocket-tools-draft .pt-system-gesture span { width:96px;height:4px;border-radius:8px;background:var(--pt-ink);opacity:.7; }
+  #pocket-tools-draft .pt-float { position:absolute;z-index:4;right:6px;top:360px;width:48px;height:56px;display:grid;place-items:center;padding:0;border:0;background:transparent;touch-action:none; }
+  #pocket-tools-draft .pt-float-face { width:var(--pt-size,36px);height:var(--pt-size,36px);display:flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--pt-line);border-radius:12px;background:var(--pt-surface);color:var(--pt-accent);box-shadow:0 3px 12px var(--pt-shadow); }
+  #pocket-tools-draft .pt-mark { width:22px;height:22px;flex:none; }
+  #pocket-tools-draft .pt-float-word { display:none; }
+  #pocket-tools-draft .pt-phone[data-kind="edge"] .pt-float { right:0;width:48px;justify-items:end; }
+  #pocket-tools-draft .pt-phone[data-kind="edge"] .pt-float-face { width:26px;height:52px;border-right:0;border-radius:16px 0 0 16px; }
+  #pocket-tools-draft .pt-phone[data-kind="edge"] .pt-mark { width:20px;height:20px; }
+  #pocket-tools-draft .pt-phone[data-kind="edge"][data-dock="left"] .pt-float { justify-items:start; }
+  #pocket-tools-draft .pt-phone[data-kind="edge"][data-dock="left"] .pt-float-face { border-right:1px solid var(--pt-line);border-left:0;border-radius:0 16px 16px 0; }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-float { z-index:12; }
+  #pocket-tools-draft .pt-phone[data-kind="list"] .pt-float { width:86px; }
+  #pocket-tools-draft .pt-phone[data-kind="list"] .pt-float-face { width:78px;height:36px;border-radius:20px; }
+  #pocket-tools-draft .pt-phone[data-kind="list"] .pt-float-word { display:inline;font-size:12px; }
+  #pocket-tools-draft .pt-overlay { position:absolute;inset:34px 0 20px;z-index:10; }
+  #pocket-tools-draft .pt-scrim { position:absolute;inset:0;width:100%;height:100%;border:0;background:light-dark(#17241d35,#00000065); }
+  #pocket-tools-draft .pt-menu { position:absolute;bottom:0;left:0;right:0;padding:10px 16px 20px;border-radius:25px 25px 0 0;background:var(--pt-surface);box-shadow:0 -8px 28px var(--pt-shadow); }
+  #pocket-tools-draft .pt-grab { width:32px;height:4px;border-radius:8px;background:var(--pt-line);margin:0 auto 10px; }
+  #pocket-tools-draft .pt-menu-header { display:flex;align-items:center;justify-content:space-between;margin-bottom:14px; }
+  #pocket-tools-draft .pt-menu-brand { display:flex;gap:10px;align-items:center; }
+  #pocket-tools-draft .pt-menu-brand>span { display:flex;flex-direction:column; }
+  #pocket-tools-draft .pt-menu-brand strong { font-size:17px; }
+  #pocket-tools-draft .pt-brand-mark { width:30px;height:30px;color:var(--pt-accent); }
+  #pocket-tools-draft .pt-icon-button { width:44px;height:44px;display:grid;place-items:center;border:0;border-radius:14px;background:transparent;color:var(--pt-muted);padding:0; }
+  #pocket-tools-draft .pt-icon-button svg { width:19px;height:19px; }
+  #pocket-tools-draft .pt-actions { display:grid;grid-template-columns:1fr 1fr;gap:9px; }
+  #pocket-tools-draft .pt-action { min-width:0;min-height:106px;padding:15px 12px 12px;display:flex;flex-direction:column;align-items:flex-start;gap:8px;border:0;border-radius:16px;background:var(--pt-soft);text-align:left; }
+  #pocket-tools-draft .pt-action-icon { color:var(--pt-accent);display:flex; }
+  #pocket-tools-draft .pt-action-icon svg { width:21px;height:21px; }
+  #pocket-tools-draft .pt-action-copy { display:flex;flex-direction:column;gap:1px; }
+  #pocket-tools-draft .pt-row-arrow { display:none; }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-scrim { background:light-dark(#17241d0c,#00000020); }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-menu { bottom:auto;top:var(--pt-card-y,132px);left:auto;right:62px;width:264px;max-width:calc(100% - 72px);padding:12px;border:1px solid var(--pt-line);border-radius:19px;box-shadow:0 8px 30px var(--pt-shadow); }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-grab { display:none; }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-menu-header { margin-bottom:5px; }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-brand-mark { width:24px;height:24px; }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-menu-brand strong { font-size:15px; }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-menu-brand small { display:none; }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-actions,#pocket-tools-draft .pt-phone[data-kind="list"] .pt-actions { display:flex;flex-direction:column;gap:0; }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-action,#pocket-tools-draft .pt-phone[data-kind="list"] .pt-action { width:100%;min-height:57px;padding:9px 8px;flex-direction:row;align-items:center;gap:12px;border-radius:10px;background:transparent; }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-action:hover,#pocket-tools-draft .pt-phone[data-kind="list"] .pt-action:hover { background:var(--pt-soft); }
+  #pocket-tools-draft .pt-phone[data-kind="card"] .pt-row-arrow,#pocket-tools-draft .pt-phone[data-kind="list"] .pt-row-arrow { display:flex;margin-left:auto;color:var(--pt-muted); }
+  #pocket-tools-draft .pt-row-arrow svg { width:16px;height:16px; }
+  #pocket-tools-draft .pt-phone[data-kind="list"] .pt-menu { padding:10px 18px 18px; }
+  #pocket-tools-draft .pt-phone[data-kind="list"] .pt-action { min-height:61px; }
+  #pocket-tools-draft .pt-phone[data-kind="list"] .pt-action:last-child { border-top:1px solid var(--pt-line);margin-top:6px;padding-top:15px;border-radius:0; }
+  #pocket-tools-draft .pt-detail { display:flex;flex-direction:column;gap:10px;padding:0 2px 4px; }
+  #pocket-tools-draft .pt-detail p { margin:0;color:var(--pt-muted);font-size:12px; }
+  #pocket-tools-draft .pt-choice { display:flex;align-items:center;gap:10px;min-height:44px; }
+  #pocket-tools-draft .pt-choice input { width:17px;height:17px;accent-color:var(--pt-accent); }
+  #pocket-tools-draft .pt-detail-field { min-width:0;width:100%;padding:10px;border:1px solid var(--pt-line);border-radius:10px;background:var(--pt-bg);font-size:16px!important; }
+  #pocket-tools-draft .pt-detail-button { min-height:44px;padding:10px 14px;border:0;border-radius:11px;background:var(--pt-soft);text-align:left; }
+  #pocket-tools-draft .pt-detail-button[data-primary] { background:var(--pt-accent);color:var(--pt-on);text-align:center; }
+  #pocket-tools-draft .pt-detail-note { min-height:20px;color:var(--pt-muted);font-size:12px; }
+  @media(max-width:370px) { #pocket-tools-draft .pt-stage { padding-inline:4px; }#pocket-tools-draft .pt-phone[data-kind="card"] .pt-menu { right:52px;max-width:calc(100% - 60px); } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('pocket-tools-draft');
+  const template = document.getElementById('pt-phone-content');
+  const phones = [...root.querySelectorAll('.pt-phone')];
+  const state = { logo: 'route', size: 36, appearance: 'system' };
+  const names = { appearance: '外观', version: '网页版本', source: '更新来源', cache: '缓存与诊断' };
+  const modes = { system: '跟随系统', light: '明亮', dark: '深色' };
+  function saved(value) {
+    if (!value || typeof value !== 'object') return;
+    if (['route','pocket','portal'].includes(value.logo)) state.logo = value.logo;
+    if (['system','light','dark'].includes(value.appearance)) state.appearance = value.appearance;
+    if (Number.isFinite(value.size)) state.size = Math.max(30, Math.min(42, value.size));
+  }
+  function persist() {
+    if (window.openai?.setWidgetState) Promise.resolve(window.openai.setWidgetState({ modelContent: { ...state }, privateContent: null })).catch(() => {});
+  }
+  function render() {
+    for (const phone of phones) {
+      phone.style.colorScheme = state.appearance === 'system' ? 'light dark' : state.appearance;
+      phone.style.setProperty('--pt-size', state.size + 'px');
+      phone.querySelectorAll('use[data-logo]').forEach(use => use.setAttribute('href', '#pt-' + state.logo));
+      phone.querySelector('[data-theme-label]').textContent = modes[state.appearance];
+    }
+  }
+  function icons() { if (globalThis.lucide) globalThis.lucide.createIcons({ attrs: { width: 20, height: 20 } }); }
+  function show(phone, open) {
+    phone.dataset.open = String(open);
+    phone.querySelector('.pt-overlay').hidden = !open;
+    phone.querySelector('.pt-float').setAttribute('aria-expanded', String(open));
+    if (!open) detail(phone, null);
+  }
+  function detail(phone, page) {
+    const area = phone.querySelector('.pt-detail');
+    phone.querySelector('.pt-actions').hidden = Boolean(page);
+    area.hidden = !page;
+    phone.querySelector('.pt-menu-brand strong').textContent = names[page] || '工具';
+    if (!page) { area.replaceChildren(); return; }
+    const uid = phone.dataset.kind;
+    const content = {
+      appearance: `<div>${Object.entries(modes).map(([value,label]) => `<label class="pt-choice cursor-interaction"><input type="radio" name="${uid}-appearance" value="${value}" ${value===state.appearance?'checked':''}><span>${label}</span></label>`).join('')}</div>`,
+      version: '<strong>当前网页 0.12.0</strong><p>更新由你手动检查。应用前可以继续使用当前页面。</p><button type="button" class="pt-detail-button cursor-interaction" data-primary data-local="check">检查页面更新</button><span class="pt-detail-note" aria-live="polite"></span>',
+      source: `<label class="pt-choice cursor-interaction"><input type="radio" name="${uid}-source" value="official" checked><span>官方</span></label><label class="pt-choice cursor-interaction"><input type="radio" name="${uid}-source" value="custom"><span>自定义</span></label><input class="pt-detail-field" aria-label="自定义更新来源" placeholder="https://updates.example/paseo/" hidden><button type="button" class="pt-detail-button cursor-interaction" data-primary data-local="save-source">保存</button><span class="pt-detail-note" aria-live="polite"></span>`,
+      cache: '<button type="button" class="pt-detail-button cursor-interaction" data-local="clear">清理临时资源缓存</button><p>保留主机配对、已安装页面与网页本地数据。</p><button type="button" class="pt-detail-button cursor-interaction" data-local="diagnostic">诊断与网页引擎</button><span class="pt-detail-note" aria-live="polite"></span>'
+    };
+    area.innerHTML = content[page];
+    const back = document.createElement('button');
+    back.type = 'button'; back.className = 'pt-detail-button cursor-interaction'; back.textContent = '返回工具';
+    back.addEventListener('click', () => detail(phone, null)); area.append(back);
+    area.addEventListener('change', event => {
+      const target = event.target;
+      if (target.name === uid + '-appearance') { state.appearance = target.value; render(); persist(); }
+      if (target.name === uid + '-source') area.querySelector('.pt-detail-field').hidden = target.value !== 'custom';
+    }, { signal: phone.detailAbort.signal });
+    icons();
+  }
+  saved(window.openai?.widgetState?.modelContent);
+  for (const phone of phones) {
+    phone.append(template.content.cloneNode(true));
+    phone.detailAbort = new AbortController();
+    const button = phone.querySelector('.pt-float');
+    let pointer = null, suppressClick = false;
+    button.addEventListener('pointerdown', event => {
+      suppressClick = false;
+      const parent = phone.getBoundingClientRect(), box = button.getBoundingClientRect();
+      pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, left: box.left-parent.left, top: box.top-parent.top, moved: false };
+      button.setPointerCapture(event.pointerId);
+    });
+    button.addEventListener('pointermove', event => {
+      if (!pointer || event.pointerId !== pointer.id) return;
+      const dx=event.clientX-pointer.x, dy=event.clientY-pointer.y;
+      if (Math.hypot(dx,dy)>6) pointer.moved=true;
+      if (!pointer.moved) return;
+      button.style.right='auto';
+      button.style.left=Math.max(0,Math.min(phone.clientWidth-button.offsetWidth,pointer.left+dx))+'px';
+      const y=Math.max(104,Math.min(phone.clientHeight-170,pointer.top+dy));
+      button.style.top=y+'px';phone.style.setProperty('--pt-card-y',Math.max(50,Math.min(250,y-232))+'px');
+    });
+    button.addEventListener('pointerup', () => {
+      if (!pointer) return;
+      suppressClick=pointer.moved;
+      if (pointer.moved) {
+        const left=button.offsetLeft+button.offsetWidth/2<phone.clientWidth/2;
+        phone.dataset.dock=left?'left':'right';
+        button.style.left=left?(phone.dataset.kind==='edge'?'0px':'4px'):'auto';button.style.right=left?'auto':(phone.dataset.kind==='edge'?'0px':'6px');
+        if (phone.dataset.kind==='card') { const menu=phone.querySelector('.pt-menu');menu.style.left=left?'62px':'auto';menu.style.right=left?'auto':'62px'; }
+      }
+      pointer=null;
+    });
+    button.addEventListener('pointercancel', () => { pointer=null;suppressClick=true; });
+    button.addEventListener('click', () => { if(suppressClick){suppressClick=false;return;}show(phone,phone.dataset.open!=='true'); });
+    phone.querySelector('.pt-close').addEventListener('click', () => show(phone,false));
+    phone.querySelector('.pt-scrim').addEventListener('click', () => show(phone,false));
+    phone.addEventListener('keydown', event => { if(event.key==='Escape')show(phone,false); });
+    phone.querySelectorAll('[data-action]').forEach(control => control.addEventListener('click', () => {
+      phone.detailAbort.abort();phone.detailAbort=new AbortController();detail(phone,control.dataset.action);
+    }));
+    phone.querySelector('.pt-detail').addEventListener('click', event => {
+      const action=event.target.closest('[data-local]')?.dataset.local;
+      const area=phone.querySelector('.pt-detail'),note=area.querySelector('.pt-detail-note');
+      if(action==='check')note.textContent='当前页面已是最新版本（示例）';
+      if(action==='clear')note.textContent='示例缓存已清理，配对与草稿保留';
+      if(action==='diagnostic')note.textContent='系统 WebView · 诊断不包含会话内容';
+      if(action==='save-source') {
+        const custom=area.querySelector('input[value="custom"]').checked;
+        if(custom&&!/^https:\/\/[^\s]+$/.test(area.querySelector('.pt-detail-field').value)){note.textContent='请输入 HTTPS 更新地址';return;}
+        phone.querySelector('[data-source-label]').textContent=custom?'自定义':'官方';detail(phone,null);
+      }
+    });
+    show(phone,true);
+  }
+  render();
+  window.addEventListener('openai:set_globals', event => { saved(event.detail?.globals?.widgetState?.modelContent);render(); });
+  if(globalThis.Tweak) {
+    const tweak=new Tweak({container:root,onChange:()=>{render();persist();}});
+    tweak.addSelect(state,'logo',{label:'Logo 方向',options:[{label:'路径',value:'route'},{label:'口袋',value:'pocket'},{label:'叠窗',value:'portal'}]});
+    tweak.addSlider(state,'size',{label:'方钮视觉尺寸',min:30,max:42,step:2,unit:'px'});
+  }
+})();
+</script>

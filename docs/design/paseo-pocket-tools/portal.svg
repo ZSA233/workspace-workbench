@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Paseo Pocket 叠窗标志草案</title>
+  <desc id="desc">两扇开放的窗口通过一条斜线相连。</desc>
+  <path d="M23 42h-5a6 6 0 0 1-6-6V18a6 6 0 0 1 6-6h18a6 6 0 0 1 6 6v5M41 22h5a6 6 0 0 1 6 6v18a6 6 0 0 1-6 6H28a6 6 0 0 1-6-6v-5M24 40l16-16" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

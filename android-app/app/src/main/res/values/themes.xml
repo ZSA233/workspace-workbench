@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.Workbench" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#58736A</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

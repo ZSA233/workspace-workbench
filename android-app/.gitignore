@@ -1,0 +1,11 @@
+.gradle/
+.kotlin/
+local.properties
+*.local.properties
+*.jks
+*.keystore
+app/src/main/assets/paseo/
+app/src/main/assets/paseo.staging/
+app/src/main/assets/legal/
+artifacts/
+captures/

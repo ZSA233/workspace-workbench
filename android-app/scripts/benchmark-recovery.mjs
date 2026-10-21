@@ -15,7 +15,12 @@ const serial = values.serial, app = 'dev.paseo.pocket.qa';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const launch = () => adb(serial, ['shell', 'am', 'start', '-n', `${app}/dev.paseo.pocket.MainActivity`]);
 async function events() {
-  const text = await adb(serial, ['shell', 'run-as', app, 'cat', 'files/diagnostics.txt']);
+  // Android <= 10 AtomicFile briefly renames the base file during a commit.
+  let text;
+  for(let attempt=0;attempt<6;attempt++) {
+    try { text=await adb(serial, ['shell', 'run-as', app, 'cat', 'files/diagnostics.txt']);break; }
+    catch(error) { if(attempt===5||!String(error.stderr).includes('No such file'))throw error;await sleep(50); }
+  }
   return text.trim().split('\n').map(line => {
     const [at, code, ...fields] = line.split(' ');
     return { at: Number(at), code, ...Object.fromEntries(fields.map(f => { const [k,v] = f.split('='); return [k, Number(v)]; })) };

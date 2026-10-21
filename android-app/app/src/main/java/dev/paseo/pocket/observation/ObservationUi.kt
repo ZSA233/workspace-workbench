@@ -71,7 +71,7 @@ class ObservationUi(private val observation: ObservationController) {
                 trace.pageLoadedMs?.let { append("本地网页加载 ${seconds(it)}\n") }
                 if (trace.adapter != "attached") {
                     append(if (trace.adapter == "initializing") "等待网页连接状态；已等待 ${seconds(trace.elapsed())}。"
-                        else "详细连接状态不可用，网页可继续使用。")
+                        else "详细连接状态不可用，仍可查看基础诊断。")
                 } else if (trace.hosts.isEmpty()) append("在网页中添加主机后，这里会显示连接状态。")
                 else trace.hosts.forEachIndexed { index, host ->
                     if (index > 0) append("\n\n")

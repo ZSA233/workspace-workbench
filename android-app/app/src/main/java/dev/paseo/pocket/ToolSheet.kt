@@ -14,7 +14,7 @@ class ToolSheet(context: Context, onSelect: (String) -> Unit) : BottomSheetDialo
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, pad)
         }
-        content.addView(TextView(context).apply { text = "Workbench"; textSize = 22f; gravity = Gravity.START })
+        content.addView(TextView(context).apply { text = "Paseo Pocket"; textSize = 22f; gravity = Gravity.START })
         for ((id, label) in listOf("appearance" to "外观", "version" to "页面版本",
             "source" to "更新来源", "cache" to "缓存与诊断")) {
             content.addView(MaterialButton(context, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {

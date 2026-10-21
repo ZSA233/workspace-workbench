@@ -64,7 +64,9 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
                 if (request.isForMainFrame) { diagnostics.record("page_load_failed"); unavailable("page_load_failed") }
             }
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-                if (request.isForMainFrame) { diagnostics.record("page_resource_missing"); unavailable("page_resource_missing") }
+                if (request.isForMainFrame || bundle.isStaticResource(request.url)) {
+                    diagnostics.record("page_resource_missing"); unavailable("page_resource_missing")
+                }
             }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 diagnostics.record(if (detail.didCrash()) "renderer_crashed" else "renderer_reclaimed")
@@ -80,6 +82,12 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
                 if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) diagnostics.record("page_console_error")
                 return true
             }
+        }
+        val engine = WebRuntime.chromiumMajor(webView.settings.userAgentString)
+        if (engine != null && engine < WebRuntime.MINIMUM_CHROMIUM) {
+            diagnostics.record("webview_too_old")
+            unavailable("webview_too_old")
+            return
         }
         diagnostics.record("page_opened")
         webView.loadUrl(PageOrigin.BASE + prefs.route)

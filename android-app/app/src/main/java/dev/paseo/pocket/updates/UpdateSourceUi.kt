@@ -4,6 +4,7 @@ import android.text.InputType
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import dev.paseo.pocket.ShellPreferences
+import dev.paseo.pocket.R
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
@@ -26,12 +27,13 @@ class UpdateSourceUi(private val activity: AppCompatActivity, private val prefs:
 
     private fun editCustom() {
         val input = TextInputEditText(activity).apply {
+            id = R.id.update_source_url
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine(true); setText(prefs.customSourceUrl)
         }
         val field = TextInputLayout(activity).apply {
             hint = "https://mirror.example/latest.json"
-            addView(input)
+            addView(input, android.widget.LinearLayout.LayoutParams(-1, -2))
             val padding = (24 * resources.displayMetrics.density).toInt()
             setPadding(padding, padding / 2, padding, 0)
         }

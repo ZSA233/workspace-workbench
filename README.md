@@ -3,6 +3,10 @@
 Workspace Workbench 用于查看和管理包含多个 Git 仓库的项目。它提供 Workspace
 列表、提交历史、文件变化、Review set，以及可选的 Paseo Agent 交接。
 
+仓库也包含独立的 [Paseo Pocket Android App](android-app/README.md) 和
+[网页资源工具](web-assets/README.md)。App 使用本地 Paseo 网页和系统 WebView，
+与 Workbench 插件分别构建、维护版本；无需启用插件即可使用。
+
 ## 快速开始
 
 正式运行需要 **Node.js 22.14+**、Git 和 Paseo。Workbench 自己的服务使用 Node.js，

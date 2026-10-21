@@ -4,8 +4,11 @@ local.properties
 *.local.properties
 *.jks
 *.keystore
+*.p12
+android-signing.properties
 app/src/main/assets/paseo/
 app/src/main/assets/paseo.staging/
 app/src/main/assets/legal/
 artifacts/
 captures/
+.device-fixtures/

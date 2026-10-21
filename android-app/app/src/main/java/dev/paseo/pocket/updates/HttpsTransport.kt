@@ -1,5 +1,7 @@
 package dev.paseo.pocket.updates
 
+import dev.paseo.pocket.AppVersion
+
 import java.io.File
 import java.net.URL
 import java.util.concurrent.CancellationException
@@ -25,8 +27,10 @@ class HttpsTransport(private val factory: (URL) -> HttpsURLConnection = { it.ope
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 15_000; connection.readTimeout = 20_000
             connection.setRequestProperty("Accept-Encoding", "identity")
-            connection.setRequestProperty("User-Agent", "PaseoPocket/0.1.0")
-            val status = connection.responseCode
+            connection.setRequestProperty("User-Agent", "PaseoPocket/${AppVersion.name}")
+            val status = try { connection.responseCode } catch (error: Exception) {
+                connection.disconnect(); cancellation.detach(); throw error
+            }
             if (status in 300..399) {
                 val location = connection.getHeaderField("Location")
                 connection.disconnect(); cancellation.detach()

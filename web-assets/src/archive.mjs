@@ -35,7 +35,7 @@ export async function downloadArchive(metadata, file, signal = AbortSignal.timeo
 
 export function safeArchivePath(name) {
   if (typeof name !== 'string' || name.length > 1024 || name.startsWith('/') ||
-      /[\\\x00-\x1f:]/.test(name) || name.split('/').some(p => p === '.' || p === '..'))
+      /[\\\x00-\x1f:]/.test(name) || name.replace(/\/$/, '').split('/').some(p => !p || p === '.' || p === '..'))
     throw new Error('Unsafe archive path');
   return name.replace(/\/$/, '');
 }
@@ -79,8 +79,9 @@ export async function extractWeb(file, output, metadata, policy) {
     if (!inventory.some(f => f.path === 'index.html') || !inventory.some(f => f.path.endsWith('.js')))
       throw new Error('Required index.html or JavaScript is missing');
     const index = await readFile(join(output, 'index.html'), 'utf8');
-    for (const match of index.matchAll(/(?:src|href)=["']([^"'#?]+)["']/g)) {
-      const path = match[1];
+    for (const match of index.matchAll(/(?:src|href)=["']([^"']+)["']/g)) {
+      if (match[1].startsWith('#')) continue;
+      const path = match[1].split(/[?#]/)[0];
       if (/^(?:https?:)?\/\//.test(path)) throw new Error('Remote index resource is forbidden');
       if (!inventory.some(f => f.path === path.replace(/^\//, '')))
         throw new Error(`Missing index resource: ${path}`);

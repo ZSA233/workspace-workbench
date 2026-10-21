@@ -19,6 +19,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.graphics.Insets
 import com.google.android.material.button.MaterialButton
 import dev.paseo.pocket.updates.PageUpdates
 import dev.paseo.pocket.updates.UpdateUi
@@ -40,6 +41,8 @@ class MainActivity : AppCompatActivity() {
         fileCallback = null
     }
     private var imeVisible = false
+    private var recoveryVisible = false
+    private var foreground = false
     override fun onCreate(savedInstanceState: Bundle?) {
         prefs = ShellPreferences(this)
         ShellSettings.applyAppearance(prefs.appearance)
@@ -66,7 +69,13 @@ class MainActivity : AppCompatActivity() {
             page.setPadding(safe.left, safe.top, safe.right, maxOf(safe.bottom, ime.bottom))
             root.post { tool.updateBounds(Rect(safe.left, safe.top, root.width - safe.right,
                 root.height - maxOf(safe.bottom, ime.bottom)), imeVisible) }
-            insets
+            // The native container already reserves these areas. Passing them to WebView
+            // would also expose CSS env(safe-area-inset-*), doubling the page's padding.
+            WindowInsetsCompat.Builder(insets)
+                .setInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime(), Insets.NONE)
+                .setInsetsIgnoringVisibility(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(), Insets.NONE)
+                .setDisplayCutout(null)
+                .build()
         }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> ViewCompat.requestApplyInsets(root) }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -95,6 +104,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createSession() {
+        recoveryVisible = false
         page.removeAllViews()
         session = WebSession(this, prefs, diagnostics, ::showRecovery, updates.store.activeDirectory()) { callback, params ->
             fileCallback?.onReceiveValue(null)
@@ -106,10 +116,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
         page.addView(session.webView, FrameLayout.LayoutParams(-1, -1))
+        if (foreground) session.webView.resumeTimers() else session.webView.pauseTimers()
     }
 
     private fun showRecovery(reason: String) {
-        if (isFinishing || isDestroyed) return
+        if (isFinishing || isDestroyed || recoveryVisible) return
+        recoveryVisible = true
         fileCallback?.onReceiveValue(null); fileCallback = null
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
@@ -117,11 +129,24 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(if (isDark()) Color.rgb(18, 22, 20) else Color.rgb(247, 248, 245))
         }
         content.addView(TextView(this).apply {
-            text = if (reason == "renderer_gone") "网页渲染进程已退出" else "本地页面加载失败"
+            text = when (reason) { "renderer_gone" -> "网页渲染进程已退出"; "webview_too_old" -> "系统 WebView 版本过旧"; else -> "本地页面加载失败" }
             textSize = 22f; gravity = Gravity.CENTER
         })
         content.addView(TextView(this).apply {
-            text = "配对数据仍保留。重新打开页面后请检查会话状态。"; gravity = Gravity.CENTER
+            text = if (reason == "webview_too_old") "请更新系统 WebView 至 Chromium 100 或以上，再重新打开页面。建议使用系统可用的最新版本。"
+                else "配对数据仍保留。重新打开页面后请检查会话状态。"
+            gravity = Gravity.CENTER
+        })
+        if (reason == "webview_too_old") content.addView(MaterialButton(this).apply {
+            text = "更新系统 WebView"
+            setOnClickListener {
+                val provider = androidx.webkit.WebViewCompat.getCurrentWebViewPackage(this@MainActivity)?.packageName
+                val uri = if (provider?.startsWith("com.google.") == true)
+                    Uri.parse("https://play.google.com/store/apps/details?id=$provider")
+                    else Uri.parse("package:${provider ?: "com.google.android.webview"}")
+                val action = if (uri.scheme == "package") android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS else android.content.Intent.ACTION_VIEW
+                runCatching { startActivity(android.content.Intent(action, uri)) }
+            }
         })
         content.addView(MaterialButton(this).apply {
             text = "重新打开页面"
@@ -148,8 +173,15 @@ class MainActivity : AppCompatActivity() {
         if (::root.isInitialized) ViewCompat.requestApplyInsets(root)
     }
 
-    override fun onResume() { super.onResume(); if (::session.isInitialized && !session.destroyed) session.webView.onResume() }
-    override fun onPause() { if (::session.isInitialized && !session.destroyed) session.webView.onPause(); super.onPause() }
+    override fun onResume() {
+        super.onResume(); foreground = true
+        if (::session.isInitialized && !session.destroyed) { session.webView.resumeTimers(); session.webView.onResume() }
+    }
+    override fun onPause() {
+        foreground = false
+        if (::session.isInitialized && !session.destroyed) { session.webView.onPause(); session.webView.pauseTimers() }
+        super.onPause()
+    }
     override fun onDestroy() {
         sheet?.dismiss(); fileCallback?.onReceiveValue(null); fileCallback = null
         if (::session.isInitialized) session.destroy()

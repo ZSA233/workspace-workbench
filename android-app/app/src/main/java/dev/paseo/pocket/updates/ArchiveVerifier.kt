@@ -110,8 +110,9 @@ class ArchiveVerifier(private val trust: PackageTrust) {
             ensure(files.any { it.path == "index.html" } && files.any { it.path.endsWith(".js") }, "resources_missing")
             val index = File(destination, "index.html")
             ensure(index.length() <= PackageLimits.METADATA, "size_limit")
-            for (match in Regex("(?:src|href)=[\"']([^\"'#?]+)[\"']").findAll(index.readText())) {
-                val resource = match.groupValues[1]
+            for (match in Regex("(?:src|href)=[\"']([^\"']+)[\"']").findAll(index.readText())) {
+                if (match.groupValues[1].startsWith('#')) continue
+                val resource = match.groupValues[1].substringBefore('?').substringBefore('#')
                 ensure(!resource.startsWith("//") && !resource.contains("://") && files.any { it.path == resource.removePrefix("/") }, "resources_missing")
             }
             val bundle = VerifiedBundle(metadata, files)

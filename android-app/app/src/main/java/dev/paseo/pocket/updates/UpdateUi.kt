@@ -8,6 +8,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.util.Locale
+import dev.paseo.pocket.AppVersion
 
 class UpdateUi(private val activity: AppCompatActivity, private val updates: PageUpdates,
     private val sourceUrl: () -> String, private val reload: () -> Unit) : AutoCloseable {
@@ -68,7 +69,7 @@ class UpdateUi(private val activity: AppCompatActivity, private val updates: Pag
             "failed" -> errorText(state.failure)
             else -> "仅在你点击时检查更新。"
         }
-        details?.text = "Paseo $current\nPaseo Pocket 0.1.0 · 非官方客户端\n\n$description"
+        details?.text = "Paseo $current\nPaseo Pocket ${AppVersion.name} · 非官方客户端\n\n$description"
         val busy = state.kind in setOf("checking", "downloading", "verifying", "applying")
         progress?.apply {
             visibility = if (busy) View.VISIBLE else View.GONE

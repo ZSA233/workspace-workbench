@@ -1,7 +1,7 @@
 # Paseo 网页资源
 
 ```sh
-npm --prefix web-assets ci
+npm --prefix web-assets ci --ignore-scripts
 npm --prefix web-assets test
 npm --prefix web-assets run bundle
 ```

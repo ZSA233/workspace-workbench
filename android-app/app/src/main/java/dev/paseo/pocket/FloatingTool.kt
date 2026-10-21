@@ -25,10 +25,10 @@ class FloatingTool(context: Context, private val prefs: ShellPreferences, onClic
     init {
         layoutParams = LayoutParams(dp(48), dp(48))
         isClickable = true; isFocusable = true
-        contentDescription = "Workbench 工具"
+        contentDescription = "Paseo Pocket 工具"
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         addView(TextView(context).apply {
-            text = "WB"; textSize = 11f; gravity = Gravity.CENTER
+            text = "PP"; textSize = 11f; gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.rgb(60, 83, 74)) }

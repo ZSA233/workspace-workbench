@@ -2,7 +2,7 @@ import java.util.Properties
 
 plugins { alias(libs.plugins.android.application) }
 
-val signingFile = file(System.getenv("WORKBENCH_SIGNING_PROPERTIES")
+val signingFile = file(System.getenv("PASEO_POCKET_SIGNING_PROPERTIES")
     ?: "${System.getProperty("user.home")}/.config/paseo-pocket/android-signing.properties")
 val signing = Properties().apply { if (signingFile.isFile) signingFile.inputStream().use(::load) }
 
@@ -33,10 +33,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    buildFeatures { buildConfig = true }
     // AAPT's default !_* directory rule silently drops Expo's complete JS/font tree.
     androidResources { ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:CVS:thumbs.db:picasa.ini:*~" }
     lint { abortOnError = true }
     testOptions { unitTests.isReturnDefaultValues = true }
+    sourceSets.getByName("debug").res.srcDir(rootProject.file("build/device-fixtures/res"))
 }
 
 dependencies {
@@ -50,6 +52,7 @@ dependencies {
     testImplementation("org.json:json:20250517")
     androidTestImplementation(libs.test.runner)
     androidTestImplementation(libs.test.junit)
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
 
 tasks.register("requireReleaseSigning") {
@@ -59,7 +62,7 @@ tasks.matching { it.name == "validateSigningRelease" || it.name == "packageRelea
     dependsOn("requireReleaseSigning")
 }
 
-val prepareWebAssets by tasks.registering(Exec::class) {
+val prepareWebAssets = tasks.register<Exec>("prepareWebAssets") {
     val tools = rootProject.file("../web-assets")
     inputs.files(fileTree(tools) { include("src/**", "licenses/**", "*.json") })
     outputs.dir("src/main/assets/paseo")
@@ -68,3 +71,11 @@ val prepareWebAssets by tasks.registering(Exec::class) {
     commandLine("node", "src/bundle.mjs")
 }
 tasks.named("preBuild") { dependsOn(prepareWebAssets) }
+
+val prepareDeviceFixtures = tasks.register<Exec>("prepareDeviceFixtures") {
+    inputs.file(rootProject.file("scripts/prepare-device-fixtures.mjs"))
+    outputs.dir(rootProject.file("build/device-fixtures/res"))
+    outputs.files(rootProject.file(".device-fixtures/localhost-cert.pem"), rootProject.file(".device-fixtures/localhost-key.pem"))
+    commandLine("node", rootProject.file("scripts/prepare-device-fixtures.mjs"))
+}
+tasks.matching { it.name == "preDebugBuild" }.configureEach { dependsOn(prepareDeviceFixtures) }

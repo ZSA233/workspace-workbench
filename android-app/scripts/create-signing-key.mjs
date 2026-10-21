@@ -22,4 +22,4 @@ await chmod(storeFile, 0o600);
 const escaped = storeFile.replaceAll('\\', '\\\\').replaceAll(':', '\\:');
 await writeFile(config, `storeFile=${escaped}\nstorePassword=${password}\nkeyAlias=workbench\nkeyPassword=${password}\n`, { mode: 0o600, flag: 'wx' });
 console.log(`Signing key created outside the repository. Back up this directory securely: ${directory}`);
-console.log(`WORKBENCH_SIGNING_PROPERTIES=${config}`);
+console.log(`PASEO_POCKET_SIGNING_PROPERTIES=${config}`);

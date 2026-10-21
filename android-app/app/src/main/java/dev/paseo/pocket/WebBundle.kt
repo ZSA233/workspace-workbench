@@ -25,6 +25,11 @@ class WebBundle(private val assets: AssetManager, private val installed: File? =
         }).build()
     private fun open(relative: String): InputStream = installed?.let { File(it, relative).inputStream() }
         ?: assets.open("paseo/$relative", AssetManager.ACCESS_STREAMING)
+    fun isStaticResource(uri: Uri): Boolean {
+        val relative = PageOrigin.resourcePath(uri.path ?: "")
+        return PageOrigin.isLocal(uri.toString()) && ((relative != null && relative in files) ||
+            uri.path?.startsWith("/_expo/") == true || uri.path?.startsWith("/assets/") == true)
+    }
 
     fun intercept(uri: Uri, mainFrame: Boolean): WebResourceResponse? {
         if (!PageOrigin.isLocal(uri.toString())) return null
@@ -48,5 +53,5 @@ class WebBundle(private val assets: AssetManager, private val installed: File? =
     }
 
     private fun missing() = WebResourceResponse("text/plain", "UTF-8", 404, "Not Found",
-        mapOf("Cache-Control" to "no-store"), ByteArrayInputStream("Local page resource is missing. Open Workbench tools to recover.".toByteArray()))
+        mapOf("Cache-Control" to "no-store"), ByteArrayInputStream("Local page resource is missing. Open Paseo Pocket tools to recover.".toByteArray()))
 }

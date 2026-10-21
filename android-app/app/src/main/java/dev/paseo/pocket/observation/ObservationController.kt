@@ -17,6 +17,7 @@ class ObservationController(private val diagnostics: Diagnostics) : AutoCloseabl
     private var recordingStarted: Long? = null
     private var closed = false
     private val sampler = PerformanceSampler { value ->
+        if (recordingStarted?.let { clock() - it >= 60000 } == true) endRecording(false)
         if (recordingStarted != null) {
             val fields = mutableMapOf<String, Long>()
             value.cpuPercent?.let { fields["cpu_milli"] = (it * 1000).coerceIn(0.0, 1e9).toLong() }
@@ -69,7 +70,7 @@ class ObservationController(private val diagnostics: Diagnostics) : AutoCloseabl
     fun endRecording(paused: Boolean = false) {
         val started = recordingStarted ?: return
         recordingStarted = null; handler.removeCallbacks(stopRecording)
-        diagnostics.record(if (paused) "recording_interrupted" else "recording_finished", mapOf("duration_ms" to (clock() - started).coerceAtLeast(0)))
+        diagnostics.record(if (paused) "recording_interrupted" else "recording_finished", mapOf("duration_ms" to (clock() - started).coerceIn(0, 60000)))
         updateSampling(); changed()
     }
     override fun close() {

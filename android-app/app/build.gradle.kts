@@ -8,6 +8,10 @@ val signing = Properties().apply { if (signingFile.isFile) signingFile.inputStre
 val appVersion = Properties().apply { rootProject.file("version.properties").inputStream().use(::load) }
 val appVersionName = appVersion.getProperty("versionName")
 val appVersionCode = appVersion.getProperty("versionCode").toInt()
+val isolatedQa = providers.gradleProperty("pocketTestPackage").orNull?.let {
+    require(it == "dev.paseo.pocket.qa") { "Only the isolated QA package is supported" }
+    true
+} ?: false
 require(Regex("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)").matches(appVersionName)) { "Invalid Android versionName" }
 require(appVersionCode in 1..2100000000) { "Invalid Android versionCode" }
 
@@ -29,6 +33,7 @@ android {
         keyPassword = signing.getProperty("keyPassword")
     }
     buildTypes {
+        getByName("debug") { if (isolatedQa) applicationIdSuffix = ".qa" }
         release {
             isMinifyEnabled = false
             if (signing.isNotEmpty()) signingConfig = signingConfigs.getByName("persistent")

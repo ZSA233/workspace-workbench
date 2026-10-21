@@ -47,7 +47,7 @@ class ShellDeviceTest {
         val provider = androidx.webkit.WebViewCompat.getCurrentWebViewPackage(instrumentation.targetContext)
         val major = provider?.versionName?.substringBefore('.')?.toIntOrNull() ?: 0
         org.junit.Assume.assumeTrue("Requires an updated system WebView", major >= WebRuntime.MINIMUM_CHROMIUM)
-        device.executeShellCommand("am start -n dev.paseo.pocket/.MainActivity")
+        device.executeShellCommand("am start -n ${instrumentation.targetContext.packageName}/dev.paseo.pocket.MainActivity")
         val deadline = System.currentTimeMillis() + 15000
         while (System.currentTimeMillis() < deadline) {
             var found = false
@@ -67,14 +67,16 @@ class ShellDeviceTest {
     private fun clickText(text: String) {
         repeat(3) { attempt ->
             device.waitForIdle(500)
-            val selector = if (text in setOf("跟随系统", "明亮", "深色")) By.clazz(RadioButton::class.java).text(text) else By.text(text)
-            var item = device.wait(Until.findObject(selector), 5000)
-            if (item == null || item.visibleBounds.isEmpty) {
-                androidx.test.uiautomator.UiScrollable(androidx.test.uiautomator.UiSelector().scrollable(true)).scrollTextIntoView(text)
-                item = device.wait(Until.findObject(selector), 5000)
+            try {
+                val selector = if (text in setOf("跟随系统", "明亮", "深色")) By.clazz(RadioButton::class.java).text(text) else By.text(text)
+                var item = device.wait(Until.findObject(selector), 5000)
+                if (item == null || item.visibleBounds.isEmpty) {
+                    androidx.test.uiautomator.UiScrollable(androidx.test.uiautomator.UiSelector().scrollable(true)).scrollTextIntoView(text)
+                    item = device.wait(Until.findObject(selector), 5000)
+                }
+                val target = item ?: error("Missing UI: $text")
+                target.click(); device.waitForIdle(1000); return
             }
-            val target = item ?: error("Missing UI: $text")
-            try { target.click(); device.waitForIdle(1000); return }
             catch (error: StaleObjectException) { if (attempt == 2) throw error }
         }
     }
@@ -186,7 +188,7 @@ class ShellDeviceTest {
         try {
             openTools(); clickText("更新来源")
             clickText("自定义")
-            val sourceField = device.wait(Until.findObject(By.res("dev.paseo.pocket", "update_source_url")), 15000)
+            val sourceField = device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url")), 15000)
             assertNotNull("Custom source field is not visible", sourceField)
             sourceField.text = "https://name:password@localhost:19443/latest.json"
             clickText("保存")
@@ -198,7 +200,7 @@ class ShellDeviceTest {
             assertNotNull(device.wait(Until.findObject(By.textContains("连接失败")), 15000))
             assertEquals("\"before-update\"", evaluate(original, "window.__pocketFixture"))
             clickText("返回工具"); clickText("更新来源"); clickText("自定义")
-            val retryField = device.wait(Until.findObject(By.res("dev.paseo.pocket", "update_source_url")), 5000)
+            val retryField = device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url")), 5000)
             retryField.text = url.replace("/latest.json", "/slow/latest.json")
             clickText("保存"); clickText("网页版本"); clickText("检查页面更新")
             assertNotNull(device.wait(Until.findObject(By.textContains("候选版本")), 15000))
@@ -210,11 +212,11 @@ class ShellDeviceTest {
             assertNotNull(device.wait(Until.findObject(By.textContains("已取消")), 15000))
             onActivity { assertSame(original, webViews(it.window.decorView).single()) }
             clickText("返回工具"); clickText("更新来源"); clickText("自定义")
-            val finalField = device.wait(Until.findObject(By.res("dev.paseo.pocket", "update_source_url")), 5000)
+            val finalField = device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url")), 5000)
             finalField.text = url
-            assertNotNull(device.wait(Until.findObject(By.res("dev.paseo.pocket", "update_source_url").text(url)), 5000))
+            assertNotNull(device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url").text(url)), 5000))
             clickText("保存")
-            assertTrue(device.wait(Until.gone(By.res("dev.paseo.pocket", "update_source_url")), 5000) == true)
+            assertTrue(device.wait(Until.gone(By.res(instrumentation.targetContext.packageName, "update_source_url")), 5000) == true)
             assertTrue("Saved source did not become active", prefs.customSource)
             assertEquals("\"before-update\"", evaluate(original, "window.__pocketFixture"))
             clickText("网页版本")

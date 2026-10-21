@@ -23,7 +23,7 @@ class ShellSettings(private val activity: AppCompatActivity, private val prefs: 
     private val appearanceChanged: () -> Unit) {
     private val observationUi = ObservationUi(observation)
     fun connectionSummary() = observationUi.summary()
-    fun observeConnection(listener: () -> Unit) = observation.subscribe(listener)
+    fun observeConnection(listener: () -> Unit) = observation.subscribe { if (observation.isForeground) listener() }
     fun detachObservation() = observationUi.detach()
     fun appearanceContent(context: Context): View {
         val group = RadioGroup(context)

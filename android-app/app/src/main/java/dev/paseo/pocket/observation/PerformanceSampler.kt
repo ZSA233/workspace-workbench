@@ -42,7 +42,7 @@ class PerformanceSampler(private val changed: (PerformanceReading) -> Unit) : Au
         worker.execute {
             val counters = if (!memory) runCatching { Counters(SystemClock.elapsedRealtime(), Process.getElapsedCpuTime(),
                 TrafficStats.getUidRxBytes(Process.myUid()), TrafficStats.getUidTxBytes(Process.myUid())) }.getOrNull() else null
-            val pss = if (memory) runCatching { Debug.MemoryInfo().also(Debug::getMemoryInfo).totalPss.toLong() }.getOrNull() else null
+            val pss = if (memory) runCatching { Debug.MemoryInfo().also(Debug::getMemoryInfo).totalPss.toLong().takeIf { it > 0 } }.getOrNull() else null
             handler.post {
                 inFlight.set(false)
                 if (!running || closed || epoch != ticket) return@post

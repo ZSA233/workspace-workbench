@@ -119,16 +119,25 @@ test('long tasks are observed only while requested in the foreground', () => {
   const f = fixture(); f.activate(); assert.equal(f.observers.size, 0);
   f.api.inspect(true, true); assert.equal(f.observers.size, 1);
   f.advance(100); [...f.observers][0].fn({ getEntries: () => [{ startTime: 1, duration: 70 }] });
+  f.advance(1);
   assert.equal(f.latest('tasks').count, 1);
   f.api.foreground(false); assert.equal(f.observers.size, 0);
   f.advance(30000); f.api.foreground(true);
   [...f.observers][0].fn({ getEntries: () => [{ startTime: 10, duration: 30000 }] });
+  f.advance(1001);
   assert.equal(f.latest('tasks').count, 1, 'A background gap must not become a long task');
   f.api.inspect(false); assert.equal(f.observers.size, 0);
 });
 test('unsupported performance observers are explicit and do not install a timer fallback', () => {
   const f = fixture({ supportedTasks: false }); f.activate(); f.api.inspect(true);
   assert.equal(f.latest('tasks').supported, false); assert.equal(f.observers.size, 0); assert.equal(f.timers.size, 0);
+});
+test('frequent long tasks are aggregated instead of flooding the native channel', () => {
+  const f=fixture();f.activate();f.api.inspect(true,true);
+  for(let n=0;n<20;n++) { f.advance(50); [...f.observers][0].fn({getEntries:()=>[{startTime:n*50+1,duration:50}]}); }
+  f.advance(1000);
+  assert(f.messages.filter(m=>m.type==='tasks').length<=4);
+  assert.equal(f.latest('tasks').count,20);
 });
 test('dispose releases all timers, observers and subscriptions', () => {
   const f = fixture(); f.activate(); f.api.inspect(true); f.api.verify(); f.emit(); f.api.dispose();

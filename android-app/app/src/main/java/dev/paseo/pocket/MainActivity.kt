@@ -24,6 +24,7 @@ import com.google.android.material.button.MaterialButton
 import dev.paseo.pocket.updates.PageUpdates
 import dev.paseo.pocket.updates.UpdateUi
 import dev.paseo.pocket.observation.ObservationController
+import dev.paseo.pocket.observation.BackgroundPolicy
 
 class MainActivity : AppCompatActivity() {
     private lateinit var session: WebSession
@@ -34,6 +35,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: ShellPreferences
     private lateinit var diagnostics: Diagnostics
     private lateinit var observation: ObservationController
+    private lateinit var background: BackgroundPolicy
+    private val lifecycleHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private lateinit var settings: ShellSettings
     private lateinit var updates: PageUpdates
     private lateinit var updateUi: UpdateUi
@@ -44,8 +47,7 @@ class MainActivity : AppCompatActivity() {
     }
     private var imeVisible = false
     private var recoveryVisible = false
-    private var foreground = false
-    private var backgroundSince: Long? = null
+    private var resumedAfterMs: Long? = null
     companion object { private var processStarted = false }
     override fun onCreate(savedInstanceState: Bundle?) {
         prefs = ShellPreferences(this)
@@ -55,7 +57,18 @@ class MainActivity : AppCompatActivity() {
         diagnostics = Diagnostics(this)
         diagnostics.record(if (!processStarted) "process_started" else "activity_recreated")
         processStarted = true
+        if (savedInstanceState != null) diagnostics.record("activity_restored")
         observation = ObservationController(diagnostics)
+        background = BackgroundPolicy(android.os.SystemClock::elapsedRealtime, { delay, action ->
+            val runnable = Runnable(action)
+            lifecycleHandler.postDelayed(runnable, delay)
+            val cancel: () -> Unit = { lifecycleHandler.removeCallbacks(runnable) }
+            cancel
+        }, pause = {
+            if (::session.isInitialized && !session.destroyed) session.webView.pauseTimers()
+        }, resume = {
+            if (::session.isInitialized && !session.destroyed) session.webView.resumeTimers()
+        }, diagnostics::record)
         updates = PageUpdates(this, diagnostics)
         updateUi = UpdateUi(this, updates, { prefs.updateUrl(updates.trust.officialUrl) },
             reload = { session.destroy(); createSession(); session.start() },
@@ -129,7 +142,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         page.addView(session.webView, FrameLayout.LayoutParams(-1, -1))
-        if (foreground) session.webView.resumeTimers() else session.webView.pauseTimers()
+        background.pageReplaced()
     }
 
     private fun showRecovery(reason: String) {
@@ -193,20 +206,24 @@ class MainActivity : AppCompatActivity() {
         if (::root.isInitialized) ViewCompat.requestApplyInsets(root)
     }
 
+    override fun onStart() {
+        super.onStart()
+        resumedAfterMs = background.foreground()
+    }
     override fun onResume() {
-        super.onResume(); foreground = true
+        super.onResume()
         if (::session.isInitialized && !session.destroyed) { session.webView.resumeTimers(); session.webView.onResume() }
-        observation.foreground(true, backgroundSince?.let { android.os.SystemClock.elapsedRealtime() - it })
-        backgroundSince = null
+        observation.foreground(true, resumedAfterMs)
+        resumedAfterMs = null
     }
     override fun onPause() {
-        foreground = false
-        backgroundSince = android.os.SystemClock.elapsedRealtime()
         observation.foreground(false)
-        if (::session.isInitialized && !session.destroyed) { session.webView.onPause(); session.webView.pauseTimers() }
+        if (::session.isInitialized && !session.destroyed) session.webView.onPause()
         super.onPause()
     }
+    override fun onStop() { background.background(); super.onStop() }
     override fun onDestroy() {
+        if (::background.isInitialized) background.close()
         sheet?.dismiss(); fileCallback?.onReceiveValue(null); fileCallback = null
         if (::session.isInitialized) session.destroy()
         if (::observation.isInitialized) observation.close()

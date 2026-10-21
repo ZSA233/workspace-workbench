@@ -1,6 +1,8 @@
 package dev.paseo.pocket.observation
 
 import android.os.SystemClock
+import android.os.Handler
+import android.os.Looper
 import android.webkit.WebView
 import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
@@ -26,11 +28,13 @@ class ObservationBridge(private val webView: WebView, private val webVersion: St
     private var verifyOnActivation = false
     private var bucketStart = 0L
     private var bucketSize = 0
+    private val handler = Handler(Looper.getMainLooper())
+    private var activationTimeout: Runnable? = null
 
     fun install() {
         runCatching { installSupported() }.onFailure {
-            script?.remove(); script = null
-            if (installed) WebViewCompat.removeWebMessageListener(webView, "PocketObservationChannel")
+            runCatching { script?.remove() }; script = null
+            if (installed) runCatching { WebViewCompat.removeWebMessageListener(webView, "PocketObservationChannel") }
             installed = false; unavailable("incompatible")
         }
     }
@@ -58,11 +62,12 @@ class ObservationBridge(private val webView: WebView, private val webVersion: St
                 if (decoded.type == "activated" && activated) return@addWebMessageListener
                 lastSeq = decoded.seq
                 if (decoded.type == "activated") {
+                    activationTimeout?.let(handler::removeCallbacks); activationTimeout = null
                     activated = true; doc = decoded.doc; candidates.clear()
                     call("foreground($foreground,$verifyOnActivation)")
                     call("inspect($inspecting)")
                     verifyOnActivation = false
-                } else message(decoded)
+                } else if (activated) message(decoded)
             }
         }
         installed = true
@@ -72,6 +77,12 @@ class ObservationBridge(private val webView: WebView, private val webVersion: St
     }
     fun pageStarted() {
         generation = UUID.randomUUID().toString(); doc = null; candidates.clear(); lastSeq = 0; activated = false
+        activationTimeout?.let(handler::removeCallbacks)
+        if (installed) {
+            val ticket = generation
+            activationTimeout = Runnable { if (!closed && !activated && generation == ticket) unavailable("timeout") }
+                .also { handler.postDelayed(it, 15000) }
+        }
         bucketStart = 0; bucketSize = 0
         if (!installed) unavailable(if (webVersion == "0.12.0") "capability" else "version")
     }
@@ -83,13 +94,16 @@ class ObservationBridge(private val webView: WebView, private val webVersion: St
     fun refresh() { if (activated) call("refresh()") }
     fun verify() { if (activated && foreground) call("verify()") }
     private fun call(command: String) {
-        if (!closed) webView.evaluateJavascript("window.__pocketObservation?.$command;void 0", null)
+        if (!closed) runCatching {
+            webView.evaluateJavascript("window.__pocketObservation?.$command;void 0", null)
+        }.onFailure { activated = false; unavailable("incompatible") }
     }
     fun close() {
         if (closed) return
         call("dispose()")
         closed = true; activated = false
-        script?.remove()
-        if (installed) WebViewCompat.removeWebMessageListener(webView, "PocketObservationChannel")
+        activationTimeout?.let(handler::removeCallbacks); activationTimeout = null
+        runCatching { script?.remove() }
+        if (installed) runCatching { WebViewCompat.removeWebMessageListener(webView, "PocketObservationChannel") }
     }
 }

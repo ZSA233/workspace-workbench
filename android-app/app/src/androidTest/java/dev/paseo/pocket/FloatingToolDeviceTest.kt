@@ -48,12 +48,12 @@ class FloatingToolDeviceTest {
             scroll?.scroll(androidx.test.uiautomator.Direction.DOWN, 1f)
             assertNotNull(device.wait(Until.findObject(By.descStartsWith("连接与诊断，")), 5000))
         }
-        device.executeShellCommand("am start -n dev.paseo.pocket/.MainActivity")
+        device.executeShellCommand("am start -n ${instrumentation.targetContext.packageName}/dev.paseo.pocket.MainActivity")
         try {
             repeat(20) { open(); close() }
             open(); capture("tools-portrait")
             click("更新来源"); click("自定义")
-            val input = device.wait(Until.findObject(By.res("dev.paseo.pocket", "update_source_url")), 5000)
+            val input = device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url")), 5000)
             input.click()
             val ime = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD).substringBefore('/')
             assertNotNull("Keyboard must actually appear", device.wait(Until.findObject(By.pkg(ime)), 10000))
@@ -61,7 +61,7 @@ class FloatingToolDeviceTest {
             val keyboard = device.findObject(By.pkg(ime)).visibleBounds
             assertTrue("Source input must stay above the keyboard", input.visibleBounds.bottom <= keyboard.top)
             device.pressBack(); device.waitForIdle(1000)
-            assertNotNull(device.findObject(By.res("dev.paseo.pocket", "update_source_url")))
+            assertNotNull(device.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url")))
             click("返回工具"); close()
             device.setOrientationLeft(); device.waitForIdle(1000)
             open(); reachCache(); capture("tools-landscape"); close()
@@ -82,7 +82,7 @@ class FloatingToolDeviceTest {
         val prefs = ShellPreferences(instrumentation.targetContext)
         val oldRight = prefs.dockRight; val oldFraction = prefs.dockFraction
         val oldCustom = prefs.customSource; val oldUrl = prefs.customSourceUrl
-        device.executeShellCommand("am start -n dev.paseo.pocket/.MainActivity")
+        device.executeShellCommand("am start -n ${instrumentation.targetContext.packageName}/dev.paseo.pocket.MainActivity")
         assertNotNull(device.wait(Until.findObject(By.desc("Paseo Pocket 工具")), 15000))
         try {
             activity { app ->

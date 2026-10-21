@@ -11,6 +11,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import dev.paseo.pocket.observation.ObservationController
+import dev.paseo.pocket.observation.BackgroundPolicy
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,7 +23,7 @@ import java.util.concurrent.TimeUnit
 class ObservationDeviceTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
-    private fun launch() { device.executeShellCommand("am start -n dev.paseo.pocket/.MainActivity") }
+    private fun launch() { device.executeShellCommand("am start -n ${instrumentation.targetContext.packageName}/dev.paseo.pocket.MainActivity") }
     private fun activity(action: (MainActivity) -> Unit) = instrumentation.runOnMainSync {
         action(ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).filterIsInstance<MainActivity>().single())
     }
@@ -51,10 +52,10 @@ class ObservationDeviceTest {
         evaluate(first, "window.__pocketDraftFixture='draft kept';true")
         device.findObject(By.desc("Paseo Pocket 工具")).click()
         device.wait(Until.findObject(By.descStartsWith("连接与诊断，")), 5000).click()
-        assertNotNull(device.wait(Until.findObject(By.res("dev.paseo.pocket", "observation_status")), 5000))
+        assertNotNull(device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "observation_status")), 5000))
         device.findObject(By.text("查看性能")).click()
         waitFor { var sampled = false; activity { sampled = observation(it).performance.cpuPercent != null && observation(it).performance.pssKiB != null }; sampled }
-        assertTrue(device.findObject(By.res("dev.paseo.pocket", "observation_performance")).text.contains("App 进程"))
+        assertTrue(device.findObject(By.res(instrumentation.targetContext.packageName, "observation_performance")).text.contains("App 进程"))
         activity { observation(it).startRecording() }
         device.findObject(By.desc("关闭面板")).click()
         activity { assertSame(first, webViews(it.window.decorView).single()); assertTrue(observation(it).isRecording) }
@@ -63,5 +64,46 @@ class ObservationDeviceTest {
         activity { assertSame(first, webViews(it.window.decorView).single()) }
         assertEquals("\"draft kept\"", evaluate(first, "window.__pocketDraftFixture"))
         evaluate(first, "delete window.__pocketDraftFixture;true")
+    }
+    @Test(timeout = 90000) fun backgroundDeadlineRetiresTimersAndResumeKeepsTheWebView() {
+        val major = androidx.webkit.WebViewCompat.getCurrentWebViewPackage(instrumentation.targetContext)?.versionName?.substringBefore('.')?.toIntOrNull() ?: 0
+        org.junit.Assume.assumeTrue("Full page requires updated WebView", major >= WebRuntime.MINIMUM_CHROMIUM)
+        launch()
+        waitFor { var attached = false; activity { attached = observation(it).trace.adapter == "attached" }; attached }
+        lateinit var first: WebView
+        lateinit var policy: BackgroundPolicy
+        activity {
+            first = webViews(it.window.decorView).single()
+            policy = MainActivity::class.java.getDeclaredField("background").also { field -> field.isAccessible = true }.get(it) as BackgroundPolicy
+        }
+        device.pressHome(); Thread.sleep(2000)
+        instrumentation.runOnMainSync { assertFalse(policy.suspended) }
+        Thread.sleep(30000)
+        instrumentation.runOnMainSync { assertTrue(policy.suspended) }
+        launch()
+        waitFor { var resumed = false; activity { resumed = !policy.suspended }; resumed }
+        activity { assertSame(first, webViews(it.window.decorView).single()) }
+    }
+    @Test(timeout = 90000) fun cancellingFilePickerAfterGraceKeepsDraftAndResolvesCallback() {
+        val major = androidx.webkit.WebViewCompat.getCurrentWebViewPackage(instrumentation.targetContext)?.versionName?.substringBefore('.')?.toIntOrNull() ?: 0
+        org.junit.Assume.assumeTrue("Full page requires updated WebView", major >= WebRuntime.MINIMUM_CHROMIUM)
+        launch()
+        waitFor { var attached = false; activity { attached = observation(it).trace.adapter == "attached" }; attached }
+        lateinit var first: WebView
+        var offset = IntArray(2)
+        activity { first = webViews(it.window.decorView).single(); first.getLocationOnScreen(offset) }
+        evaluate(first, "window.__pocketFileDraft='kept';document.body.insertAdjacentHTML('beforeend','<input id=\"pocket-file-fixture\" type=\"file\" accept=\"text/plain\" style=\"position:fixed;left:20px;top:20px;width:180px;height:60px;z-index:2147483647\">');true")
+        val scale = evaluate(first, "devicePixelRatio").toDouble()
+        device.click(offset[0] + (70*scale).toInt(), offset[1] + (45*scale).toInt())
+        waitFor { device.currentPackageName != instrumentation.targetContext.packageName }
+        Thread.sleep(32000)
+        device.pressBack()
+        waitFor { var resumed = false; activity { resumed = true }; resumed }
+        activity {
+            assertSame(first, webViews(it.window.decorView).single())
+            assertNull(MainActivity::class.java.getDeclaredField("fileCallback").also { field -> field.isAccessible = true }.get(it))
+        }
+        assertEquals("\"kept\"", evaluate(first, "window.__pocketFileDraft"))
+        evaluate(first, "document.getElementById('pocket-file-fixture').remove();delete window.__pocketFileDraft;true")
     }
 }

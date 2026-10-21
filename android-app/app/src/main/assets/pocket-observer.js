@@ -4,11 +4,12 @@
   if (window !== window.top || location.origin !== 'https://appassets.androidplatform.net') return null;
   const doc = crypto.randomUUID();
   let generation = null, sequence = 0, disposed = false, active = false, inspecting = false;
-  let store = null, attachTimer = null, verifyTimer = null, flushTimer = null, taskObserver = null;
+  let store = null, attachTimer = null, verifyTimer = null, flushTimer = null, taskObserver = null, taskFlushTimer = null;
   let attachDeadline = 0, verifying = false, verifyStarted = 0, lastState = '';
   let taskCount = 0, taskTotal = 0, taskMax = 0;
   let nextSlot = 0;
   let pendingVerify = false;
+  let lastTaskPost = -1000;
   const slots = new Map(), rtts = new Map(), unsubs = [];
   const now = () => performance.now();
   const channel = window.PocketObservationChannel;
@@ -18,7 +19,7 @@
       generation, seq: ++sequence, type, ...data })); } catch (_) { /* Diagnostics must not break the page. */ }
   };
   function fail(reason) {
-    clearTimeout(attachTimer); clearTimeout(verifyTimer); clearTimeout(flushTimer);
+    clearTimeout(attachTimer); clearTimeout(verifyTimer); clearTimeout(flushTimer); clearTimeout(taskFlushTimer);
     attachTimer = verifyTimer = flushTimer = null; verifying = false;
     for (const off of unsubs.splice(0)) { try { off(); } catch (_) {} }
     if (taskObserver) taskObserver.disconnect();
@@ -126,6 +127,7 @@
     } catch (_) { fail('incompatible'); return false; }
   }
   function tasks() {
+    clearTimeout(taskFlushTimer); taskFlushTimer = null;
     if (taskObserver) taskObserver.disconnect();
     taskObserver = null;
     if (!active || !inspecting || disposed) return;
@@ -140,7 +142,11 @@
           taskTotal = Math.min(3600000, taskTotal + Math.min(entry.duration, 60000));
           taskMax = Math.max(taskMax, Math.min(entry.duration, 60000));
         }
-        post('tasks', { supported: true, count: taskCount, totalMs: Math.round(taskTotal), maxMs: Math.round(taskMax) });
+        if (!taskFlushTimer) taskFlushTimer = setTimeout(() => {
+          taskFlushTimer = null; lastTaskPost = now();
+          if (active && inspecting && !disposed)
+            post('tasks', { supported: true, count: taskCount, totalMs: Math.round(taskTotal), maxMs: Math.round(taskMax) });
+        }, Math.max(0, 1000 - (now() - lastTaskPost)));
       });
       taskObserver.observe({ type: 'longtask', buffered: false });
     } catch (_) { post('tasks', { supported: false, count: 0, totalMs: 0, maxMs: 0 }); }

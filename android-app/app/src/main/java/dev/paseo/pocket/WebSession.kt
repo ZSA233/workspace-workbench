@@ -54,6 +54,7 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
         observation.bind(bridge)
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                if (destroyed) return
                 observation.pageStarted(); bridge.pageStarted()
             }
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
@@ -67,18 +68,25 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
             }
 
             override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+                if (destroyed) return
                 prefs.route = url
+                if (::bridge.isInitialized) bridge.refresh()
             }
-            override fun onPageFinished(view: WebView, url: String) { observation.pageFinished() }
+            override fun onPageFinished(view: WebView, url: String) { if (!destroyed) observation.pageFinished() }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) { diagnostics.record("page_load_failed"); unavailable("page_load_failed") }
+                if (destroyed) return
+                if (request.isForMainFrame) { observation.unavailable("load_error"); diagnostics.record("page_load_failed"); unavailable("page_load_failed") }
             }
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                if (destroyed) return
                 if (request.isForMainFrame || bundle.isStaticResource(request.url)) {
+                    observation.unavailable("load_error")
                     diagnostics.record("page_resource_missing"); unavailable("page_resource_missing")
                 }
             }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                if (destroyed) return true
+                observation.unavailable("renderer")
                 diagnostics.record(if (detail.didCrash()) "renderer_crashed" else "renderer_reclaimed")
                 destroy()
                 unavailable("renderer_gone")
@@ -86,16 +94,17 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
             }
         }
         webView.webChromeClient = object : WebChromeClient() {
-            override fun onProgressChanged(view: WebView, newProgress: Int) { observation.progress(newProgress) }
+            override fun onProgressChanged(view: WebView, newProgress: Int) { if (!destroyed) observation.progress(newProgress) }
             override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean =
                 chooseFiles(callback, params)
             override fun onConsoleMessage(message: ConsoleMessage): Boolean {
-                if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) diagnostics.record("page_console_error")
+                if (!destroyed && message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) diagnostics.record("page_console_error")
                 return true
             }
         }
         val engine = WebRuntime.chromiumMajor(webView.settings.userAgentString)
         if (engine != null && engine < WebRuntime.MINIMUM_CHROMIUM) {
+            observation.unavailable("engine")
             diagnostics.record("webview_too_old")
             unavailable("webview_too_old")
             return

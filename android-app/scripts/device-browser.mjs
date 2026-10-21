@@ -6,12 +6,12 @@ const execute = promisify(execFile);
 export async function adb(serial, args, options = {}) {
   return (await execute('adb', ['-s', serial, ...args], { timeout: 20000, maxBuffer: 8 * 1024 * 1024, ...options })).stdout;
 }
-export async function connectDevice(serial, { chrome = false, select = page => page.type === 'page' &&
+export async function connectDevice(serial, { chrome = false, packageName = 'dev.paseo.pocket', select = page => page.type === 'page' &&
     page.url.startsWith('https://appassets.androidplatform.net/') } = {}) {
   let pid = null;
   if (!chrome) {
     for (let n = 0; n < 40; n++) {
-      try { pid = (await adb(serial, ['shell', 'pidof', 'dev.paseo.pocket'])).trim(); } catch { /* activity launch */ }
+      try { pid = (await adb(serial, ['shell', 'pidof', packageName])).trim(); } catch { /* activity launch */ }
       if (pid) break;
       await new Promise(r => setTimeout(r, 250));
     }

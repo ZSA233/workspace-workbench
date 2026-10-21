@@ -3,7 +3,10 @@ package dev.paseo.pocket.observation
 /** Monotonic, content-free timing. Timings describe observations, not hidden handshake phases. */
 class ConnectionTrace(private val clock: () -> Long, private val event: (String, Map<String, Long>) -> Unit) {
     data class Host(val observation: HostObservation, val receivedAt: Long, val cycleStart: Long,
-        val connectionMs: Long? = null, val syncStart: Long? = null, val syncMs: Long? = null, val readyMs: Long? = null)
+        val connectionMs: Long? = null, val syncStart: Long? = null, val syncMs: Long? = null, val readyMs: Long? = null,
+        val connectionStartKnown: Boolean = false, val startKnown: Boolean = false,
+        val totalStart: Long? = null, val totalReadyMs: Long? = null)
+    private var initialHosts: Set<Int>? = null
     var hosts: List<Host> = emptyList(); private set
     var cycleStart = clock(); private set
     var progress = 0; private set
@@ -17,6 +20,7 @@ class ConnectionTrace(private val clock: () -> Long, private val event: (String,
 
     fun pageStarted() {
         cycleStart = clock(); hosts = emptyList(); pageLoadedMs = null; progress = 0
+        initialHosts = null
         adapter = "initializing"; verifying = false; resetTasks()
         event("page_loading", emptyMap())
     }
@@ -27,7 +31,8 @@ class ConnectionTrace(private val clock: () -> Long, private val event: (String,
     }
     fun beginRecovery(backgroundMs: Long) {
         cycleStart = clock()
-        hosts = hosts.map { Host(it.observation.copy(phase = "connecting"), it.receivedAt, cycleStart) }
+        hosts = hosts.map { Host(it.observation.copy(phase = "connecting"), it.receivedAt, cycleStart,
+            connectionStartKnown = true, startKnown = true, totalStart = cycleStart) }
         resetTasks()
         event("page_resumed", mapOf("background_ms" to backgroundMs.coerceAtLeast(0)))
     }
@@ -41,26 +46,32 @@ class ConnectionTrace(private val clock: () -> Long, private val event: (String,
             "state" -> {
                 verifying = message.busy
                 val at = clock(); val previous = hosts.associateBy { it.observation.host }
+                if (initialHosts == null) initialHosts = message.hosts.map { it.host }.toSet()
                 hosts = message.hosts.map { observation ->
                     val old = previous[observation.host]
                     // A later outage creates a new span; an app resume already reset the span.
-                    val restart = old?.readyMs != null && observation.phase in setOf("connecting", "offline", "error")
-                    val start = if (restart) at else old?.cycleStart ?: cycleStart
+                    val restart = old?.observation?.phase == "ready" && observation.phase != "ready"
+                    val start = if (restart) at else old?.cycleStart ?: at
                     val base = if (restart) null else old
                     val connected = observation.phase in setOf("syncing", "ready")
-                    val connection = base?.connectionMs ?: if (connected) (at - start).coerceAtLeast(0) else null
+                    val known = base?.startKnown ?: (observation.phase != "ready")
+                    val connectionKnown = base?.connectionStartKnown ?: !connected
+                    val totalStart = if (restart) at else old?.totalStart ?: if (old == null && observation.host in initialHosts!!) cycleStart else null
+                    val connection = base?.connectionMs ?: if (connected && connectionKnown) (at - start).coerceAtLeast(0) else null
                     val syncStart = base?.syncStart ?: if (connected) at else null
-                    val ready = base?.readyMs ?: if (observation.phase == "ready") (at - start).coerceAtLeast(0) else null
-                    val sync = base?.syncMs ?: if (observation.phase == "ready" && syncStart != null) (at - syncStart).coerceAtLeast(0) else null
+                    val ready = base?.readyMs ?: if (observation.phase == "ready" && known) (at - start).coerceAtLeast(0) else null
+                    val sync = base?.syncMs ?: if (observation.phase == "ready" && base?.syncStart != null) (at - base.syncStart).coerceAtLeast(0) else null
+                    val totalReady = base?.totalReadyMs ?: if (observation.phase == "ready" && totalStart != null) (at - totalStart).coerceAtLeast(0) else null
                     if (old == null || old.observation.phase != observation.phase || restart) {
                         val fields = mutableMapOf("host" to observation.host.toLong(), "elapsed_ms" to (at - start).coerceAtLeast(0))
                         connection?.let { fields["connection_ms"] = it }; sync?.let { fields["sync_ms"] = it }
                         ready?.let { fields["ready_ms"] = it }
+                        totalReady?.let { fields["total_ready_ms"] = it }
                         event("host_${observation.phase}", fields)
                     }
                     if (observation.reason != "none" && old?.observation?.reason != observation.reason)
                         event("host_reason_${observation.reason}", mapOf("host" to observation.host.toLong()))
-                    Host(observation, at, start, connection, syncStart, sync, ready)
+                    Host(observation, at, start, connection, syncStart, sync, ready, connectionKnown, known, totalStart, totalReady)
                 }
             }
         }

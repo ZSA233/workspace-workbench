@@ -20,6 +20,15 @@ class ObservationTest {
         buffer.restore("100 process_started")
         assertEquals("100 process_started\n200 page_loading", buffer.snapshot())
     }
+    @Test fun byteLimitAlsoHoldsForMaximumWidthNumericEvents() {
+        val buffer = DiagnosticBuffer()
+        val keys = listOf("duration_ms", "background_ms", "host", "elapsed_ms", "connection_ms", "sync_ms", "ready_ms", "total_ready_ms",
+            "cpu_milli", "pss_kib", "rx_bps", "tx_bps", "tasks", "task_total_ms", "task_max_ms", "supported")
+        repeat(500) { buffer.add(1000000000000000L + it, "a".repeat(50), keys.associateWith { 9999999999999999L }) }
+        assertTrue(buffer.snapshot().toByteArray().size <= DiagnosticBuffer.MAX_BYTES)
+        assertTrue(buffer.snapshot().lines().size <= DiagnosticBuffer.MAX_EVENTS)
+        val restored = DiagnosticBuffer(); restored.restore(buffer.snapshot()); assertEquals(buffer.snapshot(), restored.snapshot())
+    }
     @Test fun ratesUseMonotonicDeltasAndResetAfterSleep() {
         val math = PerformanceMath()
         assertNull(math.sample(Counters(1000, 10, 0, 0)).cpuPercent)
@@ -61,5 +70,28 @@ class ObservationTest {
         assertEquals(3000L, trace.hosts.single().readyMs)
         now = 20000; state("offline"); now = 21000; state("ready")
         assertEquals(1000L, trace.hosts.single().readyMs)
+    }
+    @Test fun latePairingAndAlreadyConnectedHostsDoNotInventConnectionDurations() {
+        var now = 0L
+        val trace = ConnectionTrace({ now }) { _, _ -> }
+        trace.pageStarted(); trace.accept(ObservationMessage("doc", 1, "state"))
+        now = 20000
+        trace.accept(ObservationMessage("doc", 2, "state", listOf(HostObservation(1, true, "syncing", "relay", null, null))))
+        now = 20100
+        trace.accept(ObservationMessage("doc", 3, "state", listOf(HostObservation(1, true, "ready", "relay", null, null))))
+        assertNull(trace.hosts.single().connectionMs); assertNull(trace.hosts.single().totalReadyMs)
+        assertEquals(100L, trace.hosts.single().syncMs)
+        assertEquals(100L, trace.hosts.single().readyMs)
+        trace.pageStarted(); now = 22000
+        trace.accept(ObservationMessage("doc", 4, "state", listOf(HostObservation(1, true, "ready", "relay", null, null))))
+        assertNull(trace.hosts.single().connectionMs); assertNull(trace.hosts.single().readyMs)
+        assertEquals(1900L, trace.hosts.single().totalReadyMs)
+    }
+    @Test fun directoryRevalidationStartsANewSyncSpanWithoutInventingANewConnection() {
+        var now = 0L; val trace = ConnectionTrace({ now }) { _, _ -> }
+        fun phase(value: String) = trace.accept(ObservationMessage("doc", 1, "state", listOf(HostObservation(1, true, value, "relay", null, null))))
+        phase("ready"); now = 1000; phase("syncing"); now = 1800; phase("ready")
+        assertNull(trace.hosts.single().connectionMs)
+        assertEquals(800L, trace.hosts.single().syncMs); assertEquals(800L, trace.hosts.single().totalReadyMs)
     }
 }

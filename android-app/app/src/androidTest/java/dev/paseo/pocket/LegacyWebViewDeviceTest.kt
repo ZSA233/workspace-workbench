@@ -18,7 +18,7 @@ class LegacyWebViewDeviceTest {
         val version = WebViewCompat.getCurrentWebViewPackage(context)?.versionName?.substringBefore('.')?.toIntOrNull() ?: 0
         assumeTrue(version in 1 until WebRuntime.MINIMUM_CHROMIUM)
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        device.executeShellCommand("am start -n dev.paseo.pocket/.MainActivity")
+        device.executeShellCommand("am start -n ${context.packageName}/dev.paseo.pocket.MainActivity")
         assertNotNull(device.wait(Until.findObject(By.text("系统 WebView 版本过旧")), 15000))
         assertNotNull(device.findObject(By.text("更新系统 WebView")))
         device.findObject(By.desc("Paseo Pocket 工具")).click()

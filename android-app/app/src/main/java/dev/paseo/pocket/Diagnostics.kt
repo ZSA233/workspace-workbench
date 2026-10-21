@@ -34,9 +34,17 @@ class Diagnostics(context: Context) : AutoCloseable {
     }
 
     @Volatile private var closed = false
+    private var lastCode = ""
+    private var lastFields = emptyMap<String, Long>()
+    private var lastTime = 0L
     fun record(code: String, fields: Map<String, Long> = emptyMap()) {
         if (closed) return
-        events.add(System.currentTimeMillis(), code, fields)
+        synchronized(events) {
+            val at = System.currentTimeMillis()
+            if (code == lastCode && fields == lastFields && at - lastTime in 0..999) return
+            events.add(at, code, fields)
+            lastCode = code; lastFields = fields.toMap(); lastTime = at
+        }
         if (!scheduled.compareAndSet(false, true)) return
         io.execute {
             scheduled.set(false)

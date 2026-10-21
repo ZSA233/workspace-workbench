@@ -16,4 +16,11 @@ class ShellPreferences(context: Context) {
     var appearance: String
         get() = prefs.getString("appearance", "system") ?: "system"
         set(value) { require(value in setOf("system", "light", "dark")); prefs.edit().putString("appearance", value).apply() }
+    var customSource: Boolean
+        get() = prefs.getBoolean("customSource", false)
+        set(value) { prefs.edit().putBoolean("customSource", value).apply() }
+    var customSourceUrl: String
+        get() = prefs.getString("customSourceUrl", "") ?: ""
+        set(value) { prefs.edit().putString("customSourceUrl", value).apply() }
+    fun updateUrl(official: String): String = if (customSource) customSourceUrl else official
 }

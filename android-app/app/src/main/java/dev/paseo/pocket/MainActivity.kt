@@ -22,6 +22,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.button.MaterialButton
 import dev.paseo.pocket.updates.PageUpdates
 import dev.paseo.pocket.updates.UpdateUi
+import dev.paseo.pocket.updates.UpdateSourceUi
 
 class MainActivity : AppCompatActivity() {
     private lateinit var session: WebSession
@@ -47,7 +48,7 @@ class MainActivity : AppCompatActivity() {
         diagnostics = Diagnostics(this)
         diagnostics.record("app_opened")
         updates = PageUpdates(this, diagnostics)
-        updateUi = UpdateUi(this, updates, { updates.trust.officialUrl }) {
+        updateUi = UpdateUi(this, updates, { prefs.updateUrl(updates.trust.officialUrl) }) {
             session.destroy(); createSession(); session.start()
         }
         root = FrameLayout(this)
@@ -85,7 +86,11 @@ class MainActivity : AppCompatActivity() {
     private fun showTools() {
         if (sheet?.isShowing == true) return
         sheet = ToolSheet(this) { section ->
-            if (section == "version") updateUi.show() else settings.show(section)
+            when (section) {
+                "version" -> updateUi.show()
+                "source" -> UpdateSourceUi(this, prefs, updates).show()
+                else -> settings.show(section)
+            }
         }.also { it.show() }
     }
 

@@ -95,5 +95,9 @@ class PageUpdates(context: Context, private val diagnostics: Diagnostics) : Auto
     }
 
     fun cancel() { if (status.kind in setOf("checking", "downloading", "verifying")) cancellation?.cancel() }
+    fun sourceChanged() {
+        if (busy()) return
+        if (status.kind != "ready") { token++; publish(UpdateStatus()) }
+    }
     override fun close() { closed = true; listener = null; cancellation?.cancel(); executor.shutdown() }
 }

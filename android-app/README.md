@@ -1,8 +1,11 @@
 # Paseo Pocket
 
-面向 Paseo 的社区 Android 薄壳，包名 `dev.paseo.pocket`，当前 APK `0.1.1`。
+面向 Paseo 的社区 Android 薄壳，包名 `dev.paseo.pocket`，版本由 `version.properties` 统一管理。
 与本仓库的 `paseo-plugin/` 独立构建、独立版本；不要求启用 Workbench 插件。
 不修改 Paseo 宿主或 relay，未关联官方 App 的签名或发布渠道。
+
+[下载已签名 APK](https://github.com/ZSA233/workspace-workbench/releases?q=android-v&expanded=true) ·
+[自动发版与签名配置](../docs/releasing-android.md)
 
 ## 使用
 
@@ -84,7 +87,8 @@ python3 scripts/verify-apk.py app/build/outputs/apk/release/app-release.apk
 ```
 
 首次构建从锁定 npm 归档生成网页，之后使用经验证的构建缓存。生成网页和构建结果不进入 Git。
-CI 只生成调试 APK，发布构建要求持久签名，缺少配置会失败。
+普通 CI 只生成调试 APK；`android-v*` tag 触发独立的正式发布工作流。
+发布构建要求持久签名，缺少配置会失败。
 
 密钥默认在 `~/.config/paseo-pocket/`，不会进入仓库。
 请安全备份该目录；后续覆盖升级必须使用相同密钥并递增 `versionCode`。

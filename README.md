@@ -7,6 +7,9 @@ Workspace Workbench 用于查看和管理包含多个 Git 仓库的项目。它�
 [网页资源工具](web-assets/README.md)。App 使用本地 Paseo 网页和系统 WebView，
 与 Workbench 插件分别构建、维护版本；无需启用插件即可使用。
 
+安卓安装包见 [Paseo Pocket Releases](https://github.com/ZSA233/workspace-workbench/releases?q=android-v&expanded=true)。
+维护者可通过 [Android 发版流程](docs/releasing-android.md) 创建版本 tag，由 Actions 自动构建、签名和发布。
+
 ## 快速开始
 
 正式运行需要 **Node.js 22.14+**、Git 和 Paseo。Workbench 自己的服务使用 Node.js，

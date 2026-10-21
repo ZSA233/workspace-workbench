@@ -5,6 +5,11 @@ plugins { alias(libs.plugins.android.application) }
 val signingFile = file(System.getenv("PASEO_POCKET_SIGNING_PROPERTIES")
     ?: "${System.getProperty("user.home")}/.config/paseo-pocket/android-signing.properties")
 val signing = Properties().apply { if (signingFile.isFile) signingFile.inputStream().use(::load) }
+val appVersion = Properties().apply { rootProject.file("version.properties").inputStream().use(::load) }
+val appVersionName = appVersion.getProperty("versionName")
+val appVersionCode = appVersion.getProperty("versionCode").toInt()
+require(Regex("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)").matches(appVersionName)) { "Invalid Android versionName" }
+require(appVersionCode in 1..2100000000) { "Invalid Android versionCode" }
 
 android {
     namespace = "dev.paseo.pocket"
@@ -13,8 +18,8 @@ android {
         applicationId = "dev.paseo.pocket"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = appVersionCode
+        versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     if (signing.isNotEmpty()) signingConfigs.create("persistent") {

@@ -1,0 +1,94 @@
+name: Android release
+
+on:
+  push:
+    tags: ['android-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing android-vMAJOR.MINOR.PATCH tag to retry
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paseo-pocket-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Validate tag input
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^android-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo '::error::Use an existing android-vMAJOR.MINOR.PATCH tag'
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Verify tagged source and release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node android-app/scripts/release.mjs preflight
+      - name: Test release automation
+        run: node --test android-app/scripts/test/*.test.mjs
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
+      - run: npm --prefix web-assets ci --ignore-scripts
+      - run: npm --prefix web-assets test
+      - name: Restore private signing configuration
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: node android-app/scripts/signing.mjs restore
+      - name: Test, lint and build signed APK
+        working-directory: android-app
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleRelease
+      - name: Verify and package release assets
+        run: node android-app/scripts/release.mjs package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: paseo-pocket-${{ env.RELEASE_TAG }}
+          if-no-files-found: error
+          path: |
+            android-app/artifacts/release/*.apk
+            android-app/artifacts/release/SHA256SUMS
+            android-app/artifacts/release/release.json
+      - name: Publish verified GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node android-app/scripts/release.mjs publish
+      - name: Release summary
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          printf '### Paseo Pocket\n\n[Download signed APK](https://github.com/%s/releases/tag/%s)\n' "$REPOSITORY" "$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+      - name: Delete temporary signing files
+        if: always() && env.PASEO_POCKET_SIGNING_DIRECTORY != ''
+        run: node android-app/scripts/signing.mjs cleanup

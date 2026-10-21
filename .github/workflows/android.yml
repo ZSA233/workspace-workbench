@@ -28,6 +28,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
       - run: npm --prefix web-assets ci --ignore-scripts
       - run: npm --prefix web-assets run bundle
+      - run: POCKET_VERIFY_BUNDLED_ADAPTER=1 node --test android-app/scripts/test/observation.test.mjs
       - run: npm --prefix web-assets test
       - run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
         working-directory: android-app

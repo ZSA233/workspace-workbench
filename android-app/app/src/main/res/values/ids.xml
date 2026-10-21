@@ -3,4 +3,6 @@
     <item name="shell_paint" type="id" />
     <item name="floating_tool" type="id" />
     <item name="tool_sheet" type="id" />
+    <item name="observation_status" type="id" />
+    <item name="observation_performance" type="id" />
 </resources>

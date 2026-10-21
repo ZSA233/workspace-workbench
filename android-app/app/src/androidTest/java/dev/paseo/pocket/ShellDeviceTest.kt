@@ -68,8 +68,13 @@ class ShellDeviceTest {
         repeat(3) { attempt ->
             device.waitForIdle(500)
             val selector = if (text in setOf("跟随系统", "明亮", "深色")) By.clazz(RadioButton::class.java).text(text) else By.text(text)
-            val item = device.wait(Until.findObject(selector), 5000) ?: error("Missing UI: $text")
-            try { item.click(); device.waitForIdle(1000); return }
+            var item = device.wait(Until.findObject(selector), 5000)
+            if (item == null || item.visibleBounds.isEmpty) {
+                androidx.test.uiautomator.UiScrollable(androidx.test.uiautomator.UiSelector().scrollable(true)).scrollTextIntoView(text)
+                item = device.wait(Until.findObject(selector), 5000)
+            }
+            val target = item ?: error("Missing UI: $text")
+            try { target.click(); device.waitForIdle(1000); return }
             catch (error: StaleObjectException) { if (attempt == 2) throw error }
         }
     }
@@ -118,7 +123,7 @@ class ShellDeviceTest {
                 assertEquals(expected, evaluate(first, "matchMedia('(prefers-color-scheme: dark)').matches"))
             }
             openTools()
-            clickText("缓存与诊断"); clickText("网页引擎与更新")
+            clickText("连接与诊断"); clickText("网页引擎与更新")
             assertNotNull(device.wait(Until.findObject(By.text("网页引擎")), 5000))
             val provider = WebViewCompat.getCurrentWebViewPackage(instrumentation.targetContext)
             assertNotNull(device.findObject(By.textContains(requireNotNull(provider?.versionName))))

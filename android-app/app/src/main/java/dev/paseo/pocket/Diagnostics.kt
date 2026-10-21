@@ -3,48 +3,50 @@ package dev.paseo.pocket
 import android.content.Context
 import android.util.AtomicFile
 import java.io.File
-import java.util.ArrayDeque
+import dev.paseo.pocket.observation.DiagnosticBuffer
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Event-only, bounded, credential-free diagnostics. No URLs, DOM, prompts or console text. */
 class Diagnostics(context: Context) : AutoCloseable {
     private val file = AtomicFile(File(context.filesDir, "diagnostics.txt"))
-    private val events = ArrayDeque<String>()
+    private val events = DiagnosticBuffer()
+    private val scheduled = AtomicBoolean(false)
     private val io = ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, ArrayBlockingQueue(16),
         ThreadPoolExecutor.DiscardPolicy())
-    private var lastCode = ""
-    private var lastTime = 0L
 
     init {
         io.execute {
             val saved = runCatching { file.openRead().use { input ->
-                input.reader().readText().takeLast(16_384).lines().takeLast(80)
-            } }.getOrDefault(emptyList())
-            synchronized(events) { saved.filter { it.matches(Regex("[0-9]+ [a-z0-9_]{1,50}")) }.forEach(events::addLast) }
+                val bytes = ByteArray(DiagnosticBuffer.MAX_BYTES)
+                var size = 0
+                while (size < bytes.size) {
+                    val count = input.read(bytes, size, bytes.size - size)
+                    if (count < 0) break
+                    size += count
+                }
+                String(bytes, 0, size, Charsets.UTF_8)
+            } }.getOrDefault("")
+            events.restore(saved)
         }
     }
 
-    fun record(code: String) {
-        require(code.matches(Regex("[a-z0-9_]{1,50}")))
-        val now = System.currentTimeMillis()
-        synchronized(events) {
-            if (code == lastCode && now - lastTime < 5000) return
-            lastCode = code; lastTime = now
-        }
+    @Volatile private var closed = false
+    fun record(code: String, fields: Map<String, Long> = emptyMap()) {
+        if (closed) return
+        events.add(System.currentTimeMillis(), code, fields)
+        if (!scheduled.compareAndSet(false, true)) return
         io.execute {
-            val snapshot = synchronized(events) {
-                events.addLast("$now $code")
-                while (events.size > 80) events.removeFirst()
-                events.joinToString("\n")
-            }
+            scheduled.set(false)
+            val snapshot = events.snapshot()
             var stream: java.io.FileOutputStream? = null
             try { stream = file.startWrite(); stream.write(snapshot.toByteArray()); file.finishWrite(stream) }
             catch (_: Exception) { stream?.let(file::failWrite) }
         }
     }
 
-    fun snapshot(): String = synchronized(events) { events.toList().takeLast(20).joinToString("\n") }
-    override fun close() { io.shutdown() }
+    fun snapshot(): String = events.snapshot()
+    override fun close() { closed = true; io.shutdown() }
 }

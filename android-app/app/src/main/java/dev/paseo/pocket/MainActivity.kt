@@ -23,6 +23,7 @@ import androidx.core.graphics.Insets
 import com.google.android.material.button.MaterialButton
 import dev.paseo.pocket.updates.PageUpdates
 import dev.paseo.pocket.updates.UpdateUi
+import dev.paseo.pocket.observation.ObservationController
 
 class MainActivity : AppCompatActivity() {
     private lateinit var session: WebSession
@@ -32,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var page: FrameLayout
     private lateinit var prefs: ShellPreferences
     private lateinit var diagnostics: Diagnostics
+    private lateinit var observation: ObservationController
     private lateinit var settings: ShellSettings
     private lateinit var updates: PageUpdates
     private lateinit var updateUi: UpdateUi
@@ -43,13 +45,17 @@ class MainActivity : AppCompatActivity() {
     private var imeVisible = false
     private var recoveryVisible = false
     private var foreground = false
+    private var backgroundSince: Long? = null
+    companion object { private var processStarted = false }
     override fun onCreate(savedInstanceState: Bundle?) {
         prefs = ShellPreferences(this)
         ShellSettings.applyAppearance(prefs.appearance)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         diagnostics = Diagnostics(this)
-        diagnostics.record("app_opened")
+        diagnostics.record(if (!processStarted) "process_started" else "activity_recreated")
+        processStarted = true
+        observation = ObservationController(diagnostics)
         updates = PageUpdates(this, diagnostics)
         updateUi = UpdateUi(this, updates, { prefs.updateUrl(updates.trust.officialUrl) },
             reload = { session.destroy(); createSession(); session.start() },
@@ -58,7 +64,7 @@ class MainActivity : AppCompatActivity() {
         page = FrameLayout(this)
         root.addView(page, FrameLayout.LayoutParams(-1, -1))
         createSession()
-        settings = ShellSettings(this, prefs, { session }, diagnostics, ::updateSystemAppearance)
+        settings = ShellSettings(this, prefs, { session }, diagnostics, observation, ::updateSystemAppearance)
         tool = FloatingTool(this, prefs, ::showTools)
         root.addView(tool)
         setContentView(root)
@@ -113,7 +119,7 @@ class MainActivity : AppCompatActivity() {
     private fun createSession() {
         recoveryVisible = false
         page.removeAllViews()
-        session = WebSession(this, prefs, diagnostics, ::showRecovery, updates.store.activeDirectory()) { callback, params ->
+        session = WebSession(this, prefs, diagnostics, observation, ::showRecovery, updates.store.activeDirectory()) { callback, params ->
             fileCallback?.onReceiveValue(null)
             fileCallback = callback
             try { filePicker.launch(params.createIntent()); true }
@@ -190,15 +196,20 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume(); foreground = true
         if (::session.isInitialized && !session.destroyed) { session.webView.resumeTimers(); session.webView.onResume() }
+        observation.foreground(true, backgroundSince?.let { android.os.SystemClock.elapsedRealtime() - it })
+        backgroundSince = null
     }
     override fun onPause() {
         foreground = false
+        backgroundSince = android.os.SystemClock.elapsedRealtime()
+        observation.foreground(false)
         if (::session.isInitialized && !session.destroyed) { session.webView.onPause(); session.webView.pauseTimers() }
         super.onPause()
     }
     override fun onDestroy() {
         sheet?.dismiss(); fileCallback?.onReceiveValue(null); fileCallback = null
         if (::session.isInitialized) session.destroy()
+        if (::observation.isInitialized) observation.close()
         if (::updateUi.isInitialized) updateUi.close()
         if (::updates.isInitialized) updates.close()
         if (::diagnostics.isInitialized) diagnostics.close()

@@ -14,10 +14,17 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.webkit.WebViewCompat
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import dev.paseo.pocket.observation.ObservationController
+import dev.paseo.pocket.observation.ObservationUi
 
 class ShellSettings(private val activity: AppCompatActivity, private val prefs: ShellPreferences,
     private val session: () -> WebSession, private val diagnostics: Diagnostics,
+    private val observation: ObservationController,
     private val appearanceChanged: () -> Unit) {
+    private val observationUi = ObservationUi(observation)
+    fun connectionSummary() = observationUi.summary()
+    fun observeConnection(listener: () -> Unit) = observation.subscribe(listener)
+    fun detachObservation() = observationUi.detach()
     fun appearanceContent(context: Context): View {
         val group = RadioGroup(context)
         val options = listOf("system" to "跟随系统", "light" to "明亮", "dark" to "深色")
@@ -42,6 +49,7 @@ class ShellSettings(private val activity: AppCompatActivity, private val prefs: 
     }
 
     fun cacheContent(context: Context): View = ShellUi.column(context).apply {
+        ShellUi.add(this, observationUi.content(context))
         ShellUi.add(this, ShellUi.button(context, "清理临时资源缓存") {
             MaterialAlertDialogBuilder(activity).setTitle("清理 App 共用资源缓存？")
                 .setMessage("保留已安装页面、Cookie、主机配对及网页本地数据。当前页面不会刷新。")
@@ -51,7 +59,7 @@ class ShellSettings(private val activity: AppCompatActivity, private val prefs: 
                 }.show()
         })
         ShellUi.add(this, ShellUi.text(context, "保留主机配对、已安装页面与网页本地数据。", 12f, muted = true))
-        ShellUi.add(this, ShellUi.button(context, "查看有限诊断", action = ::diagnosticInfo))
+        ShellUi.add(this, ShellUi.button(context, "查看最近诊断", action = ::diagnosticInfo))
         ShellUi.add(this, ShellUi.button(context, "网页引擎与更新", action = ::engineInfo))
         ShellUi.add(this, ShellUi.button(context, "开源许可") {
             val paseo = activity.assets.open("legal/Paseo-0.12.0.txt").bufferedReader().use { it.readText() }
@@ -84,7 +92,11 @@ class ShellSettings(private val activity: AppCompatActivity, private val prefs: 
     private fun diagnosticInfo() {
         val text = "Paseo Pocket ${AppVersion.name}\nPaseo ${session().bundle.version}\nAndroid API ${android.os.Build.VERSION.SDK_INT}\n" +
             "WebView ${WebViewCompat.getCurrentWebViewPackage(activity)?.let { "${it.packageName} ${it.versionName}" } ?: "不可用"}\n\n" + diagnostics.snapshot()
-        MaterialAlertDialogBuilder(activity).setTitle("有限诊断（无会话内容）").setMessage(text)
+        MaterialAlertDialogBuilder(activity).setTitle("诊断报告（无会话内容）").setMessage(text)
+            .setNeutralButton("分享") { _, _ ->
+                activity.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_TEXT, text), "分享诊断"))
+            }
             .setNegativeButton("返回", null).setPositiveButton("复制") { _, _ ->
                 activity.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Paseo Pocket diagnostics", text))
             }.show()

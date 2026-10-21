@@ -46,7 +46,7 @@ class FloatingToolDeviceTest {
         fun reachCache() {
             val scroll = device.findObject(By.clazz(android.widget.ScrollView::class.java))
             scroll?.scroll(androidx.test.uiautomator.Direction.DOWN, 1f)
-            assertNotNull(device.wait(Until.findObject(By.descStartsWith("缓存与诊断，")), 5000))
+            assertNotNull(device.wait(Until.findObject(By.descStartsWith("连接与诊断，")), 5000))
         }
         device.executeShellCommand("am start -n dev.paseo.pocket/.MainActivity")
         try {
@@ -112,7 +112,7 @@ class FloatingToolDeviceTest {
             val appearance = device.wait(Until.findObject(By.descStartsWith("外观，")), 5000)
             val version = device.findObject(By.descStartsWith("网页版本，"))
             val source = device.findObject(By.descStartsWith("更新来源，"))
-            val cache = device.findObject(By.descStartsWith("缓存与诊断，"))
+            val cache = device.findObject(By.descStartsWith("连接与诊断，"))
             assertNotNull(appearance); assertNotNull(version); assertNotNull(source); assertNotNull(cache)
             assertEquals(appearance.visibleBounds.top, version.visibleBounds.top)
             assertEquals(source.visibleBounds.top, cache.visibleBounds.top)

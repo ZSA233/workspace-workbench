@@ -18,10 +18,13 @@ import android.webkit.WebViewClient
 import android.view.ViewGroup
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
+import dev.paseo.pocket.observation.ObservationBridge
+import dev.paseo.pocket.observation.ObservationController
 import java.io.File
 
 class WebSession(private val activity: Activity, private val prefs: ShellPreferences,
     private val diagnostics: Diagnostics,
+    private val observation: ObservationController,
     private val unavailable: (String) -> Unit,
     installed: File? = null,
     private val chooseFiles: (ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams) -> Boolean) {
@@ -29,6 +32,7 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
     val webView: WebView = WebView(activity)
     var destroyed = false
         private set
+    private lateinit var bridge: ObservationBridge
 
     @SuppressLint("SetJavaScriptEnabled")
     fun start() {
@@ -45,7 +49,13 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING))
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, false)
+        bridge = ObservationBridge(webView, bundle.version, observation::message, observation::unavailable)
+        bridge.install()
+        observation.bind(bridge)
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                observation.pageStarted(); bridge.pageStarted()
+            }
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 bundle.intercept(request.url, request.isForMainFrame)
 
@@ -59,7 +69,7 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
             override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
                 prefs.route = url
             }
-            override fun onPageFinished(view: WebView, url: String) { diagnostics.record("page_loaded") }
+            override fun onPageFinished(view: WebView, url: String) { observation.pageFinished() }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (request.isForMainFrame) { diagnostics.record("page_load_failed"); unavailable("page_load_failed") }
             }
@@ -76,6 +86,7 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
             }
         }
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView, newProgress: Int) { observation.progress(newProgress) }
             override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean =
                 chooseFiles(callback, params)
             override fun onConsoleMessage(message: ConsoleMessage): Boolean {
@@ -102,6 +113,7 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
     fun destroy() {
         if (destroyed) return
         destroyed = true
+        if (::bridge.isInitialized) { observation.unbind(bridge); bridge.close() }
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.stopLoading()
         webView.removeAllViews()

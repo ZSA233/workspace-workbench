@@ -31,6 +31,7 @@ class ToolSheet(private val activity: AppCompatActivity, private val prefs: Shel
     private val title = ShellUi.text(context, "工具", 17f, medium = true)
     private val summaries = mutableMapOf<String, Pair<TextView, View>>()
     private var selectedPage = "tools"
+    private var stopObserving: (() -> Unit)? = null
     private fun dp(n: Int) = ShellUi.dp(context, n)
 
     init {
@@ -84,6 +85,7 @@ class ToolSheet(private val activity: AppCompatActivity, private val prefs: Shel
             insets
         }
         navigate("tools")
+        stopObserving = settings.observeConnection(::refreshSummary)
     }
 
     private fun tile(id: String, name: String, icon: Int): View {
@@ -114,17 +116,18 @@ class ToolSheet(private val activity: AppCompatActivity, private val prefs: Shel
         summaries["appearance"]?.first?.text = when (prefs.appearance) { "light" -> "明亮"; "dark" -> "深色"; else -> "跟随系统" }
         summaries["version"]?.first?.text = "${updates.currentVersion} · 手动更新"
         summaries["source"]?.first?.text = if (prefs.customSource) "自定义" else "官方"
-        summaries["cache"]?.first?.text = "保留主机配对"
+        summaries["cache"]?.first?.text = settings.connectionSummary()
     }
 
     private fun navigate(page: String) {
         updateUi.detach()
+        settings.detachObservation()
         body.isFocusableInTouchMode = true
         selectedPage = page; summaries.clear(); body.removeAllViews()
-        title.text = when (page) { "appearance" -> "外观"; "version" -> "网页版本"; "source" -> "更新来源"; "cache" -> "缓存与诊断"; else -> "工具" }
+        title.text = when (page) { "appearance" -> "外观"; "version" -> "网页版本"; "source" -> "更新来源"; "cache" -> "连接与诊断"; else -> "工具" }
         if (page == "tools") {
             val entries = listOf(Triple("appearance", "外观", R.drawable.ic_palette), Triple("version", "网页版本", R.drawable.ic_package_check),
-                Triple("source", "更新来源", R.drawable.ic_cloud_download), Triple("cache", "缓存与诊断", R.drawable.ic_hard_drive))
+                Triple("source", "更新来源", R.drawable.ic_cloud_download), Triple("cache", "连接与诊断", R.drawable.ic_activity))
             for (row in entries.chunked(2)) {
                 val layout = LinearLayout(context)
                 row.forEachIndexed { index, (id, name, icon) ->
@@ -162,5 +165,8 @@ class ToolSheet(private val activity: AppCompatActivity, private val prefs: Shel
         }
         refreshSummary()
     }
-    override fun dismiss() { hideKeyboard(); updateUi.detach(); super.dismiss() }
+    override fun dismiss() {
+        stopObserving?.invoke(); stopObserving = null
+        hideKeyboard(); updateUi.detach(); settings.detachObservation(); super.dismiss()
+    }
 }

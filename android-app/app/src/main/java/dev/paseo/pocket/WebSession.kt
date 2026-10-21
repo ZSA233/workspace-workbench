@@ -18,12 +18,14 @@ import android.webkit.WebViewClient
 import android.view.ViewGroup
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
+import java.io.File
 
 class WebSession(private val activity: Activity, private val prefs: ShellPreferences,
     private val diagnostics: Diagnostics,
     private val unavailable: (String) -> Unit,
+    installed: File? = null,
     private val chooseFiles: (ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams) -> Boolean) {
-    val bundle = WebBundle(activity.assets)
+    val bundle = WebBundle(activity.assets, installed)
     val webView: WebView = WebView(activity)
     var destroyed = false
         private set

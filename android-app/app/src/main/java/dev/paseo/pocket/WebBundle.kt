@@ -8,9 +8,10 @@ import androidx.webkit.WebViewAssetLoader
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.io.File
 
-class WebBundle(private val assets: AssetManager) {
-    val manifest = JSONObject(assets.open("paseo/_workbench.json").bufferedReader().use { it.readText() })
+class WebBundle(private val assets: AssetManager, private val installed: File? = null) {
+    val manifest = JSONObject(open("_workbench.json").bufferedReader().use { it.readText() })
     val version: String = manifest.getJSONObject("metadata").getString("version")
     private val files = manifest.getJSONArray("files").let { rows ->
         (0 until rows.length()).map { rows.getJSONObject(it).getString("path") }.toSet()
@@ -19,9 +20,11 @@ class WebBundle(private val assets: AssetManager) {
         .addPathHandler("/", WebViewAssetLoader.PathHandler { path ->
             val relative = PageOrigin.resourcePath(path)
             if (relative == null || relative !in files) missing()
-            else runCatching { response(relative, assets.open("paseo/$relative", AssetManager.ACCESS_STREAMING)) }
+            else runCatching { response(relative, open(relative)) }
                 .getOrElse { missing() }
         }).build()
+    private fun open(relative: String): InputStream = installed?.let { File(it, relative).inputStream() }
+        ?: assets.open("paseo/$relative", AssetManager.ACCESS_STREAMING)
 
     fun intercept(uri: Uri, mainFrame: Boolean): WebResourceResponse? {
         if (!PageOrigin.isLocal(uri.toString())) return null

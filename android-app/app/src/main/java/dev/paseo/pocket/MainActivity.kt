@@ -20,6 +20,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.button.MaterialButton
+import dev.paseo.pocket.updates.PageUpdates
+import dev.paseo.pocket.updates.UpdateUi
 
 class MainActivity : AppCompatActivity() {
     private lateinit var session: WebSession
@@ -29,6 +31,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: ShellPreferences
     private lateinit var diagnostics: Diagnostics
     private lateinit var settings: ShellSettings
+    private lateinit var updates: PageUpdates
+    private lateinit var updateUi: UpdateUi
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data))
@@ -42,6 +46,10 @@ class MainActivity : AppCompatActivity() {
         enableEdgeToEdge()
         diagnostics = Diagnostics(this)
         diagnostics.record("app_opened")
+        updates = PageUpdates(this, diagnostics)
+        updateUi = UpdateUi(this, updates, { updates.trust.officialUrl }) {
+            session.destroy(); createSession(); session.start()
+        }
         root = FrameLayout(this)
         page = FrameLayout(this)
         root.addView(page, FrameLayout.LayoutParams(-1, -1))
@@ -76,12 +84,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun showTools() {
         if (sheet?.isShowing == true) return
-        sheet = ToolSheet(this, settings::show).also { it.show() }
+        sheet = ToolSheet(this) { section ->
+            if (section == "version") updateUi.show() else settings.show(section)
+        }.also { it.show() }
     }
 
     private fun createSession() {
         page.removeAllViews()
-        session = WebSession(this, prefs, diagnostics, ::showRecovery) { callback, params ->
+        session = WebSession(this, prefs, diagnostics, ::showRecovery, updates.store.activeDirectory()) { callback, params ->
             fileCallback?.onReceiveValue(null)
             fileCallback = callback
             try { filePicker.launch(params.createIntent()); true }
@@ -138,6 +148,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         sheet?.dismiss(); fileCallback?.onReceiveValue(null); fileCallback = null
         if (::session.isInitialized) session.destroy()
+        if (::updateUi.isInitialized) updateUi.close()
+        if (::updates.isInitialized) updates.close()
         if (::diagnostics.isInitialized) diagnostics.close()
         super.onDestroy()
     }

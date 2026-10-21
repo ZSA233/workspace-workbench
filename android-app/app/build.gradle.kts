@@ -47,6 +47,7 @@ dependencies {
     implementation(libs.webkit)
     implementation(libs.compress)
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20250517")
     androidTestImplementation(libs.test.runner)
     androidTestImplementation(libs.test.junit)
 }

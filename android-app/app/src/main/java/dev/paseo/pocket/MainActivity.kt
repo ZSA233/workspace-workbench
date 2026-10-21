@@ -71,8 +71,8 @@ class MainActivity : AppCompatActivity() {
                 navigation.bottom, resources.displayMetrics.density)
             imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
             page.setPadding(safe.left, safe.top, safe.right, maxOf(safe.bottom, ime.bottom))
-            root.post { tool.updateBounds(Rect(maxOf(safe.left, guard), safe.top, root.width - maxOf(safe.right, guard),
-                root.height - maxOf(safe.bottom, ime.bottom)), imeVisible) }
+            root.post { tool.updateBounds(Rect(safe.left, safe.top, root.width - safe.right,
+                root.height - maxOf(safe.bottom, ime.bottom)), imeVisible, guard) }
             // The native container already reserves these areas. Passing them to WebView
             // would also expose CSS env(safe-area-inset-*), doubling the page's padding.
             WindowInsetsCompat.Builder(insets)

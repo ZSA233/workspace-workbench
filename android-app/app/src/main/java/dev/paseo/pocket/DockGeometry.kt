@@ -1,8 +1,8 @@
 package dev.paseo.pocket
 
 object DockGeometry {
-    /** Some older gesture shells report no lateral gesture insets and ignore exclusions.
-     * A thin bottom gesture bar distinguishes them from ordinary three-button navigation. */
+    /** Invisible inward drag extension for gesture shells which omit lateral insets.
+     * The visible face must stay flush. A thin bar distinguishes three-button navigation. */
     fun legacyGestureGuard(api: Int, gestureLeft: Int, gestureRight: Int, navigationBottom: Int, density: Float): Int =
         if (api >= 29 && gestureLeft == 0 && gestureRight == 0 && navigationBottom > 0 && navigationBottom < 32 * density)
             (24 * density + .5f).toInt() else 0

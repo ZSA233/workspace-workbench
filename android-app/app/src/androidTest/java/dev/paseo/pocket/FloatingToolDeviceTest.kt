@@ -91,8 +91,15 @@ class FloatingToolDeviceTest {
                 if (android.os.Build.VERSION.SDK_INT >= 33)
                     assertNotNull((icon as android.graphics.drawable.AdaptiveIconDrawable).monochrome)
                 val handle = app.findViewById<FloatingTool>(R.id.floating_tool)
-                assertEquals(ShellUi.dp(app, 48), handle.width)
+                assertTrue(handle.width >= ShellUi.dp(app, 48))
                 assertEquals(ShellUi.dp(app, 56), handle.height)
+                val face = handle.getChildAt(0)
+                assertEquals(ShellUi.dp(app, 26), face.width)
+                assertEquals(ShellUi.dp(app, 52), face.height)
+                assertEquals(if (oldRight) handle.width else 0, if (oldRight) face.right else face.left)
+                val location = IntArray(2).also { face.getLocationOnScreen(it) }
+                assertEquals("Visible handle must touch the physical screen edge in portrait",
+                    if (oldRight) device.displayWidth else 0, location[0] + if (oldRight) face.width else 0)
                 val start = SystemClock.uptimeMillis()
                 for ((action, x) in listOf(MotionEvent.ACTION_DOWN to 24f, MotionEvent.ACTION_MOVE to -1000f, MotionEvent.ACTION_CANCEL to -1000f)) {
                     val event = MotionEvent.obtain(start, SystemClock.uptimeMillis(), action, x, 28f, 0)

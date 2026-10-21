@@ -21,10 +21,12 @@ class FloatingTool(context: Context, private val prefs: ShellPreferences, onClic
     private var startX = 0f; private var startY = 0f
     private var dragging = false
     private var keyboardVisible = false
+    private var edgeGestureWidth = 0
     private var renderedDockRight: Boolean? = null
     private val mark = ShellUi.icon(context, R.drawable.ic_route)
     private val face = FrameLayout(context)
     private fun dp(n: Int) = ShellUi.dp(context, n)
+    private fun touchWidth() = dp(48) + edgeGestureWidth
 
     init {
         id = R.id.floating_tool
@@ -56,13 +58,19 @@ class FloatingTool(context: Context, private val prefs: ShellPreferences, onClic
         ShellUi.refresh(mark)
     }
 
-    fun updateBounds(rect: Rect, imeVisible: Boolean) {
+    fun updateBounds(rect: Rect, imeVisible: Boolean, gestureWidth: Int = 0) {
         bounds.set(rect); keyboardVisible = imeVisible
+        if (edgeGestureWidth != gestureWidth) {
+            edgeGestureWidth = gestureWidth
+            // Only the invisible inward hit area grows. The 26dp face remains flush
+            // with the screen edge even when an OEM intercepts edge swipes.
+            layoutParams = layoutParams.apply { width = touchWidth() }
+        }
         restoreDock()
     }
 
     private fun restoreDock() {
-        val left = bounds.left; val right = (bounds.right - dp(48)).coerceAtLeast(left)
+        val left = bounds.left; val right = (bounds.right - touchWidth()).coerceAtLeast(left)
         val top = bounds.top + dp(4); val bottom = (bounds.bottom - dp(60)).coerceAtLeast(top)
         x = if (prefs.dockRight) right.toFloat() else left.toFloat()
         y = DockGeometry.position(top.toFloat(), bottom.toFloat(), prefs.dockFraction)
@@ -72,7 +80,7 @@ class FloatingTool(context: Context, private val prefs: ShellPreferences, onClic
 
     fun updateGestureExclusion() {
         if (Build.VERSION.SDK_INT >= 29) ViewCompat.setSystemGestureExclusionRects(this,
-            if (isShown) listOf(Rect(0, 0, dp(48), dp(56))) else emptyList())
+            if (isShown) listOf(Rect(0, 0, touchWidth(), dp(56))) else emptyList())
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -85,7 +93,7 @@ class FloatingTool(context: Context, private val prefs: ShellPreferences, onClic
                 val dx = event.rawX - downX; val dy = event.rawY - downY
                 if (abs(dx) > slop || abs(dy) > slop) dragging = true
                 if (dragging) {
-                    x = (startX + dx).coerceIn(bounds.left.toFloat(), (bounds.right - dp(48)).coerceAtLeast(bounds.left).toFloat())
+                    x = (startX + dx).coerceIn(bounds.left.toFloat(), (bounds.right - touchWidth()).coerceAtLeast(bounds.left).toFloat())
                     y = (startY + dy).coerceIn((bounds.top + dp(4)).toFloat(), (bounds.bottom - dp(60)).coerceAtLeast(bounds.top + dp(4)).toFloat())
                 }
             }

@@ -107,7 +107,8 @@ keyPassword=PRIVATE
 
 ## 验证与维护
 
-见 [实现结构](DESIGN.md)、[0.1.1 验收记录](VERIFICATION-0.1.1.md) 和 [0.1.0 历史记录](VERIFICATION.md)。
+见 [实现结构](DESIGN.md)、[0.1.2 发布验收](VERIFICATION-0.1.2.md)、
+[0.1.1 界面验收](VERIFICATION-0.1.1.md) 和 [0.1.0 历史记录](VERIFICATION.md)。
 设备测试需要 `adb`，只操作本项目 App 和隔离测试主机。
 调试构建在构建时生成仅信任 `localhost` 的测试 CA；发布 APK 不含此 CA 或调试配置。
 测试辅助脚本不进入 APK。

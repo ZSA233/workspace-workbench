@@ -1,6 +1,7 @@
 package dev.paseo.pocket
 
 import android.os.Bundle
+import android.content.Context
 import android.content.res.Configuration
 import android.content.ActivityNotFoundException
 import android.graphics.Color
@@ -49,9 +50,14 @@ class MainActivity : AppCompatActivity() {
     private var recoveryVisible = false
     private var resumedAfterMs: Long? = null
     companion object { private var processStarted = false }
+    override fun attachBaseContext(newBase: Context) {
+        // AppCompat wraps the Activity context here. Restore the saved mode before
+        // that wrapper and the first WebView resolve their initial theme.
+        ShellSettings.applyAppearance(ShellPreferences(newBase).appearance)
+        super.attachBaseContext(newBase)
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         prefs = ShellPreferences(this)
-        ShellSettings.applyAppearance(prefs.appearance)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         diagnostics = Diagnostics(this)

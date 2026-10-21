@@ -90,6 +90,23 @@ class ShellDeviceTest {
         assertNotNull(device.wait(Until.findObject(By.desc("Paseo Pocket 工具")), 5000))
     }
 
+    @Test(timeout = 45000) fun savedAppearanceMatchesWebViewOnFirstLoad() {
+        // Run in a fresh QA process with a persisted appearance to cover cold start,
+        // before any in-process appearance selection can correct the initial mode.
+        val saved = ShellPreferences(instrumentation.targetContext).appearance
+        launch()
+        lateinit var webView: WebView
+        var dark = false
+        onActivity {
+            webView = webViews(it.window.decorView).single()
+            dark = it.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
+        if (saved != "system") assertEquals("Persisted choice must apply before constructing WebView", saved == "dark", dark)
+        waitPage(webView)
+        assertEquals("The initial page must inherit the saved native appearance without reselecting it",
+            dark.toString(), evaluate(webView, "matchMedia('(prefers-color-scheme: dark)').matches"))
+    }
+
     @Test(timeout = 90000) fun menusAppearanceAndBackgroundKeepOneWebViewAndDraft() {
         val prefs = ShellPreferences(instrumentation.targetContext)
         val previousAppearance = prefs.appearance

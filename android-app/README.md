@@ -7,8 +7,10 @@
 [下载已签名 APK](https://github.com/ZSA233/workspace-workbench/releases?q=android-v&expanded=true) ·
 [自动发版与签名配置](../docs/releasing-android.md)
 
+[0.1.5 升级功能与验收记录](../docs/releases/paseo-pocket-0.1.5.md)
+
 维护时在仓库根目录运行 `make` 查看快捷指令：`make android-check` 检查项目，
-`make android-package` 本地打包，`make android-release VERSION=0.1.3` 创建并推送新版本。
+`make android-package` 本地打包，`make android-release VERSION=0.1.5` 创建并推送新版本。
 
 ## 使用
 
@@ -18,9 +20,11 @@
 网页占据工作区；贴边的路径标志可拖动、左右吸边并记住位置。
 旧系统的边缘返回手势若抢占滑动，可长按标志再拖动。
 侧柄可见区域 26×52dp，触控区域至少 48×56dp；点击打开底部四格工具面板。
-外观、网页版本、更新来源、连接与诊断均在同一个面板中切换，子页可返回工具首页。
+四格固定为：左上外观、右上网页更新、左下应用升级、右下连接与诊断。
+网页更新来源在网页更新子页内，保存或返回后先回网页更新页，再回工具首页。
 菜单覆盖在网页上，不会重新加载或创建第二个 WebView。
-只有确认应用页面更新或手动恢复才会重开网页。
+“应用升级”下载并安装 APK；“网页更新”只切换内置网页资源，两者分别展示当前版本与进度。
+只有确认切换网页版本或手动恢复才会重开网页；安装 APK 会结束当前应用进程。
 状态栏、刘海、手势区域与键盘由原生容器统一避让，网页不重复计算这些边距。
 
 “外观”提供跟随系统、明亮、深色，保存后冷启动也会生效。
@@ -74,11 +78,11 @@ CPU 和 PSS 属于 App 本进程，不包含整个 WebView；单核 100%，多�
 日志最多 200 条且不超过 128 KiB，旧版事件记录可继续读取；
 `cpu_milli` 的单位为单核百分比的千分之一。报告只经用户复制或分享，不自动上传。
 
-## 手动页面更新
+## 手动网页更新
 
-贴边工具 → 网页版本 → 检查页面更新 → 下载并验证 → 应用更新 → 二次确认。
+贴边工具 → 网页更新 → 检查网页更新 → 下载网页资源 → 切换网页版本 → 二次确认。
 下载和验证不刷新当前页面，可取消；关闭工具面板后仍可继续下载，重开面板显示实际进度。
-应用前先处理未发送内容。更新来源编辑在保存后生效，返回时放弃未保存的修改。
+切换前先处理未发送内容。“网页更新来源”编辑在保存后生效，返回时放弃未保存的修改。
 网页更新仅手动触发，没有后台更新检查或常驻服务。
 
 默认从官方 `@getpaseo/server` npm 发布信息检查。自定义来源填写 HTTPS 更新信息地址，
@@ -98,6 +102,34 @@ CPU 和 PSS 属于 App 本进程，不包含整个 WebView；单核 100%，多�
 
 镜像生成命令见 [web-assets/README.md](../web-assets/README.md)。无需部署 GitHub Pages，
 也无需更改现有 relay；本项目不自动发布任何线上资源。
+
+## Pocket 应用升级
+
+从 0.1.5 起，工具面板左下格提供“应用升级”。0.1.4 及更早版本需要先从
+[GitHub Releases](https://github.com/ZSA233/workspace-workbench/releases?q=android-v&expanded=true)
+手动安装一次新 APK，之后即可使用 App 内更新。
+
+流程：检查应用更新 → 下载 APK → 校验 → 安装 APK → 安装提醒 → 系统授权与安装确认。
+
+- 默认回到前台时每 24 小时最多检查一次，以检查尝试时间计时，可以关闭；不循环重试。
+  发现新版本仅更新工具格提示，不弹窗。没有后台定时检查、常驻服务或自动下载。
+- 分页读取公开 Release，只接受 `android-vMAJOR.MINOR.PATCH` 的非草稿、非预发布版本，
+  并要求完整 APK、`release.json` 和 `SHA256SUMS`。不使用仓库全局 Latest，插件发布不会触发 APK 更新。
+- 同时要求版本名与 versionCode 递增；下载采用流式写入，可取消。APK 上限 80 MiB。
+- 核对清单摘要、APK 摘要、包名、版本、系统兼容及与当前安装 App 相同的签名证书身份，再交给 Android 安装器最终验证安装。
+  已下载且核对过的安装包可在重启后恢复并重新校验；不清除配对、网页存储或已安装网页。
+- 关闭面板不取消下载；进程仍存活时可以继续，Activity 销毁时取消。没有下载保活服务或断点续传。
+  启动后清理半包，最多保留一个待安装 APK；升级成功后清理旧包。
+- APK 与网页更新共用执行互斥，忙碌时另一页显示提示及入口。离线显示上次确认的缓存版本和检查时间，
+  不把缓存结果当成本次已检查到最新。拒绝授权或取消系统安装后可继续使用已下载 APK。
+- 首次安装时，系统可能要求允许 Pocket“安装未知应用”；返回后继续。每次升级仍由系统确认，
+  不进行静默安装。安装前先保存未发送内容，系统替换 APK 会重启 App。
+- GitHub 不可达、请求受限或校验失败时继续使用当前版本，可从更新页打开公开发布列表手动下载。
+  使用者无需 GitHub 账号或访问 Token。
+
+源码自行构建时，更新仓库依次取 `PASEO_POCKET_UPDATE_REPOSITORY`、Actions 的
+`GITHUB_REPOSITORY` 或默认 `ZSA233/workspace-workbench`。升级包的签名身份必须与当前 App 相同；
+发布工具同时核对 `signing-certificate.sha256`，自建发行版应配置自己的仓库与对应签名。
 
 ## 构建与签名
 
@@ -133,6 +165,13 @@ adb -s "$POCKET_DEVICE" shell am instrument -w dev.paseo.pocket.qa.test/androidx
 该参数只改变调试包，正式包始终为 `dev.paseo.pocket`。长字号／横屏布局测试需单独运行，
 沿用历史验收记录中的 `layoutChecks=true`。两个 `benchmark-*.mjs` 脚本只操作独立测试包，
 并要求其中只登记 `localhost:19444` 的隔离主机；不应对日常 App 注入故障。
+
+APK 更新专项使用 `scripts/serve-app-update-fixture.mjs`（localhost HTTPS 19446）与
+`AppUpdateDeviceTest`。准备 `artifacts/github-0.1.4/` 中的公开原始 APK、清单及校验文件，
+在专属模拟器内预装公开 0.1.2 主包，再运行 QA 测试；参数为
+`-e appUpdateFixture https://localhost:19446`，并配置对应 adb reverse。
+测试核对真实签名、下载中断、私有文件分享和系统安装确认，并将专属模拟器内的 0.1.2 覆盖到 0.1.4。
+没有 fixture 参数时这些集成项会条件跳过；菜单与 WebView 保留测试独立执行。
 
 密钥默认在 `~/.config/paseo-pocket/`，不会进入仓库。
 请安全备份该目录；后续覆盖升级必须使用相同密钥并递增 `versionCode`。

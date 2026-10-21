@@ -64,10 +64,10 @@ test("Hermes evaluates the actual client entry, registers, unloads and reloads w
     var registrations={},removals=0;
     function add(id){if(registrations[id])throw Error('duplicate '+id);registrations[id]=true;return function(){delete registrations[id];removals++;};}
     var host={addSurface:function(id){return add(id);},addSidebarItem:function(v){return add('sidebar:'+v.id);},addSettingsScreen:function(v){return add(v.id);},addWorkspacePanel:function(v){return add(v.id);},addCommandCenterItem:function(v){return add(v.id);},
-      rpc:function(r,input){if(r.name==='workspace.workbench.client-diagnostic'){logs.push(input);return Promise.resolve({ok:true});}if(input.action!=='list')throw Error('unexpected recovery write');return new Promise(function(){});}};
+      rpc:function(r,input){if(r.name==='workspace.workbench.client-diagnostic-batch'){return Promise.resolve({ok:true});}if(r.name==='workspace.workbench.client-diagnostic'){logs.push(input);return Promise.resolve({ok:true});}if(input.action!=='list')throw Error('unexpected recovery write');return new Promise(function(){});}};
     for(var pass=0;pass<3;pass++){
       var cleanup=module.exports.default(host);
-      if(!registrations.workbench||!registrations['workbench-session-recovery']||intervals!==1)throw Error('registration incomplete');
+      if(!registrations.workbench||registrations['workbench-session-recovery']||intervals!==0||console.error!==originalConsoleError)throw Error('Android must keep recovery and global hooks disabled');
       cleanup();cleanup();if(Object.keys(registrations).length||intervals!==0||console.error!==originalConsoleError)throw Error('cleanup incomplete');
     }
     print('native-client-registration-ok');

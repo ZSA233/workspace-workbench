@@ -78,6 +78,7 @@ worktree、记录和缓存。运行数据默认由 Git 本地忽略。已有项�
 - [验证记录](docs/verification/backend-parity-review-recovery-20260914.md)
 - [Node 后端职责和兼容性](paseo-plugin/backend/README.md)
 - [发布和固定版本安装](docs/releasing.md)
+- [安卓端卡顿排查与日志采集](docs/android-client-pressure.md)
 
 开发者可以运行 `make check` 检查插件类型和测试，运行 `make package` 构建发布形态的
 插件压缩包。

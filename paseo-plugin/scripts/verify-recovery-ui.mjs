@@ -68,7 +68,7 @@ try {
   await page.getByTestId("session-recovery-panel").waitFor();
   await page.waitForFunction(() => { let element = document.querySelector('[data-testid="session-recovery-panel"]'); while (element) { if (Number(getComputedStyle(element).opacity) < 0.99) return false; element = element.parentElement; } return true; });
   await shot("03-session-recovery-pill.png");
-  report.checks.push("the native session composer displays a recovery status pill and opens the session-specific controls");
+  report.checks.push("the desktop web session composer displays a recovery status pill and opens the session-specific controls; this does not exercise Android rendering");
   assert.deepEqual(report.pageErrors, []);
   report.ok = true;
 } catch (error) { report.ok = false; report.error = error.message; process.exitCode = 1; }

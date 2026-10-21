@@ -63,7 +63,7 @@ reviewSettingsUpdate,
 } from "./shared/agent-review";
 import { agentSessionProviders,agentSessionSettingsGet,agentSessionSettingsUpdate } from "./shared/agent-session";
 import { artifactList,artifactRegister } from "./shared/artifacts";
-import { clientDiagnostic } from "./shared/client-diagnostics";
+import { clientDiagnostic, clientDiagnosticBatch } from "./shared/client-diagnostics";
 import { diagnosticsQuery,mcpStatusQuery } from "./shared/diagnostics";
 import { workspaceBindingQuery,workspaceDelegate,workspaceHandoffPreview } from "./shared/handoff";
 import { projectsQuery } from "./shared/projects";
@@ -167,6 +167,11 @@ export default function contribute(server: PluginServerContext) {
   measured.handle(projectSetupSave, handleProjectSetupSave);
   measured.handle(projectStorageQuery, handleProjectStorage);
   measured.handle(clientDiagnostic, handleClientDiagnostic);
+  measured.handle(clientDiagnosticBatch, input => {
+    let result = { ok: true, retained: 0 };
+    for (const event of input.events) result = handleClientDiagnostic(event);
+    return result;
+  });
   measured.handle(diagnosticsQuery, input => handleDiagnostics(input, metrics));
   measured.handle(mcpStatusQuery, () => handleMcpStatus());
   measured.handle(projectRuntimeSettingsGet, (input) => withProject(input, () => handleProjectRuntimeSettingsGet(input)));

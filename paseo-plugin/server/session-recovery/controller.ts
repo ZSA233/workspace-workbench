@@ -208,6 +208,9 @@ export class SessionRecoveryController {
     if (!turnId) return;
     await this.lock(agentId, async () => {
       const r = this.records.get(agentId); if (!r) return;
+      // Async snapshot refresh can deliver a start after this turn's failure
+      // or successful recovery. That old start cannot cancel/reset the episode.
+      if (r.failedTurnId === turnId || (r.status === "succeeded" && r.recoveryTurnId === turnId)) return;
       if (r.status === "stopped" && r.messageId) {
         // A dispatch already accepted by the host may start after the user
         // cancels its recovery queue. That start must not re-arm the queue.

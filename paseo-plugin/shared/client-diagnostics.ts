@@ -12,3 +12,9 @@ export const clientDiagnostic = defineRpc({
   }),
   output: z.object({ ok: z.boolean(), retained: z.number().int().nonnegative() }),
 });
+
+export const clientDiagnosticBatch = defineRpc({
+  name: "workspace.workbench.client-diagnostic-batch",
+  input: z.object({ events: z.array(clientDiagnostic.input).min(1).max(16) }),
+  output: clientDiagnostic.output,
+});

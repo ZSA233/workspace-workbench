@@ -25,10 +25,10 @@ export async function verifySessionRecovery({ client, root, wait, report, reload
   assert.equal(defaults.values.intervalSeconds, 10); assert.equal(defaults.values.maxDurationMinutes, 60); assert.equal(defaults.values.enabled, true);
   assert.equal(defaults.values.method, "continue"); assert.equal(defaults.values.continueMessage, "继续");
   const cwd = join(root, "outside-workbench"); mkdirSync(cwd);
-  const create = async (scenario, title = scenario) => {
+  const create = async (scenario, title = scenario, observeRegistration = true) => {
     const snapshot = await client.createAgent({ config: { provider: "codex", model: "recovery-fixture", thinkingOptionId: "low", cwd, modeId: "auto", featureValues: { plan_mode: false } }, title });
     const id = snapshot.id;
-    await wait(async () => (await rpc({ action: "get", agentId: id })).sessions.length);
+    if (observeRegistration) await wait(async () => (await rpc({ action: "get", agentId: id })).sessions.length);
     await client.sendMessage(id, scenario, { messageId: `fixture-original-${id}` });
     return id;
   };
@@ -69,7 +69,19 @@ export async function verifySessionRecovery({ client, root, wait, report, reload
     ? "actual host prefers empty-input native recovery when installed; native and Paseo history gained no user message"
     : "actual host without the native interface automatically falls back to 继续 and retains the original session");
 
-  await policy({ intervalSeconds: 1, maxDurationMinutes: null });
+  await policy({ method: "continue", intervalSeconds: 1, maxDurationMinutes: null });
+  // No recovery list/get RPC, retryNow or UI subscriber is involved from agent
+  // creation through recovery. Observe only the host and the protocol fixture.
+  const unobserved = await create("CAPACITY_ONCE", "Automatic recovery without recovery UI polling", false);
+  await wait(async () => {
+    const thread = await threads(unobserved);
+    return thread.turns.length === 2 && thread.turns[1].status === "completed";
+  });
+  const unobservedThread = await threads(unobserved);
+  assert.equal(unobservedThread.inputs[1][0].text, "继续");
+  assert.equal((await state(unobserved)).attempt, 1);
+  report.checks.push("actual host registers and automatically continues a new session without any recovery UI status polling or retryNow");
+
   const network = await create("NETWORK_ONCE");
   await wait(async () => (await state(network)).status === "succeeded");
   const quota = await create("QUOTA");
@@ -102,6 +114,6 @@ export async function verifySessionRecovery({ client, root, wait, report, reload
   assert.equal((await state(canceled)).enabled, false);
   report.checks.push("actual host cancels pending recovery on new user work, honors manual stop and persists a per-session disable");
   await policy({ enabled: true, method: "continue", continueMessage: "继续", intervalSeconds: 10, maxDurationMinutes: 60 });
-  report.recoverySessions = { defaultFirst, first, network, quota, restored, manual, canceled };
+  report.recoverySessions = { defaultFirst, first, unobserved, network, quota, restored, manual, canceled };
   report.nativeAvailable = initial.nativeAvailable;
 }

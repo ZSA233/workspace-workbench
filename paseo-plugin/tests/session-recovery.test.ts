@@ -184,6 +184,42 @@ test("duplicate failures and concurrent ticks schedule one dispatch with a stabl
   await h.controller.claimFailure(h.agent.id, "original-turn", capacity); assert.equal(h.sent.length, 1); await h.controller.close();
 });
 
+for (const method of ["continue", "auto"] as const) test(`a delayed start for an already failed turn cannot cancel ${method} recovery`, async () => {
+  const h = harness(); await h.enable({ method });
+  await h.controller.turnEnded(h.agent.id, "original-turn", { kind: "failed", error: capacity });
+  const waiting = h.controller.list()[0];
+  // The host's async snapshot refresh for turn_started can finish after the
+  // faster turn_ended handler, especially on the first turn of a new session.
+  await h.controller.turnStarted(h.agent.id, "original-turn");
+  assert.deepEqual(h.controller.list()[0], waiting);
+  h.advance(10000); await h.controller.tick(); await h.start();
+  assert.equal(h.sent.length, 1); assert.equal(h.controller.list()[0].status, "running");
+  h.agent.activeTurn = null; h.agent.status = "error";
+  await h.controller.turnEnded(h.agent.id, "recovery-turn-1", { kind: "failed", error: capacity });
+  const next = h.controller.list()[0];
+  await h.controller.turnStarted(h.agent.id, "recovery-turn-1");
+  assert.deepEqual(h.controller.list()[0], next);
+  assert.equal(next.attempt, 1); assert.equal(next.deadlineAt, waiting.deadlineAt);
+  await h.controller.turnStarted(h.agent.id, "genuinely-new-user-turn");
+  assert.equal(h.controller.list()[0].reason, "new_user_turn");
+  h.advance(10000); await h.controller.tick(); assert.equal(h.sent.length, 1);
+  await h.controller.close();
+});
+
+for (const method of ["continue", "auto"] as const) test(`a delayed start after successful ${method} recovery preserves its completion and attempt identity`, async () => {
+  const h = harness(); await h.enable({ method });
+  await h.controller.claimFailure(h.agent.id, "original-turn", capacity);
+  h.advance(10000); await h.controller.tick(); await h.start();
+  h.agent.activeTurn = null; h.agent.status = "idle";
+  await h.controller.turnEnded(h.agent.id, "recovery-turn-1", { kind: "completed" });
+  const completed = h.controller.list()[0]; assert.equal(completed.status, "succeeded");
+  await h.controller.turnStarted(h.agent.id, "recovery-turn-1");
+  assert.deepEqual(h.controller.list()[0], completed);
+  await h.controller.turnStarted(h.agent.id, "new-user-turn");
+  assert.equal(h.controller.list()[0].status, "ready"); assert.equal(h.controller.list()[0].attempt, 0);
+  await h.controller.close();
+});
+
 test("a transient Review resume failure is reconciled without redelivering the accepted message", async () => {
   let resumed = 0;
   const review: RecoveryReviewBridge = { inspect: async () => "task", suspend: async () => {}, stop: async () => {}, resume: async () => { if (++resumed === 1) throw new Error("runtime_unavailable"); } };

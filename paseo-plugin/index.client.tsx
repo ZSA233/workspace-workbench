@@ -1,18 +1,18 @@
-import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
+import type { PluginAgentPanelProps, PluginClientContext, PluginSurfaceProps, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { Platform, Text, View } from "react-native";
 import { useEffect, useSyncExternalStore } from "react";
 import { contextSurfacePrefix, createOpenGuard, workbenchDestination } from "./client/open-workbench";
-import { registerRecoveryClient } from "./client/session-recovery";
 
 import { clearFileReviews, configureFileReviewOpener, openFileReview } from "./client/file-review-store";
 import { copy, getWorkbenchCopy } from "./shared/copy";
 import { FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel } from "./client/entry-panels";
 import { atInitializationStage, createRegistrationScope, INITIALIZATION_REVISION, type RegistrationScope } from "./client/initialization";
 import { localeFromHostProps } from "./client/i18n";
-import { clientDiagnostic } from "./shared/client-diagnostics";
-import { nativeComponentInventory } from "./client/native-components";
 import { configureNativeDiagnosticReporter, installNativeRenderErrorHook, reportNativeDiagnostic } from "./client/native-diagnostics";
 import { clearWorkbenchWorkspaceSnapshots, markWorkbenchWorkspaceSnapshotsReady, removeWorkbenchWorkspaceSnapshot, setWorkbenchWorkspaceSnapshot } from "./client/surface-context";
+import { createRegistrationQueue } from "./client/registration-queue";
+import { createDiagnosticSender } from "./client/diagnostic-sender";
+import { createAndroidWorkspaceContext } from "./client/android-workspace-context";
 
 const observerSurfaceId = "workbench";
 
@@ -23,22 +23,34 @@ const observerSurfaceId = "workbench";
 type WorkspaceApiCompatibility = {
   open?: (directory: string) => Promise<{ id: string }>;
   subscribe?: (handler: (update: { kind: string; id: string; workspace?: { id: string; directory?: string | null; name?: string | null } }) => void) => () => void;
-  list?: (options?: { subscribe?: Record<string, never> }) => Promise<{ entries: Array<{ id: string; directory?: string | null; name?: string | null }> }>;
+  list?: (options?: { subscribe?: Record<string, never>; page?: { limit: number; cursor?: string } }) => Promise<{
+    entries: Array<{ id: string; directory?: string | null; workspaceDirectory?: string | null; name?: string | null }>;
+    pageInfo?: { hasMore: boolean; nextCursor?: string | null };
+    subscription?: { release(): Promise<void> };
+  }>;
 };
 
 export default function contribute(client: PluginClientContext) {
   const scope = createRegistrationScope(reportNativeDiagnostic);
   const platform = Platform.OS || "unknown";
-  configureNativeDiagnosticReporter({ platform, report: event => client.rpc(clientDiagnostic, event).then(() => {}) });
-  scope.own("diagnostics", () => configureNativeDiagnosticReporter(null));
+  const diagnosticSender = createDiagnosticSender(client);
+  configureNativeDiagnosticReporter({ platform, report: diagnosticSender.report, errorsOnly: platform === "android" });
+  scope.own("diagnostics", () => { configureNativeDiagnosticReporter(null); diagnosticSender.close(); });
   try {
     return atInitializationStage("registration", () => {
-      if (platform !== "web") {
+      if (platform !== "web" && platform !== "android") {
         scope.optional("native-render-error-hook", installNativeRenderErrorHook);
-        scope.optional("native-component-inventory", () => { reportNativeDiagnostic("registration-components", nativeComponentInventory()); return () => {}; });
       }
       contributeClient(client, scope, platform);
-      scope.optional("recovery", () => registerRecoveryClient(client));
+      if (platform !== "android") {
+        let retired = false;
+        scope.own("recovery:module", () => { retired = true; });
+        void import("./client/session-recovery").then(module => {
+          if (!retired) scope.optional("recovery", () => module.registerRecoveryClient(client));
+        }).catch(error => { if (!retired) scope.failure("recovery:module", error); });
+      } else {
+        reportNativeDiagnostic("android-client-policy", { recoveryUi: "disabled", workspaceObservation: "on-demand", globalErrorHook: "disabled" });
+      }
       console.info(`[workbench/${INITIALIZATION_REVISION}] registered`, platform);
       return scope.close;
     });
@@ -47,6 +59,12 @@ export default function contribute(client: PluginClientContext) {
 
 function contributeClient(client: PluginClientContext, scope: RegistrationScope, platform: string) {
   const workspaceApi = ((client as unknown as { paseo?: { workspaces?: WorkspaceApiCompatibility } }).paseo)?.workspaces;
+  const androidContext = platform === "android" ? createAndroidWorkspaceContext(workspaceApi) : null;
+  if (androidContext) scope.own("android-workspace-context", androidContext.close);
+  function ContextualWorkbenchPanel(props: PluginWorkspacePanelProps | PluginAgentPanelProps) {
+    useEffect(() => androidContext?.observe(), []);
+    return <WorkbenchPanel {...props} />;
+  }
   function registerPanel(panel: Parameters<PluginClientContext["addWorkspacePanel"]>[0]) {
     return scope.register(`panel:${panel.id}`, () => client.addWorkspacePanel(panel));
   }
@@ -64,8 +82,10 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
   let surfaceMounts = 0;
   let disposed = false;
   const headerButtons = new Map<string, { remove(): void }>();
+  const headerQueue = createRegistrationQueue({ deferred: platform !== "web", report: reportNativeDiagnostic });
   scope.own("workspace-state", () => {
     disposed = true;
+    headerQueue.close();
     clearWorkbenchWorkspaceSnapshots();
     surfaceContext = null;
     surfaceListeners.clear();
@@ -79,8 +99,10 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
     reportNativeDiagnostic("contextual-surface-entry", { hostId: props.host.id });
     const context = useSyncExternalStore((listener) => { surfaceListeners.add(listener); return () => { surfaceListeners.delete(listener); }; }, () => surfaceContext, () => surfaceContext);
     useEffect(() => {
+      const releaseContext = androidContext?.observe();
       surfaceMounts++;
       return () => {
+        releaseContext?.();
         surfaceMounts--;
         void Promise.resolve().then(() => { if (surfaceMounts === 0) surfaceContext = null; });
       };
@@ -109,6 +131,7 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
     }
   }
   function FailureSurface(props: PluginSurfaceProps) {
+    useEffect(() => androidContext?.observe(), []);
     const copy = getWorkbenchCopy(localeFromHostProps(props));
     return <View style={{ flex: 1 }}><Text style={{ padding: 12, color: props.theme.colors.statusWarning }}>{copy.openFailed}</Text><WorkbenchSurfacePanel {...props} /></View>;
   }
@@ -126,7 +149,7 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
     icon: "GitBranch",
     context: "workspace",
     locations: ["explorer"],
-    Component: WorkbenchPanel,
+    Component: platform === "android" ? ContextualWorkbenchPanel : WorkbenchPanel,
   });
   registerPanel({
     id: "workspace-workbench-agent",
@@ -134,7 +157,7 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
     icon: "GitBranch",
     context: "agent",
     locations: ["explorer"],
-    Component: WorkbenchPanel,
+    Component: platform === "android" ? ContextualWorkbenchPanel : WorkbenchPanel,
   });
   registerOptionalPanel({
     id: "workspace-workbench-file",
@@ -182,6 +205,7 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
   // tabs. Add a small workspace-header entry so the panel remains one click
   // away without registering a full-screen surface.
   const removeHeaderButton = (workspaceId: string) => {
+    headerQueue.cancel(workspaceId);
     if (surfaceContext?.workspaceId === workspaceId) { surfaceContext = null; surfaceListeners.forEach((listener) => listener()); }
     for (const [id, cleanup] of contextSurfaces) {
       if (id.startsWith(contextSurfacePrefix(workspaceId))) { cleanup(); contextSurfaces.delete(id); }
@@ -193,6 +217,10 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
   };
 
   const addHeaderButton = (workspaceId: string) => {
+    if (disposed || headerButtons.has(workspaceId)) return;
+    headerQueue.enqueue(workspaceId, () => registerHeaderButton(workspaceId));
+  };
+  const registerHeaderButton = (workspaceId: string) => {
     if (disposed || headerButtons.has(workspaceId)) return;
     headerButtons.set(
       workspaceId,
@@ -214,7 +242,7 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
     );
   };
 
-  if (workspaceApi?.subscribe) {
+  if (platform !== "android" && workspaceApi?.subscribe) {
     scope.register("workspace-subscription", () => workspaceApi.subscribe!((update) => {
       if (disposed) return;
       if (update.kind === "upsert" && update.workspace) {
@@ -228,10 +256,11 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
     }));
   }
 
-  if (workspaceApi?.list) {
+  if (platform !== "android" && workspaceApi?.list) {
     void workspaceApi
       .list({ subscribe: {} })
-      .then(({ entries }) => {
+      .then(({ entries, subscription }) => {
+        if (subscription) scope.own("workspace-directory-stream", () => { void subscription.release().catch(() => {}); });
         if (disposed) return;
         for (const workspace of entries) {
           addHeaderButton(workspace.id);
@@ -244,7 +273,7 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
         // workspace directory is temporarily unavailable during app startup.
         if (!disposed) markWorkbenchWorkspaceSnapshotsReady(false);
       });
-  } else markWorkbenchWorkspaceSnapshotsReady(false);
+  } else if (platform !== "android") markWorkbenchWorkspaceSnapshotsReady(false);
 
   registerCommand({
     id: "open-workspace-workbench",

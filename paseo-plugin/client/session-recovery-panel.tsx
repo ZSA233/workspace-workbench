@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { Pressable, Switch, Text, View } from "react-native";
+import { AppState, Platform, Pressable, Switch, Text, View } from "react-native";
 import type { PluginSurfaceProps, PluginButtonContentProps } from "@getpaseo/plugin/client";
 import { ScrollView, TextInput } from "./native-components";
 import { localeFromHostProps } from "./i18n";
@@ -27,7 +27,6 @@ export function RecoveryPanel({ store, agentId, openAll, ...props }: RecoveryPan
     setUnlimited(state.policy.maxDurationMinutes === null); setEnabled(state.policy.enabled);
     setMethod(state.policy.method); setContinueMessage(state.policy.continueMessage);
   }, [state.policy.intervalSeconds, state.policy.maxDurationMinutes, state.policy.enabled, state.policy.method, state.policy.continueMessage]);
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const run = (operation: () => Promise<unknown>) => {
     if (busy) return; setBusy(true); setError(null);
     void operation().catch(e => setError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(false));
@@ -35,6 +34,18 @@ export function RecoveryPanel({ store, agentId, openAll, ...props }: RecoveryPan
   const button = (label: string, onPress: () => void, disabled = false, testID?: string) => <Pressable key={label} accessibilityRole="button" testID={testID} onPress={onPress} disabled={disabled || busy}
     style={{ paddingHorizontal: 10, paddingVertical: 8, minHeight: 36, borderWidth: 1, borderColor: colors.border, borderRadius: 6, opacity: disabled || busy ? 0.5 : 1 }}><Text style={{ color: colors.foreground }}>{label}</Text></Pressable>;
   const filtered = state.sessions.filter(s => (!agentId || s.agentId === agentId) && `${s.title} ${s.workspaceName} ${s.agentId}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
+  const needsClock = filtered.some(session => activeStates.includes(session.status) && (session.nextAttemptAt !== null || session.deadlineAt !== null));
+  useEffect(() => {
+    if (!needsClock) return;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const active = (state: string) => {
+      if (timer !== undefined) clearInterval(timer); timer = undefined;
+      if (state === "active") { setNow(Date.now()); timer = setInterval(() => setNow(Date.now()), 1000); }
+    };
+    active(Platform.OS === "web" ? "active" : AppState?.currentState || "active");
+    const subscription = Platform.OS !== "web" ? AppState?.addEventListener?.("change", active) : undefined;
+    return () => { if (timer !== undefined) clearInterval(timer); subscription?.remove(); };
+  }, [needsClock]);
   const groups = new Map<string, { name: string; sessions: RecoverySession[] }>();
   for (const session of filtered) {
     const key = session.workspaceId || session.workspaceName;

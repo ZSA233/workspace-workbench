@@ -1,0 +1,237 @@
+<div id="wb-mobile-drafts" class="viz-carousel viz-dotted-background" aria-label="Workbench 安卓 App 交互方案" data-previous-label="上一种" data-next-label="下一种">
+  <section data-variant="浮动工具" aria-label="浮动工具方案">
+    <div class="wb-stage"><div class="wb-caption">浮动工具 · 网页占满工作区 · 交互草稿</div><div class="wb-phone" data-design="floating" aria-label="浮动工具手机预览"></div></div>
+  </section>
+  <section data-variant="顶部切换" aria-label="顶部切换方案" hidden>
+    <div class="wb-stage"><div class="wb-caption">顶部切换 · 入口始终可见 · 交互草稿</div><div class="wb-phone" data-design="top" aria-label="顶部切换手机预览"></div></div>
+  </section>
+  <section data-variant="底部导航" aria-label="底部导航方案" hidden>
+    <div class="wb-stage"><div class="wb-caption">底部导航 · 单手操作 · 交互草稿</div><div class="wb-phone" data-design="bottom" aria-label="底部导航手机预览"></div></div>
+  </section>
+</div>
+<style>
+  #wb-mobile-drafts .wb-stage { display:grid; justify-items:center; align-content:start; gap:14px; min-height:790px; padding:20px 8px 8px; }
+  #wb-mobile-drafts .wb-caption { font:400 12px/1.5 system-ui,sans-serif; color:light-dark(#606661,#acb4ae); text-align:center; max-width:380px; }
+  #wb-mobile-drafts .wb-phone { --wb-bg:light-dark(#f5f6f3,#151816); --wb-surface:light-dark(#ffffff,#1e2320); --wb-text:light-dark(#202923,#edf1ec); --wb-muted:light-dark(#626d64,#b0bbb2); --wb-line:light-dark(#dce2dc,#374139); --wb-soft:light-dark(#e9eee7,#2b352d); --wb-action:light-dark(#30583b,#bad8bb); --wb-on-action:light-dark(#ffffff,#1d3622); --wb-bad:light-dark(#a53c36,#ffb4aa); --wb-shadow:light-dark(#16231916,#00000036); color-scheme:light dark; width:100%; max-width:386px; height:736px; display:flex; flex-direction:column; position:relative; border:1px solid var(--wb-line); border-radius:28px; overflow:hidden; background:var(--wb-bg); color:var(--wb-text); box-shadow:0 12px 40px var(--wb-shadow); font:400 14px/1.55 system-ui,"PingFang SC",sans-serif; }
+  #wb-mobile-drafts .wb-phone[data-theme="light"] { color-scheme:light; }
+  #wb-mobile-drafts .wb-phone[data-theme="dark"] { color-scheme:dark; }
+  #wb-mobile-drafts .wb-phone * { box-sizing:border-box; }
+  #wb-mobile-drafts .wb-phone button,#wb-mobile-drafts .wb-phone input,#wb-mobile-drafts .wb-phone select,#wb-mobile-drafts .wb-phone textarea { font:inherit; color:inherit; }
+  #wb-mobile-drafts .wb-phone button { border:0; background:transparent; border-radius:12px; padding:10px 12px; min-height:44px; text-align:left; }
+  #wb-mobile-drafts .wb-phone button:hover { background:var(--wb-soft); }
+  #wb-mobile-drafts .wb-phone button:disabled { opacity:.5; }
+  #wb-mobile-drafts .wb-phone h2,#wb-mobile-drafts .wb-phone h3,#wb-mobile-drafts .wb-phone p { margin:0; }
+  #wb-mobile-drafts .wb-phone h2 { font-size:23px; font-weight:500; letter-spacing:-.5px; }
+  #wb-mobile-drafts .wb-phone h3 { font-size:16px; font-weight:500; }
+  #wb-mobile-drafts .wb-phone svg { flex-shrink:0; }
+  #wb-mobile-drafts .wb-osbar { display:flex; align-items:center; justify-content:space-between; height:32px; flex-shrink:0; padding:5px 22px 0; font-size:12px; font-weight:500; }
+  #wb-mobile-drafts .wb-os-icons { display:flex; align-items:center; gap:6px; }
+  #wb-mobile-drafts .wb-main { flex:1; min-height:0; position:relative; display:flex; flex-direction:column; }
+  #wb-mobile-drafts .wb-gesture { height:20px; display:grid; place-items:center; flex-shrink:0; }
+  #wb-mobile-drafts .wb-gesture span { width:104px; height:4px; background:var(--wb-text); opacity:.6; border-radius:4px; }
+  #wb-mobile-drafts .wb-page { flex:1; display:flex; flex-direction:column; min-height:0; padding:12px 20px 16px; gap:18px; overflow:auto; }
+  #wb-mobile-drafts .wb-heading,#wb-mobile-drafts .wb-row,#wb-mobile-drafts .wb-actions { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  #wb-mobile-drafts .wb-heading { min-height:48px; }
+  #wb-mobile-drafts .wb-stack { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  #wb-mobile-drafts .wb-small { font-size:12px; color:var(--wb-muted); }
+  #wb-mobile-drafts .wb-badge { display:inline-flex; align-items:center; padding:3px 8px; background:var(--wb-soft); color:var(--wb-text); border-radius:7px; font-size:11px; white-space:nowrap; }
+  #wb-mobile-drafts .wb-spacer { flex:1; min-height:8px; }
+  #wb-mobile-drafts .wb-icon { display:grid; place-items:center; width:44px; padding:10px!important; flex-shrink:0; }
+  #wb-mobile-drafts .wb-primary { background:var(--wb-action)!important; color:var(--wb-on-action)!important; display:flex; align-items:center; justify-content:center; gap:8px; font-weight:500!important; }
+  #wb-mobile-drafts .wb-secondary { background:var(--wb-soft)!important; display:flex; align-items:center; justify-content:center; gap:8px; }
+  #wb-mobile-drafts .wb-profile { background:var(--wb-surface); border:1px solid var(--wb-line); border-radius:18px; padding:8px; display:flex; align-items:center; gap:2px; }
+  #wb-mobile-drafts .wb-profile-open { flex:1; min-width:0; display:flex; flex-direction:column; gap:7px; }
+  #wb-mobile-drafts .wb-url { font-size:12px; color:var(--wb-muted); overflow-wrap:anywhere; }
+  #wb-mobile-drafts .wb-empty { padding:68px 8px 18px; display:flex; flex-direction:column; align-items:center; gap:16px; text-align:center; }
+  #wb-mobile-drafts .wb-empty-mark { display:grid; place-items:center; width:60px; height:60px; background:var(--wb-soft); border-radius:20px; }
+  #wb-mobile-drafts .wb-form { display:flex; flex-direction:column; gap:20px; }
+  #wb-mobile-drafts .wb-field { display:flex; flex-direction:column; gap:8px; }
+  #wb-mobile-drafts .wb-field input,#wb-mobile-drafts .wb-field select { width:100%; min-width:0; min-height:48px; border:1px solid var(--wb-line); border-radius:12px; padding:11px 12px; background:var(--wb-surface); font-size:16px; }
+  #wb-mobile-drafts .wb-check { display:flex; align-items:center; gap:10px; min-height:44px; }
+  #wb-mobile-drafts .wb-check input { accent-color:var(--wb-action); width:18px; height:18px; }
+  #wb-mobile-drafts .wb-error { color:var(--wb-bad); font-size:12px; }
+  #wb-mobile-drafts .wb-list { background:var(--wb-surface); border:1px solid var(--wb-line); border-radius:18px; padding:4px 8px; }
+  #wb-mobile-drafts .wb-list > * + * { border-top:1px solid var(--wb-line); }
+  #wb-mobile-drafts .wb-list-row { display:flex; align-items:center; gap:12px; padding:12px 8px; width:100%; border-radius:8px!important; min-height:60px!important; }
+  #wb-mobile-drafts .wb-list-row .wb-stack { flex:1; gap:2px; }
+  #wb-mobile-drafts .wb-choice { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
+  #wb-mobile-drafts .wb-choice button { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:16px 2px; background:var(--wb-surface); border:1px solid var(--wb-line); }
+  #wb-mobile-drafts .wb-choice button[aria-pressed="true"] { background:var(--wb-action); color:var(--wb-on-action); border-color:var(--wb-action); }
+  #wb-mobile-drafts .wb-theme-sample { border-radius:18px; background:var(--wb-surface); border:1px solid var(--wb-line); padding:18px; display:flex; flex-direction:column; gap:12px; }
+  #wb-mobile-drafts .wb-web { flex:1; min-height:0; display:flex; flex-direction:column; background:var(--wb-bg); }
+  #wb-mobile-drafts .wb-web-head { display:flex; align-items:center; gap:10px; padding:8px 10px; border-bottom:1px solid var(--wb-line); }
+  #wb-mobile-drafts .wb-web-head .wb-stack { flex:1; gap:0; }
+  #wb-mobile-drafts .wb-web-title { font-size:14px; font-weight:500; }
+  #wb-mobile-drafts .wb-chat { flex:1; padding:24px 18px; display:flex; flex-direction:column; gap:22px; min-height:0; overflow:auto; }
+  #wb-mobile-drafts .wb-user-message { align-self:flex-end; max-width:88%; padding:12px 16px; border-radius:18px 18px 4px 18px; background:var(--wb-soft); }
+  #wb-mobile-drafts .wb-assistant { display:flex; flex-direction:column; align-items:flex-start; gap:10px; }
+  #wb-mobile-drafts .wb-file { display:flex; align-items:center; gap:9px; border:1px solid var(--wb-line); padding:10px 12px; border-radius:12px; background:var(--wb-surface); width:100%; }
+  #wb-mobile-drafts .wb-input { margin:10px 14px 6px; padding:10px; border:1px solid var(--wb-line); background:var(--wb-surface); border-radius:20px; display:flex; flex-direction:column; gap:8px; }
+  #wb-mobile-drafts .wb-input textarea { border:0; outline-offset:3px; resize:none; min-height:38px; padding:4px 6px; background:transparent; width:100%; font-size:16px; }
+  #wb-mobile-drafts .wb-input .wb-actions { justify-content:flex-end; }
+  #wb-mobile-drafts .wb-floating { position:absolute; right:8px; top:48%; z-index:2; width:44px; height:44px; border:1px solid var(--wb-line)!important; background:var(--wb-surface)!important; box-shadow:0 3px 12px var(--wb-shadow); border-radius:16px!important; font-size:12px!important; font-weight:500!important; text-align:center!important; padding:0!important; }
+  #wb-mobile-drafts .wb-topbar { display:flex; align-items:center; justify-content:space-between; padding:0 8px; min-height:44px; border-bottom:1px solid var(--wb-line); background:var(--wb-surface); }
+  #wb-mobile-drafts .wb-top-pick { display:flex; align-items:center; gap:8px; }
+  #wb-mobile-drafts .wb-bottom { display:flex; align-items:center; justify-content:space-around; padding:2px 8px; border-top:1px solid var(--wb-line); background:var(--wb-surface); min-height:58px; }
+  #wb-mobile-drafts .wb-bottom button { display:flex; flex-direction:column; align-items:center; gap:3px; font-size:11px; min-width:70px; padding:5px 10px; }
+  #wb-mobile-drafts .wb-bottom button[aria-current="page"] { color:var(--wb-action); background:var(--wb-soft); }
+  #wb-mobile-drafts .wb-layer { position:absolute; inset:0; z-index:5; background:light-dark(#17231e38,#00000070); display:flex; align-items:flex-end; }
+  #wb-mobile-drafts .wb-sheet { width:100%; max-height:100%; overflow:auto; border-radius:24px 24px 0 0; padding:10px 18px 20px; background:var(--wb-surface); box-shadow:0 -8px 40px var(--wb-shadow); display:flex; flex-direction:column; gap:12px; }
+  #wb-mobile-drafts .wb-sheet-grip { width:36px; height:4px; border-radius:4px; background:var(--wb-muted); opacity:.45; align-self:center; margin-bottom:2px; }
+  #wb-mobile-drafts .wb-sheet .wb-list { background:var(--wb-bg); }
+  #wb-mobile-drafts .wb-sheet .wb-profile { background:var(--wb-bg); }
+  #wb-mobile-drafts .wb-notice { padding:12px 14px; background:var(--wb-soft); border-radius:12px; font-size:12px; color:var(--wb-text); overflow-wrap:anywhere; }
+  #wb-mobile-drafts .wb-danger { color:var(--wb-bad)!important; }
+  #wb-mobile-drafts .wb-version { padding:18px; border:1px solid var(--wb-line); background:var(--wb-surface); border-radius:18px; display:flex; flex-direction:column; gap:10px; }
+  @media(max-width:400px) { #wb-mobile-drafts .wb-stage { padding:14px 0 0; } #wb-mobile-drafts .wb-phone { border-radius:20px; } #wb-mobile-drafts .wb-page { padding-left:16px; padding-right:16px; } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('wb-mobile-drafts');
+  const names = {floating:'浮动工具',top:'顶部切换',bottom:'底部导航'};
+  const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const icon = name => `<i data-lucide="${name}" aria-hidden="true"></i>`;
+  const button = (action,label,classes='',extra='') => `<button type="button" class="cursor-interaction ${classes}" data-action="${action}" ${extra}>${label}</button>`;
+  const saved = window.openai?.widgetState?.privateContent?.drafts || {};
+  const states = [...root.querySelectorAll('.wb-phone')].map(phone => {
+    const key=phone.dataset.design, stored=saved[key] || {};
+    return {phone,key,screen:'web',history:[],overlay:null,error:'',drafts:{},theme:['light','dark','system'].includes(stored.theme)?stored.theme:'system',immersive:stored.immersive!==false,startup:'last',current:'home',defaultId:null,editing:null,serial:2,notice:'',entries:[
+      {id:'home',alias:'家里工作台',url:'https://workbench.example.com/',managed:true,version:'页面 A',previous:null},
+      {id:'office',alias:'公司工作台',url:'https://office.example.com/',managed:false,version:null,previous:null}
+    ]};
+  });
+  const current = s => s.entries.find(e=>e.id===s.current) || s.entries[0];
+  const remember = s => {
+    if(typeof window.openai?.setWidgetState!=='function') return;
+    window.openai.setWidgetState({modelContent:{prototype:'Workbench Android shell',design:names[s.key],screen:s.screen,theme:s.theme,immersive:s.immersive},privateContent:{drafts:Object.fromEntries(states.map(x=>[x.key,{theme:x.theme,immersive:x.immersive}]))}}).catch(()=>{});
+  };
+  const heading = (s,title,back=true,tail='') => `<div class="wb-heading">${back?button('back',icon('arrow-left'),'wb-icon','aria-label="返回"'):''}<h2 style="flex:1">${title}</h2>${tail}</div>`;
+  const openEntry = (s,id) => {s.current=id;s.screen='web';s.history=[];s.overlay=null;s.notice='';s.error='';};
+  function entryRows(s,chooser=false) {
+    return s.entries.map(e=>`<div class="wb-profile">${button(`open:${e.id}`,`<h3>${escape(e.alias)}</h3><span class="wb-url">${escape(e.url)}</span><span class="wb-small">${e.id===s.defaultId?'启动入口 · ':''}${chooser&&e.id===s.current?'当前入口':e.managed?'页面 A / B（演示）':'普通网页缓存'}</span>`,'wb-profile-open')}${chooser?(e.id===s.current?icon('check'):''):button(`entry-menu:${e.id}`,icon('ellipsis'),'wb-icon',`aria-label="管理${escape(e.alias)}"`)}</div>`).join('');
+  }
+  function home(s) {
+    return `<div class="wb-page">${heading(s,'工作空间',false,button('settings',icon('settings-2'),'wb-icon','aria-label="App 设置"'))}<div class="wb-stack"><span class="wb-small">网页入口</span>${s.entries.length?entryRows(s):`<div class="wb-empty"><div class="wb-empty-mark">${icon('panels-top-left')}</div><h3>添加你的第一个入口</h3><p class="wb-small">给网页地址起个熟悉的名字。<br>主机和会话在网页内连接。</p></div>`}</div>${button('add',`${icon('plus')} 添加入口`,'wb-primary')}<div class="wb-spacer"></div><p class="wb-small">名称和入口列表保存在这个 App 中。</p></div>`;
+  }
+  function editor(s) {
+    const entry=s.entries.find(e=>e.id===s.editing);
+    return `<div class="wb-page">${heading(s,entry?'编辑入口':'添加入口')}<form class="wb-form" data-editor><label class="wb-field">入口名称<input name="alias" aria-label="入口名称" placeholder="例如：家里工作台" value="${escape(entry?.alias||'')}" maxlength="40" required></label><label class="wb-field">网页地址<input name="url" aria-label="网页地址" placeholder="https://你的网页地址" value="${escape(entry?.url||'')}" inputmode="url" autocomplete="off" autocapitalize="off" required></label><p class="wb-small">填写网页首页地址。Relay 和主机连接仍在网页里配置。</p><label class="wb-check"><input type="checkbox" name="default" ${s.defaultId===entry?.id?'checked':''}>设为启动入口</label>${s.error?`<p class="wb-error" role="alert">${escape(s.error)}</p>`:''}${button('save-entry','保存并打开','wb-primary')}</form></div>`;
+  }
+  function web(s) {
+    const e=current(s);
+    if(!e) return home(s);
+    const top=s.key==='top'?`<div class="wb-topbar">${button('switch',`${icon('panels-top-left')} ${escape(e.alias)} ${icon('chevron-down')}`,'wb-top-pick')}${button('menu',icon('ellipsis'),'wb-icon','aria-label="打开 App 菜单"')}</div>`:'';
+    return `${top}<div class="wb-web"><div class="wb-web-head">${button('web-sidebar',icon('panel-left'),'wb-icon','aria-label="网页会话列表"')}<div class="wb-stack"><span class="wb-web-title">Workspace Workbench</span><span class="wb-small">${e.id==='office'?'公司开发机':'家里的 Mac mini'} · 示例会话</span></div>${button('web-new',icon('square-pen'),'wb-icon','aria-label="网页新建会话"')}</div><div class="wb-chat"><div class="wb-user-message">看一下工作区今天的修改。</div><div class="wb-assistant"><span class="wb-small">Codex · 示例内容</span><p>已经检查了工作区里的修改。</p><div class="wb-file">${icon('file-code-2')}<span>README.md<br><span class="wb-small">已整理说明</span></span></div><p>任务状态和记录仍由电脑上的 Paseo 管理。</p></div><div class="wb-spacer"></div><span class="wb-small">网页界面示意</span></div><div class="wb-input"><textarea aria-label="消息草稿（演示）" placeholder="继续处理任务…" rows="1">${escape(s.drafts[e.id]||'')}</textarea><div class="wb-actions">${button('attachment',icon('paperclip'),'wb-icon','aria-label="添加附件（演示）"')}${button('send',icon('arrow-up'),'wb-primary wb-icon','aria-label="发送消息（演示）"')}</div></div></div>${s.key==='floating'?button('menu','WB','wb-floating','aria-label="打开 App 菜单"'):''}${s.key==='bottom'?`<div class="wb-bottom">${button('web',`${icon('panels-top-left')}<span>${escape(e.alias)}</span>`,'','aria-current="page"')}${button('switch',`${icon('repeat-2')}<span>切换入口</span>`)}${button('settings',`${icon('settings-2')}<span>App 设置</span>`)}</div>`:''}`;
+  }
+  function settings(s) {
+    const appearance={system:'跟随系统',light:'明亮',dark:'深色'}[s.theme];
+    return `<div class="wb-page">${heading(s,'App 设置')}<div class="wb-list">${button('appearance',`${icon('sun-moon')}<span class="wb-stack"><span>外观</span><span class="wb-small">${appearance}</span></span>${icon('chevron-right')}`,'wb-list-row')}${button('home',`${icon('panels-top-left')}<span class="wb-stack"><span>管理入口</span><span class="wb-small">名称、地址和启动入口</span></span>${icon('chevron-right')}`,'wb-list-row')}${button('cache',`${icon('hard-drive')}<span class="wb-stack"><span>页面与缓存</span><span class="wb-small">当前入口 · ${escape(current(s)?.alias||'尚未添加')}</span></span>${icon('chevron-right')}`,'wb-list-row')}</div><label class="wb-field">下次启动时<select data-setting="startup" aria-label="启动方式"><option value="last" ${s.startup==='last'?'selected':''}>打开上次使用的入口</option><option value="home" ${s.startup==='home'?'selected':''}>显示入口列表</option>${s.defaultId?`<option value="fixed" ${s.startup==='fixed'?'selected':''}>打开默认入口</option>`:''}</select></label><label class="wb-check"><input type="checkbox" data-setting="immersive" ${s.immersive?'checked':''}>状态栏与页面背景融合</label><p class="wb-small">保留系统时间和手势区域，按钮避开刘海与键盘。</p><div class="wb-spacer"></div><span class="wb-small">Workbench · 安卓薄壳设计稿</span></div>`;
+  }
+  function appearance(s) {
+    return `<div class="wb-page">${heading(s,'外观')}<div class="wb-choice">${[['system','跟随系统','monitor'],['light','明亮','sun'],['dark','深色','moon']].map(([key,label,i])=>button(`theme:${key}`,`${icon(i)}<span>${label}</span>`,'',`aria-pressed="${s.theme===key}"`)).join('')}</div><div class="wb-theme-sample"><span class="wb-small">外观预览</span><h3>家里工作台</h3><p>继续你的工作。</p>${button('appearance-example','示例按钮','wb-primary')}</div><p class="wb-small">App 外观立即切换。网页设置为跟随系统时同步；网页自己的主题选择可能优先。</p><div class="wb-spacer"></div><span class="wb-small">草稿中的网页也会预览所选颜色。</span></div>`;
+  }
+  function cache(s) {
+    const e=current(s);
+    return `<div class="wb-page">${heading(s,'页面与缓存')}<div class="wb-stack"><h3>${escape(e?.alias||'尚未添加入口')}</h3><span class="wb-url">${escape(e?.url||'添加入口后可管理缓存')}</span></div><div class="wb-list"><div class="wb-list-row"><span class="wb-stack"><span>App 网页资源缓存</span><span class="wb-small">所有入口共用，按网站规则缓存</span></span>${icon('check')}</div><div class="wb-list-row"><span class="wb-stack"><span>网页登录与配对信息</span><span class="wb-small">清理资源缓存时保留</span></span>${icon('lock-keyhole')}</div></div>${button('clear-cache','清理资源缓存并重新加载','wb-secondary',!e?'disabled':'')}<div class="wb-list">${button('package',`${icon('package')}<span class="wb-stack"><span>手动页面更新</span><span class="wb-small">后续阶段 · 完整资源包交互预览</span></span>${icon('chevron-right')}`,'wb-list-row',!e?'disabled':'')}</div><p class="wb-small">资源缓存主要减少下载。任务执行和会话同步仍需要连接电脑。</p></div>`;
+  }
+  function packagePage(s) {
+    const e=current(s);
+    return `<div class="wb-page">${heading(s,'页面版本')}<span class="wb-badge" style="align-self:flex-start">后续阶段 · 演示数据</span><div class="wb-version"><span class="wb-small">${escape(e?.alias||'当前入口')}</span><h2>${e?.managed?escape(e.version):'跟随网站更新'}</h2><p class="wb-small">${e?.managed?'已保存完整静态资源，页面不在启动时自动换版。':'这个示例入口没有提供完整资源包，使用普通网页缓存。'}</p></div>${e?.managed?button('check-update','检查页面更新','wb-primary'):button('no-package','查看支持条件','wb-secondary')}${e?.previous?button('rollback','回到上一版页面','wb-secondary'):''}<div class="wb-spacer"></div><p class="wb-small">页面资源、主机配对和会话数据分别管理。资源回退不等于网页数据回滚。</p></div>`;
+  }
+  function sheet(s) {
+    if(!s.overlay) return '';
+    const o=s.overlay,e=current(s);
+    let body='';
+    if(o.type==='menu') body=`<div class="wb-heading"><h3>${escape(e?.alias||'Workbench')}</h3>${button('dismiss',icon('x'),'wb-icon','aria-label="关闭 App 菜单"')}</div><div class="wb-list">${[['switch','repeat-2','切换入口'],['home','panels-top-left','入口首页'],['appearance','sun-moon','外观'],['cache','hard-drive','页面与缓存'],['settings','settings-2','App 设置']].map(([a,i,label])=>button(a,`${icon(i)}<span class="wb-stack">${label}</span>${icon('chevron-right')}`,'wb-list-row')).join('')}</div>`;
+    if(o.type==='switch') body=`<div class="wb-heading"><h3>切换入口</h3>${button('dismiss',icon('x'),'wb-icon','aria-label="关闭入口切换"')}</div><div class="wb-stack">${entryRows(s,true)}</div>${button('add',`${icon('plus')} 添加入口`,'wb-secondary')}${button('home','管理全部入口')}`;
+    if(o.type==='entry') {
+      const x=s.entries.find(x=>x.id===o.id);
+      body=`<div class="wb-heading"><h3>${escape(x?.alias||'入口')}</h3>${button('dismiss',icon('x'),'wb-icon','aria-label="关闭入口管理"')}</div>${button(`edit:${o.id}`,'编辑名称和地址','wb-secondary')}${button(`default:${o.id}`,'设为启动入口','wb-secondary')}${button(`delete:${o.id}`,'移除入口','wb-danger')}`;
+    }
+    if(o.type==='delete') body=`<h3>移除这个入口？</h3><p>仅移除 App 中的名称和地址。网页配对信息保留。</p><div class="wb-actions">${button('dismiss','取消')}${button(`confirm-delete:${o.id}`,'移除入口','wb-danger')}</div>`;
+    if(o.type==='clear-cache') body=`<h3>清理资源缓存并重新加载？</h3><p>清理 App 内所有入口共用的网页资源缓存，保留网页登录和主机配对信息。</p><p class="wb-small">当前页面会重新加载，请先处理未发送内容。</p><div class="wb-actions">${button('dismiss','取消')}${button('confirm-clear','清理并重新加载','wb-primary')}</div>`;
+    if(o.type==='update') body=`<h3>发现页面 B（示例）</h3><p>下载完整资源并校验，通过后再切换。</p><p class="wb-small">切换会重新加载页面，请先处理未发送内容。</p>${button('install-update','下载并切换','wb-primary')}${button('simulate-failure','模拟更新失败','wb-secondary')}${button('dismiss','稍后')}`;
+    if(o.type==='updated') body=`<h3>已切换到页面 B（示例）</h3><p>入口、配对信息继续保留。网页资源更新流程演示完成。</p>${button('dismiss','完成','wb-primary')}`;
+    if(o.type==='update-failed') body=`<h3>资源校验失败（演示）</h3><p>继续使用${escape(e?.version||'当前页面')}，没有切换到不完整的资源。</p>${button('dismiss','继续使用当前版','wb-primary')}`;
+    if(o.type==='rollback') body=`<h3>回到上一版页面？</h3><p>仅回退静态资源。网页数据格式需要确认兼容后才能回退。</p><p class="wb-small">草稿只演示界面，不执行数据回滚。</p>${button('dismiss','知道了','wb-primary')}`;
+    if(o.type==='notice') body=`<h3>${escape(o.title)}</h3><p>${escape(o.text)}</p>${button('dismiss','知道了','wb-primary')}`;
+    return `<div class="wb-layer"><div class="wb-sheet" role="dialog" aria-modal="true" aria-label="${escape(o.title||'App 操作面板')}"><div class="wb-sheet-grip"></div>${body}</div></div>`;
+  }
+  function render(s) {
+    s.phone.dataset.theme=s.theme;
+    const pages={home,editor,web,settings,appearance,cache,package:packagePage};
+    s.phone.innerHTML=`<div class="wb-osbar" style="${s.immersive?'':'background:var(--wb-surface);border-bottom:1px solid var(--wb-line)'}"><span>9:41</span><span class="wb-os-icons">${icon('wifi')}${icon('battery-medium')}</span></div><div class="wb-main">${(pages[s.screen]||home)(s)}${sheet(s)}</div><div class="wb-gesture"><span></span></div>`;
+    if(globalThis.lucide) globalThis.lucide.createIcons({attrs:{width:18,height:18}});
+  }
+  function go(s,screen) {if(s.screen!==screen)s.history.push(s.screen);s.screen=screen;s.overlay=null;s.error='';}
+  function saveEntry(s) {
+    const form=s.phone.querySelector('[data-editor]');
+    if(!form||!form.reportValidity())return;
+    const f=new FormData(form),alias=String(f.get('alias')||'').trim(),raw=String(f.get('url')||'').trim();
+    let url;
+    try {url=new URL(raw);if(url.protocol!=='https:'||!url.hostname||url.username||url.password)throw new Error();}
+    catch {s.error='请输入完整的 HTTPS 网页地址，不要填写配对链接或账号密码。';render(s);const fields=s.phone.querySelector('[data-editor]').elements;fields.alias.value=alias;fields.url.value=raw;return;}
+    if(!alias){s.error='请给入口起一个名字。';render(s);return;}
+    let e=s.entries.find(e=>e.id===s.editing);
+    if(e){if(e.url!==url.href){e.managed=false;e.version=null;e.previous=null;}e.alias=alias;e.url=url.href;}
+    else {e={id:`entry-${++s.serial}`,alias,url:url.href,managed:false,version:null,previous:null};s.entries.push(e);}
+    if(f.has('default')){s.defaultId=e.id;s.startup='fixed';}
+    else if(s.defaultId===e.id){s.defaultId=null;s.startup='last';}
+    openEntry(s,e.id);render(s);remember(s);
+  }
+  function act(s,action) {
+    const [a,...rest]=action.split(':'),id=rest.join(':');
+    if(a==='save-entry') {saveEntry(s);return;}
+    else if(a==='open') openEntry(s,id);
+    else if(['home','settings','appearance','cache','package','web'].includes(a)) go(s,a);
+    else if(a==='back') {s.overlay=null;s.error='';s.screen=s.history.pop()||(current(s)?'web':'home');}
+    else if(a==='add') {s.editing=null;go(s,'editor');}
+    else if(a==='edit') {s.editing=id;go(s,'editor');}
+    else if(a==='menu'||a==='switch') s.overlay={type:a};
+    else if(a==='entry-menu') s.overlay={type:'entry',id};
+    else if(a==='delete') s.overlay={type:'delete',id};
+    else if(a==='confirm-delete') {s.entries=s.entries.filter(e=>e.id!==id);if(s.current===id)s.current=s.entries[0]?.id||null;if(s.defaultId===id){s.defaultId=null;s.startup='home';}s.overlay=null;s.screen='home';}
+    else if(a==='default') {s.defaultId=id;s.startup='fixed';s.overlay=null;}
+    else if(a==='theme') s.theme=id;
+    else if(a==='dismiss') s.overlay=null;
+    else if(a==='clear-cache') s.overlay={type:'clear-cache'};
+    else if(a==='confirm-clear') s.overlay={type:'notice',title:'资源缓存已清理（演示）',text:'登录与配对信息保留。真正的 App 会重新加载当前网页。'};
+    else if(a==='check-update') s.overlay=current(s)?.version==='页面 B'?{type:'notice',title:'当前已是页面 B（示例）',text:'没有新的页面资源。'}:{type:'update'};
+    else if(a==='install-update') {const e=current(s);e.previous=e.version;e.version='页面 B';s.overlay={type:'updated'};}
+    else if(a==='simulate-failure') s.overlay={type:'update-failed'};
+    else if(a==='rollback') s.overlay={type:'rollback'};
+    else if(a==='no-package') s.overlay={type:'notice',title:'需要完整资源包',text:'从前端构建产物生成资源清单，才能可靠地固定页面版本。普通网页缓存仍可使用。'};
+    else if(a==='web-sidebar') s.overlay={type:'notice',title:'网页里的会话列表',text:'这里由 Paseo 网页管理主机、项目和会话。App 的入口别名不改变这些记录。'};
+    else if(a==='web-new'||a==='send'||a==='attachment') s.overlay={type:'notice',title:'网页操作示意',text:'这是本地交互草稿，没有发送消息、创建会话或读取文件。'};
+    else if(a==='appearance-example') return;
+    render(s);remember(s);
+  }
+  for(const s of states) {
+    s.phone.addEventListener('click',event=>{const b=event.target.closest('[data-action]');if(!b||b.disabled)return;const draft=s.phone.querySelector('textarea');if(draft&&s.current)s.drafts[s.current]=draft.value;act(s,b.dataset.action);});
+    s.phone.addEventListener('change',event=>{const setting=event.target.dataset.setting;if(setting==='startup')s.startup=event.target.value;else if(setting==='immersive'){s.immersive=event.target.checked;render(s);}else return;remember(s);});
+    s.phone.addEventListener('submit',event=>{if(event.target.matches('[data-editor]')){event.preventDefault();saveEntry(s);}});
+    s.phone.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing&&event.target.matches('[data-editor] input:not([type="checkbox"])')){event.preventDefault();saveEntry(s);}});
+    render(s);
+    if(globalThis.Tweak) {
+      const controls={scene:'工作中'};
+      let lastScene=controls.scene;
+      const tweak=new Tweak({container:s.phone,onChange:()=>{
+        const scenes={'工作中':'web','入口列表':'home','添加入口':'editor','外观':'appearance','缓存与更新':'cache','首次打开':'home'};
+        if(controls.scene!==lastScene){
+          if(controls.scene==='首次打开'){s.entries=[];s.current=null;s.defaultId=null;}
+          s.screen=scenes[controls.scene];s.history=[];s.overlay=null;s.editing=null;lastScene=controls.scene;
+        }
+        render(s);remember(s);
+      }});
+      tweak.addSelect(controls,'scene',{label:'查看流程',options:['工作中','入口列表','添加入口','外观','缓存与更新','首次打开']});
+      tweak.addSelect(s,'theme',{label:'外观',options:[{label:'跟随系统',value:'system'},{label:'明亮',value:'light'},{label:'深色',value:'dark'}]});
+      tweak.addToggle(s,'immersive',{label:'状态栏背景融合'});
+    }
+  }
+  window.addEventListener('openai:set_globals',event=>{
+    const next=event.detail?.globals?.widgetState?.privateContent?.drafts;
+    if(!next)return;
+    for(const s of states){const v=next[s.key];if(!v)continue;let changed=false;if(['system','light','dark'].includes(v.theme)&&s.theme!==v.theme){s.theme=v.theme;changed=true;}if(typeof v.immersive==='boolean'&&s.immersive!==v.immersive){s.immersive=v.immersive;changed=true;}if(changed)render(s);}
+  });
+})();
+</script>

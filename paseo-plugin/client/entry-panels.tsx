@@ -1,11 +1,15 @@
 import {WorkbenchThemeProvider,useWorkbenchThemeColors,type TextThemeColors} from "./theme-context";
 import type { PluginAgentPanelProps,PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { createElement,useEffect,useState,type ComponentType } from "react";
-import { Text,View } from "react-native";
+import { AppState,Platform,Text,View } from "react-native";
 import { copy } from "../shared/copy";
 import { CLIENT_GENERATION } from "./initialization";
 import { reportNativeDiagnostic } from "./native-diagnostics";
 import type { WorkbenchSurfaceProps } from "./surface-context";
+import { installNativeHealthMonitor } from "./native-health";
+
+const loadWorkbenchPanel = () => import("./panel");
+const loadFileReviewPanel = () => import("./file-review");
 
 type PanelProps = PluginAgentPanelProps | PluginWorkspacePanelProps;
 type DeferredProps = { name: string; loader: () => Promise<Record<string, unknown>>; exportName: string; props: object };
@@ -17,6 +21,7 @@ function reportStaticPanelLoad(): void {
 export function DeferredPanel({ name, loader, exportName, props }: DeferredProps) {
   const [component, setComponent] = useState<ComponentType<any> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => Platform.OS === "ios" ? installNativeHealthMonitor({ activity: AppState, report: reportNativeDiagnostic }) : undefined, []);
   useEffect(() => {
     let active = true;
     reportNativeDiagnostic("component_load_started", { entry: name, phase: "component_resolution", componentName: exportName });
@@ -45,17 +50,17 @@ export function DeferredPanel({ name, loader, exportName, props }: DeferredProps
 export function WorkbenchPanel(props: PanelProps) {
   reportStaticPanelLoad();
   reportNativeDiagnostic("panel-entry", { kind: props.context, workspaceId: props.workspaceId });
-  return <DeferredPanel name="WorkbenchPanel" loader={() => import("./panel")} exportName="WorkbenchPanel" props={props} />;
+  return <DeferredPanel name="WorkbenchPanel" loader={loadWorkbenchPanel} exportName="WorkbenchPanel" props={props} />;
 }
 export function WorkbenchSurfacePanel(props: WorkbenchSurfaceProps) {
   reportStaticPanelLoad();
   reportNativeDiagnostic("surface-entry", { workspaceId: props.target?.workspaceId || "" });
-  return <DeferredPanel name="WorkbenchSurfacePanel" loader={() => import("./panel")} exportName="WorkbenchSurfacePanel" props={props} />;
+  return <DeferredPanel name="WorkbenchSurfacePanel" loader={loadWorkbenchPanel} exportName="WorkbenchSurfacePanel" props={props} />;
 }
 export function FileReviewPanel(props: PanelProps) {
   reportStaticPanelLoad();
   reportNativeDiagnostic("file-panel-entry", { kind: props.context, workspaceId: props.workspaceId });
-  return <DeferredPanel name="FileReviewPanel" loader={() => import("./file-review")} exportName="FileReviewPanel" props={props} />;
+  return <DeferredPanel name="FileReviewPanel" loader={loadFileReviewPanel} exportName="FileReviewPanel" props={props} />;
 }
 
 function NativePanelShell({ name }: { name: string }) {

@@ -3,6 +3,7 @@ package dev.paseo.pocket
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
+import android.widget.RadioButton
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -10,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import androidx.test.uiautomator.StaleObjectException
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.junit.Assert.*
@@ -63,8 +65,22 @@ class ShellDeviceTest {
         }
     }
     private fun clickText(text: String) {
-        val item = device.wait(Until.findObject(By.text(text)), 5000) ?: error("Missing UI: $text")
-        item.click(); device.waitForIdle(1000)
+        repeat(3) { attempt ->
+            device.waitForIdle(500)
+            val selector = if (text in setOf("跟随系统", "明亮", "深色")) By.clazz(RadioButton::class.java).text(text) else By.text(text)
+            val item = device.wait(Until.findObject(selector), 5000) ?: error("Missing UI: $text")
+            try { item.click(); device.waitForIdle(1000); return }
+            catch (error: StaleObjectException) { if (attempt == 2) throw error }
+        }
+    }
+    private fun openTools() {
+        val handle = device.wait(Until.findObject(By.desc("Paseo Pocket 工具")), 5000) ?: error("Missing tool handle")
+        handle.click(); device.waitForIdle(500)
+    }
+    private fun closeTools() {
+        device.findObject(By.desc("关闭面板")).click()
+        assertTrue(device.wait(Until.gone(By.desc("关闭面板")), 5000))
+        assertNotNull(device.wait(Until.findObject(By.desc("Paseo Pocket 工具")), 5000))
     }
 
     @Test(timeout = 90000) fun menusAppearanceAndBackgroundKeepOneWebViewAndDraft() {
@@ -78,20 +94,37 @@ class ShellDeviceTest {
             assertNativeInsetsAreNotRepeated(first)
             evaluate(first, "window.__pocketFixture='retained';document.body.insertAdjacentHTML('beforeend','<textarea id=\"pocket-fixture-draft\">unsent fixture</textarea>');true")
             repeat(3) {
-                device.findObject(By.desc("Paseo Pocket 工具")).click()
+                openTools()
                 clickText("外观")
                 clickText(if (it % 2 == 0) "深色" else "明亮")
                 onActivity { activity -> assertSame(first, webViews(activity.window.decorView).single()) }
                 assertEquals("\"retained\"", evaluate(first, "window.__pocketFixture"))
                 assertEquals("\"unsent fixture\"", evaluate(first, "document.getElementById('pocket-fixture-draft').value"))
-                assertEquals((it % 2 == 0).toString(), evaluate(first, "matchMedia('(prefers-color-scheme: dark)').matches"))
+                onActivity { activity ->
+                    val dark = activity.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES
+                    assertEquals(it % 2 == 0, dark)
+                    if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        val light = android.util.TypedValue()
+                        assertTrue(activity.theme.resolveAttribute(android.R.attr.isLightTheme, light, true))
+                        assertEquals("Activity isLightTheme must match its configuration", !dark, light.data != 0)
+                    }
+                }
+                clickText("返回工具")
+                closeTools()
+                // WebView can defer its media-query update until the modal returns window focus.
+                val expected = (it % 2 == 0).toString()
+                val themeDeadline = System.currentTimeMillis() + 10000
+                while (evaluate(first, "matchMedia('(prefers-color-scheme: dark)').matches") != expected && System.currentTimeMillis() < themeDeadline) Thread.sleep(100)
+                assertEquals(expected, evaluate(first, "matchMedia('(prefers-color-scheme: dark)').matches"))
             }
-            device.findObject(By.desc("Paseo Pocket 工具")).click()
+            openTools()
             clickText("缓存与诊断"); clickText("网页引擎与更新")
             assertNotNull(device.wait(Until.findObject(By.text("网页引擎")), 5000))
             val provider = WebViewCompat.getCurrentWebViewPackage(instrumentation.targetContext)
             assertNotNull(device.findObject(By.textContains(requireNotNull(provider?.versionName))))
             clickText("返回")
+            clickText("返回工具")
+            closeTools()
             try {
                 device.setOrientationLeft(); device.waitForIdle(1000)
                 onActivity { activity -> assertSame(first, webViews(activity.window.decorView).single()) }
@@ -134,7 +167,7 @@ class ShellDeviceTest {
         }
     }
 
-    @Test(timeout = 120000) fun customSourceUpdateUiPreservesStorageAndAppliesOnlyAfterConfirmation() {
+    @Test(timeout = 180000) fun customSourceUpdateUiPreservesStorageAndAppliesOnlyAfterConfirmation() {
         val argument = InstrumentationRegistry.getArguments().getString("mirrorUrl")
         org.junit.Assume.assumeTrue(argument != null)
         val url = requireNotNull(argument)
@@ -146,21 +179,46 @@ class ShellDeviceTest {
         waitPage(original)
         evaluate(original, "localStorage.setItem('pocket.fixture.update','kept');window.__pocketFixture='before-update';true")
         try {
-            device.findObject(By.desc("Paseo Pocket 工具")).click(); clickText("更新来源")
-            clickText("自定义 · HTTPS 更新信息")
-            assertNotNull(device.wait(Until.findObject(By.text("自定义更新信息地址")), 15000))
+            openTools(); clickText("更新来源")
+            clickText("自定义")
             val sourceField = device.wait(Until.findObject(By.res("dev.paseo.pocket", "update_source_url")), 15000)
             assertNotNull("Custom source field is not visible", sourceField)
-            if (sourceField.text != url) { sourceField.text = ""; sourceField.text = url }
+            sourceField.text = "https://name:password@localhost:19443/latest.json"
+            clickText("保存")
+            assertNotNull(device.wait(Until.findObject(By.text("请输入不含登录信息和片段的 HTTPS 地址")), 5000))
+            assertEquals(oldCustom, prefs.customSource)
+            assertEquals(oldUrl, prefs.customSourceUrl)
+            sourceField.text = url + "-missing"
+            clickText("保存"); clickText("网页版本"); clickText("检查页面更新")
+            assertNotNull(device.wait(Until.findObject(By.textContains("连接失败")), 15000))
+            assertEquals("\"before-update\"", evaluate(original, "window.__pocketFixture"))
+            clickText("返回工具"); clickText("更新来源"); clickText("自定义")
+            val retryField = device.wait(Until.findObject(By.res("dev.paseo.pocket", "update_source_url")), 5000)
+            retryField.text = url.replace("/latest.json", "/slow/latest.json")
+            clickText("保存"); clickText("网页版本"); clickText("检查页面更新")
+            assertNotNull(device.wait(Until.findObject(By.textContains("候选版本")), 15000))
+            clickText("下载并验证")
+            closeTools()
+            openTools(); clickText("网页版本")
+            assertNotNull(device.wait(Until.findObject(By.text("取消操作")), 5000))
+            clickText("取消操作")
+            assertNotNull(device.wait(Until.findObject(By.textContains("已取消")), 15000))
+            onActivity { assertSame(original, webViews(it.window.decorView).single()) }
+            clickText("返回工具"); clickText("更新来源"); clickText("自定义")
+            val finalField = device.wait(Until.findObject(By.res("dev.paseo.pocket", "update_source_url")), 5000)
+            finalField.text = url
             assertNotNull(device.wait(Until.findObject(By.res("dev.paseo.pocket", "update_source_url").text(url)), 5000))
             clickText("保存")
             assertTrue(device.wait(Until.gone(By.res("dev.paseo.pocket", "update_source_url")), 5000) == true)
             assertTrue("Saved source did not become active", prefs.customSource)
             assertEquals("\"before-update\"", evaluate(original, "window.__pocketFixture"))
-            device.findObject(By.desc("Paseo Pocket 工具")).click(); clickText("页面版本")
+            clickText("网页版本")
             clickText("检查页面更新")
             assertNotNull(device.wait(Until.findObject(By.textContains("候选版本")), 15000))
+            // Detach the update page without cancelling the lifecycle-owned transfer.
             clickText("下载并验证")
+            closeTools()
+            openTools(); clickText("网页版本")
             assertNotNull(device.wait(Until.findObject(By.textContains("等待应用")), 60000))
             onActivity { assertSame(original, webViews(it.window.decorView).single()) }
             assertEquals("\"before-update\"", evaluate(original, "window.__pocketFixture"))
@@ -169,7 +227,8 @@ class ShellDeviceTest {
             assertNotNull(device.wait(Until.findObject(By.text("应用页面更新？")), 5000))
             device.findObjects(By.text("应用更新")).last().click()
             assertNotNull(device.wait(Until.findObject(By.textContains("页面更新已应用")), 30000))
-            clickText("返回")
+            clickText("返回工具")
+            closeTools()
             lateinit var replacement: WebView
             onActivity { replacement = webViews(it.window.decorView).single() }
             assertNotSame(original, replacement)

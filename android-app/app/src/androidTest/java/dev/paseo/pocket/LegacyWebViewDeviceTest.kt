@@ -22,7 +22,7 @@ class LegacyWebViewDeviceTest {
         assertNotNull(device.wait(Until.findObject(By.text("系统 WebView 版本过旧")), 15000))
         assertNotNull(device.findObject(By.text("更新系统 WebView")))
         device.findObject(By.desc("Paseo Pocket 工具")).click()
-        assertNotNull(device.wait(Until.findObject(By.text("页面版本")), 3000))
+        assertNotNull(device.wait(Until.findObject(By.text("网页版本")), 3000))
         device.pressBack()
     }
 }

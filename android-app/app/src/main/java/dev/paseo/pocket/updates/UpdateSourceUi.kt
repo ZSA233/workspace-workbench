@@ -1,55 +1,67 @@
 package dev.paseo.pocket.updates
 
+import android.content.Context
 import android.text.InputType
-import androidx.appcompat.app.AlertDialog
+import android.view.View
+import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import androidx.appcompat.app.AppCompatActivity
 import dev.paseo.pocket.ShellPreferences
+import dev.paseo.pocket.ShellUi
 import dev.paseo.pocket.R
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 
 class UpdateSourceUi(private val activity: AppCompatActivity, private val prefs: ShellPreferences, private val updates: PageUpdates) {
-    fun show() {
-        if (updates.status.kind in setOf("checking", "downloading", "verifying", "applying")) {
-            MaterialAlertDialogBuilder(activity).setTitle("更新正在进行")
-                .setMessage("请先在页面版本中完成或取消当前操作，再切换来源。")
-                .setPositiveButton("返回", null).show()
-            return
+    private fun busy() = updates.status.kind in setOf("checking", "downloading", "verifying", "applying")
+    fun content(context: Context, saved: () -> Unit, openVersion: () -> Unit): View {
+        val content = ShellUi.column(context)
+        if (busy()) {
+            ShellUi.add(content, ShellUi.text(context, "请先在网页版本中完成或取消当前操作，再切换来源。"))
+            ShellUi.add(content, ShellUi.button(context, "前往网页版本", primary = true, action = openVersion))
+            return content
         }
-        MaterialAlertDialogBuilder(activity).setTitle("更新来源")
-            .setSingleChoiceItems(arrayOf("官方 · npm 发布源", "自定义 · HTTPS 更新信息"), if (prefs.customSource) 1 else 0) { dialog, which ->
-                dialog.dismiss()
-                if (which == 0) { prefs.customSource = false; updates.sourceChanged() }
-                else editCustom()
-            }.setNegativeButton("返回", null).show()
-    }
-
-    private fun editCustom() {
-        val input = TextInputEditText(activity).apply {
+        val group = RadioGroup(context)
+        val official = RadioButton(context).apply { id = View.generateViewId(); text = "官方"; minHeight = ShellUi.dp(context, 44); ShellUi.paint(this, foreground = R.color.shell_ink) }
+        val custom = RadioButton(context).apply { id = View.generateViewId(); text = "自定义"; minHeight = ShellUi.dp(context, 44); ShellUi.paint(this, foreground = R.color.shell_ink) }
+        group.addView(official); group.addView(custom)
+        group.check(if (prefs.customSource) custom.id else official.id)
+        ShellUi.add(content, group)
+        val input = TextInputEditText(context).apply {
             id = R.id.update_source_url
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            setSingleLine(true); setText(prefs.customSourceUrl)
+            setSingleLine(true); setText(prefs.customSourceUrl); textSize = 16f
         }
-        val field = TextInputLayout(activity).apply {
+        val field = TextInputLayout(context).apply {
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            val radius = ShellUi.dp(context, 10).toFloat()
+            setBoxCornerRadii(radius, radius, radius, radius)
+            boxStrokeColor = ShellUi.color(context, R.color.shell_accent)
             hint = "https://mirror.example/latest.json"
-            addView(input, android.widget.LinearLayout.LayoutParams(-1, -2))
-            val padding = (24 * resources.displayMetrics.density).toInt()
-            setPadding(padding, padding / 2, padding, 0)
+            addView(input, LinearLayout.LayoutParams(-1, -2))
+            visibility = if (prefs.customSource) View.VISIBLE else View.GONE
         }
-        val popup = MaterialAlertDialogBuilder(activity).setTitle("自定义更新信息地址")
-            .setMessage("镜像必须保留官方包的签名与摘要。切换来源不会更新页面或清除主机配对。")
-            .setView(field).setNegativeButton("取消", null).setPositiveButton("保存", null).create()
-        popup.setOnShowListener {
-            popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+        group.setOnCheckedChangeListener { _, checked -> field.visibility = if (checked == custom.id) View.VISIBLE else View.GONE }
+        ShellUi.add(content, field)
+        ShellUi.add(content, ShellUi.text(context, "镜像保留官方签名与摘要。保存来源不会更新页面或清除配对。", 12f, muted = true))
+        val note = ShellUi.text(context, "", 12f, muted = true).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+        ShellUi.add(content, note)
+        ShellUi.add(content, ShellUi.button(context, "保存", primary = true) {
+            if (busy()) { note.text = "更新正在进行，请先完成或取消当前操作。" }
+            else {
                 val value = input.text.toString().trim()
                 try {
-                    httpsUri(value)
-                    prefs.customSourceUrl = value; prefs.customSource = true
-                    updates.sourceChanged(); popup.dismiss()
+                    if (custom.isChecked) httpsUri(value)
+                    val changed = prefs.customSource != custom.isChecked || (custom.isChecked && prefs.customSourceUrl != value)
+                    if (custom.isChecked) prefs.customSourceUrl = value
+                    prefs.customSource = custom.isChecked
+                    if (changed) updates.sourceChanged()
+                    activity.currentFocus?.clearFocus()
+                    saved()
                 } catch (_: UpdateFailure) { field.error = "请输入不含登录信息和片段的 HTTPS 地址" }
             }
-        }
-        popup.show()
+        })
+        return content
     }
 }

@@ -1,1 +1,6 @@
-<resources><item name="update_source_url" type="id" /></resources>
+<resources>
+    <item name="update_source_url" type="id" />
+    <item name="shell_paint" type="id" />
+    <item name="floating_tool" type="id" />
+    <item name="tool_sheet" type="id" />
+</resources>

@@ -8,7 +8,7 @@ export async function uiNodes(serial) {
     const xml = await adb(serial, ['shell', 'cat', path]);
     return [...xml.matchAll(/<node\b[^>]*>/g)].map(row => Object.fromEntries(
       [...row[0].matchAll(/([\w-]+)="([^"]*)"/g)].map(m => [m[1], decode(m[2])])));
-  } finally { await adb(serial, ['shell', 'rm', path]); }
+  } finally { await adb(serial, ['shell', 'rm', '-f', path]); }
 }
 export async function tapNode(serial, predicate) {
   const node = (await uiNodes(serial)).find(predicate);

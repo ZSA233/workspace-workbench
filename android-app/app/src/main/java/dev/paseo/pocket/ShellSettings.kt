@@ -7,6 +7,9 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
+import android.view.View
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.webkit.WebViewCompat
@@ -15,45 +18,47 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 class ShellSettings(private val activity: AppCompatActivity, private val prefs: ShellPreferences,
     private val session: () -> WebSession, private val diagnostics: Diagnostics,
     private val appearanceChanged: () -> Unit) {
-    fun show(section: String) {
-        when (section) {
-            "appearance" -> appearance()
-            "cache" -> cache()
-            else -> error("Unknown shell settings section")
+    fun appearanceContent(context: Context): View {
+        val group = RadioGroup(context)
+        val options = listOf("system" to "跟随系统", "light" to "明亮", "dark" to "深色")
+        val values = mutableMapOf<Int, String>()
+        for ((value, label) in options) {
+            val radio = RadioButton(context).apply {
+                id = View.generateViewId(); text = label; textSize = 14f
+                minHeight = ShellUi.dp(context, 44)
+                ShellUi.paint(this, foreground = R.color.shell_ink)
+            }
+            values[radio.id] = value; group.addView(radio)
+            if (prefs.appearance == value) group.check(radio.id)
         }
-    }
-
-    private fun appearance() {
-        val values = listOf("system", "light", "dark")
-        MaterialAlertDialogBuilder(activity).setTitle("外观")
-            .setSingleChoiceItems(arrayOf("跟随系统", "明亮", "深色"), values.indexOf(prefs.appearance)) { dialog, which ->
-                prefs.appearance = values[which]
-                applyAppearance(prefs.appearance)
-                appearanceChanged()
+        group.setOnCheckedChangeListener { _, id ->
+            val value = values.getValue(id)
+            if (prefs.appearance != value) {
+                prefs.appearance = value; applyAppearance(value); appearanceChanged()
                 diagnostics.record("appearance_changed")
-                dialog.dismiss()
-            }.setNegativeButton("返回", null).show()
+            }
+        }
+        return group
     }
 
-    private fun cache() {
-        MaterialAlertDialogBuilder(activity).setTitle("缓存与诊断")
-            .setItems(arrayOf("清理临时资源缓存", "查看有限诊断", "网页引擎与更新", "开源许可")) { _, which ->
-                when (which) {
-                    0 -> MaterialAlertDialogBuilder(activity).setTitle("清理 App 共用资源缓存？")
-                        .setMessage("保留已安装页面、Cookie、主机配对及网页本地数据。当前页面不会刷新。")
-                        .setNegativeButton("取消", null).setPositiveButton("清理") { _, _ ->
-                            if (!session().destroyed) session().webView.clearCache(true)
-                            diagnostics.record("cache_cleared")
-                        }.show()
-                    1 -> diagnosticInfo()
-                    2 -> engineInfo()
-                    else -> {
-                        val text = activity.assets.open("legal/Paseo-0.12.0.txt").bufferedReader().use { it.readText() }
-                        MaterialAlertDialogBuilder(activity).setTitle("Paseo · Apache 2.0")
-                            .setMessage(text).setPositiveButton("返回", null).show()
-                    }
-                }
-            }.setNegativeButton("返回", null).show()
+    fun cacheContent(context: Context): View = ShellUi.column(context).apply {
+        ShellUi.add(this, ShellUi.button(context, "清理临时资源缓存") {
+            MaterialAlertDialogBuilder(activity).setTitle("清理 App 共用资源缓存？")
+                .setMessage("保留已安装页面、Cookie、主机配对及网页本地数据。当前页面不会刷新。")
+                .setNegativeButton("取消", null).setPositiveButton("清理") { _, _ ->
+                    if (!session().destroyed) session().webView.clearCache(true)
+                    diagnostics.record("cache_cleared")
+                }.show()
+        })
+        ShellUi.add(this, ShellUi.text(context, "保留主机配对、已安装页面与网页本地数据。", 12f, muted = true))
+        ShellUi.add(this, ShellUi.button(context, "查看有限诊断", action = ::diagnosticInfo))
+        ShellUi.add(this, ShellUi.button(context, "网页引擎与更新", action = ::engineInfo))
+        ShellUi.add(this, ShellUi.button(context, "开源许可") {
+            val paseo = activity.assets.open("legal/Paseo-0.12.0.txt").bufferedReader().use { it.readText() }
+            val lucide = activity.resources.openRawResource(R.raw.lucide_license).bufferedReader().use { it.readText() }
+            MaterialAlertDialogBuilder(activity).setTitle("开源许可")
+                .setMessage("Paseo · Apache 2.0\n\n$paseo\n\nLucide Icons\n\n$lucide").setPositiveButton("返回", null).show()
+        })
     }
 
     private fun engineInfo() {

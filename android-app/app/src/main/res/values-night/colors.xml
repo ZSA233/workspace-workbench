@@ -1,0 +1,10 @@
+<resources>
+    <color name="shell_background">#141817</color>
+    <color name="shell_surface">#202624</color>
+    <color name="shell_soft">#2B3330</color>
+    <color name="shell_line">#3B4540</color>
+    <color name="shell_ink">#EDF2EF</color>
+    <color name="shell_muted">#ADB8B1</color>
+    <color name="shell_accent">#A4CEBA</color>
+    <color name="shell_on_accent">#16392C</color>
+</resources>

@@ -23,12 +23,12 @@ import androidx.core.graphics.Insets
 import com.google.android.material.button.MaterialButton
 import dev.paseo.pocket.updates.PageUpdates
 import dev.paseo.pocket.updates.UpdateUi
-import dev.paseo.pocket.updates.UpdateSourceUi
 
 class MainActivity : AppCompatActivity() {
     private lateinit var session: WebSession
     private var sheet: ToolSheet? = null
     private lateinit var root: FrameLayout
+    private lateinit var tool: FloatingTool
     private lateinit var page: FrameLayout
     private lateinit var prefs: ShellPreferences
     private lateinit var diagnostics: Diagnostics
@@ -51,23 +51,27 @@ class MainActivity : AppCompatActivity() {
         diagnostics = Diagnostics(this)
         diagnostics.record("app_opened")
         updates = PageUpdates(this, diagnostics)
-        updateUi = UpdateUi(this, updates, { prefs.updateUrl(updates.trust.officialUrl) }) {
-            session.destroy(); createSession(); session.start()
-        }
+        updateUi = UpdateUi(this, updates, { prefs.updateUrl(updates.trust.officialUrl) },
+            reload = { session.destroy(); createSession(); session.start() },
+            changed = { sheet?.refreshSummary() })
         root = FrameLayout(this)
         page = FrameLayout(this)
         root.addView(page, FrameLayout.LayoutParams(-1, -1))
         createSession()
         settings = ShellSettings(this, prefs, { session }, diagnostics, ::updateSystemAppearance)
-        val tool = FloatingTool(this, prefs, ::showTools)
+        tool = FloatingTool(this, prefs, ::showTools)
         root.addView(tool)
         setContentView(root)
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val gestures = insets.getInsets(WindowInsetsCompat.Type.systemGestures())
+            val navigation = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            val guard = DockGeometry.legacyGestureGuard(android.os.Build.VERSION.SDK_INT, gestures.left, gestures.right,
+                navigation.bottom, resources.displayMetrics.density)
             imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
             page.setPadding(safe.left, safe.top, safe.right, maxOf(safe.bottom, ime.bottom))
-            root.post { tool.updateBounds(Rect(safe.left, safe.top, root.width - safe.right,
+            root.post { tool.updateBounds(Rect(maxOf(safe.left, guard), safe.top, root.width - maxOf(safe.right, guard),
                 root.height - maxOf(safe.bottom, ime.bottom)), imeVisible) }
             // The native container already reserves these areas. Passing them to WebView
             // would also expose CSS env(safe-area-inset-*), doubling the page's padding.
@@ -94,13 +98,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun showTools() {
         if (sheet?.isShowing == true) return
-        sheet = ToolSheet(this) { section ->
-            when (section) {
-                "version" -> updateUi.show()
-                "source" -> UpdateSourceUi(this, prefs, updates).show()
-                else -> settings.show(section)
+        WindowInsetsControllerCompat(window, root).hide(WindowInsetsCompat.Type.ime())
+        tool.visibility = android.view.View.INVISIBLE
+        sheet = ToolSheet(this, prefs, updates, settings, updateUi).also { panel ->
+            panel.setOnDismissListener {
+                sheet = null
+                tool.visibility = android.view.View.VISIBLE
+                tool.updateGestureExclusion()
             }
-        }.also { it.show() }
+            panel.show()
+        }
     }
 
     private fun createSession() {
@@ -161,8 +168,15 @@ class MainActivity : AppCompatActivity() {
     private fun isDark() = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
     private fun updateSystemAppearance() {
         if (!::root.isInitialized) return
+        // AppCompat can deliver uiMode without recreating this Activity. Re-resolve the
+        // DayNight theme so WebView sees the matching framework isLightTheme attribute.
+        theme.applyStyle(R.style.Theme_PaseoPocket, true)
+        if (::session.isInitialized && !session.destroyed)
+            session.webView.dispatchConfigurationChanged(Configuration(resources.configuration))
         val dark = isDark()
-        root.setBackgroundColor(if (dark) Color.rgb(18, 22, 20) else Color.rgb(247, 248, 245))
+        root.setBackgroundColor(ShellUi.color(this, R.color.shell_background))
+        if (::tool.isInitialized) tool.refreshAppearance()
+        sheet?.refreshAppearance()
         WindowInsetsControllerCompat(window, root).apply {
             isAppearanceLightStatusBars = !dark; isAppearanceLightNavigationBars = !dark
         }

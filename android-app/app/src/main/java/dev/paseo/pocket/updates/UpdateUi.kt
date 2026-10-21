@@ -1,42 +1,40 @@
 package dev.paseo.pocket.updates
 
+import android.content.Context
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.util.Locale
 import dev.paseo.pocket.AppVersion
+import dev.paseo.pocket.ShellUi
 
+/** The update worker outlives its visible page; detached pages retain no native views. */
 class UpdateUi(private val activity: AppCompatActivity, private val updates: PageUpdates,
-    private val sourceUrl: () -> String, private val reload: () -> Unit) : AutoCloseable {
-    private var dialog: AlertDialog? = null
+    private val sourceUrl: () -> String, private val reload: () -> Unit,
+    private val changed: () -> Unit = {}) : AutoCloseable {
     private var details: TextView? = null
     private var progress: ProgressBar? = null
+    private var primaryButton: MaterialButton? = null
+    private var cancelButton: MaterialButton? = null
+    private var confirmation: AlertDialog? = null
 
-    init { updates.listener = { render(it) } }
-    fun show() {
-        if (dialog?.isShowing == true) return
-        val padding = (24 * activity.resources.displayMetrics.density).toInt()
-        val content = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(padding, padding / 2, padding, padding)
+    init { updates.listener = { render(it); changed() } }
+    fun content(context: Context): View {
+        detach()
+        val content = ShellUi.column(context)
+        details = ShellUi.text(context, "").also { ShellUi.add(content, it) }
+        progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).also {
+            ShellUi.add(content, it)
         }
-        details = TextView(activity).also { content.addView(it) }
-        progress = ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).also {
-            content.addView(it, LinearLayout.LayoutParams(-1, -2))
-        }
-        val popup = MaterialAlertDialogBuilder(activity).setTitle("页面版本").setView(content)
-            .setPositiveButton("检查页面更新", null).setNegativeButton("返回", null).setNeutralButton("取消操作", null).create()
-        dialog = popup
-        popup.setOnShowListener {
-            popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { primary() }
-            popup.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { updates.cancel() }
-            render(updates.status)
-        }
-        popup.setOnDismissListener { details = null; progress = null; dialog = null }
-        popup.show()
+        primaryButton = ShellUi.button(context, "检查页面更新", primary = true, action = ::primary).also { ShellUi.add(content, it) }
+        cancelButton = ShellUi.button(context, "取消操作") { updates.cancel() }.also { ShellUi.add(content, it) }
+        render(updates.status)
+        return content
     }
 
     private fun primary() {
@@ -44,10 +42,10 @@ class UpdateUi(private val activity: AppCompatActivity, private val updates: Pag
         when (state.kind) {
             "candidate" -> state.candidate?.let(updates::download)
             "ready" -> {
-                MaterialAlertDialogBuilder(activity).setTitle("应用页面更新？")
+                confirmation = MaterialAlertDialogBuilder(activity).setTitle("应用页面更新？")
                     .setMessage("页面将重新打开。请先发送或保存尚未发送的内容。主机配对及网页本地数据会保留。")
                     .setNegativeButton("暂不应用", null).setPositiveButton("应用更新") { _, _ ->
-                        state.readyId?.let { updates.apply(it) { reload(); render(updates.status) } }
+                        state.readyId?.let { updates.apply(it) { reload(); render(updates.status); changed() } }
                     }.show()
             }
             else -> updates.check(sourceUrl())
@@ -55,7 +53,6 @@ class UpdateUi(private val activity: AppCompatActivity, private val updates: Pag
     }
 
     private fun render(state: UpdateStatus) {
-        val popup = dialog ?: return
         val current = updates.currentVersion
         val description = when (state.kind) {
             "checking" -> "正在检查所选来源…"
@@ -76,16 +73,15 @@ class UpdateUi(private val activity: AppCompatActivity, private val updates: Pag
             isIndeterminate = state.kind != "downloading" || state.total <= 0
             if (!isIndeterminate) { max = 1000; progress = ((state.downloaded * 1000) / state.total).toInt() }
         }
-        popup.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+        primaryButton?.apply {
             isEnabled = !busy
+            alpha = if (busy) .5f else 1f
             text = when (state.kind) { "candidate" -> "下载并验证"; "ready" -> "应用更新"; else -> "检查页面更新" }
         }
-        popup.getButton(AlertDialog.BUTTON_NEUTRAL)?.apply {
-            visibility = if (busy && state.kind != "applying") View.VISIBLE else View.GONE
-        }
+        cancelButton?.visibility = if (busy && state.kind != "applying") View.VISIBLE else View.GONE
     }
-
-    override fun close() { dialog?.dismiss(); updates.listener = null }
+    fun detach() { details = null; progress = null; primaryButton = null; cancelButton = null }
+    override fun close() { confirmation?.dismiss(); detach(); updates.listener = null }
     companion object {
         private fun mb(bytes: Long) = String.format(Locale.ROOT, "%.1f", bytes / 1048576.0)
         fun errorText(code: String?): String = when (code) {

@@ -1,0 +1,11 @@
+<resources>
+    <color name="shell_background">#FAFBFA</color>
+    <color name="shell_surface">#FFFFFF</color>
+    <color name="shell_soft">#F1F4F2</color>
+    <color name="shell_line">#E0E5E2</color>
+    <color name="shell_ink">#202A26</color>
+    <color name="shell_muted">#737C77</color>
+    <color name="shell_accent">#356D5D</color>
+    <color name="shell_on_accent">#FFFFFF</color>
+    <color name="launcher_background">#356D5D</color>
+</resources>

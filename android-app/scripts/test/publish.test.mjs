@@ -27,8 +27,10 @@ function fakeGitHub(f) {
     if (program !== 'gh') return command(program, args, options);
     state.calls.push(args);
     if (args[0] === 'api') {
-      if (state.release) return JSON.stringify(state.release);
-      throw Object.assign(new Error('not found'), { status: 1, stderr: 'gh: Not Found (HTTP 404)' });
+      assert.equal(args[1], 'graphql', 'Draft and public releases must use a lookup that can see both');
+      return JSON.stringify({ data: { repository: { release: state.release ? {
+        databaseId: 1, isDraft: state.release.draft, tagName: tag, url: state.release.html_url,
+      } : null } } });
     }
     const action = args[1];
     if (action === 'create') state.release = { draft: true, tag_name: tag, html_url: `https://github.com/${repo}/releases/tag/${tag}` };
@@ -54,6 +56,8 @@ test('tag preflight accepts main source and draft retries but rejects public or 
   remote.release.draft = false;
   await assert.rejects(preflight({ root: f.root, tag, repo, run: remote.run }), /already public/);
   assert.throws(() => existingRelease(repo, tag, () => { throw Object.assign(new Error('server unavailable'), { status: 1, stderr: 'HTTP 503' }); }), /unavailable/);
+  assert.throws(() => existingRelease(repo, tag, () => JSON.stringify({ data: { repository: null } })), /did not confirm/);
+  assert.throws(() => existingRelease(repo, tag, () => JSON.stringify({ errors: [{ message: 'denied' }] })), /did not confirm/);
 });
 test('draft upload is downloaded and checked before publishing without changing global Latest', async t => {
   const f = await fixture(t), remote = fakeGitHub(f);

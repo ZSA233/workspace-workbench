@@ -35,7 +35,13 @@ jobs:
           fi
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Check out immutable application source
+        uses: actions/checkout@v7
+        with:
           ref: ${{ env.RELEASE_TAG }}
+          path: release-source
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v7
@@ -45,7 +51,7 @@ jobs:
       - name: Verify tagged source and release state
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node android-app/scripts/release.mjs preflight
+        run: node android-app/scripts/release.mjs preflight --source-root release-source
       - name: Test release automation
         run: node --test android-app/scripts/test/*.test.mjs
       - uses: actions/setup-java@v6
@@ -57,8 +63,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: true
-      - run: npm --prefix web-assets ci --ignore-scripts
-      - run: npm --prefix web-assets test
+      - run: npm --prefix release-source/web-assets ci --ignore-scripts
+      - run: npm --prefix release-source/web-assets test
       - name: Restore private signing configuration
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -67,22 +73,22 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: node android-app/scripts/signing.mjs restore
       - name: Test, lint and build signed APK
-        working-directory: android-app
+        working-directory: release-source/android-app
         run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleRelease
       - name: Verify and package release assets
-        run: node android-app/scripts/release.mjs package
+        run: node android-app/scripts/release.mjs package --source-root release-source
       - uses: actions/upload-artifact@v7
         with:
           name: paseo-pocket-${{ env.RELEASE_TAG }}
           if-no-files-found: error
           path: |
-            android-app/artifacts/release/*.apk
-            android-app/artifacts/release/SHA256SUMS
-            android-app/artifacts/release/release.json
+            release-source/android-app/artifacts/release/*.apk
+            release-source/android-app/artifacts/release/SHA256SUMS
+            release-source/android-app/artifacts/release/release.json
       - name: Publish verified GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node android-app/scripts/release.mjs publish
+        run: node android-app/scripts/release.mjs publish --source-root release-source
       - name: Release summary
         shell: bash
         env:

@@ -71,6 +71,8 @@ gh workflow run android-release.yml --ref main -f tag=android-v0.1.2
 
 只能重试未完成的草稿或尚未创建 Release 的 tag。已公开版本拒绝覆盖，需要修改时发布新的版本。
 不要删除或移动已公开 tag。Actions 不自动修改源码或递增版本，正式版本以 tag 对应提交为准。
+手动重试使用所选工作流提交中的发布工具，应用另行检出到固定 tag；
+因此可以修复发布工具后重试，保持 APK 源码不变。版本清单分别记录应用和发布工具的提交。
 
 ## 本地验证
 

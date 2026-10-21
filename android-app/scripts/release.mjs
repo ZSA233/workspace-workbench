@@ -24,11 +24,13 @@ function validateRepository(repo) {
 }
 export function existingRelease(repo, tag, run = command) {
   validateRepository(repo);
-  try { return JSON.parse(run('gh', ['api', `repos/${repo}/releases/tags/${tag}`])); }
-  catch (error) {
-    if (error.status && /HTTP 404/.test(error.stderr?.toString() ?? '')) return null;
-    throw error;
-  }
+  // REST's by-tag endpoint omits draft releases, even when the tag exists.
+  const [owner, name] = repo.split('/');
+  const query = 'query($owner:String!,$name:String!,$tag:String!){repository(owner:$owner,name:$name){release(tagName:$tag){databaseId isDraft tagName url}}}';
+  const result = JSON.parse(run('gh', ['api', 'graphql', '-f', `query=${query}`, '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `tag=${tag}`]));
+  if (result.errors || !result.data?.repository) throw new Error('GitHub did not confirm repository release state');
+  const release = result.data.repository.release;
+  return release ? { id: release.databaseId, draft: release.isDraft, tag_name: release.tagName, html_url: release.url } : null;
 }
 export async function preflight({ tag, repo = process.env.GITHUB_REPOSITORY, root = repository, run = command }) {
   const metadata = await readVersion(join(root, 'android-app'));
@@ -82,6 +84,7 @@ export async function packageRelease({ root = repository, output = join(root, 'a
   const bundle = JSON.parse(await readFile(join(base, 'app/src/main/assets/paseo/_workbench.json'), 'utf8'));
   const manifest = { schemaVersion: 1, applicationId: 'dev.paseo.pocket', ...metadata,
     tag: releaseTag(metadata.versionName), sourceCommit: run('git', ['rev-parse', 'HEAD'], { cwd: root }),
+    automationCommit: run('git', ['rev-parse', 'HEAD'], { cwd: repository }),
     apk: name, sha256: await sha256(join(output, name)), certificateSha256: fingerprint,
     webVersion: bundle.metadata.version, webAssetCount: bundle.files.length };
   await writeFile(join(output, 'release.json'), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -136,12 +139,13 @@ export async function publishRelease({ tag, repo = process.env.GITHUB_REPOSITORY
   return result.html_url;
 }
 async function main() {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: { tag: { type: 'string' }, output: { type: 'string' } } });
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: { tag: { type: 'string' }, output: { type: 'string' }, 'source-root': { type: 'string' } } });
   if (positionals.length !== 1) throw new Error('Use preflight, package, or publish');
   const tag = values.tag ?? process.env.RELEASE_TAG, output = values.output ? resolve(values.output) : undefined;
-  if (positionals[0] === 'preflight') console.log(JSON.stringify(await preflight({ tag }), null, 2));
-  else if (positionals[0] === 'package') console.log(JSON.stringify(await packageRelease({ output }), null, 2));
-  else if (positionals[0] === 'publish') console.log(await publishRelease({ tag, output }));
+  const root = values['source-root'] ? resolve(values['source-root']) : undefined;
+  if (positionals[0] === 'preflight') console.log(JSON.stringify(await preflight({ tag, root }), null, 2));
+  else if (positionals[0] === 'package') console.log(JSON.stringify(await packageRelease({ output, root }), null, 2));
+  else if (positionals[0] === 'publish') console.log(await publishRelease({ tag, output, root }));
   else throw new Error('Use preflight, package, or publish');
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))

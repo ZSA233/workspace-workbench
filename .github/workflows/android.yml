@@ -22,6 +22,8 @@ jobs:
       - uses: android-actions/setup-android@v3
       - run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v4
+      - run: npm --prefix web-assets ci --ignore-scripts
+      - run: npm --prefix web-assets test
       - run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
         working-directory: android-app
       - uses: actions/upload-artifact@v4

@@ -4,6 +4,7 @@
 构建工具锁定在 `gradle/libs.versions.toml` 与 Wrapper 配置中；使用 JDK 17。
 
 ```sh
+npm --prefix ../web-assets ci --ignore-scripts
 cd android-app
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 node scripts/create-signing-key.mjs
@@ -16,3 +17,7 @@ node scripts/create-signing-key.mjs
 `keyAlias`、`keyPassword` 的私有 properties 文件。
 
 此工程不修改 Paseo 宿主、relay 或已安装插件。
+
+首次构建从锁定的官方 npm 归档生成完整网页资源，后续复用已验证缓存。
+从仓库根目录执行 `npm --prefix web-assets ci --ignore-scripts` 后，
+运行 `android-app/gradlew -p android-app assembleDebug`。构建不执行上游包脚本。

@@ -55,3 +55,13 @@ tasks.register("requireReleaseSigning") {
 tasks.matching { it.name == "validateSigningRelease" || it.name == "packageRelease" }.configureEach {
     dependsOn("requireReleaseSigning")
 }
+
+val prepareWebAssets by tasks.registering(Exec::class) {
+    val tools = rootProject.file("../web-assets")
+    inputs.files(fileTree(tools) { include("src/**", "licenses/**", "*.json") })
+    outputs.dir("src/main/assets/paseo")
+    outputs.dir("src/main/assets/legal")
+    workingDir(tools)
+    commandLine("node", "src/bundle.mjs")
+}
+tasks.named("preBuild") { dependsOn(prepareWebAssets) }

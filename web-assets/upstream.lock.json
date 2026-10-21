@@ -1,0 +1,12 @@
+{
+  "name": "@getpaseo/server",
+  "version": "0.12.0",
+  "dist": {
+    "tarball": "https://registry.npmjs.org/@getpaseo/server/-/server-0.12.0.tgz",
+    "integrity": "sha512-tURu5huZFJCk4rjWLO3ipRXO9AQmV1XJETzf286xbEapAzmwmjRMM+F8daGsxTaKRHD+jWZpeBcxPCcI/+WxNA==",
+    "signatures": [{
+      "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+      "sig": "MEQCIG+GdtHbLoKzFuRSe5BNtimbGpG9hUTSnq56W4isME1dAiBhf2kgK/n3ej5KEk7Srf/92fT8Nnh4rsUTb8I03Z822g=="
+    }]
+  }
+}

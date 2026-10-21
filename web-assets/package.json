@@ -1,0 +1,12 @@
+{
+  "name": "workbench-web-assets",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "bundle": "node src/bundle.mjs"
+  },
+  "dependencies": { "tar-stream": "3.2.2" }
+}

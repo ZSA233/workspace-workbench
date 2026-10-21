@@ -55,9 +55,25 @@ APK 元数据与传输故障由 `serve-app-update-fixture.mjs` 的 localhost HTT
 
 - `769f3a8`：GitHub APK 策略、持久化、签名身份校验、系统安装入口与更新互斥。
 - `341545f`：四格与页面层级、独立文案、界面回归和状态栏修正。
+- `66c17c2`：版本与使用／验收文档。
+- `1f358c9`：移出另一项未完成的文件保存接线，通过干净构建；本地草稿原样保留。
 - 正式 tag：`android-v0.1.5`；版本与使用文档单独提交。
 - [Release](https://github.com/ZSA233/workspace-workbench/releases/tag/android-v0.1.5)
 - [签名 APK](https://github.com/ZSA233/workspace-workbench/releases/download/android-v0.1.5/paseo-pocket-0.1.5.apk)
 - [公开产物校验摘要](https://github.com/ZSA233/workspace-workbench/releases/download/android-v0.1.5/SHA256SUMS)
 
-正式产物由 tag 对应的 GitHub Actions 构建。公开下载、Actions 运行及最终摘要在发布完成后补记于本记录的 main 分支。
+## 公开发布复核
+
+- [Android CI](https://github.com/ZSA233/workspace-workbench/actions/runs/39667854671) 与仓库 CI 通过。
+- [正式发布 Actions](https://github.com/ZSA233/workspace-workbench/actions/runs/39668555894) 成功；Release 已公开，为正式版。
+- 从公开 HTTPS 地址无认证重新下载 APK、`release.json` 和 `SHA256SUMS`，两个文件摘要均匹配。
+- APK 为 `dev.paseo.pocket` / 0.1.5 / code 6，min API 26、target API 37，证书与 0.1.4 相同。
+- 39 个内置网页资源完整。APK 仅包含本次升级功能，文件保存草稿保留在本地工作区。
+- 发布清单的源码提交与自动化提交均为 `1f358c9304f26707f46a7e72b2fb2d30256bddce`。
+- 仓库全局 Latest 仍为插件 `v0.5.1`；Pocket 使用独立的 `android-v*` 发布系列。
+
+公开 APK：12,029,459 字节；SHA-256：
+
+```text
+f12efe0a14d629f3da3942a3e2819d248e02a91a9036e0a2014be6aed66cb85a
+```

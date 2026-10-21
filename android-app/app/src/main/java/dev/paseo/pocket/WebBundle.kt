@@ -1,0 +1,49 @@
+package dev.paseo.pocket
+
+import android.content.res.AssetManager
+import android.net.Uri
+import android.webkit.WebResourceResponse
+import android.webkit.MimeTypeMap
+import androidx.webkit.WebViewAssetLoader
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.io.InputStream
+
+class WebBundle(private val assets: AssetManager) {
+    val manifest = JSONObject(assets.open("paseo/_workbench.json").bufferedReader().use { it.readText() })
+    val version: String = manifest.getJSONObject("metadata").getString("version")
+    private val files = manifest.getJSONArray("files").let { rows ->
+        (0 until rows.length()).map { rows.getJSONObject(it).getString("path") }.toSet()
+    }
+    private val loader = WebViewAssetLoader.Builder().setDomain(PageOrigin.HOST)
+        .addPathHandler("/", WebViewAssetLoader.PathHandler { path ->
+            val relative = PageOrigin.resourcePath(path)
+            if (relative == null || relative !in files) missing()
+            else runCatching { response(relative, assets.open("paseo/$relative", AssetManager.ACCESS_STREAMING)) }
+                .getOrElse { missing() }
+        }).build()
+
+    fun intercept(uri: Uri, mainFrame: Boolean): WebResourceResponse? {
+        if (!PageOrigin.isLocal(uri.toString())) return null
+        val target = if (mainFrame && PageOrigin.isSpaRoute(uri.path ?: "/"))
+            Uri.parse("${PageOrigin.BASE}/index.html") else uri
+        return loader.shouldInterceptRequest(target) ?: missing()
+    }
+
+    private fun response(path: String, input: InputStream): WebResourceResponse {
+        val extension = path.substringAfterLast('.', "").lowercase()
+        val mime = when (extension) {
+            "js", "mjs" -> "application/javascript"
+            "wasm" -> "application/wasm"
+            "json" -> "application/json"
+            "woff2" -> "font/woff2"
+            "woff" -> "font/woff"
+            else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
+        }
+        return WebResourceResponse(mime, if (extension in setOf("html", "js", "css", "json", "svg", "txt")) "UTF-8" else null,
+            200, "OK", mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"), input)
+    }
+
+    private fun missing() = WebResourceResponse("text/plain", "UTF-8", 404, "Not Found",
+        mapOf("Cache-Control" to "no-store"), ByteArrayInputStream("Local page resource is missing. Open Workbench tools to recover.".toByteArray()))
+}

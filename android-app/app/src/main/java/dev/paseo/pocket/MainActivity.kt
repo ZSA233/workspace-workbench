@@ -1,12 +1,18 @@
 package dev.paseo.pocket
 
 import android.os.Bundle
-import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
+    private lateinit var session: WebSession
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(TextView(this).apply { text = "Paseo Pocket"; textSize = 24f })
+        session = WebSession(this, ShellPreferences(this))
+        setContentView(session.webView)
+        session.start()
     }
+
+    override fun onResume() { super.onResume(); if (::session.isInitialized) session.webView.onResume() }
+    override fun onPause() { if (::session.isInitialized) session.webView.onPause(); super.onPause() }
+    override fun onDestroy() { if (::session.isInitialized) session.destroy(); super.onDestroy() }
 }

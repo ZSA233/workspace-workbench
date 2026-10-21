@@ -3,6 +3,23 @@
 Android、Workbench 插件和内置网页分别维护版本。日常 push / PR 执行检查，不发布 APK；
 只有 `android-vMAJOR.MINOR.PATCH` tag 触发 Android 正式发布。插件的 `v*` 发布流程保持独立。
 
+从仓库根目录运行 `make` 或 `make help` 可查看快捷指令。Makefile 转调现有脚本，
+版本校验、签名和发布规则仍由脚本统一处理。
+
+| 指令 | 用途 |
+| --- | --- |
+| `make android-version` | 查看并检查当前 APK 版本 |
+| `make android-test` | 执行发版脚本和网页资源测试 |
+| `make android-check` | 版本、上述测试、Android JVM 测试及 lint |
+| `make android-build` | 构建并校验本地调试 APK |
+| `make android-package` | 构建、签名并打包本地正式 APK，不推送 |
+| `make android-prepare VERSION=0.1.3` | 只准备版本文件 |
+| `make android-release VERSION=0.1.3` | 提交版本、创建并推送 tag，触发 Actions 正式发布 |
+| `make android-retry TAG=android-v0.1.3` | 重试已有 tag 的未完成发布 |
+
+先按 [构建说明](../android-app/README.md#构建与签名) 安装依赖及配置工具链。
+发版、重试和签名配置需要显式调用对应目标，不是 `make`、测试或本地构建的依赖。
+
 ## 一次性签名配置
 
 正式 APK 沿用持久密钥，以便用户直接覆盖升级。源码、证书指纹和产物公开，私钥与密码保存到
@@ -11,8 +28,8 @@ GitHub Actions Secrets。不要把签名配置、私钥或其 Base64 内容提�
 本机已有签名配置时，从仓库根目录执行：
 
 ```sh
-node android-app/scripts/signing.mjs configure --repo OWNER/REPO --dry-run
-node android-app/scripts/signing.mjs configure --repo OWNER/REPO
+make android-signing-check REPO=OWNER/REPO
+make android-signing-configure REPO=OWNER/REPO
 ```
 
 需要已登录的 GitHub CLI 和 JDK。脚本读取默认的 `~/.config/paseo-pocket/android-signing.properties`，
@@ -35,11 +52,11 @@ fork 项目独立发布时，先运行 `node android-app/scripts/create-signing-
 
 ```sh
 # 只准备版本文件，不提交、打 tag 或推送
-node scripts/release-android.mjs --version 0.1.2
+make android-prepare VERSION=0.1.3
 git diff -- android-app/version.properties
 
 # 确认发版：提交版本文件，创建带注释的 tag，原子推送 main 与 tag
-node scripts/release-android.mjs --version 0.1.2 --publish
+make android-release VERSION=0.1.3
 ```
 
 脚本自动递增 versionCode；重复准备相同版本不会重复递增。
@@ -66,7 +83,7 @@ Android Release 不设为仓库全局 Latest，避免改变插件的默认下载
 `android-v0.1.2` tag，或执行：
 
 ```sh
-gh workflow run android-release.yml --ref main -f tag=android-v0.1.2
+make android-retry TAG=android-v0.1.2
 ```
 
 只能重试未完成的草稿或尚未创建 Release 的 tag。已公开版本拒绝覆盖，需要修改时发布新的版本。
@@ -77,14 +94,9 @@ gh workflow run android-release.yml --ref main -f tag=android-v0.1.2
 ## 本地验证
 
 ```sh
-node android-app/scripts/version.mjs --check
-node --test android-app/scripts/test/*.test.mjs
+make android-check
 actionlint .github/workflows/android.yml .github/workflows/android-release.yml
-npm --prefix web-assets test
-cd android-app
-./gradlew --no-daemon testDebugUnitTest lintDebug assembleRelease
-cd ..
-node android-app/scripts/release.mjs package
+make android-package
 ```
 
 需要 Node.js 22、JDK 17、Android SDK 及持久签名配置。打包产物位于忽略目录

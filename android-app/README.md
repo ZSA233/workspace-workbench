@@ -7,6 +7,9 @@
 [下载已签名 APK](https://github.com/ZSA233/workspace-workbench/releases?q=android-v&expanded=true) ·
 [自动发版与签名配置](../docs/releasing-android.md)
 
+维护时在仓库根目录运行 `make` 查看快捷指令：`make android-check` 检查项目，
+`make android-package` 本地打包，`make android-release VERSION=0.1.3` 创建并推送新版本。
+
 ## 使用
 
 打开 App 即进入内置 Paseo 网页。首次在网页里添加主机或粘贴配对链接；之后恢复上次工作页面。

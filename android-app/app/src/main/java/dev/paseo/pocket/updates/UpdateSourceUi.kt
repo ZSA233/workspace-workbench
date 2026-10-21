@@ -18,8 +18,8 @@ class UpdateSourceUi(private val activity: AppCompatActivity, private val prefs:
     fun content(context: Context, saved: () -> Unit, openVersion: () -> Unit): View {
         val content = ShellUi.column(context)
         if (busy()) {
-            ShellUi.add(content, ShellUi.text(context, "请先在网页版本中完成或取消当前操作，再切换来源。"))
-            ShellUi.add(content, ShellUi.button(context, "前往网页版本", primary = true, action = openVersion))
+            ShellUi.add(content, ShellUi.text(context, "请先完成或取消当前网页更新，再切换来源。"))
+            ShellUi.add(content, ShellUi.button(context, "前往网页更新", primary = true, action = openVersion))
             return content
         }
         val group = RadioGroup(context)
@@ -44,7 +44,7 @@ class UpdateSourceUi(private val activity: AppCompatActivity, private val prefs:
         }
         group.setOnCheckedChangeListener { _, checked -> field.visibility = if (checked == custom.id) View.VISIBLE else View.GONE }
         ShellUi.add(content, field)
-        ShellUi.add(content, ShellUi.text(context, "镜像保留官方签名与摘要。保存来源不会更新页面或清除配对。", 12f, muted = true))
+        ShellUi.add(content, ShellUi.text(context, "仅用于网页资源。镜像保留官方签名与摘要，保存后需手动检查网页更新。", 12f, muted = true))
         val note = ShellUi.text(context, "", 12f, muted = true).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
         ShellUi.add(content, note)
         ShellUi.add(content, ShellUi.button(context, "保存", primary = true) {

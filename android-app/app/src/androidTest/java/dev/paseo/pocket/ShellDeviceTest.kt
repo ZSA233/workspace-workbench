@@ -194,6 +194,14 @@ class ShellDeviceTest {
     @Test(timeout = 180000) fun customSourceUpdateUiPreservesStorageAndAppliesOnlyAfterConfirmation() {
         val argument = InstrumentationRegistry.getArguments().getString("mirrorUrl")
         org.junit.Assume.assumeTrue(argument != null)
+        val target = instrumentation.targetContext
+        org.junit.Assume.assumeTrue("Update injection requires the isolated QA package", target.packageName == "dev.paseo.pocket.qa")
+        target.getSharedPreferences("app_updates", 0).edit().putBoolean("automatic", false).commit()
+        android.util.AtomicFile(java.io.File(target.filesDir, "pages/pending.json")).delete()
+        val configurator = androidx.test.uiautomator.Configurator.getInstance()
+        val oldIdleTimeout = configurator.waitForIdleTimeout
+        // Progress updates keep accessibility busy; do not wait ten seconds before a click.
+        configurator.waitForIdleTimeout = 0
         val url = requireNotNull(argument)
         val prefs = ShellPreferences(instrumentation.targetContext)
         val oldCustom = prefs.customSource; val oldUrl = prefs.customSourceUrl
@@ -203,7 +211,7 @@ class ShellDeviceTest {
         waitPage(original)
         evaluate(original, "localStorage.setItem('pocket.fixture.update','kept');window.__pocketFixture='before-update';true")
         try {
-            openTools(); clickText("更新来源")
+            openTools(); clickText("网页更新"); clickText("网页更新来源")
             clickText("自定义")
             val sourceField = device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url")), 15000)
             assertNotNull("Custom source field is not visible", sourceField)
@@ -213,22 +221,22 @@ class ShellDeviceTest {
             assertEquals(oldCustom, prefs.customSource)
             assertEquals(oldUrl, prefs.customSourceUrl)
             sourceField.text = url + "-missing"
-            clickText("保存"); clickText("网页版本"); clickText("检查页面更新")
+            clickText("保存"); clickText("检查网页更新")
             assertNotNull(device.wait(Until.findObject(By.textContains("连接失败")), 15000))
             assertEquals("\"before-update\"", evaluate(original, "window.__pocketFixture"))
-            clickText("返回工具"); clickText("更新来源"); clickText("自定义")
+            clickText("网页更新来源"); clickText("自定义")
             val retryField = device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url")), 5000)
             retryField.text = url.replace("/latest.json", "/slow/latest.json")
-            clickText("保存"); clickText("网页版本"); clickText("检查页面更新")
-            assertNotNull(device.wait(Until.findObject(By.textContains("候选版本")), 15000))
-            clickText("下载并验证")
+            clickText("保存"); clickText("检查网页更新")
+            assertNotNull(device.wait(Until.findObject(By.textContains("候选网页版本")), 15000))
+            clickText("下载网页资源")
             closeTools()
-            openTools(); clickText("网页版本")
+            openTools(); clickText("网页更新")
             assertNotNull(device.wait(Until.findObject(By.text("取消操作")), 5000))
             clickText("取消操作")
             assertNotNull(device.wait(Until.findObject(By.textContains("已取消")), 15000))
             onActivity { assertSame(original, webViews(it.window.decorView).single()) }
-            clickText("返回工具"); clickText("更新来源"); clickText("自定义")
+            clickText("网页更新来源"); clickText("自定义")
             val finalField = device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url")), 5000)
             finalField.text = url
             assertNotNull(device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url").text(url)), 5000))
@@ -236,21 +244,20 @@ class ShellDeviceTest {
             assertTrue(device.wait(Until.gone(By.res(instrumentation.targetContext.packageName, "update_source_url")), 5000) == true)
             assertTrue("Saved source did not become active", prefs.customSource)
             assertEquals("\"before-update\"", evaluate(original, "window.__pocketFixture"))
-            clickText("网页版本")
-            clickText("检查页面更新")
-            assertNotNull(device.wait(Until.findObject(By.textContains("候选版本")), 15000))
+            clickText("检查网页更新")
+            assertNotNull(device.wait(Until.findObject(By.textContains("候选网页版本")), 15000))
             // Detach the update page without cancelling the lifecycle-owned transfer.
-            clickText("下载并验证")
+            clickText("下载网页资源")
             closeTools()
-            openTools(); clickText("网页版本")
-            assertNotNull(device.wait(Until.findObject(By.textContains("等待应用")), 60000))
+            openTools(); clickText("网页更新")
+            assertNotNull(device.wait(Until.findObject(By.textContains("等待切换网页版本")), 60000))
             onActivity { assertSame(original, webViews(it.window.decorView).single()) }
             assertEquals("\"before-update\"", evaluate(original, "window.__pocketFixture"))
-            clickText("应用更新")
+            clickText("切换网页版本")
             // A second confirmation protects unsent text before the explicit reload.
-            assertNotNull(device.wait(Until.findObject(By.text("应用页面更新？")), 5000))
-            device.findObjects(By.text("应用更新")).last().click()
-            assertNotNull(device.wait(Until.findObject(By.textContains("页面更新已应用")), 30000))
+            assertNotNull(device.wait(Until.findObject(By.text("切换网页版本？")), 5000))
+            device.findObjects(By.text("切换网页版本")).last().click()
+            assertNotNull(device.wait(Until.findObject(By.textContains("网页版本已切换")), 30000))
             clickText("返回工具")
             closeTools()
             lateinit var replacement: WebView
@@ -259,6 +266,9 @@ class ShellDeviceTest {
             waitPage(replacement)
             assertEquals("\"kept\"", evaluate(replacement, "localStorage.getItem('pocket.fixture.update')"))
             evaluate(replacement, "localStorage.removeItem('pocket.fixture.update');true")
-        } finally { prefs.customSourceUrl = oldUrl; prefs.customSource = oldCustom }
+        } finally {
+            prefs.customSourceUrl = oldUrl; prefs.customSource = oldCustom
+            configurator.waitForIdleTimeout = oldIdleTimeout
+        }
     }
 }

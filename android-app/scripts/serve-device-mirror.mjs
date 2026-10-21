@@ -19,7 +19,7 @@ const server = createServer({ key: await readFile(resolve(root, '.device-fixture
     let resume;
     if (pathname.startsWith('/slow/')) {
       stream.on('data', chunk => {
-        stream.pause(); response.write(chunk, () => { resume = setTimeout(() => stream.resume(), 60); });
+        stream.pause(); response.write(chunk, () => { resume = setTimeout(() => stream.resume(), 150); });
       });
       stream.on('end', () => response.end());
     } else stream.pipe(response);

@@ -52,7 +52,7 @@ class FloatingToolDeviceTest {
         try {
             repeat(20) { open(); close() }
             open(); capture("tools-portrait")
-            click("更新来源"); click("自定义")
+            click("网页更新"); click("网页更新来源"); click("自定义")
             val input = device.wait(Until.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url")), 5000)
             input.click()
             val ime = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD).substringBefore('/')
@@ -62,7 +62,7 @@ class FloatingToolDeviceTest {
             assertTrue("Source input must stay above the keyboard", input.visibleBounds.bottom <= keyboard.top)
             device.pressBack(); device.waitForIdle(1000)
             assertNotNull(device.findObject(By.res(instrumentation.targetContext.packageName, "update_source_url")))
-            click("返回工具"); close()
+            click("返回网页更新"); close()
             device.setOrientationLeft(); device.waitForIdle(1000)
             open(); reachCache(); capture("tools-landscape"); close()
             device.setOrientationNatural(); device.unfreezeRotation(); device.waitForIdle(1000)
@@ -110,14 +110,14 @@ class FloatingToolDeviceTest {
             }
             device.findObject(By.desc("Paseo Pocket 工具")).click()
             val appearance = device.wait(Until.findObject(By.descStartsWith("外观，")), 5000)
-            val version = device.findObject(By.descStartsWith("网页版本，"))
-            val source = device.findObject(By.descStartsWith("更新来源，"))
+            val version = device.findObject(By.descStartsWith("网页更新，"))
+            val app = device.findObject(By.descStartsWith("应用升级，"))
             val cache = device.findObject(By.descStartsWith("连接与诊断，"))
-            assertNotNull(appearance); assertNotNull(version); assertNotNull(source); assertNotNull(cache)
+            assertNotNull(appearance); assertNotNull(version); assertNotNull(app); assertNotNull(cache)
             assertEquals(appearance.visibleBounds.top, version.visibleBounds.top)
-            assertEquals(source.visibleBounds.top, cache.visibleBounds.top)
+            assertEquals(app.visibleBounds.top, cache.visibleBounds.top)
             assertTrue(appearance.visibleBounds.right < version.visibleBounds.right)
-            val tiles = listOf(appearance, version, source, cache)
+            val tiles = listOf(appearance, version, app, cache)
             val minimum = ShellUi.dp(instrumentation.targetContext, 106)
             val settled = SystemClock.uptimeMillis() + 5000
             while (tiles.any { it.visibleBounds.height() < minimum } && SystemClock.uptimeMillis() < settled) SystemClock.sleep(100)
@@ -127,12 +127,13 @@ class FloatingToolDeviceTest {
             assertNull(device.findObject(By.desc("Paseo Pocket 工具")))
             click("外观")
             device.pressBack()
-            assertNotNull(device.wait(Until.findObject(By.text("网页版本")), 5000))
-            click("更新来源"); click("自定义")
-            device.pressBack() // input has not been focused, so back returns to the grid.
+            assertNotNull(device.wait(Until.findObject(By.text("网页更新")), 5000))
+            click("网页更新"); click("网页更新来源"); click("自定义")
+            device.pressBack() // input has not been focused, so back returns to web updates.
             assertEquals("Unsaved source choice must not apply", oldCustom, prefs.customSource)
             assertEquals(oldUrl, prefs.customSourceUrl)
-            device.pressBack()
+            device.pressBack() // web updates -> tools
+            device.pressBack() // tools -> webpage
             assertNotNull(device.wait(Until.findObject(By.desc("Paseo Pocket 工具")), 5000))
             val handle = device.findObject(By.desc("Paseo Pocket 工具"))
             val screen = Rect(0, 0, device.displayWidth, device.displayHeight)

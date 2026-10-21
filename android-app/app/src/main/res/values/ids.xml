@@ -5,4 +5,7 @@
     <item name="tool_sheet" type="id" />
     <item name="observation_status" type="id" />
     <item name="observation_performance" type="id" />
+    <item name="app_update_status" type="id" />
+    <item name="web_update_status" type="id" />
+    <item name="app_update_entry" type="id" />
 </resources>

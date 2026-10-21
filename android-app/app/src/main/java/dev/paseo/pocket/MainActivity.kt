@@ -45,10 +45,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var updateUi: UpdateUi
     private lateinit var appUpdates: AppUpdates
     private lateinit var appUpdateUi: AppUpdateUi
-    private var saveCallback: ((Uri?) -> Unit)? = null
-    private val savePicker = registerForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
-        val callback = saveCallback; saveCallback = null; callback?.invoke(uri)
-    }
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data))
@@ -154,9 +150,7 @@ class MainActivity : AppCompatActivity() {
     private fun createSession() {
         recoveryVisible = false
         page.removeAllViews()
-        session = WebSession(this, prefs, diagnostics, observation, ::showRecovery, updates.store.activeDirectory(), chooseSave = { name, callback ->
-            if (saveCallback != null) callback(null) else { saveCallback = callback; try { savePicker.launch(name) } catch (_: ActivityNotFoundException) { saveCallback = null; callback(null) } }
-        }) { callback, params ->
+        session = WebSession(this, prefs, diagnostics, observation, ::showRecovery, updates.store.activeDirectory()) { callback, params ->
             fileCallback?.onReceiveValue(null)
             fileCallback = callback
             try { filePicker.launch(params.createIntent()); true }
@@ -249,7 +243,6 @@ class MainActivity : AppCompatActivity() {
     }
     override fun onStop() { background.background(); super.onStop() }
     override fun onDestroy() {
-        saveCallback?.invoke(null); saveCallback = null
         if (::background.isInitialized) background.close()
         sheet?.dismiss(); fileCallback?.onReceiveValue(null); fileCallback = null
         if (::session.isInitialized) session.destroy()

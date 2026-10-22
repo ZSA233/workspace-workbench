@@ -8,7 +8,6 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.net.Uri
 import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -53,7 +52,7 @@ class MainActivity : AppCompatActivity() {
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val callback = fileCallback
         fileCallback = null
-        val files = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+        val files = FileChooserResult.parse(result.resultCode, result.data)
         diagnostics.record(if (files.isNullOrEmpty()) "file_picker_cancelled" else "file_picker_selected")
         callback?.onReceiveValue(files)
     }

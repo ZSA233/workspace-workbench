@@ -17,6 +17,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture({ enabled = true, composer = true, setter = true, trusted = true, version = '0.12.0' } = {}) {
   let now = 0, sequence = 0;
   const timers = new Map(), nodes = [], changes = [], errors = [], reports = [], observers = new Set(), windowListeners = new Map();
+  const consoleErrors = [], alerts = [];
   const schedule = (fn, delay = 0) => { const id = ++sequence; timers.set(id, { fn, at: now + delay }); return id; };
   class Event {
     constructor(type, options = {}) { this.type = type; this.bubbles = !!options.bubbles; this.stopped = false; }
@@ -66,7 +67,7 @@ function fixture({ enabled = true, composer = true, setter = true, trusted = tru
   const context = vm.createContext({ window, document, HTMLInputElement: Input, DataTransfer, File, Blob, Uint8Array,
     location: { origin: trusted ? 'https://appassets.androidplatform.net' : 'https://outside.invalid' },
     setTimeout: schedule, clearTimeout: id => timers.delete(id), MutationObserver: Observer, Event, MouseEvent: Event,
-    URL: { createObjectURL: () => 'blob:proof' }, Image, console });
+    URL: { createObjectURL: () => 'blob:proof' }, Image, console: { ...console, error: (...args) => consoleErrors.push(args) } });
   const api = enabled ? vm.runInContext(`(${adapter})(${JSON.stringify({ webVersion: version })})`, context) : null;
   function loadModule(source, dependencies) {
     let exports;
@@ -74,9 +75,22 @@ function fixture({ enabled = true, composer = true, setter = true, trusted = tru
       factory(window, id => dependencies[deps.indexOf(id)] ?? {}, null, null, module, module.exports, deps); exports = module.exports; };
     vm.runInContext(source, context); return exports;
   }
-  const pick = () => loadModule(upstreamModule('const o={images:\'image/*\''),
-    [{ Platform: { isDOMAvailable: true }, PermissionStatus: { GRANTED: 'granted' } }, {}, { parseMediaTypes: value => value }]).default.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true });
-  return { pick, api, nodes, reports, errors, observers, timers, document,
+  const picker = () => loadModule(upstreamModule('const o={images:\'image/*\''),
+    [{ Platform: { isDOMAvailable: true }, PermissionStatus: { GRANTED: 'granted' } }, {}, { parseMediaTypes: value => value }]).default;
+  const pick = () => picker().launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true });
+  const pickWithHook = () => {
+    const raster = loadModule(upstreamModule('e.resolveRasterImageMimeType='), []);
+    const normalizer = loadModule(upstreamModule('e.normalizePickedImageAssets='), [raster, {}, {}, {}]);
+    const hook = loadModule(upstreamModule('_e.useImageAttachmentPicker='), [
+      { useRef: value => ({ current: value }), useCallback: callback => callback },
+      { default: { alert: (...args) => alerts.push(args) }, __esModule: true },
+      { ...picker(), useMediaLibraryPermissions: () => [{ status: 'granted', granted: true }, async () => ({ status: 'granted', granted: true })],
+        PermissionStatus: { UNDETERMINED: 'undetermined' }, getPendingResultAsync: async () => null },
+      { useTranslation: () => ({ t: key => key }) }, { isElectronRuntime: () => false }, normalizer, { isWeb: true }
+    ]);
+    return hook.useImageAttachmentPicker().pickImages();
+  };
+  return { pick, pickWithHook, api, nodes, reports, errors, consoleErrors, alerts, observers, timers, document,
     input: () => nodes.find(node => node instanceof Input),
     select(files) { const input = nodes.find(node => node instanceof Input); input._files = files; input.dispatchEvent(new Event('change', { bubbles: true })); },
     status: () => nodes.find(node => node.attributes.has('data-pocket-image-status'))?.textContent ?? '',
@@ -100,6 +114,52 @@ test('real Expo picker leaves an empty-MIME image Promise pending after its chan
   f.select([new File([png], 'photo.png')]); await tick();
   assert.equal(settled, false);
   assert.match(f.errors[0].message, /Unsupported file type/);
+});
+test('real image attachment hook rejects an unadapted image/x-png File after the Expo picker succeeds', withBundle, async () => {
+  const f = fixture({ enabled: false }), result = f.pickWithHook();
+  await tick(); f.select([new File([png], 'photo.png', { type: 'image/x-png' })]);
+  assert.equal(await result, null);
+  assert.match(f.consoleErrors[0][1].message, /Unsupported image type/);
+  assert.equal(f.alerts.length, 1); assert.equal(f.errors.length, 0);
+});
+test('aliases use actual image headers and pass the real picker, normalizer and attachment hook', withBundle, async t => {
+  const jpeg = Uint8Array.from([255, 216, 255, 224, 0, 16, 74, 70, 73, 70]);
+  const bmp = Uint8Array.from([66, 77, ...Array(52).fill(0)]);
+  for (const [supplied, bytes, expected] of [
+    ['image/x-png', png, 'image/png'], ['image/pjpeg', jpeg, 'image/jpeg'], ['image/x-jpeg', jpeg, 'image/jpeg'],
+    ['image/x-ms-bmp', bmp, 'image/bmp'], ['image/x-bmp', bmp, 'image/bmp'],
+    ['image/x-png', jpeg, 'image/jpeg'], ['image/vnd.provider-photo', png, 'image/png']
+  ]) await t.test(`${supplied} → ${expected}`, async () => {
+    const f = fixture(), original = new File([bytes], 'provider-photo.bin', { type: supplied, lastModified: 1234 });
+    const result = f.pickWithHook(); await tick(); f.select([original]); const images = await result;
+    assert.equal(images.length, 1); assert.equal(images[0].mimeType, expected);
+    assert.equal(images[0].source.kind, 'blob');
+    const file = images[0].source.blob;
+    assert.equal(file.type, expected); assert.equal(file.name, original.name); assert.equal(file.lastModified, 1234);
+    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), bytes);
+    let saved;
+    const metadata = await f.persist()({ pickImages: async () => images,
+      persister: { persistFromBlob: async value => { saved = value; return { id: 'original-draft-storage' }; } } });
+    assert.equal(saved.blob, file); assert.equal(saved.mimeType, expected); assert.equal(metadata.length, 1);
+    assert.equal(f.consoleErrors.length, 0); assert.equal(f.alerts.length, 0); assert.equal(f.errors.length, 0);
+    f.pill(); assert(f.reports.includes('image_attachment_ready')); f.api.dispose();
+  });
+});
+test('an alias image label and filename cannot promote non-image bytes or a truncated PNG signature', withBundle, async t => {
+  for (const bytes of [new TextEncoder().encode('%PDF-proof'), Uint8Array.from([137, 80, 78, 71])])
+    await t.test(`reject ${bytes.length}-byte payload`, async () => {
+      const f = fixture(), result = f.pickWithHook(); await tick();
+      f.select([new File([bytes], 'renamed.png', { type: 'image/x-png' })]);
+      assert.equal(await result, null); assert.match(f.status(), /无法识别/);
+      assert(f.reports.includes('image_input_unsupported'));
+      assert.equal(f.consoleErrors.length, 0); assert.equal(f.alerts.length, 0); assert.equal(f.errors.length, 0); f.api.dispose();
+    });
+});
+test('image/jpg remains the original File and the real normalizer returns image/jpeg metadata', withBundle, async () => {
+  const f = fixture(), original = new File([Uint8Array.from([255, 216, 255, 224])], 'compatible.jpg', { type: 'image/jpg', lastModified: 4321 });
+  const result = f.pickWithHook(); await tick(); f.select([original]); const images = await result;
+  assert.equal(images[0].source.blob, original); assert.equal(images[0].mimeType, 'image/jpeg');
+  assert.equal(f.consoleErrors.length, 0); assert.equal(f.alerts.length, 0); f.api.dispose();
 });
 test('normalized replay resolves the actual Expo picker, preserves bytes/name/time and follows original persistence', withBundle, async () => {
   const f = fixture(), file = new File([png], 'camera-original.bin', { type: 'application/octet-stream', lastModified: 1234 });

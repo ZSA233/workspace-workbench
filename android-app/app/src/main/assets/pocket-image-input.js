@@ -9,9 +9,10 @@
   const report = code => { try { channel?.postMessage(code); } catch (_) {} };
   const extensions = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
     avif: 'image/avif', heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff', bmp: 'image/bmp' };
+  const acceptedTypes = new Set([...Object.values(extensions), 'image/jpg']);
   function imageType(bytes, file, extensionFallback) {
     const text = (offset, length) => String.fromCharCode(...bytes.slice(offset, offset + length));
-    if (bytes[0] === 137 && text(1, 3) === 'PNG') return 'image/png';
+    if (bytes[0] === 137 && text(1, 7) === 'PNG\r\n\x1a\n') return 'image/png';
     if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
     if (text(0, 6) === 'GIF87a' || text(0, 6) === 'GIF89a') return 'image/gif';
     if (text(0, 4) === 'RIFF' && text(8, 4) === 'WEBP') return 'image/webp';
@@ -52,11 +53,12 @@
     if (!disposed) show(message, true);
   }
   async function prepare(file, operation) {
-    const supplied = file.type.toLowerCase().split(';')[0];
+    const supplied = file.type.toLowerCase().split(';')[0].trim();
     // Known types remain the original File, including bytes, name and timestamps.
-    // Repair missing/generic MIME metadata, or a non-image type only when the
-    // actual header identifies an image. Keep valid image Files unchanged.
-    if (supplied.startsWith('image/')) return file;
+    // Expo's normalizer rejects aliases such as image/x-png and image/pjpeg.
+    // Repair these from the actual header, without trusting an image/* label or
+    // filename. image/jpg is already accepted by the upstream normalizer.
+    if (acceptedTypes.has(supplied)) return file;
     // Read only a header here. No full-image copy or additional native URI permissions.
     const bytes = await Promise.race([file.slice(0, 64).arrayBuffer(), new Promise((_, reject) => {
       operation.readTimers.push(setTimeout(() => reject(new Error('read_timeout')), 15000));

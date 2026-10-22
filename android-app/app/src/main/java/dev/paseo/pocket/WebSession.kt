@@ -36,6 +36,7 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
         private set
     private lateinit var bridge: ObservationBridge
     private lateinit var fileSave: FileSaveBridge
+    private lateinit var imageInput: PocketImageInput
 
     @SuppressLint("SetJavaScriptEnabled")
     fun start() {
@@ -56,6 +57,8 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
         bridge.install()
         fileSave = FileSaveBridge(webView, chooseSave)
         fileSave.install()
+        imageInput = PocketImageInput(webView, bundle.version, diagnostics)
+        imageInput.install()
         observation.bind(bridge)
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
@@ -129,6 +132,7 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
         destroyed = true
         if (::bridge.isInitialized) { observation.unbind(bridge); bridge.close() }
         if (::fileSave.isInitialized) fileSave.close()
+        if (::imageInput.isInitialized) imageInput.close()
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.stopLoading()
         webView.removeAllViews()

@@ -75,12 +75,14 @@ jobs:
       - name: Test, lint and build signed APK
         working-directory: release-source/android-app
         run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleRelease
-      - name: Verify bundled observation adapter when present
+      - name: Verify bundled adapters when present
         working-directory: release-source
         run: |
-          if test -f android-app/scripts/test/observation.test.mjs; then
-            POCKET_VERIFY_BUNDLED_ADAPTER=1 node --test android-app/scripts/test/observation.test.mjs
-          fi
+          for adapter_test in observation image-input; do
+            if test -f "android-app/scripts/test/$adapter_test.test.mjs"; then
+              POCKET_VERIFY_BUNDLED_ADAPTER=1 node --test "android-app/scripts/test/$adapter_test.test.mjs"
+            fi
+          done
       - name: Verify and package release assets
         run: node android-app/scripts/release.mjs package --source-root release-source
       - uses: actions/upload-artifact@v7

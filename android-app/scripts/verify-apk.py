@@ -17,4 +17,8 @@ with zipfile.ZipFile(sys.argv[1]) as apk:
     if save_bridge.exists():
         assert apk.read('assets/pocket-file-save.js') == save_bridge.read_bytes(), 'File-save bridge must be included unchanged'
         assert any(b'FileSaveBridge' in apk.read(name) for name in apk.namelist() if name.endswith('.dex')), 'Native file-save bridge is missing'
+    image_input = Path(__file__).resolve().parents[1] / 'app/src/main/assets/pocket-image-input.js'
+    if image_input.exists():
+        assert apk.read('assets/pocket-image-input.js') == image_input.read_bytes(), 'Image input adapter must be included unchanged'
+        assert any(b'PocketImageInput' in apk.read(name) for name in apk.namelist() if name.endswith('.dex')), 'Image input adapter is missing'
     print(f"Verified {len(manifest['files'])} APK web assets for Paseo {manifest['metadata']['version']}")

@@ -51,8 +51,11 @@ class MainActivity : AppCompatActivity() {
     }
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data))
+        val callback = fileCallback
         fileCallback = null
+        val files = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+        diagnostics.record(if (files.isNullOrEmpty()) "file_picker_cancelled" else "file_picker_selected")
+        callback?.onReceiveValue(files)
     }
     private val installPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (::appUpdateUi.isInitialized) appUpdateUi.permissionReturned()
@@ -159,7 +162,7 @@ class MainActivity : AppCompatActivity() {
         }) { callback, params ->
             fileCallback?.onReceiveValue(null)
             fileCallback = callback
-            try { filePicker.launch(params.createIntent()); true }
+            try { filePicker.launch(params.createIntent()); diagnostics.record("file_picker_opened"); true }
             catch (_: ActivityNotFoundException) {
                 fileCallback?.onReceiveValue(null); fileCallback = null
                 diagnostics.record("file_picker_unavailable"); true

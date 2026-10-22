@@ -305,6 +305,28 @@ test('private staging is ignored by Git and a paused background save cannot reac
   }finally{await f.close();}
 });
 
+test('adaptive directory ordering returns a fast page then a pinned global order, including bounded-window fallback',async()=>{
+  for(const budget of [32*1024*1024,64*1024]){
+    const f=await fixture();f.cache.config.cacheBytes=budget;
+    try{
+      await mkdir(join(f.root,'many'));
+      const expected:string[]=[];
+      for(let n=0;n<430;n++){const name=`file-${String(n).padStart(4,'0')}`;expected.push(name);await writeFile(join(f.root,'many',name),'x');}
+      for(let n=0;n<23;n++){const name=`folder-${String(n).padStart(4,'0')}`;await mkdir(join(f.root,'many',name));expected.unshift(name);}
+      expected.sort((a,b)=>Number(b.startsWith('folder'))-Number(a.startsWith('folder'))||a.localeCompare(b));
+      const request={action:'list',workspaceId:f.main,path:'many',listingProtocol:2};
+      const first=await f.call(request);assert.equal(first.order,'native');assert.equal(first.entries.length,200);
+      for(let i=0;i<200;i++){const versions=await f.call({action:'versions',workspaceId:f.main,paths:['many'],listingProtocol:2});if(versions.orders.many==='ready')break;await new Promise(r=>setTimeout(r,5));}
+      let page=await f.call(request);assert.equal(page.order,'sorted');const names:string[]=[],snapshots=new Set<string>();
+      for(;;){names.push(...page.entries.map((e:any)=>e.name));snapshots.add(page.snapshotId);if(!page.cursor)break;page=await f.call({...request,cursor:page.cursor});assert.equal(page.order,'sorted');}
+      assert.deepEqual(names,expected);assert.equal(new Set(names).size,names.length);assert.equal(snapshots.size,1);
+      const nativeNext=await f.call({...request,cursor:first.cursor});assert.equal(nativeNext.order,'native','a pending cursor cannot silently switch order');
+      const stale=page.cursor||first.cursor;await writeFile(join(f.root,'many','new-file'),'changed');await assert.rejects(f.call({...request,cursor:stale}),/Directory changed/);
+      assert.ok(f.cache.status().memory.bytes<=budget);
+    }finally{await f.close();}
+  }
+});
+
 test('combined download reads persist monotonic confirmations and cannot revive a paused task',async()=>{
   const f=await fixture();
   try{
@@ -327,5 +349,7 @@ test('ZIP preparation checkpoints are bounded and preserve a concurrent pause',a
     f.files.tasks.journal.save=(task:any)=>{if(task.id==='zip-progress'&&task.state==='preparing'&&task.processed>0)progress++;return original(task);};
     await f.call({action:'download',id:'zip-progress',workspaceId:f.main,paths:['archive']});const task=await f.wait('zip-progress',['active','failed']);
     assert.equal(task.state,'active',task.error);assert.equal(task.processed,514);assert.ok(progress<30,`${progress} progress saves should be at least 10x fewer than 514`);
+    let pause:Promise<any>|undefined;f.files.tasks.journal.save=(current:any)=>{const result=original(current);if(current.id==='zip-pause'&&current.state==='preparing'&&current.processed>=128&&!pause)queueMicrotask(()=>{pause ||= f.call({action:'control',id:'zip-pause',command:'pause'});});return result;};
+    await f.call({action:'download',id:'zip-pause',workspaceId:f.main,paths:['archive']});await f.wait('zip-pause',['paused']);await pause;await new Promise(r=>setTimeout(r,30));assert.equal(f.files.tasks.journal.require('zip-pause').state,'paused');
   }finally{await f.close();}
 });

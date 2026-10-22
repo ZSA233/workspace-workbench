@@ -15,6 +15,13 @@ export class FilesTreeState {
   private flights = new Map<string, Promise<void>>();
   private listeners = new Set<() => void>();
   private revision = 0;
+  structureRevision = 0;
+  foreground = true;
+  sortedListing = false;
+  interacting = false;
+  private sortReady = new Set<string>();
+  canReorder() { return this.scroll <= 1 && !this.selected.size && !this.interacting; }
+  async applySorted(rpc:FilesCall){if(!this.foreground||!this.canReorder())return;for(const path of [...this.sortReady]){if(!this.canReorder())break;this.sortReady.delete(path);await this.load(path,rpc);}}
   private epoch = 0;
   private directoryEpochs = new Map<string, number>();
   private dirty = new Set<string>();
@@ -24,30 +31,33 @@ export class FilesTreeState {
   readonly decorations: FilesDecorationsState;
   constructor(key: string, workspaceId: string) {
     this.key = key; this.workspaceId = workspaceId;
-    this.decorations = new FilesDecorationsState(workspaceId, () => this.instance, () => this.emit());
+    this.decorations = new FilesDecorationsState(workspaceId, () => this.instance, () => this.emit('view'));
     const saved = readPreference(key); if (saved) { this.expanded = new Set(['', ...(saved.expanded || [])]); this.selected = new Set(saved.selected || []); this.scroll = saved.scroll || 0; this.instance = saved.instance || ''; }
   }
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   snapshot = () => this.revision;
-  emit() { this.revision++; this.listeners.forEach(fn => fn()); }
+  emit(kind: 'structure' | 'view' = 'structure') { if(kind==='structure')this.structureRevision++; this.revision++; this.listeners.forEach(fn => fn()); }
   save() { writePreference(this.key, { instance: this.instance, expanded: [...this.expanded], selected: [...this.selected], scroll: this.scroll }); }
-  clear() { this.epoch++; this.directoryEpochs.clear(); this.dirty.clear(); this.flights.clear(); this.refreshing.clear(); this.changesFlight = undefined; this.decorations.clear(); this.pages.clear(); this.expanded = new Set(['']); this.selected.clear(); this.scroll = 0; this.instance = ''; removePreference(this.key); this.emit(); }
-  toggle(path: string, rpc: FilesCall) { if (this.expanded.has(path)) this.expanded.delete(path); else { this.expanded.add(path); void this.load(path, rpc); } this.save(); this.emit(); }
-  async load(path: string, rpc: FilesCall, more = false, fresh = false): Promise<void> {
+  clear() { this.epoch++; this.sortReady.clear(); this.directoryEpochs.clear(); this.dirty.clear(); this.flights.clear(); this.refreshing.clear(); this.changesFlight = undefined; this.decorations.clear(); this.pages.clear(); this.expanded = new Set(['']); this.selected.clear(); this.scroll = 0; this.instance = ''; removePreference(this.key); this.emit(); }
+  toggle(path: string, rpc: FilesCall) { if (this.expanded.has(path)) this.expanded.delete(path); else { this.expanded.add(path); void this.load(path, rpc, false, false, true); } this.save(); this.emit(); }
+  async load(path: string, rpc: FilesCall, more = false, fresh = false, reopened = false): Promise<void> {
     const epoch = this.epoch;
     if (this.flights.has(path)) {
       const pending = this.flights.get(path)!;
       if (!fresh) return pending;
       await pending;
       if (epoch !== this.epoch) return;
-      return this.load(path, rpc, more, fresh);
+      return this.load(path, rpc, more, fresh, reopened);
     }
     const directoryEpoch = this.directoryEpochs.get(path) || 0;
-    this.refreshing.add(path); this.emit();
+    const first = !this.pages.has(path);
+    this.refreshing.add(path); if (first) this.emit('view');
+    let changed = first;
     const flight = (async () => {
       try {
-        const old = this.pages.get(path), request = { action: 'list', workspaceId: this.workspaceId, ...(this.instance ? { instance: this.instance } : {}), path, limit: 200, ...(fresh ? { fresh: true } : {}) };
+        const old = this.pages.get(path), request = { action: 'list', workspaceId: this.workspaceId, ...(this.instance ? { instance: this.instance } : {}), path, limit: 200, ...(this.sortedListing ? {listingProtocol:2, ...(!reopened && !this.canReorder() && old?.order?{order:old.order}:{})}:{}), ...(fresh ? { fresh: true } : {}) };
         let page = await rpc({ ...request, ...(more && old?.cursor ? { cursor: old.cursor } : {}) }) as DirectoryPage;
+        if(more && old?.snapshotId && page.snapshotId!==old.snapshotId)throw Object.assign(new Error('Directory changed'),{code:'file_listing_changed'});
         if (!more && old && old.entries.length > 200) {
           let collected = page.entries;
           while (page.cursor && collected.length < old.entries.length) { page = await rpc({ ...request, cursor: page.cursor }) as DirectoryPage; collected = [...collected, ...page.entries]; }
@@ -56,16 +66,24 @@ export class FilesTreeState {
         if (epoch !== this.epoch || directoryEpoch !== (this.directoryEpochs.get(path) || 0)) return;
         if (this.instance && this.instance !== page.instance) { this.clear(); return; }
         this.instance = page.instance;
+        if(old?.order==='native' && page.order==='sorted' && !reopened && !this.canReorder()){this.sortReady.add(path);return;}
+        if(page.order==='native' && page.sortState==='ready')this.sortReady.add(path);else this.sortReady.delete(path);
+
         // Replace only when a complete page arrived. A failed refresh retains every visible row.
-        const entries = more && old ? [...old.entries, ...page.entries.filter(e => !old.entries.some(x => x.path === e.path))] : page.entries;
-        this.pages.set(path, { ...page, entries }); this.error = ''; this.save();
+        const known = new Set(old?.entries.map(e=>e.path));
+        let entries = more && old ? [...old.entries, ...page.entries.filter(e => !known.has(e.path))] : page.entries;
+        const same = !!old && JSON.stringify(old.entries)===JSON.stringify(entries);
+        if(same)entries=old.entries;
+        changed ||= !same || Boolean(old?.cursor)!==Boolean(page.cursor) || !!this.error;
+        this.pages.set(path, { ...page, entries }); this.error = ''; if(changed)this.save();
       } catch (e) {
         if (epoch !== this.epoch) return;
         const code = (e as any)?.code;
+        if(code==='file_listing_changed'){this.dirty.add(path);return;}
         if (code === 'workspace_instance_changed') this.clear();
-        this.error = e instanceof Error ? e.message : String(e);
+        const message = e instanceof Error ? e.message : String(e);changed ||= this.error!==message;this.error=message;
       }
-    })().finally(() => { if (this.flights.get(path) === flight) { this.flights.delete(path); this.refreshing.delete(path); this.emit(); } });
+    })().finally(() => { if (this.flights.get(path) === flight) { this.flights.delete(path); this.refreshing.delete(path); if(changed)this.emit(); if(more && this.dirty.has(path) && this.foreground)void this.refreshChanges(rpc); } });
     this.flights.set(path, flight); return flight;
   }
   changed(change: FileChange, rpc: FilesCall) {
@@ -88,7 +106,7 @@ export class FilesTreeState {
       }
     }
     this.save(); this.emit();
-    if (this.listeners.size) void this.refreshChanges(rpc);
+    if (this.foreground && this.listeners.size) void this.refreshChanges(rpc);
   }
   private refreshChanges(rpc: FilesCall): Promise<void> {
     if (this.changesFlight) return this.changesFlight;
@@ -96,7 +114,8 @@ export class FilesTreeState {
     const flight = (async () => {
       // Merge completions from a batch; progress updates never reach this path.
       await new Promise(resolve => setTimeout(resolve, 40));
-      while (epoch === this.epoch && this.dirty.size) {
+      let passes=0;
+      while (epoch === this.epoch && this.dirty.size && passes++<2) {
         const paths = [...this.dirty]; this.dirty.clear();
         for (const path of paths) await this.load(path, rpc, false, true);
       }
@@ -109,17 +128,18 @@ export class FilesTreeState {
     if (!this.instance) return this.load('', rpc);
     const paths = [...this.expanded].filter(p => this.pages.has(p)).slice(0, 200);
     try {
-      const result = await rpc({ action: 'versions', workspaceId: this.workspaceId, instance: this.instance, paths });
+      const result = await rpc({ action: 'versions', workspaceId: this.workspaceId, instance: this.instance, paths, ...(this.sortedListing?{listingProtocol:2}:{}) });
       // Limit concurrent refreshes; large directory expansions must not flood the authenticated bridge.
-      for (const path of paths) if (result.versions[path] !== this.pages.get(path)?.version) await this.load(path, rpc);
+      for (const path of paths) { if(result.orders?.[path]==='ready' && this.pages.get(path)?.order==='native')this.sortReady.add(path);if(result.versions[path]!==this.pages.get(path)?.version || this.sortReady.has(path) && this.canReorder())await this.load(path,rpc); }
     } catch (e) { if ((e as any)?.code === 'workspace_instance_changed') this.clear(); this.error = e instanceof Error ? e.message : String(e); this.emit(); }
   }
   rows(filter = '') {
+    filter = filter.toLocaleLowerCase();
     const result: TreeRow[] = [{ key: 'root', path: '', depth: 0 }];
     const visit = (path: string, depth: number) => {
       const page = this.pages.get(path);
       for (const entry of page?.entries || []) {
-        if (!filter || entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()) || entry.kind === 'directory') result.push({ key: entry.path, path: entry.path, depth, entry });
+        if (!filter || entry.name.toLocaleLowerCase().includes(filter) || entry.kind === 'directory') result.push({ key: entry.path, path: entry.path, depth, entry });
         if (entry.kind === 'directory' && this.expanded.has(entry.path)) visit(entry.path, depth + 1);
       }
       if (page?.cursor) result.push({ key: path + '/:more', path, depth, more: true });

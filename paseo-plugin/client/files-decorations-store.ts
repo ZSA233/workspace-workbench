@@ -28,6 +28,8 @@ export class FilesDecorationsState {
           batch.push(path); bytes += size; this.pending.delete(path);
         }
         const manual = this.force; this.force = false;
+        let changed = false;
+        const put = (path: string, value: DecorationRecord) => { const old=this.entries.get(path); if (!old || old.freshness!==value.freshness || JSON.stringify(old.entry)!==JSON.stringify(value.entry)) changed=true; this.entries.delete(path);this.entries.set(path,old && old.freshness===value.freshness && JSON.stringify(old.entry)===JSON.stringify(value.entry)?Object.assign(old,{observedAt:value.observedAt}):value); };
         try {
           const result = await rpc({ action: 'decorations', workspaceId: this.workspaceId, instance, paths: batch, force: manual }) as FileDecorations;
           if (epoch !== this.epoch || instance !== this.instance() || result.instance !== instance || result.workspaceId !== this.workspaceId) return;
@@ -35,15 +37,14 @@ export class FilesDecorationsState {
           for (const path of batch) {
             const entry = byPath.get(path), old = this.entries.get(path);
             const fresh = entry?.state === 'ready';
-            this.entries.delete(path);
-            this.entries.set(path, { entry: fresh ? entry : old?.entry || { path, state: 'unknown' }, freshness: fresh ? result.freshness : old ? 'stale' : 'unknown', observedAt: fresh ? result.observedAt : old?.observedAt || result.observedAt });
+            put(path, { entry: fresh ? entry : old?.entry || { path, state: 'unknown' }, freshness: fresh ? result.freshness : old ? 'stale' : 'unknown', observedAt: fresh ? result.observedAt : old?.observedAt || result.observedAt });
           }
         } catch {
           if (epoch !== this.epoch || instance !== this.instance()) return;
-          for (const path of batch) { const old = this.entries.get(path); this.entries.set(path, { entry: old?.entry || { path, state: 'unknown' }, freshness: old ? 'stale' : 'unknown', observedAt: old?.observedAt || '' }); }
+          for (const path of batch) { const old = this.entries.get(path); put(path, { entry: old?.entry || { path, state: 'unknown' }, freshness: old ? 'stale' : 'unknown', observedAt: old?.observedAt || '' }); }
         }
         while (this.entries.size > 4000) this.entries.delete(this.entries.keys().next().value!);
-        this.changed();
+        if (changed) this.changed();
       }
     })().finally(() => { if (this.flight === current) this.flight = undefined; });
     this.flight = current; return current;

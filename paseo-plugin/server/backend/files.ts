@@ -1,3 +1,4 @@
+import { DirectoryOrder, type DirectoryName } from './directory-order.ts';
 import { watch, type FSWatcher } from 'node:fs';
 import { opendir, lstat, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -17,6 +18,7 @@ import { SyntaxService } from './syntax-service.ts';
 
 export class WorkspaceFiles {
   readonly roots: FileRoots;
+  readonly order: DirectoryOrder;
   readonly tasks: FileTasks;
   readonly decorations: FileDecorationsService;
   readonly documents:Documents;
@@ -32,7 +34,7 @@ export class WorkspaceFiles {
   readonly onChanged: (id: string, paths: string[]) => void;
   constructor(workspaces: Workspaces, cache: ObservationCache, onChanged: (id: string, paths: string[]) => void, status?: RepositoryStatus, syntax?:SyntaxService) {
     this.workspaces = workspaces; this.cache = cache; this.onChanged = onChanged;
-    this.roots = new FileRoots(workspaces);
+    this.roots = new FileRoots(workspaces);this.order=new DirectoryOrder(cache);
     this.documents=new Documents(this.roots,syntax||(this.ownSyntax=new SyntaxService()));
     if (!status) { this.ownScheduler = new ObservationScheduler({ internalPaths: [workspaces.config.stateRoot, workspaces.config.workspaceRoot, workspaces.config.recordsRoot, workspaces.config.treesRoot] }); status = new RepositoryStatus(cache, this.ownScheduler, workspaces.config.gitTimeout); }
     this.decorations = new FileDecorationsService(this.roots, status);
@@ -51,6 +53,7 @@ export class WorkspaceFiles {
     fullPaths.forEach(path => batch!.paths.add(path));
   }
   retire(id: string) {
+    this.order.retire(id);
     this.documents.syntax.retire(id);
     this.ownScheduler?.retireWorkspace(id);
     const batch = this.changes.get(id); if (batch) { clearTimeout(batch.timer); this.changes.delete(id); }
@@ -94,12 +97,12 @@ export class WorkspaceFiles {
     if(input.action==='document-asset')return this.documents.asset(context,input.path,input.offset,input.version);
     if (input.action === 'decorations') return this.decorations.query(context, input.paths, input.force);
     if (input.action === 'versions') {
-      const versions: Record<string, string> = Object.create(null);
+      const versions: Record<string, string> = Object.create(null), orders:Record<string,string>=Object.create(null);
       for (const path of input.paths) {
-        try { const full = await this.roots.path(context, path); const s = await lstat(full); const w = this.touch(full, input.workspaceId); versions[path] = `${this.generation}:${fileVersion(s)}:${w.revision}:${Math.floor(Date.now()/30_000)}`; }
+        try { const full = await this.roots.path(context, path); const s = await lstat(full); const w = this.touch(full, input.workspaceId); const content=`${this.generation}:${fileVersion(s)}:${w.revision}`;versions[path] = `${content}:${Math.floor(Date.now()/30_000)}`;if(input.listingProtocol===2)orders[path]=this.order.state(this.order.key(context.instance,path),content)?'ready':'preparing'; }
         catch { versions[path] = 'missing'; }
       }
-      return { versions, instance: context.instance };
+      return { versions, instance: context.instance, ...(input.listingProtocol===2?{orders}:{}) };
     }
     if (input.action === 'preview') {
       const handle = await this.roots.read(context, input.path);
@@ -125,13 +128,28 @@ export class WorkspaceFiles {
     const observed = this.touch(full, input.workspaceId);
     const contentVersion = `${this.generation}:${fileVersion(stat)}:${observed.revision}`;
     const version = `${contentVersion}:${Math.floor(Date.now()/30_000)}`;
-    let offset = 0;
+    const orderKey=this.order.key(context.instance,input.path);
+    let offset = 0, after:DirectoryName|undefined;
+    let ordering:'native'|'sorted'=input.listingProtocol===2 && input.order!=='native' && this.order.state(orderKey,contentVersion)?'sorted':'native';
     if (input.cursor) {
-      try { const cursor = JSON.parse(Buffer.from(input.cursor, 'base64url').toString()); if (cursor.version !== contentVersion || !Number.isSafeInteger(cursor.offset) || cursor.offset < 0) throw new Error(); offset = cursor.offset; }
+      try { const cursor = JSON.parse(Buffer.from(input.cursor, 'base64url').toString()); if (cursor.version !== contentVersion || !Number.isSafeInteger(cursor.offset) || cursor.offset < 0) throw new Error(); offset = cursor.offset;
+        if(input.listingProtocol===2){ordering=cursor.order||'native';if(!['native','sorted'].includes(ordering))throw new Error();if(ordering==='sorted'){after=cursor.after;if(!after||typeof after.name!=='string'||typeof after.directory!=='boolean')throw new Error();}}
+      }
       catch { throw new WorkbenchError('file_listing_changed', 'Directory changed; refresh its first page'); }
     }
+    const snapshotId=hash(contentVersion+':'+ordering);
+    const cursorFor=(offset:number,after?:DirectoryName)=>Buffer.from(JSON.stringify({version:contentVersion,offset,...(input.listingProtocol===2?{order:ordering,...(after?{after}:{})}:{})})).toString('base64url');
+    if(input.listingProtocol===2 && ordering==='sorted'){
+      const key=`files:sorted:${hash(context.instance)}:${input.path}:${offset}:${input.limit}`;
+      const page=await this.cache.read(key,version,async()=>{
+        const names=await this.order.page(orderKey,contentVersion,full,input.limit,after),more=names.length>input.limit,entries:FileEntry[]=[];
+        for(const item of names.slice(0,input.limit)){const info=await fileStat(join(full,item.name));if(!info)throw new WorkbenchError('file_listing_changed','Directory changed during listing');const path=input.path?input.path+'/'+item.name:item.name;entries.push({name:item.name,path,kind:info.isDirectory()?'directory':info.isFile()?'file':info.isSymbolicLink()?'link':'other',size:info.size,modifiedAt:info.mtimeMs,version:fileVersion(info),protected:this.roots.protected(context,path),repository:context.repositories.has(join(full,item.name))});}
+        if(fileVersion(await lstat(full))!==fileVersion(stat))throw new WorkbenchError('file_listing_changed','Directory changed during listing');
+        return {workspaceId:input.workspaceId,instance:context.instance,path:input.path,version,entries,order:ordering,sortState:'ready',snapshotId,...(more?{cursor:cursorFor(offset+entries.length,names[input.limit-1])}:{})};
+      },true,input.fresh,{workspaceId:input.workspaceId,repoPath:context.root});return page;
+    }
     const key = `files:v1:${hash(context.instance)}:${input.path}:${offset}:${input.limit}`;
-    return this.cache.read(key, version, async () => {
+    const result=await this.cache.read(key, version, async () => {
       const entries: FileEntry[] = [];
       const directory = await opendir(full); let index = 0, more = false;
       for await (const item of directory) {
@@ -144,10 +162,12 @@ export class WorkspaceFiles {
       }
       if (fileVersion(await lstat(full)) !== fileVersion(stat)) throw new WorkbenchError('file_listing_changed', 'Directory changed during listing');
       entries.sort((a,b) => Number(b.kind === 'directory')-Number(a.kind === 'directory') || a.name.localeCompare(b.name));
-      const page: DirectoryPage = { workspaceId: input.workspaceId, instance: context.instance, path: input.path, version, entries, ...(more ? { cursor: Buffer.from(JSON.stringify({ version: contentVersion, offset: index-1 })).toString('base64url') } : {}) };
+      const page: DirectoryPage = { workspaceId: input.workspaceId, instance: context.instance, path: input.path, version, entries, ...(more ? { cursor: cursorFor(index-1) } : {}) };
       return page;
     }, true, input.fresh, { workspaceId: input.workspaceId, repoPath: context.root });
+    if(input.listingProtocol===2){this.order.prepare(orderKey,full,contentVersion,input.workspaceId);return {...result,order:'native',sortState:this.order.state(orderKey,contentVersion)?'ready':'preparing',snapshotId};}
+    return result;
   }
   assertIdle(id: string) { this.tasks.assertIdle(id); }
-  async close() { this.closed = true; for (const entry of this.changes.values()) clearTimeout(entry.timer); this.changes.clear(); clearInterval(this.timer); for (const value of this.directories.values()) { value.watcher?.close(); clearTimeout(value.timer); } this.directories.clear(); await this.tasks.close(); if (this.ownScheduler) this.decorations.status.close(); await this.ownScheduler?.close(); await this.ownSyntax?.close(); }
+  async close() { this.closed = true; for (const entry of this.changes.values()) clearTimeout(entry.timer); this.changes.clear(); clearInterval(this.timer); for (const value of this.directories.values()) { value.watcher?.close(); clearTimeout(value.timer); } this.directories.clear(); await this.order.close(); await this.tasks.close(); if (this.ownScheduler) this.decorations.status.close(); await this.ownScheduler?.close(); await this.ownSyntax?.close(); }
 }

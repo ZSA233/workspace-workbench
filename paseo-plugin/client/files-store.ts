@@ -62,7 +62,7 @@ export class FileTransferStore {
     this.rpc = rpc; this.downloadSelection = Boolean(capabilities.downloadSelection);this.readWindow=Boolean(capabilities.readWindow); this.owners++; const visible=capabilities.foreground!==false;if(visible)this.visibleOwners++;clearTimeout(this.timer);if(visible||this.hasWork())void this.poll();
     return () => { this.owners--;if(visible)this.visibleOwners--;this.schedulePoll(); };
   }
-  private hasWork() { return !!(this.running.size || this.saving.size || Object.keys(this.saved).length || [...this.tasks.values()].some(t=>t.cleanupPending || !this.stopped.has(t.id) && (!this.errors.has(t.id) || /connection|socket|transport|network|timed out|observer_unavailable/i.test(this.errors.get(t.id)!)) && (!t.selectionPending && ['queued','preparing'].includes(t.state) || ['active','ready_to_save'].includes(t.state) && (t.direction==='operation' || t.direction==='upload' && (this.files.has(t.id) || t.offset===t.size) || t.direction==='download' && (this.destinations.has(t.id) || t.state==='active' && DownloadStaging.supported() && canSave()))))); }
+  private hasWork() { return !!(this.running.size || this.saving.size || this.cleaning.size || Object.keys(this.saved).length || [...this.tasks.values()].some(t=>!this.stopped.has(t.id) && (!this.errors.has(t.id) || /connection|socket|transport|network|timed out|observer_unavailable/i.test(this.errors.get(t.id)!)) && (!t.selectionPending && ['queued','preparing'].includes(t.state) || ['active','ready_to_save'].includes(t.state) && (t.direction==='operation' || t.direction==='upload' && (this.files.has(t.id) || t.offset===t.size) || t.direction==='download' && (this.destinations.has(t.id) || t.state==='active' && DownloadStaging.supported() && canSave()))))); }
   private schedulePoll(){clearTimeout(this.timer);if(!this.owners&&!this.running.size&&!this.saving.size)return;const work=this.hasWork();if(!work&&!this.visibleOwners)return;const delay=this.failures?OBSERVATION_POLICY.retryMs[Math.min(this.failures-1,3)]:work?1200:5000;this.timer=setTimeout(()=>void this.poll(),delay);}
   async call(input: Record<string, any>) { if (!this.rpc) throw new Error('File connection is unavailable'); return this.rpc(input); }
   private record(task: FileTask, notify = true) {
@@ -87,14 +87,14 @@ export class FileTransferStore {
           for (;;) { const page = await this.call({ action: 'tasks', activeOnly: true, limit: 200, ...(before ? { before } : {}) }); for (const task of page.tasks as FileTask[]) all.set(task.id, task); if (page.tasks.length < 200 || !page.next) break; before = page.next; }
         }
         result.tasks = [...all.values()];
-        const seen = new Set<string>();
-        for (const incoming of result.tasks as FileTask[]) { seen.add(incoming.id); const task = this.record(incoming, this.tasks.has(incoming.id)); if (done(task)) { this.discardDestination(task.id); this.files.delete(task.id); if (task.direction === 'download' && !this.cleaned.has(task.id)) void this.cleanup(task.id); else if (task.direction !== 'download') this.localOffsets.delete(task.id); } }
+        const seen = new Set<string>();let urgent=!!this.snapshot.error;
+        for (const incoming of result.tasks as FileTask[]) { const old=this.tasks.get(incoming.id);urgent ||= !old || old.state!==incoming.state || old.error!==incoming.error || old.cleanupPending!==incoming.cleanupPending;seen.add(incoming.id); const task = this.record(incoming, this.tasks.has(incoming.id)); if (done(task)) { this.discardDestination(task.id); this.files.delete(task.id); if (task.direction === 'download' && !this.cleaned.has(task.id)) void this.cleanup(task.id); else if (task.direction !== 'download') this.localOffsets.delete(task.id); } }
         // Tasks outside the recent page retain their stable identities and are queried individually.
         for (const [id, old] of this.tasks) if (!seen.has(id) && !done(old)) { try { this.record(await this.call({ action: 'task', id })); } catch { /* keep the recovery entry */ } }
         for (const [id, old] of this.tasks) if (done(old) && !seen.has(id)) { this.tasks.delete(id); this.cleaned.delete(id); }
         for (const [id, message] of this.errors) if (/connection|socket|transport|network|timed out|observer_unavailable/i.test(message)) this.errors.delete(id);
         this.failures=0;this.temporaryBytes = result.temporaryBytes;
-        this.emit();
+        this.emit(undefined,!urgent);
         for (const task of this.tasks.values()) {
           const policy = task.batchId && this.batchPolicies.get(task.batchId);
           if (task.state === 'conflict' && task.conflict !== 'changed' && policy && !(policy === 'replace' && task.canReplace === false)) { await this.control(task.id, policy); continue; }

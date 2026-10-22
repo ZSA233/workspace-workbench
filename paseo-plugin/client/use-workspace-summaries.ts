@@ -38,12 +38,15 @@ export function useWorkspaceSummaries(project: string, workspaceId: string, path
     // Speculative content has one subscriber and never gates basic summaries.
     const round = useRef(createPrefetchRound()).current;
     const [, advance] = useState(0);
-    const candidates = inputs.filter(input => input.repoPath !== selected && (queries[inputs.indexOf(input)]?.data?.result as any)?.regions?.summary?.state === 'ready').map(input => {
-        const repository = (queries[inputs.indexOf(input)]?.data?.result as any)?.regions?.summary?.result?.repository;
-        return { ...input, ...content, summaryOnly: false, scope: repository?.dirty || repository?.branchScopeAvailable === false ? 'working' : 'branch' };
+    const eligible = inputs.flatMap((input,index) => {
+        const summary = (queries[index]?.data?.result as any)?.regions?.summary;
+        if(summary?.state!=='ready')return [];
+        const repository=summary.result?.repository;
+        return [{...input,...content,summaryOnly:false,scope:repository?.dirty || repository?.branchScopeAvailable===false?'working':'branch'}];
     });
+    const candidates=eligible.filter(input=>input.repoPath!==selected);
     const candidateKeys = candidates.map(input => JSON.stringify([project,input]));
-    round.reconcile(JSON.stringify([project,workspaceId,instance,content]),candidateKeys,enabled);
+    round.reconcile(JSON.stringify([project,workspaceId,instance,content]),eligible.map(input=>JSON.stringify([project,input])),enabled);
     const nextKey = round.next(candidateKeys);
     const warm = candidates[candidateKeys.indexOf(nextKey || '')];
     const warmKey = warm ? JSON.stringify([project, warm]) : '';

@@ -9,14 +9,15 @@ import { ScrollView } from './native-components';
 import { filesTreesChanged } from './files-tree-store';
 
 export const fileBytes = (n: number | null) => n === null ? '—' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KiB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MiB' : (n / 1073741824).toFixed(2) + ' GiB';
-export function useFileConnection(project: string, scope: string, enabled: boolean, downloadSelection = false) {
+export function useFileConnection(project: string, scope: string, enabled: boolean, downloadSelection = false, foreground = true, readWindow = false) {
   const call = useRpc(filesRpc), store = fileTransferStore(scope);
   useEffect(() => store.subscribeChanges(changes => filesTreesChanged(scope, changes, request => store.call(request))), [store, scope]);
-  useEffect(() => enabled ? store.bind(async request => { const result = await call({ projectConfig: project, request: request as any }); if (!result.ok) { const error = new Error(result.error?.message || 'File request failed') as Error & { code?: string }; error.code = result.error?.code; throw error; } return result.result; }, { downloadSelection }) : undefined, [call, project, store, enabled, downloadSelection]);
+  useEffect(() => enabled ? store.bind(async request => { const result = await call({ projectConfig: project, request: request as any }); if (!result.ok) { const error = new Error(result.error?.message || 'File request failed') as Error & { code?: string }; error.code = result.error?.code; throw error; } return result.result; }, { downloadSelection, foreground, readWindow }) : undefined, [call, project, store, enabled, downloadSelection, foreground, readWindow]);
   return store;
 }
-export function FileTransfers({ store, theme }: { store: FileTransferStore; theme: any }) {
-  const zh = useWorkbenchLocale() === 'zh-CN', snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot), [open, setOpen] = useState(false), [batch, setBatch] = useState(false), [error, setError] = useState('');
+const noSubscription = () => () => {};
+export function FileTransfers({ store, theme, foreground = true }: { store: FileTransferStore; theme: any; foreground?: boolean }) {
+  const zh = useWorkbenchLocale() === 'zh-CN', snapshot = useSyncExternalStore(foreground ? store.subscribe : noSubscription, store.getSnapshot), [open, setOpen] = useState(false), [batch, setBatch] = useState(false), [error, setError] = useState('');
   const [page, setPage] = useState(0);
   const { height } = useWindowDimensions();
   const c = theme.colors, active = snapshot.tasks.filter(t => t.cleanupPending || !['complete', 'cancelled', 'delegated'].includes(t.state));

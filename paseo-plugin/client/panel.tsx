@@ -325,7 +325,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   // cold start the socket can exist before it is ready to serve, which used to
   // turn the initial workspace list into a misleading observer_timeout.
   const backendReady = backendQuery.data?.state === "ready";
-  const fileStore = useFileConnection(projectConfig, filesScopeKey, backendReady, backendQuery.data?.readCapabilities?.downloadSelectionProtocol === 1);
+  const fileStore = useFileConnection(projectConfig, filesScopeKey, backendReady, backendQuery.data?.readCapabilities?.downloadSelectionProtocol === 1, foreground, backendQuery.data?.readCapabilities?.fileReadWindowProtocol === 1);
   reportNativeDiagnostic("project-panel-backend-readiness", { ready: String(backendReady), state: String(backendQuery.data?.state || "pending") });
   const observationTiming = useMemo(
     () => observationTimingFromWire(backendQuery.data?.timing),
@@ -381,7 +381,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   // and trigger an unwanted fallback.
   useEffect(() => { if (listResult?.observation?.state === "ready") { reconcileFilesTrees(filesScopeKey, observedWorkspaces); reconcileDocuments(filesScopeKey,observedWorkspaces); reconcileFileReviews(hostWorkspaceId, projectConfig, observedWorkspaces); } }, [filesScopeKey, observedWorkspaces, listResult?.observation?.state, hostWorkspaceId, projectConfig]);
   const documentReturn=useDocumentReturn(filesScopeKey),handledDocumentReturn=useRef<typeof documentReturn>(undefined);
-  useEffect(()=>{if(!foreground||!documentReturn||documentReturn.hostWorkspaceId&&documentReturn.hostWorkspaceId!==hostWorkspaceId||handledDocumentReturn.current===documentReturn||listResult?.observation?.state!=='ready')return;const workspace=observedWorkspaces.find(w=>w.id===documentReturn.workspaceId&&w.state!=='removed'&&w.state!=='record_invalid');if(workspace){handledDocumentReturn.current=documentReturn;selectWorkspace(workspace.id);setTab('files');consumeDocumentReturn(filesScopeKey,documentReturn);}},[documentReturn,listResult?.observation?.state,observedWorkspaces,selectWorkspace,foreground,hostWorkspaceId,filesScopeKey]);
+  useEffect(()=>{if(!foreground||!preferences.hydrated||!documentReturn||documentReturn.hostWorkspaceId&&documentReturn.hostWorkspaceId!==hostWorkspaceId||handledDocumentReturn.current===documentReturn||listResult?.observation?.state!=='ready')return;const workspace=observedWorkspaces.find(w=>w.id===documentReturn.workspaceId&&w.state!=='removed'&&w.state!=='record_invalid');if(workspace){handledDocumentReturn.current=documentReturn;selectWorkspace(workspace.id);setTab('files');consumeDocumentReturn(filesScopeKey,documentReturn);}},[documentReturn,listResult?.observation?.state,observedWorkspaces,selectWorkspace,foreground,preferences.hydrated,hostWorkspaceId,filesScopeKey]);
   const selectedWorkspace = observedWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId);
   const selectedWorkspaceIsMain = isMainWorkspace(selectedWorkspace);
   useEffect(() => {
@@ -912,7 +912,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               styles={styles}
             />
             </View></View>
-          ) : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} onOpenDocument={backendQuery.data?.readCapabilities?.documentPreviewProtocol===1?(path,instance)=>openDocument({hostWorkspaceId,agentId,projectConfig,scope:filesScopeKey,workspaceId:selectedWorkspace.id,workspaceName:selectedWorkspace.displayName||selectedWorkspace.id,instance,directory:selectedWorkspace.treePath||selectedWorkspace.sourceRoot||'',path}):undefined} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
+          ) : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} onOpenDocument={backendQuery.data?.readCapabilities?.documentPreviewProtocol===1?(path,instance)=>openDocument({hostWorkspaceId,agentId,projectConfig,scope:filesScopeKey,workspaceId:selectedWorkspace.id,workspaceName:selectedWorkspace.displayName||selectedWorkspace.id,instance,directory:selectedWorkspace.treePath||selectedWorkspace.sourceRoot||'',path}):undefined} foreground={foreground} sortedListing={backendQuery.data?.readCapabilities?.directoryListingProtocol === 2} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
             {selectedWorkspaceIsMain ? <View style={styles.targetRow}>
               <Text style={styles.layoutMenuHint}>{localizedCopy.mainReviewHint}</Text>
               <TextInput value={mainReviewInstructions} onChangeText={setMainReviewInstructions} placeholder={localizedCopy.mainReviewInstructions} multiline style={styles.targetInput} />
@@ -938,7 +938,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         </BodyContainer>
         </SectionAllocationContext.Provider>
       </View>
-      <FileTransfers store={fileStore} theme={theme} />
+      <FileTransfers store={fileStore} theme={theme} foreground={foreground} />
       <AnchoredMenu open={statusMenuOpen} onClose={() => setStatusMenuOpen(false)} theme={theme}>
         <Text style={styles.layoutMenuHint}>{observationLabel}</Text>
         {backendReady && !basicCapable ? <Text style={styles.layoutMenuHint}>{localizedCopy.basicObservationCompatibility}</Text> : null}

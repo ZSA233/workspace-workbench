@@ -12,30 +12,31 @@ import { GeometricIcon } from './geometric-icon';
 import { fileGitColor, fileGitDescription, fileGitPalette, fileTreeIcon } from './files-decoration-display';
 import { destinationInsideSource, unchangedFileMove, type FileLocation } from '../shared/file-operations';
 
+const noSubscription = () => () => {};
 const parent = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
-export default function FilesManager({ scope, workspace, store, theme, decorationsEnabled = false, onOpenDocument }: { scope: string; workspace: any; store: FileTransferStore; theme: any; decorationsEnabled?: boolean; onOpenDocument?:(path:string,instance:string)=>void }) {
+export default function FilesManager({ scope, workspace, store, theme, decorationsEnabled = false, foreground = true, sortedListing = false, onOpenDocument }: { scope: string; workspace: any; store: FileTransferStore; theme: any; decorationsEnabled?: boolean; foreground?: boolean; sortedListing?: boolean; onOpenDocument?:(path:string,instance:string)=>void }) {
   const zh = useWorkbenchLocale() === 'zh-CN', c = theme.colors;
   const { fontScale } = useWindowDimensions();
   const dense = Platform.OS === 'web' && !(globalThis as any).matchMedia?.('(pointer: coarse)').matches;
   const rowHeight = Math.max(dense ? 22 : 30, Math.ceil(16 * fontScale) + 6), indent = dense ? 12 : 15;
   const clipboard = useSyncExternalStore(subscribeFileClipboard, getFileClipboard);
   const tree = useMemo(() => filesTreeState(scope, workspace.id), [scope, workspace.id]);
-  const revision = useSyncExternalStore(tree.subscribe, tree.snapshot);
+  const revision = useSyncExternalStore(foreground ? tree.subscribe : noSubscription, tree.snapshot);
   const [filter, setFilter] = useState(''), [menu, setMenu] = useState<string | null>(null), [dialog, setDialog] = useState<'mkdir' | 'rename' | 'delete' | null>(null), [name, setName] = useState(''), [error, setError] = useState(''), [drop, setDrop] = useState<string | null>(null), [preview, setPreview] = useState<{ name: string; text: string; size: number } | null>(null);
   const [dialogEntries, setDialogEntries] = useState<FileEntry[]>([]), [dialogPath, setDialogPath] = useState('');
   const [visibleStart, setVisibleStart] = useState(0), [listHeight, setListHeight] = useState(800);
-  const touching = useRef(false);
+  const touching = useRef(false), pointerPressed=useRef(false), interaction=useRef(false);
   const dragged = useRef<FileLocation[]>([]);
   const pointer = useRef({ id: -1, x: 0, y: 0 });
   const longPressClick = useRef<{ id: number; x: number; y: number; until: number } | null>(null);
   const rootRef = useRef<any>(null), listRef = useRef<any>(null), hover = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), busy = useRef(false), anchor = useRef('');
-  const rows = useMemo(() => tree.rows(filter), [tree, revision, filter]);
+  const rows = useMemo(() => tree.rows(filter), [tree, tree.structureRevision, filter]);
   const decorationPaths = [...new Set(['', ...rows.slice(Math.max(0, visibleStart-8), visibleStart + Math.ceil(listHeight/rowHeight)+16).filter(row => !row.more).map(row => row.path)])];
   const decorationPathsKey = JSON.stringify(decorationPaths), decorationPathsRef = useRef(decorationPaths);
   decorationPathsRef.current = decorationPaths;
   const palette = fileGitPalette(theme);
   const gitPending = decorationsEnabled && decorationPaths.some(path => tree.decorations.entries.get(path)?.freshness !== 'fresh');
-  const entries = useMemo(() => new Map([...tree.pages.values()].flatMap(p => p.entries).map(e => [e.path, e])), [tree, revision]);
+  const entries = useMemo(() => new Map([...tree.pages.values()].flatMap(p => p.entries).map(e => [e.path, e])), [tree, tree.structureRevision]);
   const selected = [...tree.selected].map(p => entries.get(p)).filter(Boolean) as FileEntry[];
   const topLevel = (values: FileEntry[]) => { const paths = new Set(values.map(entry => entry.path)); return values.filter(entry => { for (let value = parent(entry.path); value; value = parent(value)) if (paths.has(value)) return false; return true; }); };
   const targetPath = menu !== null ? menu && entries.get(menu)?.kind !== 'directory' ? parent(menu) : menu : selected.length === 1 && selected[0].kind === 'directory' ? selected[0].path : selected.length ? parent(selected[0].path) : '';
@@ -43,22 +44,26 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   const call = (input: Record<string, any>) => store.call(input);
   const run = (work: () => Promise<unknown>) => { setError(''); void work().catch(e => setError(String(e.message || e))); };
   useEffect(() => {
+    tree.foreground=foreground;tree.sortedListing=sortedListing;
+    if(!foreground)return;
     let disposed = false, timer: ReturnType<typeof setTimeout>;
     const update = async () => { await tree.validate(call); if (!disposed && decorationsEnabled) await tree.decorations.refresh(decorationPathsRef.current, call); if (!disposed) timer = setTimeout(update, 3000); };
     void update();
-    void (async () => { await tree.load('', call); for (const path of tree.expanded) if (path && !disposed) await tree.load(path, call); })();
-    return () => { disposed = true; clearTimeout(timer); clearTimeout(hover.current); tree.save(); };
-  }, [tree, store, decorationsEnabled]);
+    void (async () => { if(!tree.pages.has(''))await tree.load('', call); for (const path of tree.expanded) if (path && !disposed && !tree.pages.has(path)) await tree.load(path, call); })();
+    return () => { disposed = true; clearTimeout(timer); clearTimeout(hover.current); tree.foreground=false; tree.save(); };
+  }, [tree, store, decorationsEnabled, foreground, sortedListing]);
   useEffect(() => {
-    if (decorationsEnabled && tree.instance) void tree.decorations.refresh(decorationPathsRef.current, call);
-  }, [tree, store, decorationsEnabled, tree.instance, decorationPathsKey]);
+    if (foreground && decorationsEnabled && tree.instance) void tree.decorations.refresh(decorationPathsRef.current, call);
+  }, [tree, store, decorationsEnabled, foreground, tree.instance, decorationPathsKey]);
+  interaction.current=menu!==null || dialog!==null || drop!==null || dragged.current.length>0 || busy.current || !!filter;
+  useEffect(()=>{tree.interacting=pointerPressed.current || interaction.current;if(foreground)void tree.applySorted(call);},[tree,foreground,visibleStart,tree.selected.size,menu,dialog,drop,filter]);
   useEffect(() => { if (tree.pages.size) listRef.current?.scrollToOffset?.({ offset: tree.scroll, animated: false }); }, [tree, Boolean(tree.pages.size)]);
   useEffect(() => {
     const document = (globalThis as any).document;
     if (Platform.OS !== 'web' || !document) return;
     // A touch release can generate a click at the newly opened portal menu.
     // Consume only the originating gesture, leaving subsequent menu taps usable.
-    const release = () => { if (longPressClick.current) longPressClick.current.until = Date.now() + 500; };
+    const release = () => { pointerPressed.current=false;tree.interacting=interaction.current;if(tree.foreground&&!tree.interacting)void tree.applySorted(call);if (longPressClick.current) longPressClick.current.until = Date.now() + 500; };
     const click = (event: any) => {
       const press = longPressClick.current;
       if (!press) return;
@@ -66,7 +71,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
       const origin = typeof event.pointerId === 'number' && event.pointerId >= 0 ? event.pointerId === press.id : Math.abs(event.clientX - press.x) < 12 && Math.abs(event.clientY - press.y) < 12;
       if (origin) { longPressClick.current = null; event.preventDefault(); event.stopImmediatePropagation(); }
     };
-    const cancel = () => { longPressClick.current = null; };
+    const cancel = () => { longPressClick.current = null; release(); };
     document.addEventListener('click', click, true); document.addEventListener('pointerup', release, true); document.addEventListener('touchend', release, true); document.addEventListener('pointercancel', cancel, true);
     return () => { document.removeEventListener('click', click, true); document.removeEventListener('pointerup', release, true); document.removeEventListener('touchend', release, true); document.removeEventListener('pointercancel', cancel, true); };
   }, []);
@@ -78,7 +83,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
       if (a >= 0 && b >= 0) for (const row of rows.slice(Math.min(a,b), Math.max(a,b)+1)) if (row.entry) tree.selected.add(row.path);
     } else if (e.ctrlKey || e.metaKey) { if (tree.selected.has(path)) tree.selected.delete(path); else if (path) tree.selected.add(path); anchor.current = path; }
     else { tree.selected = new Set(path ? [path] : []); anchor.current = path; }
-    tree.save(); tree.emit();
+    tree.save(); tree.emit('view');
   };
   const copy = (operation: 'copy' | 'move') => {
     if (!selected.length || selected.some(e => e.protected && !(operation === 'copy' && e.repository))) return;
@@ -152,7 +157,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     if (/input|textarea/i.test(event.target?.tagName || '')) return;
     if ((event.ctrlKey || event.metaKey) && ['c','x','v','a'].includes(event.key.toLowerCase())) {
       event.preventDefault(); const key = event.key.toLowerCase();
-      if (key === 'c') copy('copy'); else if (key === 'x' && !readOnly) copy('move'); else if (key === 'v') paste(targetPath); else if (key === 'a') { tree.selected = new Set(rows.filter(r => r.entry && (!r.entry.protected || r.entry.repository)).map(r => r.path)); tree.emit(); }
+      if (key === 'c') copy('copy'); else if (key === 'x' && !readOnly) copy('move'); else if (key === 'v') paste(targetPath); else if (key === 'a') { tree.selected = new Set(rows.filter(r => r.entry && (!r.entry.protected || r.entry.repository)).map(r => r.path)); tree.emit('view'); }
     } else if (['ArrowDown','ArrowUp','Home','End'].includes(event.key)) {
       event.preventDefault(); const visible = rows.filter(row => !row.more), current = visible.findIndex(row => row.path === anchor.current);
       const index = event.key === 'Home' ? 0 : event.key === 'End' ? visible.length-1 : Math.min(visible.length-1, Math.max(0, current + (event.key === 'ArrowDown' ? 1 : -1)));
@@ -164,7 +169,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
       else if (event.key === 'ArrowLeft') { if (tree.expanded.has(row.path)) tree.toggle(row.path, call); else selection(parent(row.path)); }
     } else if (event.key === 'Delete' && selected.length && !readOnly && !selected.some(e => e.protected)) { event.preventDefault(); showDialog('delete'); }
     else if (event.key === 'F2' && selected.length === 1 && !selected[0].protected && !readOnly) { event.preventDefault(); showDialog('rename'); }
-    else if (event.key === 'Escape') { setMenu(null); tree.selected.clear(); tree.emit(); }
+    else if (event.key === 'Escape') { setMenu(null); tree.selected.clear(); tree.emit('view'); }
   };
   const dragOver = (event: any, row: TreeRow) => {
     event.preventDefault(); event.stopPropagation(); if (readOnly) return;
@@ -197,7 +202,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
       <View style={{ width: 14, alignItems: 'center', justifyContent: 'center' }}>{decoration?.mark ? directory ? <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }}/> : <Text style={{ color, fontSize: 10, fontWeight: '600', lineHeight: 14 }}>{decoration.mark}</Text> : null}</View>
       <View style={{ width: 53, alignItems: 'flex-end' }}>{tree.refreshing.has(row.path) ? <GeometricIcon name="RefreshCw" size={10} color={c.foregroundMuted}/> : entry && !directory ? <Text style={{ color: c.foregroundMuted, fontSize: 10 }}>{fileBytes(entry.size)}</Text> : null}</View>
     </Pressable>;
-    return Platform.OS === 'web' ? createElement('div', { key: row.key, 'data-file-path': row.path, 'data-git-mark': decoration?.mark || '', 'data-git-ignored': Boolean(decoration?.ignored), title: [row.path || workspace.displayName || workspace.id, details].filter(Boolean).join('\n'), onPointerDownCapture: (event: any) => { touching.current = event.pointerType === 'touch'; pointer.current = { id: event.pointerId, x: event.clientX, y: event.clientY }; }, tabIndex: 0, style: { display: 'flex', width: '100%', userSelect: 'none', outline: 'none' }, onClickCapture: (event: any) => { selection(row.path, event); if ((directory||touching.current) && !event.ctrlKey && !event.metaKey && !event.shiftKey) open(row); }, draggable: Boolean(entry && !entry.protected && !readOnly), onDoubleClick: () => { if (!directory) open(row); }, onContextMenu: (e: any) => { e.preventDefault(); e.stopPropagation(); if (!tree.selected.has(row.path)) selection(row.path); setMenu(row.path); }, onDragStart: (e: any) => { const paths = tree.selected.has(row.path) ? [...tree.selected] : [row.path]; const values = paths.map(p => entries.get(p)).filter((x): x is FileEntry => Boolean(x && !x.protected)); dragged.current = values.map(x => ({ ...destination(x.path), version: x.version })); e.dataTransfer.setData('application/x-workbench-files', JSON.stringify({ scope, entries: dragged.current })); e.dataTransfer.effectAllowed = 'copyMove'; }, onDragOver: (e: any) => dragOver(e, row), onDrop: (e: any) => onDrop(e, row) } as any, content) : content;
+    return Platform.OS === 'web' ? createElement('div', { key: row.key, 'data-file-path': row.path, 'data-git-mark': decoration?.mark || '', 'data-git-ignored': Boolean(decoration?.ignored), title: [row.path || workspace.displayName || workspace.id, details].filter(Boolean).join('\n'), onPointerDownCapture: (event: any) => { touching.current = event.pointerType === 'touch';pointerPressed.current=true;tree.interacting=true; pointer.current = { id: event.pointerId, x: event.clientX, y: event.clientY }; }, tabIndex: 0, style: { display: 'flex', width: '100%', userSelect: 'none', outline: 'none' }, onClickCapture: (event: any) => { selection(row.path, event); if ((directory||touching.current) && !event.ctrlKey && !event.metaKey && !event.shiftKey) open(row); }, draggable: Boolean(entry && !entry.protected && !readOnly), onDoubleClick: () => { if (!directory) open(row); }, onContextMenu: (e: any) => { e.preventDefault(); e.stopPropagation(); if (!tree.selected.has(row.path)) selection(row.path); setMenu(row.path); }, onDragStart: (e: any) => { tree.interacting=true;const paths = tree.selected.has(row.path) ? [...tree.selected] : [row.path]; const values = paths.map(p => entries.get(p)).filter((x): x is FileEntry => Boolean(x && !x.protected)); dragged.current = values.map(x => ({ ...destination(x.path), version: x.version })); e.dataTransfer.setData('application/x-workbench-files', JSON.stringify({ scope, entries: dragged.current })); e.dataTransfer.effectAllowed = 'copyMove'; }, onDragOver: (e: any) => dragOver(e, row), onDrop: (e: any) => onDrop(e, row) } as any, content) : content;
   };
   const body = <View style={{ flex: 1, minHeight: 0 }}>
     <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', paddingHorizontal: 3, borderBottomWidth: 1, borderBottomColor: c.border || '#ffffff18' }}>
@@ -232,5 +237,5 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     </Modal.Content></Modal>
     <Modal open={Boolean(preview)} title={preview?.name || ''} onOpenChange={open => { if (!open) setPreview(null); }}><Modal.Content scrollable contentContainerStyle={{ padding: 12, gap: 8 }}><Text style={{ color: c.foregroundMuted, fontSize: 11 }}>{zh ? '预览前 64 KiB' : 'Preview first 64 KiB'} · {fileBytes(preview?.size || 0)}</Text><Text selectable style={{ color: c.foreground, fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>{preview?.text}</Text></Modal.Content></Modal>
   </View>;
-  return Platform.OS === 'web' ? createElement('div', { ref: rootRef, tabIndex: 0, onKeyDownCapture: keyDown, onDragOver: (event: any) => { if (event.currentTarget.contains(event.target)) dragOver(event, rows[0]); }, onDrop: (event: any) => { if (event.currentTarget.contains(event.target)) onDrop(event, rows[0]); }, onContextMenu: (event: any) => { if (!event.currentTarget.contains(event.target) || /input|textarea/i.test(event.target?.tagName || '')) return; event.preventDefault(); selection(''); setMenu(''); }, onDragEnd: () => { dragged.current = []; setDrop(null); clearTimeout(hover.current); }, onDragLeave: (event: any) => { if (!event.currentTarget.contains(event.relatedTarget)) { setDrop(null); clearTimeout(hover.current); } }, style: { display: 'flex', flexDirection: 'column', width: '100%', flex: 1, minHeight: 0, outline: 'none' } } as any, body) : body;
+  return Platform.OS === 'web' ? createElement('div', { ref: rootRef, tabIndex: 0, onKeyDownCapture: keyDown, onDragOver: (event: any) => { if (event.currentTarget.contains(event.target)) dragOver(event, rows[0]); }, onDrop: (event: any) => { if (event.currentTarget.contains(event.target)) onDrop(event, rows[0]); }, onContextMenu: (event: any) => { if (!event.currentTarget.contains(event.target) || /input|textarea/i.test(event.target?.tagName || '')) return; event.preventDefault(); selection(''); setMenu(''); }, onDragEnd: () => { dragged.current = [];pointerPressed.current=false;tree.interacting=menu!==null || dialog!==null || busy.current || !!filter; setDrop(null); clearTimeout(hover.current); }, onDragLeave: (event: any) => { if (!event.currentTarget.contains(event.relatedTarget)) { setDrop(null); clearTimeout(hover.current); } }, style: { display: 'flex', flexDirection: 'column', width: '100%', flex: 1, minHeight: 0, outline: 'none' } } as any, body) : body;
 }

@@ -11,6 +11,7 @@ export function observationCacheIdentity(params: Json): string {
 }
 
 type Entry = {
+  ephemeral?: boolean;
   value: Json;
   fingerprint: string;
   time: number;
@@ -83,7 +84,7 @@ export class ObservationCache {
         if (!entry.owners.length) { this.entries.delete(key); this.failures.delete(key); }
       } else if (Array.isArray(entry.value.workspaces)) { this.entries.delete(key); this.failures.delete(key); }
     }
-    this.writer.save({ version: 1, entries: [...this.entries] });
+    this.writer.save({ version: 1, entries: [...this.entries].filter(([,entry])=>!entry.ephemeral) });
   }
   /** Only call with a complete, successfully decoded record roster. */
   reconcileWorkspaces(workspaces: Json[]) {
@@ -108,7 +109,7 @@ export class ObservationCache {
       this.entries.delete(key); this.failures.delete(key);
     }
     this.workspaceInstances = instances;
-    this.writer.save({ version: 1, entries: [...this.entries] });
+    this.writer.save({ version: 1, entries: [...this.entries].filter(([,entry])=>!entry.ephemeral) });
   }
   private trim() {
     let bytes = [...this.entries.values()].reduce(
@@ -304,6 +305,16 @@ export class ObservationCache {
     this.entries.set(key, entry);
     this.trim(); this.onProduced?.(scope);
   }
+  /** Transient name indices share this cache's entry/byte quota and ownership fences. */
+  publishTransient(key:string,fingerprint:string,value:Json,scope:CachePublication,bytes:number){
+    if(this.closed)return;
+    const entry:Entry={value,fingerprint,time:this.clock(),bytes,ephemeral:true};this.own(entry,scope);
+    this.entries.delete(key);this.entries.set(key,entry);this.trim();
+  }
+  transient(key:string,fingerprint:string):Json|undefined{
+    const entry=this.entries.get(key);if(!entry?.ephemeral||entry.fingerprint!==fingerprint)return;
+    this.entries.delete(key);this.entries.set(key,entry);return entry.value;
+  }
   peek(key: string, fingerprint: string): Json | undefined {
     const entry = this.entries.get(key);
     if (!entry || entry.fingerprint !== fingerprint || this.failures.has(key) || entry.value.observation?.state !== 'ready') return undefined;
@@ -377,7 +388,7 @@ export class ObservationCache {
     this.generation++;
     while (this.flights.size || this.background.size)
       await Promise.allSettled([...this.flights.values(), ...this.background]);
-    this.writer.save({ version: 1, entries: [...this.entries] }); await this.writer.flush();
+    this.writer.save({ version: 1, entries: [...this.entries].filter(([,entry])=>!entry.ephemeral) }); await this.writer.flush();
     this.entries.clear();
     this.failures.clear();
     this.probes.clear();

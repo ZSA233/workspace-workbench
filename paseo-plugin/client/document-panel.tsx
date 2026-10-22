@@ -29,7 +29,7 @@ function DocumentBody({selection:s,...props}:Props&{selection:DocumentSelection}
   const call=useCallback(async(request:Record<string,unknown>)=>{const result=await rpcRef.current({projectConfig:s.projectConfig,request:request as any});if(!result.ok){const error=Object.assign(new Error(result.error?.message||'Read failed'),{code:result.error?.code});throw error;}return result.result as any;},[s.projectConfig]);
   const status=useQuery({queryKey:['document-backend',s.projectConfig],queryFn:()=>backend({projectConfig:s.projectConfig}),staleTime:1000});
   const ready=status.data?.state==='ready',capable=status.data?.readCapabilities?.documentPreviewProtocol===1;
-  const transfers=useFileConnection(s.projectConfig,s.scope,ready,status.data?.readCapabilities?.downloadSelectionProtocol===1);
+  const transfers=useFileConnection(s.projectConfig,s.scope,ready,status.data?.readCapabilities?.downloadSelectionProtocol===1,activity.foreground,status.data?.readCapabilities?.fileReadWindowProtocol===1);
   const reader=useMemo(()=>createDocumentReader(s.scope+'\0'+documentKey(s),s,call),[s.scope,s.workspaceId,s.instance,s.path,call]);
   const state=useSyncExternalStore(reader.subscribe,reader.snapshot),[error,setError]=useState(''),[search,setSearch]=useState(''),[match,setMatch]=useState(0),[visible,setVisible]=useState(0),[width,setWidth]=useState(800);
   const md=languageForPath(s.path)==='markdown',mode=state.mode||(md?'preview':'source'),list=useRef<any>(null);
@@ -72,6 +72,6 @@ function DocumentBody({selection:s,...props}:Props&{selection:DocumentSelection}
     {mode==='source'&&state.page&&(!state.page.eof||state.windowOffset>0)?<Text style={{padding:4,color:c.foregroundMuted,fontSize:11}}>{zh?`搜索范围：已加载的第 ${state.startLine}–${state.startLine+lines.length-1} 行。`:`Search covers loaded lines ${state.startLine}–${state.startLine+lines.length-1}.`}</Text>:null}
     {state.continuation||longLine?<Text style={{padding:4,color:c.foregroundMuted,fontSize:11}}>{state.continuation?(zh?`从第 ${state.startLine} 行的中间继续；前一段包含开头。`:`Continuing line ${state.startLine}; its beginning is in the previous section.`):(zh?'超长行自动换行显示。':'Very long lines are wrapped.')}</Text>:null}
     {state.reason?<Text style={{padding:4,color:c.foregroundMuted,fontSize:11}}>{['large_file','syntax_budget'].includes(state.reason)?(zh?'大文件模式：分段显示源码。':'Large file mode: paged source.'):state.reason==='markdown_preview_limit'?(zh?'文档排版超过预览预算，已切换为分段源码。':'Preview budget exceeded. Showing paged source.'):state.reason==='unknown_language'?(zh?'此类型使用纯文本显示。':'Plain text for this file type.'):(zh?'语法高亮暂不可用，源码仍可阅读。':'Highlighting is unavailable; source remains readable.')}</Text>:null}
-    <FileTransfers store={transfers} theme={props.theme}/>
+    <FileTransfers store={transfers} theme={props.theme} foreground={activity.foreground}/>
   </View>;
 }

@@ -1,6 +1,12 @@
 import type {Comparison} from './comparison';
 import {z} from 'zod';
-export const noteAnchor=z.object({path:z.string().min(1).max(4096),side:z.enum(['file','old','new']),start:z.number().int().positive().optional(),end:z.number().int().positive().optional()}).strict();
+export const noteAnchor=z.object({path:z.string().min(1).max(4096),side:z.enum(['file','old','new']),start:z.number().int().positive().optional(),end:z.number().int().positive().optional()}).strict().superRefine((anchor,ctx)=>{
+ if(anchor.side==='file'){
+  if(anchor.start!==undefined||anchor.end!==undefined)ctx.addIssue({code:'custom',path:['side'],message:'File anchors have no line numbers'});
+ }else if(anchor.start===undefined||anchor.end===undefined){
+  ctx.addIssue({code:'custom',path:[anchor.start===undefined?'start':'end'],message:'Line anchors require both start and end; use the captured old/new patch line numbers'});
+ }else if(anchor.end<anchor.start)ctx.addIssue({code:'custom',path:['end'],message:'End line must not precede start line'});
+});
 export const noteContent=z.object({title:z.string().min(1).max(200),reason:z.string().min(1).max(8000),behavior:z.string().min(1).max(8000),basis:z.enum(['requirement','autonomous','missing-context']),requirement:z.string().max(8000).default(''),perspective:z.enum(['implementer','inferred']),question:z.string().max(4000).default(''),evidence:z.string().max(8000).default(''),anchors:z.array(noteAnchor).min(1).max(32)}).strict();
 export const noteBatch=z.object({requestId:z.string().min(1).max(200),snapshotId:z.string().regex(/^[a-f0-9]{64}$/),operations:z.array(z.object({id:z.string().min(1).max(100),expectedRevision:z.number().int().nonnegative(),action:z.enum(['upsert','withdraw']),content:noteContent.optional()}).strict()).min(1).max(32)}).strict();
 export const noteFeedback=z.object({requestId:z.string().min(1).max(200),id:z.string().min(1),revision:z.number().int().positive(),action:z.enum(['read','question','confirm']),text:z.string().max(4000).default('')}).strict();

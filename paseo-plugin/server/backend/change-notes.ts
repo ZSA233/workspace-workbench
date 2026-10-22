@@ -91,7 +91,8 @@ export class ChangeNotes {
   const snapshot=await load<Snapshot>(this.snapshotPath(batch.snapshotId));this.check(snapshot,c);
   const path=this.ledgerPath(c.instance,c.repo.repoPath),ledger=await load(path,empty()),identity=hash(stable([author,batch])),prior=ledger.requests[batch.requestId];
   if(prior){if(prior.digest!==identity)throw new WorkbenchError('notes_request_conflict','Request ID was used with different content');return prior.result;}
-  const seen=new Set<string>();
+  const seen=new Set<string>(),capturedLines=new Map<string,Partial<Record<'old'|'new',Set<number>>>>();
+  const linesFor=(file:Json,side:'old'|'new')=>{let lines=capturedLines.get(file.path);if(!lines){lines={};capturedLines.set(file.path,lines);}return lines[side] ||= patchLines(file.patch,side);};
   for(const op of batch.operations){
    if(seen.has(op.id))throw new WorkbenchError('notes_duplicate','Duplicate note ID');seen.add(op.id);
    const existing=ledger.notes.find(n=>n.id===op.id);
@@ -100,9 +101,12 @@ export class ChangeNotes {
     if(!op.content)throw new WorkbenchError('notes_content_required','Explanation required');
     if(op.content.basis==='requirement'&&!op.content.requirement.trim())throw new WorkbenchError('notes_requirement_required','Provide requirement evidence or declare missing context');
     for(const anchor of op.content.anchors){const file=snapshot.files.find(f=>f.path===anchor.path);if(!file)throw new WorkbenchError('notes_anchor_invalid','Anchor not in captured files');
-     if(anchor.side==='file'){if(anchor.start||anchor.end)throw new WorkbenchError('notes_anchor_invalid','File anchors have no line numbers');continue;}
+     if(anchor.side==='file'){
+      if(!file.binary&&!file.truncated&&(linesFor(file,'old').size||linesFor(file,'new').size))throw new WorkbenchError('notes_line_anchor_required',`${anchor.path}: text explanations must target specific lines. Use side old/new with start and end from the captured patch; file anchors are only for binary, truncated or line-free changes.`);
+      continue;
+     }
      if(file.binary||file.truncated||!anchor.start||!anchor.end||anchor.end<anchor.start)throw new WorkbenchError('notes_anchor_invalid','Only complete text supports line anchors');
-     const lines=patchLines(file.patch,anchor.side);for(let n=anchor.start;n<=anchor.end;n++){if(n-anchor.start>10000||!lines.has(n))throw new WorkbenchError('notes_anchor_invalid','Line is outside the captured patch');}
+     const lines=linesFor(file,anchor.side);for(let n=anchor.start;n<=anchor.end;n++){if(n-anchor.start>10000||!lines.has(n))throw new WorkbenchError('notes_anchor_invalid','Line is outside the captured patch');}
     }
    }else if(!existing)throw new WorkbenchError('notes_missing','Cannot withdraw missing note');
   }

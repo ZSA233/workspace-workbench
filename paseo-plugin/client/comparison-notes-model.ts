@@ -12,5 +12,6 @@ export function comparisonExplanationRequest(project:string,workspaceId:string,r
  `方式：${c.mode}`,`实际差异起点：${c.leftSha}`,...(c.mergeBase?[`共同祖先：${c.mergeBase}`]:[]),
  `读取参数：${JSON.stringify({workspaceId,repoPath,scope:'compare',comparison:{fromRef:c.fromSha,toRef:c.toSha,fromLabel:c.fromRef,toLabel:c.toRef,mode:c.mode}})}`,
  '调用 workbench_change_notes_read，随后通过 workbench_change_notes_write 写入。分页读取继续使用相同完整 SHA，不重新解析分支。',
+ '正常文本说明必须定位到具体代码行：anchors 使用 side: "old" 或 "new"，并填写捕获补丁中的 start、end（单行时相同）；选择最小相关行段，分散的改动用多个锚点，不要用 side: "file" 或整文件范围代替行定位。删除定位旧侧，新增定位新侧。只有二进制、截断补丁或纯重命名等没有可定位行的变化使用文件级说明。',
  '结合本会话需求说明原因、最终行为变化和自主调整。合并低信息量机械修改；不知道需求时明确说明，不编造依据。'
  ].join('\n');}

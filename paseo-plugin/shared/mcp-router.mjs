@@ -18,7 +18,7 @@ const materialTools = [
 const connectionTool = { name: "workbench_connection_status", description: "Check the local MCP, Paseo and plugin RPC connection without a project or Agent context." };
 const noteTools=[
  {name:"workbench_change_notes_read",description:"Freeze changed locations and existing explanations. Follow nextOffset or supply up to 8 paths. Describe meaningful behavior changes; do not invent requirement evidence."},
- {name:"workbench_change_notes_write",description:"Batch write explanations for a captured snapshot. Use expectedRevision (0 for new notes); retry with the same requestId. Cannot mark user approval. Skip trivial formatting."}
+ {name:"workbench_change_notes_write",description:"Write explanations: text needs old/new start/end; file only for binary, truncated or line-free changes. Use expectedRevision; retry same requestId. Cannot approve for user."}
 ];
 const publicTools = [
  ...noteTools,
@@ -440,7 +440,10 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
 
 function changeNotesSchema(write){
  const str={type:'string',minLength:1};
- const anchor={type:'object',additionalProperties:false,required:['path','side'],properties:{path:str,side:{enum:['file','old','new']},start:{type:'integer',minimum:1},end:{type:'integer',minimum:1}}};
+ const anchor={anyOf:[
+  {type:'object',description:'Normal text: anchor the relevant captured code lines. Use old for deleted lines, new for added lines. A single line has start=end.',additionalProperties:false,required:['path','side','start','end'],properties:{path:str,side:{enum:['old','new']},start:{type:'integer',minimum:1},end:{type:'integer',minimum:1}}},
+  {type:'object',description:'Only binary, Gitlink, truncated or line-free changes such as pure renames. Complete text with patch lines must use a line anchor.',additionalProperties:false,required:['path','side'],properties:{path:str,side:{enum:['file']}}}
+ ]};
  const content={type:'object',additionalProperties:false,required:['title','reason','behavior','basis','perspective','anchors'],properties:{title:str,reason:str,behavior:str,basis:{enum:['requirement','autonomous','missing-context']},requirement:{type:'string'},perspective:{enum:['implementer','inferred']},question:{type:'string'},evidence:{type:'string'},anchors:{type:'array',minItems:1,maxItems:32,items:anchor}}};
  return {type:'object',additionalProperties:false,required:['workspaceId','repoPath',...(write?['batch']:[])],properties:{workspaceId:str,repoPath:str,...(write?{batch:{type:'object',additionalProperties:false,required:['requestId','snapshotId','operations'],properties:{requestId:str,snapshotId:str,operations:{type:'array',minItems:1,maxItems:32,items:{type:'object',additionalProperties:false,required:['id','expectedRevision','action'],properties:{id:str,expectedRevision:{type:'integer',minimum:0},action:{enum:['upsert','withdraw']},content}}}}}}:{list:{type:'boolean',description:'Read existing explanations in nextOffset pages without Git work'},scope:{enum:['branch','working','commit','compare']},comparison:{type:'object',properties:{fromRef:str,toRef:str,fromLabel:{type:'string',description:'Optional display name for the fixed fromRef SHA; never resolved as a ref'},toLabel:{type:'string',description:'Optional display name for the fixed toRef SHA; never resolved as a ref'},mode:{enum:['endpoints','contribution']}}},commitSha:str,paths:{type:'array',maxItems:8,items:str},offset:{type:'integer',minimum:0},snapshotId:str})}};
 }

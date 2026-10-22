@@ -25,7 +25,10 @@ source files. It does not start another Agent, dispatch a message, or approve co
      when citing requirements;
    - `perspective: "implementer" | "inferred"`;
    - optional `question` and author-provided `evidence`;
-   - `anchors: [{path, side: "file" | "old" | "new", start?, end?}]`.
+   - Normal text requires `anchors: [{path, side: "old" | "new", start, end}]`.
+     Choose the relevant captured lines, rather than describing the whole file.
+     For one line, use the same `start` and `end`; deleted lines use `old`,
+     added lines use `new`. Multiple locations can share one explanation.
 5. Reuse the exact request ID and content after an uncertain response. On a
    revision conflict, read the current note and explicitly reconcile the edit.
    Never blindly retry with a new request ID.
@@ -36,9 +39,14 @@ or turn test claims into verified evidence. Group meaningful changes; trivial
 formatting does not require repetitive explanations. Indentation and comments are
 not automatically trivial.
 
-Only captured patch lines can receive line anchors. Binary, Gitlink and truncated
-patches support file-level explanations. Snapshots use bounded file reads (128 KiB
-per patch); the Agent must not claim it inspected content beyond truncation.
+Only captured patch lines can receive line anchors. `side: "file"` is accepted
+only for binary, Gitlink, truncated patches or changes with no captured code lines
+(such as pure renames, mode-only changes or empty files). A complete text patch
+with code lines rejects file-level writes and requires an explicit line range;
+omitted or invalid lines never fall back to a file-level explanation. Snapshots
+use bounded file reads (128 KiB per patch); the Agent must not claim it inspected
+content beyond truncation. Existing saved file-level explanations remain readable
+and manageable; their locations are not guessed or silently migrated.
 
 ## Reading and feedback
 

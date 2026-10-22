@@ -44,6 +44,13 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
   assert.match(preview.description, /local/);
   assert.match(execute.description, /requestId alone/);
   assert.match(status.description, /request ID/);
+  const notes = response.result.tools.find(tool => tool.name === 'workbench_change_notes_write')!;
+  const anchor = (notes.inputSchema as any).properties.batch.properties.operations.items.properties.content.properties.anchors.items;
+  const line = anchor.anyOf.find((branch: any) => branch.properties.side.enum.includes('new'));
+  const file = anchor.anyOf.find((branch: any) => branch.properties.side.enum.includes('file'));
+  assert.deepEqual(line.required, ['path', 'side', 'start', 'end']);
+  assert.equal('start' in file.properties || 'end' in file.properties, false);
+  assert.match(notes.description, /text needs old\/new start\/end/);
   for (const tool of response.result.tools) {
     assert.ok(tool.description.length < 180);
     if (tool.name === "workbench_artifact_register") assert.deepEqual(tool.inputSchema.required, ["artifact"]);

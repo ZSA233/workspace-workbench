@@ -8,8 +8,8 @@ const entry = z.object({ ...scope, path, version: z.string().optional() });
 const batchId = z.string().max(128).optional();
 const policy = z.enum(['ask', 'replace', 'keep']).default('ask');
 export const fileRequest = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('list'), ...scope, path, cursor: z.string().optional(), limit: z.number().int().min(1).max(200).default(200), fresh: z.boolean().default(false) }),
-  z.object({ action: z.literal('versions'), ...scope, paths: z.array(z.string()).max(200).default([]) }),
+  z.object({ action: z.literal('list'), ...scope, path, listingProtocol:z.literal(2).optional(), order:z.enum(['native','sorted']).optional(), cursor: z.string().optional(), limit: z.number().int().min(1).max(200).default(200), fresh: z.boolean().default(false) }),
+  z.object({ action: z.literal('versions'), ...scope, listingProtocol:z.literal(2).optional(), paths: z.array(z.string()).max(200).default([]) }),
   z.object({ action: z.literal('decorations'), ...scope, paths: z.array(z.string().max(32768)).max(200), force: z.boolean().default(false) }),
   z.object({ action: z.literal('preview'), ...scope, path, offset: z.number().int().nonnegative().default(0) }),
   z.object({ action: z.literal('document'), ...scope, path, offset: z.number().int().nonnegative().default(0), version:z.string().optional() }),
@@ -24,7 +24,7 @@ export const fileRequest = z.discriminatedUnion('action', [
   z.object({ action: z.literal('finish'), id }),
   z.object({ action: z.literal('download'), id, batchId, ...scope, paths: z.array(z.string()).min(1).max(200), defer: z.boolean().default(false), versions:z.record(z.string(),z.string()).optional() }),
   z.object({ action: z.literal('download-selection'), id, offset: z.number().int().nonnegative(), paths: z.array(z.string()).min(1).max(200), final: z.boolean() }),
-  z.object({ action: z.literal('read'), id, offset: z.number().int().nonnegative() }),
+  z.object({ action: z.literal('read'), id, confirmedOffset: z.number().int().nonnegative().optional(), offset: z.number().int().nonnegative() }),
   z.object({ action: z.literal('verify'), id, offset: z.number().int().nonnegative(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }),
   z.object({ action: z.literal('ack'), id, offset: z.number().int().nonnegative() }),
   z.object({ action: z.literal('control'), id, command: z.enum(['pause', 'resume', 'cancel', 'skip', 'keep', 'replace', 'retry', 'complete', 'delegated']) }),
@@ -35,8 +35,8 @@ export const fileRequest = z.discriminatedUnion('action', [
 ]);
 export type FileRequest = z.infer<typeof fileRequest>;
 export type FileEntry = { name: string; path: string; kind: 'directory' | 'file' | 'link' | 'other'; size: number; modifiedAt: number; version: string; protected: boolean; repository: boolean };
-export type DirectoryPage = { workspaceId: string; instance: string; path: string; version: string; entries: FileEntry[]; cursor?: string; refreshing?: boolean };
+export type DirectoryPage = { workspaceId: string; instance: string; path: string; version: string; entries: FileEntry[]; cursor?: string; refreshing?: boolean; order?:'native'|'sorted'; sortState?:'preparing'|'ready'; snapshotId?:string };
 export type FileTaskState = 'queued' | 'preparing' | 'active' | 'paused' | 'interrupted' | 'conflict' | 'ready_to_save' | 'complete' | 'cancelled' | 'failed' | 'delegated';
 export type FileChange = { workspaceId: string; instance: string; paths: string[]; removed?: string[] };
 export type FileTask = { id: string; batchId?: string; cleanupPending?: boolean; canReplace?: boolean; conflict?: 'exists' | 'changed'; direction: 'upload' | 'download' | 'operation'; operation?: string; workspaceId: string; instance: string; workspaceName: string; path: string; name: string; size: number | null; offset: number; state: FileTaskState; createdAt: number; updatedAt: number; error?: string; sha256?: string; files?: number; processed?: number; excluded?: number; modifiedAt?: number; sourceName?: string; nextOffset?: number; changes?: FileChange[]; selectionPending?: boolean; selectionCount?: number };
-export type FileResult = import('./document.ts').DocumentPage | import('./document.ts').DocumentSyntax | import('./document.ts').DocumentAsset | import('./document.ts').DocumentStat | {cancelled:true} | import('./file-decorations.ts').FileDecorations | { noop: true } | DirectoryPage | FileTask | { tasks: FileTask[]; next?: number; temporaryBytes: number } | { versions: Record<string, string>; instance: string } | { data: string; offset: number; size: number; sha256: string; version?: string };
+export type FileResult = import('./document.ts').DocumentPage | import('./document.ts').DocumentSyntax | import('./document.ts').DocumentAsset | import('./document.ts').DocumentStat | {cancelled:true} | import('./file-decorations.ts').FileDecorations | { noop: true } | DirectoryPage | FileTask | { tasks: FileTask[]; next?: number; temporaryBytes: number } | { versions: Record<string, string>; instance: string } | { data: string; offset: number; size: number; sha256: string; confirmedOffset?: number; version?: string };

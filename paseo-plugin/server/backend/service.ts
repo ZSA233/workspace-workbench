@@ -82,6 +82,8 @@ export class Service {
       syntaxHighlightProtocol:1,
       fileDecorationsProtocol: 1,
       downloadSelectionProtocol: 1,
+      fileReadWindowProtocol: 1,
+      directoryListingProtocol: 2,
       contextProtocol:1, diffRead: this.observation.diffTasks.health(),
       refreshProtocol: 1,
       refreshControls: this.observation.refresh.controlHealth(),

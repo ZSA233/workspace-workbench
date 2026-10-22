@@ -304,3 +304,28 @@ test('private staging is ignored by Git and a paused background save cannot reac
     await writeFile(join(f.repo,'.workbench-transfer-private'),'partial');const status=execFileSync('git',['-C',f.repo,'status','--porcelain'],{encoding:'utf8'});assert.equal(status.includes('.workbench-transfer-private'),false);assert.ok(status.includes('incoming'));
   }finally{await f.close();}
 });
+
+test('combined download reads persist monotonic confirmations and cannot revive a paused task',async()=>{
+  const f=await fixture();
+  try{
+    await writeFile(join(f.root,'data.bin'),Buffer.alloc(FILE_CHUNK_BYTES*3+17,42));
+    await f.call({action:'download',id:'read-window',workspaceId:f.main,paths:['data.bin']});await f.wait('read-window',['active']);
+    const second=await f.call({action:'read',id:'read-window',offset:FILE_CHUNK_BYTES,confirmedOffset:FILE_CHUNK_BYTES});assert.equal(second.confirmedOffset,FILE_CHUNK_BYTES);
+    await f.call({action:'read',id:'read-window',offset:0,confirmedOffset:0});assert.equal((await f.call({action:'task',id:'read-window'})).offset,FILE_CHUNK_BYTES);
+    await f.call({action:'ack',id:'read-window',offset:FILE_CHUNK_BYTES*2});assert.equal((await f.call({action:'ack',id:'read-window',offset:FILE_CHUNK_BYTES})).offset,FILE_CHUNK_BYTES*2);
+    await f.call({action:'control',id:'read-window',command:'pause'});
+    await assert.rejects(f.call({action:'read',id:'read-window',offset:0,confirmedOffset:FILE_CHUNK_BYTES*3}),/offset|active/i);assert.equal((await f.call({action:'task',id:'read-window'})).state,'paused');
+    await f.restart();assert.equal((await f.call({action:'task',id:'read-window'})).offset,FILE_CHUNK_BYTES*2);
+  }finally{await f.close();}
+});
+
+test('ZIP preparation checkpoints are bounded and preserve a concurrent pause',async()=>{
+  const f=await fixture();
+  try{
+    await mkdir(join(f.root,'archive'));for(let n=0;n<513;n++)await writeFile(join(f.root,'archive',`item-${n}`),'entry');
+    const original=f.files.tasks.journal.save.bind(f.files.tasks.journal);let progress=0;
+    f.files.tasks.journal.save=(task:any)=>{if(task.id==='zip-progress'&&task.state==='preparing'&&task.processed>0)progress++;return original(task);};
+    await f.call({action:'download',id:'zip-progress',workspaceId:f.main,paths:['archive']});const task=await f.wait('zip-progress',['active','failed']);
+    assert.equal(task.state,'active',task.error);assert.equal(task.processed,514);assert.ok(progress<30,`${progress} progress saves should be at least 10x fewer than 514`);
+  }finally{await f.close();}
+});

@@ -1,4 +1,6 @@
 import { FILE_CHUNK_BYTES, type FileTask, type FileChange } from '../shared/files.ts';
+import { downloadWindow } from './files-download-window.ts';
+import { OBSERVATION_POLICY } from '../shared/observation-policy.ts';
 import { unchangedFileMove } from '../shared/file-operations.ts';
 import { checksum, decode, encode, newFileId, DownloadStaging, readPreference, writePreference, canSave, pickSaveDestination, delegateDownload, type LocalFile, type SaveDestination } from './files-platform.ts';
 
@@ -23,7 +25,12 @@ export class FileTransferStore {
   private timer?: ReturnType<typeof setTimeout>;
   private polling?: Promise<void>;
   private owners = 0;
+  private visibleOwners = 0;
+  private failures = 0;
+  private progressTimer?: ReturnType<typeof setTimeout>;
+  private lastEmit = 0;
   private downloadSelection = false;
+  private readWindow = false;
   private saved: Record<string, number>;
   private verified = new Set<string>();
   private batchPolicies = new Map<string, string>();
@@ -32,35 +39,42 @@ export class FileTransferStore {
   private destinations = new Map<string, SaveDestination>();
   private cleaning = new Map<string, Promise<void>>();
   applyBatchPolicy(batchId: string, command: string) { this.batchPolicies.set(batchId, command); if (this.batchPolicies.size > 1000) this.batchPolicies.delete(this.batchPolicies.keys().next().value!); }
+  private temporaryBytes = 0;
   private snapshot: Snapshot = { tasks: [], temporaryBytes: 0, localBytes: 0 };
   readonly scope: string;
   constructor(scope: string) { this.scope = scope; this.saved = readPreference(scope + ':files-saved') || {}; }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   subscribeChanges = (listener: (changes: FileChange[]) => void) => { this.changeListeners.add(listener); return () => { this.changeListeners.delete(listener); }; };
   getSnapshot = () => this.snapshot;
-  private emit(error?: string) {
+  private emit(error?: string, progress = false) {
+    if(progress && Date.now()-this.lastEmit<200){this.progressTimer ??= setTimeout(()=>{this.progressTimer=undefined;this.emit();},200-(Date.now()-this.lastEmit));return;}
+    clearTimeout(this.progressTimer);this.progressTimer=undefined;this.lastEmit=Date.now();
     const priority = (task: FileTask) => ['active', 'preparing'].includes(task.state) ? 0 : task.cleanupPending || ['conflict', 'ready_to_save', 'failed', 'interrupted'].includes(task.state) ? 1 : done(task) ? 3 : 2;
     const tasks = [...this.tasks.values()].sort((a, b) => priority(a) - priority(b) || b.createdAt - a.createdAt).map(t => ({ ...t,
       ...(['active', 'ready_to_save'].includes(t.state) && (this.saveOffsets.has(t.id) || this.localOffsets.has(t.id)) ? { offset: (this.saveOffsets.get(t.id) ?? this.localOffsets.get(t.id))!, state: (this.saveOffsets.get(t.id) ?? this.localOffsets.get(t.id)) === t.size ? 'ready_to_save' as const : 'active' as const } : {}),
       saving: this.saving.has(t.id), destinationSelected: this.destinations.has(t.id), stagedBytes: this.localOffsets.get(t.id), localError: this.errors.get(t.id), speed: this.speeds.get(t.id), needsSource: t.direction === 'upload' && !done(t) && !this.files.has(t.id) && t.offset < (t.size ?? 0),
     }));
-    this.snapshot = { ...this.snapshot, tasks, error, localBytes: [...this.localOffsets.values()].reduce((a, b) => a + b, 0) };
-    this.listeners.forEach(fn => fn());
+    const next = { ...this.snapshot, temporaryBytes:this.temporaryBytes, tasks, error, localBytes: [...this.localOffsets.values()].reduce((a, b) => a + b, 0) };
+    if(JSON.stringify(next)===JSON.stringify(this.snapshot))return;
+    this.snapshot=next;this.listeners.forEach(fn => fn());
   }
-  bind(rpc: FilesCall, capabilities: { downloadSelection?: boolean } = {}) {
-    this.rpc = rpc; this.downloadSelection = Boolean(capabilities.downloadSelection); this.owners++; void this.poll();
-    return () => { this.owners--; if (!this.owners && !this.running.size) clearTimeout(this.timer); };
+  bind(rpc: FilesCall, capabilities: { downloadSelection?: boolean; readWindow?: boolean; foreground?: boolean } = {}) {
+    this.rpc = rpc; this.downloadSelection = Boolean(capabilities.downloadSelection);this.readWindow=Boolean(capabilities.readWindow); this.owners++; const visible=capabilities.foreground!==false;if(visible)this.visibleOwners++;clearTimeout(this.timer);if(visible||this.hasWork())void this.poll();
+    return () => { this.owners--;if(visible)this.visibleOwners--;this.schedulePoll(); };
   }
+  private hasWork() { return !!(this.running.size || this.saving.size || Object.keys(this.saved).length || [...this.tasks.values()].some(t=>t.cleanupPending || !this.stopped.has(t.id) && (!this.errors.has(t.id) || /connection|socket|transport|network|timed out|observer_unavailable/i.test(this.errors.get(t.id)!)) && (!t.selectionPending && ['queued','preparing'].includes(t.state) || ['active','ready_to_save'].includes(t.state) && (t.direction==='operation' || t.direction==='upload' && (this.files.has(t.id) || t.offset===t.size) || t.direction==='download' && (this.destinations.has(t.id) || t.state==='active' && DownloadStaging.supported() && canSave()))))); }
+  private schedulePoll(){clearTimeout(this.timer);if(!this.owners&&!this.running.size&&!this.saving.size)return;const work=this.hasWork();if(!work&&!this.visibleOwners)return;const delay=this.failures?OBSERVATION_POLICY.retryMs[Math.min(this.failures-1,3)]:work?1200:5000;this.timer=setTimeout(()=>void this.poll(),delay);}
   async call(input: Record<string, any>) { if (!this.rpc) throw new Error('File connection is unavailable'); return this.rpc(input); }
   private record(task: FileTask, notify = true) {
     const old = this.tasks.get(task.id);
     if (old && old.updatedAt > task.updatedAt) return old;
     this.tasks.set(task.id, task);
+    if(done(task) && Object.hasOwn(this.saved,task.id)){delete this.saved[task.id];writePreference(this.scope+':files-saved',this.saved);}
     if (notify && task.changes?.length && JSON.stringify(old?.changes) !== JSON.stringify(task.changes)) this.changeListeners.forEach(listener => listener(task.changes!));
     return task;
   }
   private discardDestination(id: string) { const destination = this.destinations.get(id); this.destinations.delete(id); if (destination) void destination.discard().catch(() => {}); }
-  private accept(task: FileTask) { task = this.record(task); if (done(task)) { this.discardDestination(task.id); this.files.delete(task.id); this.errors.delete(task.id); this.speeds.delete(task.id); if (task.direction === 'download') void this.cleanup(task.id); else this.localOffsets.delete(task.id); this.verified.delete(task.id); } this.emit(); return task; }
+  private accept(task: FileTask) { const old=this.tasks.get(task.id); const progress=old?.state===task.state && !task.changes?.length && old?.error===task.error && old?.cleanupPending===task.cleanupPending; task = this.record(task); if (done(task)) { this.discardDestination(task.id); this.files.delete(task.id); this.errors.delete(task.id); this.speeds.delete(task.id); if (task.direction === 'download') void this.cleanup(task.id); else this.localOffsets.delete(task.id); this.verified.delete(task.id); } this.emit(undefined,progress); return task; }
   async poll() {
     if (this.polling) return this.polling;
     clearTimeout(this.timer);
@@ -79,16 +93,16 @@ export class FileTransferStore {
         for (const [id, old] of this.tasks) if (!seen.has(id) && !done(old)) { try { this.record(await this.call({ action: 'task', id })); } catch { /* keep the recovery entry */ } }
         for (const [id, old] of this.tasks) if (done(old) && !seen.has(id)) { this.tasks.delete(id); this.cleaned.delete(id); }
         for (const [id, message] of this.errors) if (/connection|socket|transport|network|timed out|observer_unavailable/i.test(message)) this.errors.delete(id);
-        this.snapshot.temporaryBytes = result.temporaryBytes;
+        this.failures=0;this.temporaryBytes = result.temporaryBytes;
         this.emit();
         for (const task of this.tasks.values()) {
           const policy = task.batchId && this.batchPolicies.get(task.batchId);
           if (task.state === 'conflict' && task.conflict !== 'changed' && policy && !(policy === 'replace' && task.canReplace === false)) { await this.control(task.id, policy); continue; }
           if (this.saved[task.id] === task.size && !done(task)) { try { if (task.offset !== task.size) await this.call({ action: 'ack', id: task.id, offset: task.size }); this.accept(await this.call({ action: 'control', id: task.id, command: 'complete' })); delete this.saved[task.id]; writePreference(this.scope + ':files-saved', this.saved); } catch { /* saved locally; retry confirmation only */ } }
-          if (['active', 'ready_to_save'].includes(task.state) && !this.errors.has(task.id) && !this.stopped.has(task.id) && !this.saving.has(task.id) && (task.direction === 'upload' && (this.files.has(task.id) || task.offset === task.size) || task.direction === 'download' && (this.destinations.has(task.id) || DownloadStaging.supported() && canSave()))) this.enqueue(task.id);
+          if (['active', 'ready_to_save'].includes(task.state) && !this.errors.has(task.id) && !this.stopped.has(task.id) && !this.saving.has(task.id) && (task.direction === 'upload' && (this.files.has(task.id) || task.offset === task.size) || task.direction === 'download' && (this.destinations.has(task.id) || task.state==='active' && DownloadStaging.supported() && canSave()))) this.enqueue(task.id);
         }
-      } catch (e) { this.emit(String(e instanceof Error ? e.message : e)); }
-    })().finally(() => { this.polling = undefined; if (this.owners || this.running.size) this.timer = setTimeout(() => void this.poll(), this.running.size || this.snapshot.tasks.some(t => !done(t)) ? 1200 : 5000); });
+      } catch (e) { this.failures++;this.emit(String(e instanceof Error ? e.message : e)); }
+    })().finally(() => { this.polling = undefined; this.schedulePoll(); });
     return this.polling;
   }
   async upload(file: LocalFile, workspaceId: string, instance: string, path: string, policy = 'ask', batchId?: string) {
@@ -182,14 +196,13 @@ export class FileTransferStore {
     if (!canSave() && !this.destinations.has(task.id)) return;
     const staging = await DownloadStaging.open(this.scope, task.id, task.size); let offset = await staging.offset();
     this.localOffsets.set(task.id, offset); this.emit();
-    while (offset < task.size) {
-      this.check(task.id); const started = Date.now(), chunk = await this.call({ action: 'read', id: task.id, offset });
-      const bytes = decode(chunk.data); if (chunk.offset !== offset || chunk.size !== task.size || checksum(bytes) !== chunk.sha256) throw new Error('Download chunk verification failed');
-      await staging.write(offset, bytes, chunk.sha256); offset += bytes.length;
-      this.localOffsets.set(task.id, offset); this.speeds.set(task.id, bytes.length * 1000 / Math.max(1, Date.now() - started)); this.emit();
-      this.accept(await this.call({ action: 'ack', id: task.id, offset: Math.max(task.offset, offset) }));
-    }
-    if (task.size === 0) this.accept(await this.call({ action: 'ack', id: task.id, offset: 0 }));
+    const combined=this.readWindow, transferStarted=Date.now(), initialOffset=offset;
+    await downloadWindow({offset,size:task.size,check:()=>this.check(task.id),
+      read:async position=>{const request={action:'read',id:task.id,offset:position,...(combined?{confirmedOffset:offset}:{})};try{return await this.call(request);}catch(error){const latest=await this.call({action:'task',id:task.id});this.check(task.id);this.record(latest);if(!['active','ready_to_save'].includes(latest.state))throw error;return this.call(request);}},
+      consume:async(position,bytes,digest)=>{this.check(task.id);await staging.write(position,bytes,digest);this.check(task.id);offset=position+bytes.length;this.localOffsets.set(task.id,offset);this.speeds.set(task.id,(offset-initialOffset)*1000/Math.max(1,Date.now()-transferStarted));this.emit(undefined,true);if(!combined)this.accept(await this.call({action:'ack',id:task.id,offset:Math.max(task.offset,offset)}));}
+    });
+    // The final confirmation is independent of prefetch and remains recoverable.
+    if(combined || task.size===0)this.accept(await this.call({action:'ack',id:task.id,offset:Math.max(task.offset,offset)}));
     if (this.destinations.has(task.id) && !this.saving.has(task.id)) await this.saveChosen(task);
   }
   private async saveChosen(task: FileTask, direct = false) {
@@ -201,7 +214,8 @@ export class FileTransferStore {
       if (!direct && DownloadStaging.supported()) await (await DownloadStaging.open(this.scope, id, task.size)).exportTo(output, () => this.check(id));
       else {
         try {
-          for (let offset = 0; offset < task.size;) { this.check(id); const started = Date.now(), chunk = await this.call({ action: 'read', id, offset }); const bytes = decode(chunk.data); if (checksum(bytes) !== chunk.sha256 || chunk.offset !== offset || chunk.size !== task.size || !bytes.length || offset + bytes.length > task.size) throw new Error('Download checksum mismatch'); await output.write(bytes); offset += bytes.length; this.saveOffsets.set(id, offset); this.speeds.set(id, bytes.length * 1000 / Math.max(1, Date.now() - started)); this.emit(); }
+          const transferStarted=Date.now();
+          await downloadWindow({offset:0,size:task.size,check:()=>this.check(id),read:offset=>this.call({action:'read',id,offset}),consume:async(offset,bytes)=>{this.check(id);await output.write(bytes);this.check(id);this.saveOffsets.set(id,offset+bytes.length);this.speeds.set(id,(offset+bytes.length)*1000/Math.max(1,Date.now()-transferStarted));this.emit(undefined,true);}});
           this.check(id); await output.close();
         } catch (e) { await output.abort().catch(() => {}); throw e; }
       }

@@ -337,6 +337,8 @@ export class FileTasks {
     const part = this.part(task.id); await rm(part, { force: false }).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; });
     const zip = new yazl.ZipFile();
     const destination = await open(part, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    let checkpointAt=Date.now(),checkpointItems=0;
+    const checkpoint=()=>{if((task.processed||0)-checkpointItems<128 && Date.now()-checkpointAt<250)return;const current=this.journal.require(task.id);if(current.state!=='preparing')return;current.processed=task.processed;current.excluded=task.excluded;this.journal.save(current);checkpointItems=task.processed||0;checkpointAt=Date.now();};
     const check = () => this.check(task);
     const output = new Writable({ highWaterMark: FILE_CHUNK_BYTES, write(bytes: Buffer, _encoding, callback) {
       void (async () => { check(); let offset = 0; while (offset < bytes.length) { const result = await destination.write(bytes, offset, bytes.length - offset); if (!result.bytesWritten) throw new Error('No archive write progress'); offset += result.bytesWritten; } })().then(() => callback(), callback);
@@ -366,7 +368,7 @@ export class FileTasks {
               }).catch(e => callback(e, null as any));
             });
           }
-          task.processed!++; this.save(task); await sleep();
+          task.processed!++; checkpoint(); await sleep();
         }
       }
       zip.end(); await flight; await destination.sync(); await syncDirectory(this.journal.root);
@@ -375,6 +377,7 @@ export class FileTasks {
     task.private.archive = true; task.size = (await lstat(part)).size; task.state = 'active'; this.save(task);
   }
   async read(input: Extract<FileRequest, { action: 'read' }>) {
+    if(input.confirmedOffset!==undefined)await this.ack({action:'ack',id:input.id,offset:input.confirmedOffset});
     const task = this.journal.require(input.id), context = await this.context(task);
     if (task.direction !== 'download' || !['active', 'ready_to_save'].includes(task.state)) throw new WorkbenchError('file_task_not_active', 'Download is not active');
     const file = task.private.archive || task.private.snapshot ? await open(this.part(task.id), constants.O_RDONLY | constants.O_NOFOLLOW) : await this.roots.read(context, task.private.source);
@@ -385,7 +388,7 @@ export class FileTasks {
       let total = 0;
       while (total < buffer.length) { const r = await file.read(buffer, total, buffer.length - total, input.offset + total); if (!r.bytesRead) throw new WorkbenchError('file_source_changed', 'Source ended before the expected size'); total += r.bytesRead; }
       if (!task.private.archive && !task.private.snapshot && fileVersion(await file.stat()) !== task.private.version) throw new WorkbenchError('file_source_changed', 'Source changed during this read');
-      return { data: buffer.toString('base64'), offset: input.offset, size: task.size!, sha256: digest(buffer) };
+      return { data: buffer.toString('base64'), offset: input.offset, size: task.size!, sha256: digest(buffer), confirmedOffset: this.journal.require(task.id).offset };
     } catch (error) {
       if (error instanceof WorkbenchError && error.code === 'file_source_changed') { const latest = this.journal.require(task.id); if (!terminal(latest)) { latest.state = 'failed'; latest.error = error.message; latest.private.sourceChanged = true; this.save(latest); } }
       throw error;
@@ -394,7 +397,8 @@ export class FileTasks {
   async ack(input: Extract<FileRequest, { action: 'ack' }>) {
     return this.lock(input.id, async () => {
       const task = this.journal.require(input.id);
-      if (task.direction !== 'download' || !['active', 'ready_to_save'].includes(task.state) || input.offset < task.offset || input.offset > task.size!) throw new WorkbenchError('file_offset_conflict', 'Invalid confirmed download offset');
+      if (task.direction !== 'download' || !['active', 'ready_to_save'].includes(task.state) || input.offset > task.size!) throw new WorkbenchError('file_offset_conflict', 'Invalid confirmed download offset');
+      if(input.offset<=task.offset && (task.offset>0 || task.state==='ready_to_save'))return this.journal.view(task);
       task.offset = input.offset; task.state = task.offset === task.size ? 'ready_to_save' : 'active'; return this.save(task);
     });
   }

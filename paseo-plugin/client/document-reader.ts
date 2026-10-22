@@ -18,7 +18,7 @@ export function createDocumentReader(key:string,scope:Scope,call:Call){
   function subscribe(fn:()=>void){listeners.add(fn);return()=>{listeners.delete(fn);};}
   function snapshot(){return reader.state;}
   function update(patch:Partial<ReaderState>){if(closed)return;reader.state={...reader.state,...patch};listeners.forEach(f=>f());}
-  function cancelSyntax(){for(const requestId of requestIds)void call({action:'document-cancel',...scope,requestId}).catch(()=>{});requestIds.clear();}
+  function cancelSyntax(){pendingViewport=undefined;syntaxFlight=undefined;for(const requestId of requestIds)void call({action:'document-cancel',...scope,requestId}).catch(()=>{});requestIds.clear();}
   function setView(patch:Pick<Partial<ReaderState>,'scroll'|'mode'>){if(patch.mode!==undefined)update(patch);else reader.state={...reader.state,...patch};}
   async function load(reset=false){
     if(closed)return;const epoch=++generation;cancelSyntax();if(reset)retriedSyntaxVersion=undefined;
@@ -50,7 +50,15 @@ export function createDocumentReader(key:string,scope:Scope,call:Call){
       update({page,text:page.text,startLine:anchor.line,windowOffset:anchor.offset,windowIndex:before.windowIndex-1,continuation:anchor.continuation,tokens:{},loading:false,scroll:0});
     }catch(error){if(epoch===generation)update({loading:false,error:String((error as Error).message),changed:changedError(error)});}finally{reading=false;}
   }
-  async function highlight(lineStart:number,markdown=false):Promise<void>{
+  let syntaxFlight:Promise<void>|undefined, pendingViewport:{lineStart:number;markdown:boolean}|undefined;
+  function highlight(lineStart:number,markdown=false):Promise<void>{
+    pendingViewport={lineStart,markdown};
+    if(syntaxFlight)return syntaxFlight;
+    const epoch=generation;
+    const flight=(async()=>{while(pendingViewport&&!closed&&epoch===generation){const next=pendingViewport;pendingViewport=undefined;await highlightNow(next.lineStart,next.markdown);}})().finally(()=>{if(syntaxFlight===flight){syntaxFlight=undefined;if(pendingViewport&&!closed)void highlight(pendingViewport.lineStart,pendingViewport.markdown);}});
+    syntaxFlight=flight;return flight;
+  }
+  async function highlightNow(lineStart:number,markdown=false):Promise<void>{
     const page=reader.state.page;if(!page||page.binary||closed||reader.state.changed)return;
     if(markdown&&reader.state.markdown||['large_file','syntax_budget','unknown_language'].includes(reader.state.reason||''))return;
     const end=Math.min(lineStart+199,reader.state.startLine+reader.state.text.split(/\r\n|\r|\n/).length-1);
@@ -58,7 +66,7 @@ export function createDocumentReader(key:string,scope:Scope,call:Call){
     const epoch=generation,requestId=newFileId();requestIds.add(requestId);
     try{const result:DocumentSyntax=await call({action:'document-syntax',...scope,version:page.version,lineStart,count:200,markdown,requestId});
       if(closed||epoch!==generation||reader.state.page?.version!==result.version)return;
-      if(markdown&&['timeout','busy','parser_error'].includes(result.reason||'')&&retriedSyntaxVersion!==result.version){retriedSyntaxVersion=result.version;await new Promise(resolve=>setTimeout(resolve,250));if(!closed&&epoch===generation)return highlight(lineStart,true);return;}
+      if(markdown&&['timeout','busy','parser_error'].includes(result.reason||'')&&retriedSyntaxVersion!==result.version){retriedSyntaxVersion=result.version;await new Promise(resolve=>setTimeout(resolve,250));if(!closed&&epoch===generation)return highlightNow(lineStart,true);return;}
       update({tokens:{...Object.fromEntries(Object.entries(reader.state.tokens).slice(-200)),...result.lines},...(result.markdown?{markdown:result.markdown}:{}),...(markdown&&result.state==='plain'&&!result.markdown?{mode:'source' as const}:{}),syntaxState:result.state,reason:!markdown&&reader.state.reason==='markdown_preview_limit'?reader.state.reason:result.reason});
     }catch(error){void call({action:'document-cancel',...scope,requestId}).catch(()=>{});if(epoch===generation&&!closed)update({syntaxState:'plain',error:String((error as Error).message),changed:(error as any).code==='file_source_changed'});}
     finally{requestIds.delete(requestId);}

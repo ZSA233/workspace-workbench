@@ -72,3 +72,15 @@ test('legacy web Diff keeps inline backgrounds while coloring the complete line'
   const pieces:any[]=[];function collect(value:any){if(value?.props?.children!==undefined){const children=value.props.children;if(typeof children==='string')pieces.push({text:children,style:value.props.style});else for(const child of Array.isArray(children)?children:[children])collect(child);}}collect(rendered);
   assert.equal(pieces.map(p=>p.text).join(''),code);assert.equal(pieces.filter(p=>p.style?.backgroundColor==='#abcdef').map(p=>p.text).join(''),'old');assert.ok(new Set(pieces.map(p=>p.style?.color)).size>1);
 });
+
+test('eight identical syntax subscribers share a parser; cancelling one leaves the others running',async()=>{
+  const service=new SyntaxService(),abort=new AbortController();
+  try{
+    const calls=Array.from({length:8},(_,n)=>service.parse('owner','fixed-blob','/* multiline\n comment */\nconst n = 42;','typescript',false,n===0?abort.signal:undefined));
+    abort.abort();const results=await Promise.all(calls);
+    assert.equal(results[0].reason,'cancelled');assert.ok(results.slice(1).every(result=>result.state==='ready'));
+    assert.equal((service as any).sequence,1);assert.equal(service.lookup('owner','fixed-blob','typescript'),results[1]);
+    service.retire('owner');assert.equal(service.lookup('owner','fixed-blob','typescript'),undefined);
+  }finally{await service.close();}
+});
+

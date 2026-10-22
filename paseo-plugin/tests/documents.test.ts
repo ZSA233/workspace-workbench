@@ -112,3 +112,12 @@ test('host view replacement reuses the snapshot and only validates metadata',asy
   assert.deepEqual(calls,['document','document-syntax','document-stat']);assert.equal(replacement.state.text,'old');
   const revision=replacement.state.revision;await replacement.load(true);assert.equal(replacement.state.revision,revision+1);replacement.close();clearDocumentCache('theme');
 });
+
+test('first syntax viewport starts immediately and scroll requests coalesce to the latest viewport',async()=>{
+  const starts:number[]=[],scope={workspaceId:'w',instance:'one',path:'code.go'},page={version:'fixed',text:'line\n'.repeat(1200),binary:false,eof:true} as any;
+  let resolve!: (value:any)=>void;
+  const reader=createDocumentReader('coalesce\0one',scope,async input=>{if(input.action==='document')return page;if(input.action==='document-syntax'){starts.push(input.lineStart as number);if(starts.length===1)return new Promise(r=>resolve=r);return {version:'fixed',state:'ready',language:'go',lines:{}};}return {};});
+  await reader.load();const first=reader.highlight(1);assert.deepEqual(starts,[1]);
+  for(let line=201;line<=1001;line+=100)void reader.highlight(line);
+  resolve({version:'fixed',state:'ready',language:'go',lines:{}});await first;assert.deepEqual(starts,[1,1001]);reader.close();clearDocumentCache('coalesce');
+});

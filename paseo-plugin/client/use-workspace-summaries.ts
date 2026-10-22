@@ -1,3 +1,4 @@
+import { createPrefetchRound } from './prefetch-round.ts';
 import { publishRefresh, publishSummaryFailure } from './observation-publication.ts';
 import { useRepositoryRefresh } from "./use-repository-refresh";
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -8,7 +9,7 @@ import { createRepositoryRefreshClient, repositoryQueryKeys, type RefreshInput, 
 export function useWorkspaceSummaries(project: string, workspaceId: string, paths: string[], selected: string, enabled: boolean, rpc: RefreshRpc, content: {
     historyMode: string;
     maxCommits: number;
-}) {
+}, instance = workspaceId) {
     const client = useQueryClient();
     const forced = useRef(new Set<string>());
     const reader = useRef(createRepositoryRefreshClient()).current;
@@ -35,21 +36,24 @@ export function useWorkspaceSummaries(project: string, workspaceId: string, path
         return () => keys.forEach(key => reader.releaseRefresh(key, rpc));
     }, [identity, enabled]);
     // Speculative content has one subscriber and never gates basic summaries.
-    const [prefetched, setPrefetched] = useState<Set<string>>(() => new Set());
+    const round = useRef(createPrefetchRound()).current;
+    const [, advance] = useState(0);
     const candidates = inputs.filter(input => input.repoPath !== selected && (queries[inputs.indexOf(input)]?.data?.result as any)?.regions?.summary?.state === 'ready').map(input => {
         const repository = (queries[inputs.indexOf(input)]?.data?.result as any)?.regions?.summary?.result?.repository;
         return { ...input, ...content, summaryOnly: false, scope: repository?.dirty || repository?.branchScopeAvailable === false ? 'working' : 'branch' };
     });
-    const warm = candidates.find(input => !prefetched.has(JSON.stringify([project, input])));
+    const candidateKeys = candidates.map(input => JSON.stringify([project,input]));
+    round.reconcile(JSON.stringify([project,workspaceId,instance,content]),candidateKeys,enabled);
+    const nextKey = round.next(candidateKeys);
+    const warm = candidates[candidateKeys.indexOf(nextKey || '')];
     const warmKey = warm ? JSON.stringify([project, warm]) : '';
     const basicsSettled = queries.length > 0 && queries.every(query => query.data && !(query.data.result as any)?.observation?.readTask);
     const preload = useRepositoryRefresh(project, warm || { workspaceId, repoPath: '', scope: 'working', historyMode: content.historyMode, maxCommits: content.maxCommits }, enabled && basicsSettled && !!warm, rpc, true);
     useEffect(() => {
         if (!warmKey || !preload.query.data || preload.pending || preload.query.isFetching)
             return;
-        setPrefetched(previous => { if (previous.has(warmKey))
-            return previous; const next = new Set(previous); next.add(warmKey); if (next.size > 128)
-            next.delete(next.values().next().value!); return next; });
+        round.complete(warmKey, !preload.query.data.error && !(preload.query.data.result as any)?.regions?.graph?.error && !(preload.query.data.result as any)?.regions?.changes?.error);
+        advance(value => value+1);
     }, [warmKey, preload.query.data, preload.pending, preload.query.isFetching]);
     const current = queries[inputs.findIndex(input => input.repoPath === selected)];
     const currentMeta = (current?.data?.result as any)?.observation;
@@ -57,6 +61,6 @@ export function useWorkspaceSummaries(project: string, workspaceId: string, path
         const error = query.data?.error || (query.data?.result as any)?.regions?.summary?.error;
         return error ? [{ repoPath: inputs[index].repoPath, ...error }] : [];
     });
-    return { failures, currentRunning: enabled && (current?.isFetching && !current.data || currentMeta?.readTask?.state === 'running'), refresh: () => queries.forEach((query, index) => { if (query.isFetching || (query.data?.result as any)?.observation?.readTask)
-            return; reader.retry(keys[index]); forced.current.add(keys[index]); void query.refetch({ cancelRefetch: false }); }), confirmed: queries.filter(q => (q.data?.result as any)?.regions?.summary?.state === 'ready').length, total: paths.length };
+    return { failures, currentRunning: enabled && (current?.isFetching && !current.data || currentMeta?.readTask?.state === 'running'), refresh: () => { round.retry(); advance(value=>value+1); queries.forEach((query, index) => { if (query.isFetching || (query.data?.result as any)?.observation?.readTask)
+            return; reader.retry(keys[index]); forced.current.add(keys[index]); void query.refetch({ cancelRefetch: false }); }); }, confirmed: queries.filter(q => (q.data?.result as any)?.regions?.summary?.state === 'ready').length, total: paths.length };
 }

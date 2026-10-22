@@ -125,7 +125,7 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
     const refreshInput = { workspaceId: selectedWorkspaceId, repoPath: selectedRepoPath, historyMode: graphView.historyMode, maxCommits: graphView.maxCommits, scope: changesScope, commitSha: selectedCommit || undefined };
     const refreshRpc = (params: Record<string, unknown>) => rpc({ method: 'observer.refresh', params });
     const selectedRefresh = useRepositoryRefresh(projectConfig, refreshInput, refreshCapable && repositoryActive, refreshRpc);
-    const basicSummaries = useWorkspaceSummaries(projectConfig, selectedWorkspaceId, (displayDetail?.repositories || []).map(repo => repo.repoPath), selectedRepoPath, basicCapable && foreground && tab === 'workspace' && backendReady, refreshRpc, { historyMode: graphView.historyMode, maxCommits: graphView.maxCommits });
+    const basicSummaries = useWorkspaceSummaries(projectConfig, selectedWorkspaceId, (displayDetail?.repositories || []).map(repo => repo.repoPath), selectedRepoPath, basicCapable && foreground && tab === 'workspace' && backendReady, refreshRpc, { historyMode: graphView.historyMode, maxCommits: graphView.maxCommits }, selectedWorkspace?.instanceKey || selectedWorkspace?.createdAt || selectedWorkspaceId);
     const basicFailed = basicSummaries.failures.some(failure => failure.repoPath === selectedRepoPath);
     const graphFeedback = refreshRegionFeedback(selectedRefresh.query.data, 'graph', Boolean(graph), basicFailed);
     const graphRegion = selectedRefresh.result?.regions?.graph;

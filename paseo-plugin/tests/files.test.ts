@@ -320,6 +320,7 @@ test('adaptive directory ordering returns a fast page then a pinned global order
       let page=await f.call(request);assert.equal(page.order,'sorted');const names:string[]=[],snapshots=new Set<string>();
       for(;;){names.push(...page.entries.map((e:any)=>e.name));snapshots.add(page.snapshotId);if(!page.cursor)break;page=await f.call({...request,cursor:page.cursor});assert.equal(page.order,'sorted');}
       assert.deepEqual(names,expected);assert.equal(new Set(names).size,names.length);assert.equal(snapshots.size,1);
+      f.cache.clear();const retained=await f.call({...request,order:'sorted'});assert.equal(retained.order,'sorted');assert.deepEqual(retained.entries.map((e:any)=>e.name),expected.slice(0,200),'eviction must preserve a sorted page through the bounded window');
       const nativeNext=await f.call({...request,cursor:first.cursor});assert.equal(nativeNext.order,'native','a pending cursor cannot silently switch order');
       const stale=page.cursor||first.cursor;await writeFile(join(f.root,'many','new-file'),'changed');await assert.rejects(f.call({...request,cursor:stale}),/Directory changed/);
       assert.ok(f.cache.status().memory.bytes<=budget);

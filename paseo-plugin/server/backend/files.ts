@@ -130,7 +130,7 @@ export class WorkspaceFiles {
     const version = `${contentVersion}:${Math.floor(Date.now()/30_000)}`;
     const orderKey=this.order.key(context.instance,input.path);
     let offset = 0, after:DirectoryName|undefined;
-    let ordering:'native'|'sorted'=input.listingProtocol===2 && input.order!=='native' && this.order.state(orderKey,contentVersion)?'sorted':'native';
+    let ordering:'native'|'sorted'=input.listingProtocol===2 && input.order!=='native' && (input.order==='sorted' || this.order.state(orderKey,contentVersion))?'sorted':'native';
     if (input.cursor) {
       try { const cursor = JSON.parse(Buffer.from(input.cursor, 'base64url').toString()); if (cursor.version !== contentVersion || !Number.isSafeInteger(cursor.offset) || cursor.offset < 0) throw new Error(); offset = cursor.offset;
         if(input.listingProtocol===2){ordering=cursor.order||'native';if(!['native','sorted'].includes(ordering))throw new Error();if(ordering==='sorted'){after=cursor.after;if(!after||typeof after.name!=='string'||typeof after.directory!=='boolean')throw new Error();}}
@@ -146,7 +146,7 @@ export class WorkspaceFiles {
         for(const item of names.slice(0,input.limit)){const info=await fileStat(join(full,item.name));if(!info)throw new WorkbenchError('file_listing_changed','Directory changed during listing');const path=input.path?input.path+'/'+item.name:item.name;entries.push({name:item.name,path,kind:info.isDirectory()?'directory':info.isFile()?'file':info.isSymbolicLink()?'link':'other',size:info.size,modifiedAt:info.mtimeMs,version:fileVersion(info),protected:this.roots.protected(context,path),repository:context.repositories.has(join(full,item.name))});}
         if(fileVersion(await lstat(full))!==fileVersion(stat))throw new WorkbenchError('file_listing_changed','Directory changed during listing');
         return {workspaceId:input.workspaceId,instance:context.instance,path:input.path,version,entries,order:ordering,sortState:'ready',snapshotId,...(more?{cursor:cursorFor(offset+entries.length,names[input.limit-1])}:{})};
-      },true,input.fresh,{workspaceId:input.workspaceId,repoPath:context.root});return page;
+      },true,input.fresh,{workspaceId:input.workspaceId,repoPath:context.root});this.order.prepare(orderKey,full,contentVersion,input.workspaceId);return page;
     }
     const key = `files:v1:${hash(context.instance)}:${input.path}:${offset}:${input.limit}`;
     const result=await this.cache.read(key, version, async () => {

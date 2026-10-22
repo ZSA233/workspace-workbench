@@ -55,7 +55,7 @@ export class FilesTreeState {
     let changed = first;
     const flight = (async () => {
       try {
-        const old = this.pages.get(path), request = { action: 'list', workspaceId: this.workspaceId, ...(this.instance ? { instance: this.instance } : {}), path, limit: 200, ...(this.sortedListing ? {listingProtocol:2, ...(!reopened && !this.canReorder() && old?.order?{order:old.order}:{})}:{}), ...(fresh ? { fresh: true } : {}) };
+        const old = this.pages.get(path), request = { action: 'list', workspaceId: this.workspaceId, ...(this.instance ? { instance: this.instance } : {}), path, limit: 200, ...(this.sortedListing ? {listingProtocol:2, ...(old?.order==='sorted' || !reopened && !this.canReorder() && old?.order?{order:old!.order}:{})}:{}), ...(fresh ? { fresh: true } : {}) };
         let page = await rpc({ ...request, ...(more && old?.cursor ? { cursor: old.cursor } : {}) }) as DirectoryPage;
         if(more && old?.snapshotId && page.snapshotId!==old.snapshotId)throw Object.assign(new Error('Directory changed'),{code:'file_listing_changed'});
         if (!more && old && old.entries.length > 200) {

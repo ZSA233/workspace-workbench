@@ -69,7 +69,7 @@ export class FileTransferStore {
     const old = this.tasks.get(task.id);
     if (old && old.updatedAt > task.updatedAt) return old;
     this.tasks.set(task.id, task);
-    if(done(task) && Object.hasOwn(this.saved,task.id)){delete this.saved[task.id];writePreference(this.scope+':files-saved',this.saved);}
+    if(done(task) && Object.prototype.hasOwnProperty.call(this.saved,task.id)){delete this.saved[task.id];writePreference(this.scope+':files-saved',this.saved);}
     if (notify && task.changes?.length && JSON.stringify(old?.changes) !== JSON.stringify(task.changes)) this.changeListeners.forEach(listener => listener(task.changes!));
     return task;
   }

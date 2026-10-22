@@ -337,9 +337,19 @@ export class FileTasks {
     const part = this.part(task.id); await rm(part, { force: false }).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; });
     const zip = new yazl.ZipFile();
     const destination = await open(part, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    let checkpointAt=Date.now(),checkpointItems=0;
-    const checkpoint=()=>{if((task.processed||0)-checkpointItems<128 && Date.now()-checkpointAt<250)return;const current=this.journal.require(task.id);if(current.state!=='preparing')return;current.processed=task.processed;current.excluded=task.excluded;this.journal.save(current);checkpointItems=task.processed||0;checkpointAt=Date.now();};
-    const check = () => this.check(task);
+    let checkpointAt=Date.now(),checkpointItems=0,checkpointTimer:ReturnType<typeof setTimeout>|undefined,checkpointError:unknown;
+    const flushProgress=()=>{
+      clearTimeout(checkpointTimer);checkpointTimer=undefined;
+      if((task.processed||0)===checkpointItems)return;
+      const current=this.journal.require(task.id);if(current.state!=='preparing')return;
+      current.processed=task.processed;current.excluded=task.excluded;this.journal.save(current);
+      checkpointItems=task.processed||0;checkpointAt=Date.now();
+    };
+    const checkpoint=()=>{
+      if((task.processed||0)-checkpointItems>=128 || Date.now()-checkpointAt>=250)flushProgress();
+      else checkpointTimer ??= setTimeout(()=>{try{flushProgress();}catch(error){checkpointError=error;}},Math.max(0,250-(Date.now()-checkpointAt)));
+    };
+    const check = () => {this.check(task);if(checkpointError)throw checkpointError;};
     const output = new Writable({ highWaterMark: FILE_CHUNK_BYTES, write(bytes: Buffer, _encoding, callback) {
       void (async () => { check(); let offset = 0; while (offset < bytes.length) { const result = await destination.write(bytes, offset, bytes.length - offset); if (!result.bytesWritten) throw new Error('No archive write progress'); offset += result.bytesWritten; } })().then(() => callback(), callback);
     } });
@@ -373,7 +383,8 @@ export class FileTasks {
       }
       zip.end(); await flight; await destination.sync(); await syncDirectory(this.journal.root);
     } catch (e) { (zip.outputStream as Readable).destroy(e instanceof Error ? e : new Error(String(e))); await flight.catch(() => {}); throw e; }
-    finally { await destination.close(); }
+    finally { clearTimeout(checkpointTimer); await destination.close(); }
+    if(checkpointError)throw checkpointError;
     task.private.archive = true; task.size = (await lstat(part)).size; task.state = 'active'; this.save(task);
   }
   async read(input: Extract<FileRequest, { action: 'read' }>) {

@@ -27,3 +27,13 @@ test('prepared sorting waits for top and idle selection, and a late response can
   assert.equal(tree.pages.get('')!.entries[0].name,'b');assert.ok(tree.selected.has('b'));assert.equal(tree.scroll,99);
   tree.selected.clear();tree.scroll=0;await tree.applySorted(async()=>({...page,order:'sorted',entries:[file('a'),file('b')],snapshotId:'sorted',sortState:'ready'}));assert.equal(tree.pages.get('')!.entries[0].name,'a');
 });
+
+test('ordinary transfer progress publishes at most every 200ms while pause is immediate',async t=>{
+  const {FileTransferStore}=await import('../client/files-store.ts');
+  t.mock.timers.enable({apis:['Date','setTimeout'],now:1000});
+  const store=new FileTransferStore('progress-rate') as any;let notifications=0;store.subscribe(()=>notifications++);
+  const task:any={id:'progress',direction:'upload',workspaceId:'w',instance:'one',workspaceName:'W',name:'bytes',path:'',state:'active',size:100,offset:0,createdAt:1,updatedAt:1};
+  store.accept({...task});for(let offset=1;offset<=50;offset++)store.accept({...task,offset,updatedAt:offset+1});assert.equal(notifications,1);
+  t.mock.timers.tick(199);assert.equal(notifications,1);t.mock.timers.tick(1);assert.equal(notifications,2);assert.equal(store.getSnapshot().tasks[0].offset,50);
+  store.accept({...task,state:'paused',offset:50,updatedAt:100});assert.equal(notifications,3);assert.equal(store.getSnapshot().tasks[0].state,'paused');
+});

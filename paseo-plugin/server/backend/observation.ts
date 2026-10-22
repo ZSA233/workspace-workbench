@@ -351,6 +351,7 @@ export class Observation {
     this.closing = true;
     for (const abort of this.linkedReads.values()) abort.abort();
     await this.activity.close();
+    await this.diffContent.syntax.close();
   }
   /** Gitlink metadata supplements the roster; it never gates cached rows. */
   private linkedSupplement(workspace: Json): Json | undefined {

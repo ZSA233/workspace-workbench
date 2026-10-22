@@ -9,12 +9,16 @@ import { hash, stable, WorkbenchError, type Json } from './storage.ts';
 import type { Workspaces } from './workspaces.ts';
 import type { ObservationCache } from './cache.ts';
 import type { ObservationScheduler } from './observation-scheduler.ts';
+import { SyntaxService } from './syntax-service.ts';
+import { highlightDiff, patchCoordinates } from './diff-syntax.ts';
 
 export class DiffContent {
+  readonly syntax=new SyntaxService();
   private workspaces: Workspaces;
   private cache: ObservationCache;
   private scheduler: ObservationScheduler;
   constructor(workspaces: Workspaces, cache: ObservationCache, scheduler: ObservationScheduler) { this.workspaces = workspaces; this.cache = cache; this.scheduler = scheduler; }
+  private verifyWorkspace(workspace:Json){const current=this.workspaces.get(workspace.id);if(current.state==='removed'||workspaceInstanceKey(current as Json&{id:string})!==workspaceInstanceKey(workspace as Json&{id:string}))throw new WorkbenchError('workspace_instance_changed','The original workspace no longer exists');}
   async identify(params: Json) {
     if (typeof params.path !== 'string' || !params.path) throw new WorkbenchError('path_required', 'Diff path is required');
     validateDiffPath(params.path);
@@ -31,7 +35,7 @@ export class DiffContent {
     const token = this.scheduler.token(path, scope === 'working' ? 'working' : 'refs');
     const immutable = scope === 'compare' || scope === 'commit' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(String(params.commitSha || ''));
     const identity = stable({ workspace: workspace.id, workspaceInstance:workspaceInstanceKey(workspace), repository: path, record: repo, scope, path: params.path, contextLines:80, oldPath: params.oldPath || null, commit: params.commitSha || null, comparison: comparisonKey(params.comparison), ...(params.readKind==='context'?{readKind:'context',context:contextRequest(params.context)}:{}) });
-    return { workspace, repo, path, scope, token, immutable, identity, key: `diff-content:${identity}`, taskKey: `${identity}:${immutable ? '' : token}` };
+    return { workspace, repo, path, scope, token, immutable, identity, key: `diff-content:syntax-v1:${identity}`, taskKey: `${identity}:${immutable ? '' : token}` };
   }
   async read(params: Json, deadline: number, signal?: AbortSignal): Promise<Json> {
     const context = await this.identify(params);
@@ -39,10 +43,10 @@ export class DiffContent {
     if(params.readKind==='context'){
       const patch=await this.read({...params,readKind:undefined,context:undefined},deadline,signal);
       const git=new Git(path,this.workspaces.config.gitTimeout,deadline,signal,true);
-      return this.cache.read(key,context.identity,async()=>({...await readDiffContext(git,patch,params,this.cache,this.workspaces.config.maxDiffBytes),observation:{state:'ready',immutableIdentity:hash(context.identity)}}),true,true,{workspaceId:workspace.id,repoPath:path});
+      return this.cache.read(key,context.identity,async()=>{const slice=await readDiffContext(git,patch,params,this.cache,this.workspaces.config.maxDiffBytes);const syntax=await highlightDiff(this.workspaces,this.syntax,workspace,git,patch,slice.lines,signal);this.verifyWorkspace(workspace);return {...slice,syntax,observation:{state:'ready',immutableIdentity:hash(context.identity)}};},true,true,{workspaceId:workspace.id,repoPath:path});
     }
     const file = immutable ? null : await lstat(join(path, params.path)).catch(() => null);
-    const fingerprint = immutable ? context.identity : `${token}:${file?.ino}:${file?.mtimeMs}:${file?.size}`;
+    const fingerprint = immutable ? context.identity : `${token}:${file?.ino}:${file?.mtimeMs}:${file?.ctimeMs}:${file?.size}`;
     const cached = this.cache.peek(key, fingerprint);
     if (cached) return { ...cached, cacheHit: true };
     const git = new Git(path, this.workspaces.config.gitTimeout, deadline, signal, true);
@@ -51,10 +55,14 @@ export class DiffContent {
     const value = await this.cache.read(key, fingerprint, async () => {
       const diff = await git.diff(scope, params.path, base, scope === 'compare' ? params.comparison.toSha : params.commitSha, { oldPath: params.oldPath, maxBytes: this.workspaces.config.maxDiffBytes });
       const observedAt = new Date().toISOString();
-      return { schemaVersion: 'workspace.workbench/v1', workspaceId: workspace.id, repoPath: repo.repoPath, scope, path: params.path, contextLines:80,
+      const result:Json={ schemaVersion: 'workspace.workbench/v1', workspaceId: workspace.id, repoPath: repo.repoPath, scope, path: params.path, contextLines:80,
         oldPath:'oldPath' in diff?diff.oldPath:params.oldPath, head: diff.head, baseSha: diff.left, left: diff.left, right: diff.right, patch: diff.patch, patchDigest:hash(diff.patch),
         binary: /^Binary files .* differ$|^GIT binary patch$/m.test(diff.patch), truncated: diff.truncated, readBytes: diff.bytes,
         observation: { state: 'ready', observedAt, ...(immutable ? { immutableIdentity: context.identity } : { validationKey: `${path}#${scope === 'working' ? 'working' : 'refs'}`, validationToken: token, validationDependencies: { [`${path}#${scope === 'working' ? 'working' : 'refs'}`]: token } }) } };
+      result.syntax=await highlightDiff(this.workspaces,this.syntax,workspace,git,result,patchCoordinates(result.patch),signal);
+      this.verifyWorkspace(workspace);
+      if(!immutable){const after=await lstat(join(path,params.path)).catch(()=>null);if(file?.ino!==after?.ino||file?.mtimeMs!==after?.mtimeMs||file?.ctimeMs!==after?.ctimeMs||file?.size!==after?.size)result.syntax={...result.syntax,left:{},right:{},state:'plain',reason:'source_changed'};}
+      return result;
     }, true, true, { workspaceId: workspace.id, repoPath: path });
     // Watching prepares in the background; content does not wait for an index scan.
     void withBackgroundGit(() => this.scheduler.register(workspace.id, path)).catch(() => {});

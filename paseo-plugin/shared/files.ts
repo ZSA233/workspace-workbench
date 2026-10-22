@@ -12,12 +12,17 @@ export const fileRequest = z.discriminatedUnion('action', [
   z.object({ action: z.literal('versions'), ...scope, paths: z.array(z.string()).max(200).default([]) }),
   z.object({ action: z.literal('decorations'), ...scope, paths: z.array(z.string().max(32768)).max(200), force: z.boolean().default(false) }),
   z.object({ action: z.literal('preview'), ...scope, path, offset: z.number().int().nonnegative().default(0) }),
+  z.object({ action: z.literal('document'), ...scope, path, offset: z.number().int().nonnegative().default(0), version:z.string().optional() }),
+  z.object({ action: z.literal('document-stat'), ...scope, path, version:z.string().optional() }),
+  z.object({ action: z.literal('document-syntax'), ...scope, path, requestId:id.optional(), version:z.string(), lineStart:z.number().int().min(1).default(1), count:z.number().int().min(1).max(200).default(200), markdown:z.boolean().default(false) }),
+  z.object({ action:z.literal('document-cancel'), ...scope, requestId:id }),
+  z.object({ action: z.literal('document-asset'), ...scope, path, offset:z.number().int().nonnegative().default(0), version:z.string().optional() }),
   z.object({ action: z.literal('mkdir'), ...scope, path, name: z.string().min(1), id, existOk: z.boolean().default(false) }),
   z.object({ action: z.literal('mutate'), id, batchId, operation: z.enum(['copy', 'move', 'rename', 'delete']), entries: z.array(entry).min(1).max(200), destination: entry.optional(), name: z.string().optional(), policy, confirm: z.boolean().default(false) }),
   z.object({ action: z.literal('upload'), id, batchId, ...scope, path, name: z.string().min(1), size: z.number().int().nonnegative(), modifiedAt: z.number().nonnegative(), policy }),
   z.object({ action: z.literal('chunk'), id, offset: z.number().int().nonnegative(), data: z.string().max(Math.ceil(FILE_CHUNK_BYTES / 3) * 4), sha256: z.string().regex(/^[a-f0-9]{64}$/) }),
   z.object({ action: z.literal('finish'), id }),
-  z.object({ action: z.literal('download'), id, batchId, ...scope, paths: z.array(z.string()).min(1).max(200), defer: z.boolean().default(false) }),
+  z.object({ action: z.literal('download'), id, batchId, ...scope, paths: z.array(z.string()).min(1).max(200), defer: z.boolean().default(false), versions:z.record(z.string(),z.string()).optional() }),
   z.object({ action: z.literal('download-selection'), id, offset: z.number().int().nonnegative(), paths: z.array(z.string()).min(1).max(200), final: z.boolean() }),
   z.object({ action: z.literal('read'), id, offset: z.number().int().nonnegative() }),
   z.object({ action: z.literal('verify'), id, offset: z.number().int().nonnegative(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }),
@@ -34,4 +39,4 @@ export type DirectoryPage = { workspaceId: string; instance: string; path: strin
 export type FileTaskState = 'queued' | 'preparing' | 'active' | 'paused' | 'interrupted' | 'conflict' | 'ready_to_save' | 'complete' | 'cancelled' | 'failed' | 'delegated';
 export type FileChange = { workspaceId: string; instance: string; paths: string[]; removed?: string[] };
 export type FileTask = { id: string; batchId?: string; cleanupPending?: boolean; canReplace?: boolean; conflict?: 'exists' | 'changed'; direction: 'upload' | 'download' | 'operation'; operation?: string; workspaceId: string; instance: string; workspaceName: string; path: string; name: string; size: number | null; offset: number; state: FileTaskState; createdAt: number; updatedAt: number; error?: string; sha256?: string; files?: number; processed?: number; excluded?: number; modifiedAt?: number; sourceName?: string; nextOffset?: number; changes?: FileChange[]; selectionPending?: boolean; selectionCount?: number };
-export type FileResult = import('./file-decorations.ts').FileDecorations | { noop: true } | DirectoryPage | FileTask | { tasks: FileTask[]; next?: number; temporaryBytes: number } | { versions: Record<string, string>; instance: string } | { data: string; offset: number; size: number; sha256: string; version?: string };
+export type FileResult = import('./document.ts').DocumentPage | import('./document.ts').DocumentSyntax | import('./document.ts').DocumentAsset | import('./document.ts').DocumentStat | {cancelled:true} | import('./file-decorations.ts').FileDecorations | { noop: true } | DirectoryPage | FileTask | { tasks: FileTask[]; next?: number; temporaryBytes: number } | { versions: Record<string, string>; instance: string } | { data: string; offset: number; size: number; sha256: string; version?: string };

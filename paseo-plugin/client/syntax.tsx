@@ -1,7 +1,7 @@
 import {NativeHighlightedCode} from './syntax-native';
 import type {SyntaxSpan} from './native-syntax';
 import { createElement, memo, useEffect, useState, type ComponentType, type ReactElement } from "react";
-import { Platform, Text, type StyleProp, type TextStyle } from "react-native";
+import { Platform, type StyleProp, type TextStyle } from "react-native";
 
 /** Native rows draw supplied bounded token ranges, never import the web highlighter. */
 export type SyntaxTheme = {
@@ -23,23 +23,10 @@ export type HighlightedCodeProps = {
 };
 
 export { editorCodeFontFamily } from "./code-font";
-import { editorCodeFontFamily } from "./code-font";
 
 type WebSyntaxModule = typeof import("./syntax-web");
 
-function PlainCode({ code, theme, style }: HighlightedCodeProps): ReactElement {
-  return (
-    <Text
-      selectable
-      style={[
-        style,
-        { color: theme.colors.foreground, fontFamily: editorCodeFontFamily } as TextStyle,
-      ]}
-    >
-      {code}
-    </Text>
-  );
-}
+function PlainCode(props: HighlightedCodeProps): ReactElement {return <NativeHighlightedCode {...props} spans={null}/>;}
 
 let loadedWebRenderer:ComponentType<HighlightedCodeProps>|null=null;
 let webLoad:Promise<WebSyntaxModule>|null=null;
@@ -70,6 +57,5 @@ function WebHighlightedCode(props: HighlightedCodeProps): ReactElement {
 // rows, and mounting one foreground/dynamic-loader effect per row makes the
 // native commit phase needlessly fragile. The web-only loader is never called
 // by Android or iOS.
-export const HighlightedCode = Platform.OS === "web"
-  ? memo(WebHighlightedCode)
-  : NativeHighlightedCode;
+function WebCode(props:HighlightedCodeProps){return props.spans!==undefined?<NativeHighlightedCode {...props}/>:<WebHighlightedCode {...props}/>;}
+export const HighlightedCode=Platform.OS==="web"?memo(WebCode):NativeHighlightedCode;

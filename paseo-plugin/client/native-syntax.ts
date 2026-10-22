@@ -1,7 +1,8 @@
 /** No DOM, regular-expression grammar, or host dependency. UTF-16 ranges preserve source exactly. */
 export const NATIVE_SYNTAX_LIMITS = Object.freeze({lineChars:2048,lineSpans:96,batchChars:4096,batchMs:4,cacheLines:256,cacheChars:128*1024,cacheSpans:16*1024,contextRows:10,version:1});
 export type NativeLanguage='go'|'javascript'|'typescript'|'json';
-export type SyntaxKind='plain'|'keyword'|'string'|'comment'|'number';
+export type { SyntaxKind } from "../shared/code-syntax";
+import type { SyntaxKind } from "../shared/code-syntax";
 export type SyntaxSpan={start:number;end:number;kind:SyntaxKind};
 const go=new Set('break default func interface select case defer go map struct chan else goto package switch const fallthrough if range type continue for import return var true false nil'.split(' '));
 const js=new Set('break case catch class const continue debugger default delete do else export extends finally for function if import in instanceof let new return super switch this throw try typeof var void while with yield async await true false null undefined'.split(' '));
@@ -45,7 +46,9 @@ export function scanNativeLine(code:string,language:NativeLanguage,shouldYield:(
 }
 /** Clip existing ranges and change backgrounds without parsing substrings. */
 export function nativeRenderSegments(code:string,spans:readonly SyntaxSpan[]|null|undefined,change?:readonly[number,number]){
- const source=spans?.length?spans:[{start:0,end:code.length,kind:'plain' as const}];
+ const source:SyntaxSpan[]=[];let cursor=0;
+ for(const span of spans||[]){if(span.start<cursor||span.end>code.length||span.start>=span.end)continue;if(span.start>cursor)source.push({start:cursor,end:span.start,kind:'plain'});source.push(span);cursor=span.end;}
+ if(cursor<code.length)source.push({start:cursor,end:code.length,kind:'plain'});
  const result:Array<SyntaxSpan&{changed:boolean}>=[];
  for(const span of source){let start=span.start;const ends=change?[change[0],change[1],span.end].filter(end=>end>start&&end<=span.end):[span.end];
   for(const end of ends){if(end<=start)continue;result.push({start,end,kind:span.kind,changed:!!change&&start>=change[0]&&end<=change[1]});start=end;}

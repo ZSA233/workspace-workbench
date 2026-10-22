@@ -47,7 +47,7 @@ export async function readSingleDiff(git: Git, scope: string, path: string, base
     : await git.range(scope, base, commit);
   // Freeze the comparison base once; a concurrent checkout must not relabel
   // a patch with a later HEAD while the commands are running.
-  if (scope === 'working' && head) range.args = ['diff', head];
+  if (scope === 'working' && head) { range.args = ['diff', head]; range.left=head; }
   let oldPath = options.oldPath || undefined;
   if (!untracked) {
     const names = diffNames(await git.text([...range.args, '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', '--', ...(oldPath ? [oldPath] : []), path]));

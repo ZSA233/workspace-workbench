@@ -2,13 +2,15 @@ import { useRef, useMemo, useLayoutEffect, useSyncExternalStore } from 'react';
 import { View } from 'react-native';
 import { useDiffNotes, type DiffNotes } from './components/diff-notes';
 import { useNativeSyntax } from './use-native-syntax';
+import {diffLineSyntax} from '../shared/code-syntax';
+import type {DiffLine} from './model';
 import type { DiffDisplayRow, DiffResult } from './model';
 import type { FileReviewSelection } from './file-review-store';
 import type { PluginWorkspacePanelProps } from '@getpaseo/plugin/client';
 import type { ChangeNote, NotesResult } from '../shared/change-notes';
 type Entry = {
     notes: DiffNotes;
-    tokens: ReturnType<typeof useNativeSyntax>;
+    tokens:(code:string,line?:DiffLine,side?:'left'|'right')=>readonly import('../shared/code-syntax').SyntaxSpan[]|null|undefined;
     rows: DiffDisplayRow[];
     indexes: Map<string, number>;
     placements: ReturnType<DiffNotes['positions']>;
@@ -29,7 +31,8 @@ export function ComparisonFileNotes({ registry, selection, diff, rows, visible, 
 }) {
     const notes = useDiffNotes(selection, diff, foreground, theme, openOther, { revealAnchor: reveal });
     const stableVisible = useMemo(() => visible, [visible.join(',')]);
-    const tokens = useNativeSyntax(rows, selection.path, foreground, stableVisible);
+    const fallback=useNativeSyntax(rows, selection.path, foreground&&!diff.syntax, stableVisible);
+    const tokens:Entry['tokens']=(code,line,side)=>diffLineSyntax(diff.syntax,diff.patchDigest,code,line,side)??(diff.syntax?null:fallback(code));
     const indexes = useMemo(() => new Map(rows.map((row, index) => [row.key, index])), [rows]);
     const placements = notes.positions(rows), latest = useRef(jump);
     latest.current = jump;

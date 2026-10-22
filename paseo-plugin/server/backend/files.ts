@@ -12,11 +12,15 @@ import type { ObservationCache } from './cache.ts';
 import { FileDecorationsService } from './file-decorations.ts';
 import { RepositoryStatus } from './repository-status.ts';
 import { ObservationScheduler } from './observation-scheduler.ts';
+import { Documents } from './documents.ts';
+import { SyntaxService } from './syntax-service.ts';
 
 export class WorkspaceFiles {
   readonly roots: FileRoots;
   readonly tasks: FileTasks;
   readonly decorations: FileDecorationsService;
+  readonly documents:Documents;
+  private ownSyntax?:SyntaxService;
   private ownScheduler?: ObservationScheduler;
   private directories = new Map<string, { watcher?: FSWatcher; revision: number; used: number; owners: Set<string>; timer?: ReturnType<typeof setTimeout> }>();
   private generation = randomUUID();
@@ -26,9 +30,10 @@ export class WorkspaceFiles {
   readonly workspaces: Workspaces;
   readonly cache: ObservationCache;
   readonly onChanged: (id: string, paths: string[]) => void;
-  constructor(workspaces: Workspaces, cache: ObservationCache, onChanged: (id: string, paths: string[]) => void, status?: RepositoryStatus) {
+  constructor(workspaces: Workspaces, cache: ObservationCache, onChanged: (id: string, paths: string[]) => void, status?: RepositoryStatus, syntax?:SyntaxService) {
     this.workspaces = workspaces; this.cache = cache; this.onChanged = onChanged;
     this.roots = new FileRoots(workspaces);
+    this.documents=new Documents(this.roots,syntax||(this.ownSyntax=new SyntaxService()));
     if (!status) { this.ownScheduler = new ObservationScheduler({ internalPaths: [workspaces.config.stateRoot, workspaces.config.workspaceRoot, workspaces.config.recordsRoot, workspaces.config.treesRoot] }); status = new RepositoryStatus(cache, this.ownScheduler, workspaces.config.gitTimeout); }
     this.decorations = new FileDecorationsService(this.roots, status);
     this.tasks = new FileTasks(this.roots, (id, paths) => this.changed(id, paths));
@@ -46,6 +51,7 @@ export class WorkspaceFiles {
     fullPaths.forEach(path => batch!.paths.add(path));
   }
   retire(id: string) {
+    this.documents.syntax.retire(id);
     this.ownScheduler?.retireWorkspace(id);
     const batch = this.changes.get(id); if (batch) { clearTimeout(batch.timer); this.changes.delete(id); }
     for (const [path, entry] of this.directories) { entry.owners.delete(id); if (!entry.owners.size) { entry.watcher?.close(); clearTimeout(entry.timer); this.directories.delete(path); } }
@@ -62,7 +68,7 @@ export class WorkspaceFiles {
     }
     entry.used = Date.now(); entry.owners.add(workspaceId); return entry;
   }
-  async request(raw: Json): Promise<Json> {
+  async request(raw: Json,signal?:AbortSignal): Promise<Json> {
     const parsed = fileRequest.safeParse(raw);
     if (!parsed.success) throw new WorkbenchError('file_request_invalid', 'Invalid file request', parsed.error.issues.map(i => ({ path: i.path, message: i.message })));
     const input = parsed.data;
@@ -81,6 +87,11 @@ export class WorkspaceFiles {
     if (input.action === 'tasks') return this.tasks.list(input.before, input.limit, input.activeOnly);
     if (input.action === 'mutate') { const result = await this.workspaces.mutations.run(() => this.tasks.operation(input)); return 'noop' in result ? result : this.tasks.settled(input.id); }
     const context = await this.roots.context(input.workspaceId, input.instance, input.action === 'mkdir');
+    if(input.action==='document')return this.documents.page(context,input.path,input.offset,input.version);
+    if(input.action==='document-stat')return this.documents.stat(context,input.path,input.version);
+    if(input.action==='document-syntax')return this.documents.highlight(context,input.path,input.version,input.lineStart,input.count,input.markdown,signal,input.requestId);
+    if(input.action==='document-cancel')return this.documents.cancel(context,input.requestId);
+    if(input.action==='document-asset')return this.documents.asset(context,input.path,input.offset,input.version);
     if (input.action === 'decorations') return this.decorations.query(context, input.paths, input.force);
     if (input.action === 'versions') {
       const versions: Record<string, string> = Object.create(null);
@@ -138,5 +149,5 @@ export class WorkspaceFiles {
     }, true, input.fresh, { workspaceId: input.workspaceId, repoPath: context.root });
   }
   assertIdle(id: string) { this.tasks.assertIdle(id); }
-  async close() { this.closed = true; for (const entry of this.changes.values()) clearTimeout(entry.timer); this.changes.clear(); clearInterval(this.timer); for (const value of this.directories.values()) { value.watcher?.close(); clearTimeout(value.timer); } this.directories.clear(); await this.tasks.close(); if (this.ownScheduler) this.decorations.status.close(); await this.ownScheduler?.close(); }
+  async close() { this.closed = true; for (const entry of this.changes.values()) clearTimeout(entry.timer); this.changes.clear(); clearInterval(this.timer); for (const value of this.directories.values()) { value.watcher?.close(); clearTimeout(value.timer); } this.directories.clear(); await this.tasks.close(); if (this.ownScheduler) this.decorations.status.close(); await this.ownScheduler?.close(); await this.ownSyntax?.close(); }
 }

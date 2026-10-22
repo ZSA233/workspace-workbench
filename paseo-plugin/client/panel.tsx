@@ -1,3 +1,4 @@
+import {openDocument,reconcileDocuments,useDocumentReturn,consumeDocumentReturn} from "./document-store";
 import { FileTransfers, useFileConnection } from './files-transfer-panel';
 import { reconcileFilesTrees } from './files-tree-store';
 import { reconcileFileReviews } from './file-review-store';
@@ -378,7 +379,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   // The active selection is independent from the selector's filter. Changing
   // from “all” to “dirty” must not make a clean selected workspace disappear
   // and trigger an unwanted fallback.
-  useEffect(() => { if (listResult?.observation?.state === "ready") { reconcileFilesTrees(filesScopeKey, observedWorkspaces); reconcileFileReviews(hostWorkspaceId, projectConfig, observedWorkspaces); } }, [filesScopeKey, observedWorkspaces, listResult?.observation?.state, hostWorkspaceId, projectConfig]);
+  useEffect(() => { if (listResult?.observation?.state === "ready") { reconcileFilesTrees(filesScopeKey, observedWorkspaces); reconcileDocuments(filesScopeKey,observedWorkspaces); reconcileFileReviews(hostWorkspaceId, projectConfig, observedWorkspaces); } }, [filesScopeKey, observedWorkspaces, listResult?.observation?.state, hostWorkspaceId, projectConfig]);
+  const documentReturn=useDocumentReturn(filesScopeKey),handledDocumentReturn=useRef<typeof documentReturn>(undefined);
+  useEffect(()=>{if(!foreground||!documentReturn||documentReturn.hostWorkspaceId&&documentReturn.hostWorkspaceId!==hostWorkspaceId||handledDocumentReturn.current===documentReturn||listResult?.observation?.state!=='ready')return;const workspace=observedWorkspaces.find(w=>w.id===documentReturn.workspaceId&&w.state!=='removed'&&w.state!=='record_invalid');if(workspace){handledDocumentReturn.current=documentReturn;selectWorkspace(workspace.id);setTab('files');consumeDocumentReturn(filesScopeKey,documentReturn);}},[documentReturn,listResult?.observation?.state,observedWorkspaces,selectWorkspace,foreground,hostWorkspaceId,filesScopeKey]);
   const selectedWorkspace = observedWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId);
   const selectedWorkspaceIsMain = isMainWorkspace(selectedWorkspace);
   useEffect(() => {
@@ -909,7 +912,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               styles={styles}
             />
             </View></View>
-          ) : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
+          ) : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} onOpenDocument={backendQuery.data?.readCapabilities?.documentPreviewProtocol===1?(path,instance)=>openDocument({hostWorkspaceId,agentId,projectConfig,scope:filesScopeKey,workspaceId:selectedWorkspace.id,workspaceName:selectedWorkspace.displayName||selectedWorkspace.id,instance,directory:selectedWorkspace.treePath||selectedWorkspace.sourceRoot||'',path}):undefined} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
             {selectedWorkspaceIsMain ? <View style={styles.targetRow}>
               <Text style={styles.layoutMenuHint}>{localizedCopy.mainReviewHint}</Text>
               <TextInput value={mainReviewInstructions} onChangeText={setMainReviewInstructions} placeholder={localizedCopy.mainReviewInstructions} multiline style={styles.targetInput} />

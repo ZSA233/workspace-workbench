@@ -9,6 +9,7 @@ import type { WorkbenchSurfaceProps } from "./surface-context";
 import { installNativeHealthMonitor } from "./native-health";
 
 const loadWorkbenchPanel = () => import("./panel");
+const loadDocumentPanel=()=>import("./document-panel");
 const loadFileReviewPanel = () => import("./file-review");
 
 type PanelProps = PluginAgentPanelProps | PluginWorkspacePanelProps;
@@ -62,6 +63,8 @@ export function FileReviewPanel(props: PanelProps) {
   reportNativeDiagnostic("file-panel-entry", { kind: props.context, workspaceId: props.workspaceId });
   return <DeferredPanel name="FileReviewPanel" loader={loadFileReviewPanel} exportName="FileReviewPanel" props={props} />;
 }
+
+export function DocumentPanel(props:PanelProps){return <DeferredPanel name="DocumentPanel" loader={loadDocumentPanel} exportName="DocumentPanel" props={props}/>;}
 
 function NativePanelShell({ name }: { name: string }) {
   const colors=useWorkbenchThemeColors();

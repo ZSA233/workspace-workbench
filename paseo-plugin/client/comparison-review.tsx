@@ -1,4 +1,5 @@
 import {createScrollSignal} from './diff-scroll-store';
+import {syntaxStatus} from './syntax-status';
 import {useDiffMeasurements} from './use-diff-measurements';
 import {useDiffRailWidth} from './use-diff-rail-width';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -123,8 +124,10 @@ export function ComparisonReviewPanel(props: Props) {
         }
         if (diff.truncated)
             rows.push({ kind: 'status', path: file.path, key: `truncated:${file.path}`, message: '差异已截断，未展示完整内容' });
+        const syntaxMessage=syntaxStatus(diff.syntax?.reason,true);if(syntaxMessage)rows.push({kind:'status',path:file.path,key:`syntax:${file.path}`,message:syntaxMessage});
         const slices = ((view.contexts[file.path] || []) as ContextRequest[]).map(request => result<ContextSlice>(bodies.read(contextJob(file.path, request)))).filter((s): s is ContextSlice => !!s?.lines && s.patchDigest === diff.patchDigest);
         slicesByPath.set(file.path, slices);
+        if(diff.syntax&&slices.some(slice=>slice.syntax))diffs.set(file.path,{...diff,syntax:{...diff.syntax,left:Object.assign({},diff.syntax.left,...slices.map(s=>s.syntax?.left)),right:Object.assign({},diff.syntax.right,...slices.map(s=>s.syntax?.right))}});
         const expanded = view.expanded[file.path], prior = cache.get(file.path);
         let model: ReturnType<typeof comparisonFileRows>;
         if (prior && prior.diff === diff && prior.expanded === expanded && prior.mode === mode && prior.slices.length === slices.length && prior.slices.every((s, i) => s === slices[i]))

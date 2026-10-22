@@ -101,7 +101,7 @@ export class FileTransferStore {
     const task = this.tasks.get(id); if (!task || file.size !== task.size || file.name !== task.name && file.name !== (task as any).sourceName || task.modifiedAt !== undefined && file.lastModified !== task.modifiedAt) throw new Error('Select the original file with the same name, size and modification time');
     this.files.set(id, file); this.verified.delete(id); await this.control(id, 'resume');
   }
-  async download(workspaceId: string, instance: string, paths: string[], suggestedName: string) {
+  async download(workspaceId: string, instance: string, paths: string[], suggestedName: string, versions?:Record<string,string>) {
     const groups = batches(paths); if (!groups.length) return;
     if (groups.length > 1 && !this.downloadSelection) throw new Error('Update the plugin backend to download this selection as one archive');
     // Keep the initial click's activation: choose the destination before the first RPC.
@@ -114,7 +114,7 @@ export class FileTransferStore {
     if (destination) this.destinations.set(id, destination);
     try {
       let task: FileTask;
-      try { task = await this.call({ action: 'download', id, workspaceId, instance, paths: groups[0], ...(groups.length > 1 ? { defer: true } : {}) }); }
+      try { task = await this.call({ action: 'download', id, workspaceId, instance, paths: groups[0], ...(versions?{versions}:{}), ...(groups.length > 1 ? { defer: true } : {}) }); }
       catch (error) { try { task = await this.call({ action: 'task', id }); } catch { throw error; } }
       this.accept(task);
       let offset = groups[0].length;

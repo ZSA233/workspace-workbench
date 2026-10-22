@@ -212,7 +212,7 @@ export class FileTasks {
     candidate.private.selectionVersions = Object.create(null);
     for (const path of input.paths) {
       if (!path || this.roots.metadata(context, path)) throw new WorkbenchError('path_protected', 'Select files or ordinary directories');
-      const info = await lstat(await this.roots.path(context, path)); candidate.private.selectionVersions[path] = fileVersion(info);
+      const info = await lstat(await this.roots.path(context, path)); if(input.versions?.[path]&&input.versions[path]!==fileVersion(info))throw new WorkbenchError('file_source_changed','The previewed file changed; refresh before downloading'); candidate.private.selectionVersions[path] = fileVersion(info);
       if (input.paths.length === 1 && info.isFile()) candidate.private.version = fileVersion(info);
     }
     if (input.defer) { candidate.selectionPending = true; candidate.selectionCount = input.paths.length; }

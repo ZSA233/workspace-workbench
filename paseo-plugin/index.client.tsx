@@ -1,3 +1,4 @@
+import {configureDocumentOpener,clearDocuments,openDocument} from "./client/document-store";
 import type { PluginAgentPanelProps, PluginClientContext, PluginSurfaceProps, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { Platform, Text, View } from "react-native";
 import { useEffect, useSyncExternalStore } from "react";
@@ -5,7 +6,7 @@ import { contextSurfacePrefix, createOpenGuard, workbenchDestination } from "./c
 
 import { clearFileReviews, configureFileReviewOpener, openFileReview } from "./client/file-review-store";
 import { copy, getWorkbenchCopy } from "./shared/copy";
-import { FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel } from "./client/entry-panels";
+import { DocumentPanel, FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel } from "./client/entry-panels";
 import { atInitializationStage, createRegistrationScope, INITIALIZATION_REVISION, type RegistrationScope } from "./client/initialization";
 import { localeFromHostProps } from "./client/i18n";
 import { configureNativeDiagnosticReporter, installNativeRenderErrorHook, reportNativeDiagnostic } from "./client/native-diagnostics";
@@ -179,6 +180,13 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
     Component: FileReviewPanel,
   });
 
+  registerOptionalPanel({id:'workspace-workbench-document',title:'File Viewer',icon:'GitBranch',context:'workspace',locations:['workspace'],Component:DocumentPanel});
+  registerOptionalPanel({id:'workspace-workbench-document-agent',title:'File Viewer',icon:'GitBranch',context:'agent',locations:['workspace'],Component:DocumentPanel});
+  scope.register('document-opener',()=>configureDocumentOpener((selection,back)=>{
+    if(!selection.hostWorkspaceId&&selection.directory&&workspaceApi?.open){void workspaceApi.open(selection.directory).then(workspace=>{if(!disposed)openDocument({...selection,hostWorkspaceId:workspace.id});}).catch(error=>console.error('document_open_failed',error));return;}
+    client.openPanel(back?(selection.agentId?'workspace-workbench-agent':'workspace-workbench-workspace'):(selection.agentId?'workspace-workbench-document-agent':'workspace-workbench-document'),{workspaceId:selection.hostWorkspaceId,agentId:selection.agentId,location:back?'explorer':'workspace'});
+  }));
+
   scope.register("file-review-opener", () => configureFileReviewOpener((request) => {
     if (!request.hostWorkspaceId && request.directory && request.selection) {
       const selection = request.selection;
@@ -251,7 +259,7 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
       } else {
         removeHeaderButton(update.id);
         removeWorkbenchWorkspaceSnapshot(update.id);
-        clearFileReviews(update.id);
+        clearFileReviews(update.id); clearDocuments(update.id);
       }
     }));
   }

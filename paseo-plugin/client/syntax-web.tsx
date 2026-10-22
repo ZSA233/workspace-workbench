@@ -1,11 +1,13 @@
-import {syntaxPalette,tokenColor} from './syntax-palette';
+import {syntaxPalette} from './syntax-palette';
+import {NativeHighlightedCode} from './syntax-native';
+import {syntaxKind,type SyntaxSpan} from '../shared/code-syntax';
 import "./prism-environment";
 import { memo } from "react";
 // The full prism.js entry includes prism-file-highlight, which touches
 // Element.prototype in native hosts that expose only a partial document shim.
 import Prism from "./prism-core";
 import { normalizePrismTokens } from "./prism-normalize";
-import { Platform, Text, type StyleProp, type TextStyle } from "react-native";
+import { Platform, type StyleProp, type TextStyle } from "react-native";
 import type { Grammar } from "prismjs";
 
 import "prismjs/components/prism-markup";
@@ -73,9 +75,11 @@ type HighlightedCodeProps = {
   path: string;
   theme: SyntaxTheme;
   style?: StyleProp<TextStyle>;
+  inlineChange?:readonly[number,number];
+  changeBackground?:string;
 };
 
-export const HighlightedCode = memo(function HighlightedCode({ code, path, theme, style }: HighlightedCodeProps) {
+export const HighlightedCode = memo(function HighlightedCode({ code, path, theme, style,inlineChange,changeBackground }: HighlightedCodeProps) {
   const language = languageForPath(path);
   const palette = syntaxPalette(theme);
   const codeStyle: StyleProp<TextStyle> = [
@@ -86,20 +90,8 @@ export const HighlightedCode = memo(function HighlightedCode({ code, path, theme
     } as TextStyle,
     style,
   ];
-  if (!code) return <Text selectable style={codeStyle} />;
   const grammar = language === "plain" ? null : Prism.languages[language];
-  if (!grammar) return <Text selectable style={codeStyle}>{code || " "}</Text>;
-  const tokens = tokenLines(code || " ", language, grammar);
-  return (
-    <Text selectable style={codeStyle}>
-      {(tokens[0] || []).map((token, index) => (
-        <Text
-          key={`${token.content}-${index}`}
-          style={{ color: tokenColor(token.types, palette), fontFamily: editorCodeFontFamily }}
-        >
-          {token.content}
-        </Text>
-      ))}
-    </Text>
-  );
+  const spans:SyntaxSpan[]=[];let start=0;
+  if(grammar)for(const token of tokenLines(code,language,grammar)[0]||[]){const end=start+token.content.length;spans.push({start,end,kind:syntaxKind(token.types)});start=end;}
+  return <NativeHighlightedCode code={code} path={path} theme={theme} style={codeStyle} spans={spans.length>2048?null:spans} inlineChange={inlineChange} changeBackground={changeBackground}/>;
 });

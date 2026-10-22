@@ -56,7 +56,7 @@ export function UnifiedRow({
       <Text style={styles.lineNumber}>{line.newLine ?? ""}</Text>
       <Text style={[styles.diffMarker, marker]}>{line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " "}</Text>
       <Text selectable testID="diff-code-unified" style={styles.codeText}>
-        {Platform.OS!=='web'?<HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} spans={nativeTokens(line.content)} inlineChange={line.inlineChange} changeBackground={line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`}/>:line.inlineChange ? <>{line.inlineChange[0]>0?<HighlightedCode code={line.content.slice(0,line.inlineChange[0])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}<Text style={[styles.codeSyntaxText,{backgroundColor:line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`} ]}>{line.content.slice(...line.inlineChange)}</Text>{line.inlineChange[1]<line.content.length?<HighlightedCode code={line.content.slice(line.inlineChange[1])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}</> : <HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} />}
+        <HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} spans={nativeTokens(line.content,line)} inlineChange={line.inlineChange} changeBackground={line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`}/>
       </Text>
     </View>
   );
@@ -111,7 +111,7 @@ function DiffCell({
       <Text style={styles.lineNumber}>{side === "left" ? line.oldLine ?? "" : line.newLine ?? ""}</Text>
       <Text style={[styles.diffMarker, marker]}>{line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " "}</Text>
       <Text selectable testID={`diff-code-${side}`} style={styles.codeText}>
-        {Platform.OS!=='web'?<HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} spans={nativeTokens(line.content)} inlineChange={line.inlineChange} changeBackground={line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`}/>:line.inlineChange ? <>{line.inlineChange[0]>0?<HighlightedCode code={line.content.slice(0,line.inlineChange[0])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}<Text style={[styles.codeSyntaxText,{backgroundColor:line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`} ]}>{line.content.slice(...line.inlineChange)}</Text>{line.inlineChange[1]<line.content.length?<HighlightedCode code={line.content.slice(line.inlineChange[1])} path={path} theme={theme} style={styles.codeSyntaxText}/>:null}</> : <HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} />}
+        <HighlightedCode code={line.content} path={path} theme={theme} style={styles.codeSyntaxText} spans={nativeTokens(line.content,line,side)} inlineChange={line.inlineChange} changeBackground={line.kind==='added'?`${theme.colors.statusSuccess}38`:`${theme.colors.statusDanger}38`}/>
       </Text>
     </View>
   );

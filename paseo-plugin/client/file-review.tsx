@@ -1,4 +1,5 @@
 import {useDiffRailWidth} from './use-diff-rail-width';
+import {syntaxStatus} from './syntax-status';
 import {fileReviewQueryKey,fileReviewParams} from './file-review-query';
 import {ComparisonReviewPanel} from './comparison-review';
 import {HunkRow,OverviewRail,UnifiedRow,SplitRow,makeStyles} from './components/diff-rendering';
@@ -52,7 +53,7 @@ import {
 import { useLastSuccessfulResponse } from "./observation";
 import { useReviewModePreference } from "./review-preferences";
 import type { ReviewMode } from "./review-mode";
-import { useWorkbenchCopy } from "./i18n";
+import { useWorkbenchCopy,useWorkbenchLocale } from "./i18n";
 import { reportNativeDiagnostic } from "./native-diagnostics";
 
 type FilePanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
@@ -245,6 +246,7 @@ function DiffViewer({
 }) {
   reportNativeDiagnostic("file-review-diff-render", { entry: "DiffViewer" });
   const copy = useWorkbenchCopy();
+  const syntaxMessage=syntaxStatus(diff.syntax?.reason,useWorkbenchLocale()==='zh-CN');
   const {nativeTokens,parsed,rows,measureRow,setDragging,measurementGeneration,width,setWidth,rowMetrics,overviewMarkers,listRef,horizontalRef,copyRoot,currentHunk,viewportHeight,scrollSignal,restoredPosition,initialOffset,contentHeight,setContentHeight,onListLayout,jumpToHunk,jumpToRow,onScrollToIndexFailed,onViewableItemsChanged,viewabilityConfig}=reading;
 
   const noteScroll=useRef({x:0,y:position.offset});
@@ -278,6 +280,7 @@ function DiffViewer({
   return (
     <View ref={copyRoot} style={styles.diffShell}>
       {diff.truncated ? <Text style={styles.warningText}>{copy.text_1d3d755616}</Text> : null}
+      {syntaxMessage?<Text style={styles.warningText}>{syntaxMessage}</Text>:null}
       <View style={styles.diffViewport} onLayout={event=>setWidth(event.nativeEvent.layout.width)}>
         <ScrollView
           ref={horizontalRef}

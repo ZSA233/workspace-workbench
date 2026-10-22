@@ -12,6 +12,7 @@ export type ContextLine = {
     content: string;
 };
 export type ContextSlice = {
+    syntax?:import('./code-syntax.ts').DiffSyntax;
     lines: ContextLine[];
     oldTotal: number;
     newTotal: number;

@@ -463,6 +463,7 @@ export type ChangesResult = {
 };
 
 export type DiffResult = {
+  syntax?:import("../shared/code-syntax").DiffSyntax;
   contextLines?:number;
   patchDigest?:string;
   left?:string|null;right?:string|null;
@@ -1088,25 +1089,7 @@ export function buildDiffOverviewMarkers(rows: DiffDisplayRow[], metrics: DiffDi
   return markers;
 }
 
-export function languageForPath(path: string): string {
-  const lower = path.toLowerCase();
-  if (lower.endsWith(".go")) return "go";
-  if (lower.endsWith(".tsx")) return "tsx";
-  if (lower.endsWith(".ts") || lower.endsWith(".mts") || lower.endsWith(".cts")) return "typescript";
-  if (lower.endsWith(".jsx")) return "jsx";
-  if (lower.endsWith(".js") || lower.endsWith(".mjs") || lower.endsWith(".cjs")) return "javascript";
-  if (lower.endsWith(".jsonc")) return "json5";
-  if (lower.endsWith(".json")) return "json";
-  if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
-  if (lower.endsWith(".py")) return "python";
-  if (lower.endsWith(".sql")) return "sql";
-  if (lower.endsWith(".sh") || lower.endsWith(".bash") || lower.endsWith(".zsh")) return "bash";
-  if (lower.endsWith(".md") || lower.endsWith(".mdx")) return "markdown";
-  if (lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xml") || lower.endsWith(".svg")) return "markup";
-  if (lower.endsWith(".css") || lower.endsWith(".scss") || lower.endsWith(".less")) return "css";
-  if (lower.endsWith(".toml")) return "toml";
-  return "plain";
-}
+export { languageForPath } from "../shared/code-syntax.ts";
 
 export type DiffReferenceInput = {
   scope: "working" | "branch" | "commit";

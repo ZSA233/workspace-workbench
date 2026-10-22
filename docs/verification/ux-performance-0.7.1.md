@@ -42,7 +42,7 @@ macOS arm64、Node 22.22.1；同一份数据，前后版本交错测量各 20 �
 
 | 检查 | 结果 |
 | --- | --- |
-| 插件 typecheck、完整 Node 回归 | 待最终发布树复核 |
+| 插件 typecheck、完整 Node 回归 | typecheck 通过；清洁发布检出 721 项全部通过（包含 Hermes、协议、缓存、生命周期、handoff-image、Reviewer） |
 | Android 发布脚本 | 34 项通过 |
 | 网页资源测试 | 5 项通过 |
 | Pocket JVM | 43 项通过 |

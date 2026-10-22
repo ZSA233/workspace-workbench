@@ -76,6 +76,36 @@ try {
   await page.getByText('+ Folder', { exact: true }).click(); await page.getByText('New folder',{exact:true}).waitFor(); await page.getByRole('textbox').last().fill('drop-target'); await page.getByText('Confirm', { exact: true }).last().click();
   await page.locator('[data-file-path="drop-target"]').waitFor({ timeout: 20000 });
   const target = page.locator('[data-file-path="drop-target"]');
+  // Measure actual rendered rows, including their labels: drag feedback must
+  // never insert layout above the list or change the landing row's padding.
+  const dragSource = page.locator('[data-file-path="drag-proof.txt"]');
+  const dragGeometry = async () => {
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    return Promise.all([rootEntry, target, dragSource, target.getByText('drop-target', { exact: true })].map(async locator => {
+      const box = await locator.boundingBox(); assert.ok(box, 'drag row remains mounted'); return box;
+    }));
+  };
+  const stationary = (before, after, action) => {
+    for (let row = 0; row < before.length; row++) for (const axis of ['x', 'y', 'width', 'height'])
+      assert.ok(Math.abs(before[row][axis] - after[row][axis]) <= 0.1, `${action}: row ${row} ${axis} moved from ${before[row][axis]} to ${after[row][axis]}`);
+  };
+  const dragBefore = await dragGeometry(), moving = await page.evaluateHandle(() => new DataTransfer());
+  await dragSource.dispatchEvent('dragstart', { dataTransfer: moving });
+  for (const [landing, ctrlKey] of [[target, false], [target, false], [rootEntry, true], [target, false], [dragSource, false]]) {
+    await landing.dispatchEvent('dragover', { dataTransfer: moving, ctrlKey });
+    const geometry = await dragGeometry(); (report.dragGeometry ||= []).push({ action: 'internal hover', before: dragBefore, after: geometry });
+    stationary(dragBefore, geometry, 'internal hover');
+  }
+  await dragSource.dispatchEvent('dragend', { dataTransfer: moving });
+  stationary(dragBefore, await dragGeometry(), 'cancel internal drag');
+  const external = await page.evaluateHandle(() => { const data = new DataTransfer(); data.items.add(new File(['hover only'], 'hover-only.txt')); return data; });
+  for (const landing of [target, rootEntry, target]) {
+    await landing.dispatchEvent('dragover', { dataTransfer: external });
+    stationary(dragBefore, await dragGeometry(), 'external hover');
+  }
+  await target.dispatchEvent('dragleave', { dataTransfer: external, relatedTarget: await page.evaluateHandle(() => document.body) });
+  stationary(dragBefore, await dragGeometry(), 'leave file tree');
+  check('internal and external drag feedback, target changes and cancellation keep every row and label at the same coordinates');
   await target.dispatchEvent('dragover', { dataTransfer: await page.evaluateHandle(() => new DataTransfer()) }); await pause(800);
   await target.dispatchEvent('drop', { dataTransfer: await page.evaluateHandle(() => { const data = new DataTransfer(); data.items.add(new File(['nested proof'], 'nested.txt')); return data; }) });
   await wait(async () => { try { return await readFile(join(ui.project, 'drop-target/nested.txt'), 'utf8') === 'nested proof'; } catch { return false; } }); check('hovered directory expands and receives a dropped file');

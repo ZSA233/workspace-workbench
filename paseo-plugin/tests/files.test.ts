@@ -353,3 +353,16 @@ test('ZIP preparation checkpoints are bounded and preserve a concurrent pause',a
     await f.call({action:'download',id:'zip-pause',workspaceId:f.main,paths:['archive']});await f.wait('zip-pause',['paused']);await pause;await new Promise(r=>setTimeout(r,30));assert.equal(f.files.tasks.journal.require('zip-pause').state,'paused');
   }finally{await f.close();}
 });
+
+test('ZIP progress flushes after 250ms even without another entry and stops on pause',async()=>{
+  const f=await fixture();
+  try{
+    await mkdir(join(f.root,'slow-archive'));await writeFile(join(f.root,'slow-archive','item'),'payload');
+    const walk=(f.files.tasks as any).walk.bind(f.files.tasks);
+    (f.files.tasks as any).walk=async function*(...args:any[]){for await(const item of walk(...args)){yield item;await new Promise(resolve=>setTimeout(resolve,400));}};
+    await f.call({action:'download',id:'zip-clock',workspaceId:f.main,paths:['slow-archive']});
+    for(let n=0;n<100&&!f.files.tasks.journal.require('zip-clock').processed;n++)await new Promise(resolve=>setTimeout(resolve,10));
+    const partial=f.files.tasks.journal.require('zip-clock');assert.equal(partial.state,'preparing');assert.equal(partial.processed,1,'the timer flushes while the producer has not yielded its next entry');
+    await f.call({action:'control',id:'zip-clock',command:'pause'});await new Promise(resolve=>setTimeout(resolve,300));assert.equal(f.files.tasks.journal.require('zip-clock').state,'paused');
+  }finally{await f.close();}
+});

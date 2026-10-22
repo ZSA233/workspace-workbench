@@ -38,7 +38,8 @@ class FileSaveBridge(private val webView: WebView,
         choose(picker.name) { selected ->
             picking = null
             if (closed || generation != picker.ticket) {
-                if (selected != null && !worker.isShutdown) worker.execute { runCatching { DocumentsContract.deleteDocument(webView.context.contentResolver, selected) } }
+                if (selected != null) worker.execute { runCatching { DocumentsContract.deleteDocument(webView.context.contentResolver, selected) } }
+                if (closed) worker.shutdown()
             } else if (selected == null) respond(picker.reply, picker.id, picker.ticket, "Save cancelled", 0)
             else worker.execute {
                 val error = runCatching { sessions.register(picker.id, selected) }.exceptionOrNull()
@@ -97,6 +98,8 @@ class FileSaveBridge(private val webView: WebView,
         closed = true; pickers.clear()
         runCatching { script?.remove() }
         if (installed) runCatching { WebViewCompat.removeWebMessageListener(webView, "PocketFileSaveChannel") }
-        worker.execute(sessions::clear); worker.shutdown()
+        worker.execute(sessions::clear)
+        // Keep the I/O lane only until an already displayed picker can release its URI.
+        if (picking == null) worker.shutdown()
     }
 }

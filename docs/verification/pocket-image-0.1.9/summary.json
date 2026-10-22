@@ -1,0 +1,144 @@
+{
+  "kind": "actual-Android-Pocket-native-image-pipeline",
+  "packageName": "dev.paseo.pocket.qa",
+  "androidSdk": "37",
+  "apkVersion": "0.1.9",
+  "apkVersionCode": "10",
+  "scenarios": {
+    "images": 2,
+    "cancelFirst": true,
+    "chooserDelayMs": 32000
+  },
+  "checks": [
+    "Connected the actual full QA app to only the owned isolated TLS host",
+    "Native cancellation returned without a pill; the next selection remained available",
+    "Real native PhotoPicker confirmation produced expected pills and byte-identical IndexedDB PNGs",
+    "The real send path delivered each original PNG to fake Codex with matching SHA-256"
+  ],
+  "page": {
+    "origin": "https://appassets.androidplatform.net",
+    "secure": true,
+    "ua": "Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/145.0.0.0 Mobile Safari/537.36",
+    "adapter": true
+  },
+  "events": [
+    {
+      "kind": "visibilitychange",
+      "trusted": true,
+      "at": 3375.4000000000233,
+      "visibility": "hidden"
+    },
+    {
+      "kind": "change",
+      "trusted": false,
+      "at": 5582.70000000007,
+      "connected": true,
+      "accept": ",image/*",
+      "composerCount": 1,
+      "files": []
+    },
+    {
+      "kind": "visibilitychange",
+      "trusted": true,
+      "at": 5589.599999999977,
+      "visibility": "visible"
+    },
+    {
+      "kind": "visibilitychange",
+      "trusted": true,
+      "at": 6632.599999999977,
+      "visibility": "hidden"
+    },
+    {
+      "kind": "visibilitychange",
+      "trusted": true,
+      "at": 51552.09999999998,
+      "visibility": "visible"
+    },
+    {
+      "kind": "change",
+      "trusted": true,
+      "at": 51557.20000000007,
+      "connected": true,
+      "accept": ",image/*",
+      "composerCount": 1,
+      "files": [
+        {
+          "name": "34.png",
+          "type": "image/png",
+          "size": 3797
+        },
+        {
+          "name": "35.png",
+          "type": "image/png",
+          "size": 4099
+        }
+      ]
+    },
+    {
+      "kind": "change",
+      "trusted": false,
+      "at": 51574.59999999998,
+      "connected": true,
+      "accept": ",image/*",
+      "composerCount": 1,
+      "files": [
+        {
+          "name": "34.png",
+          "type": "image/png",
+          "size": 3797
+        },
+        {
+          "name": "35.png",
+          "type": "image/png",
+          "size": 4099
+        }
+      ]
+    }
+  ],
+  "persistedImages": [
+    {
+      "id": "att_msg_1792700126796_k7bacyzrc",
+      "fileName": "34.png",
+      "mimeType": "image/png",
+      "size": 3797,
+      "sha256": "5d1d65dbff546da967625ed6ca6a4aa6880eff2ce732093dbdeeecd7895bce1a"
+    },
+    {
+      "id": "att_msg_1792700126797_3cjbdlizl",
+      "fileName": "35.png",
+      "mimeType": "image/png",
+      "size": 4099,
+      "sha256": "e8b71408af849f1d870d01b6cd94a8a74158a1a64de682b012052a4a2177b893"
+    }
+  ],
+  "delivery": {
+    "threadId": "0b966ee7-7740-4e95-98e2-b283c344d94b",
+    "imageHashes": [
+      "5d1d65dbff546da967625ed6ca6a4aa6880eff2ce732093dbdeeecd7895bce1a",
+      "e8b71408af849f1d870d01b6cd94a8a74158a1a64de682b012052a4a2177b893"
+    ],
+    "imageCount": 2
+  },
+  "pageErrors": [],
+  "finalComposer": {
+    "pills": 0,
+    "notice": ""
+  },
+  "ok": true,
+  "baseline018": {
+    "nativePickerConfirmations": 2,
+    "attachmentPills": 0,
+    "storedAttachmentBlobs": 0,
+    "nativeResultEvent": "file_picker_cancelled"
+  },
+  "regressions": {
+    "androidDeviceTests": 12,
+    "pocketNodeTests": 60,
+    "postBundleTests": 41,
+    "webAssetTests": 5,
+    "jvmTests": 43,
+    "lintErrors": 0,
+    "lintWarnings": 50
+  }
+}

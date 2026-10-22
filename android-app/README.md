@@ -7,6 +7,7 @@
 [下载已签名 APK](https://github.com/ZSA233/workspace-workbench/releases?q=android-v&expanded=true) ·
 [自动发版与签名配置](../docs/releasing-android.md)
 
+[0.1.9 原生选图修复与模拟器验收](VERIFICATION-0.1.9.md) ·
 [0.1.6 文件上传与保存](../docs/releases/paseo-pocket-0.1.6.md) ·
 [0.1.5 升级功能与验收记录](../docs/releases/paseo-pocket-0.1.5.md)
 
@@ -183,6 +184,16 @@ adb -s "$POCKET_DEVICE" shell am instrument -w dev.paseo.pocket.qa.test/androidx
 该参数只改变调试包，正式包始终为 `dev.paseo.pocket`。长字号／横屏布局测试需单独运行，
 沿用历史验收记录中的 `layoutChecks=true`。两个 `benchmark-*.mjs` 脚本只操作独立测试包，
 并要求其中只登记 `localhost:19444` 的隔离主机；不应对日常 App 注入故障。
+
+会话选图的完整原生回归在仓库根目录运行：
+
+```sh
+node android-app/scripts/verify-device-images.mjs --serial "$POCKET_DEVICE" \
+  --cancel-first --images 2 --chooser-delay-ms 32000 --output /tmp/pocket-images
+```
+
+它会重置已安装的独立 QA 包，自行启动隔离宿主，通过系统相册选图，核对真实缩略图、
+草稿及发送到宿主的图片校验值。不会安装 APK 或调用真实模型；截图和结果保存在输出目录。
 
 APK 更新专项使用 `scripts/serve-app-update-fixture.mjs`（localhost HTTPS 19446）与
 `AppUpdateDeviceTest`。准备 `artifacts/github-0.1.4/` 中的公开原始 APK、清单及校验文件，

@@ -146,3 +146,9 @@ test('moving back into the same directory skips RPC and queue while mixed moves 
     assert.equal(store.getSnapshot().tasks.length, 0, 'a backend no-op receipt never becomes a queue row');
   } finally { unbind(); }
 });
+
+test('old Pocket bridges queue destinations until the preceding writer is closed',async()=>{
+  const {pickSaveDestination}=await import('../client/files-platform.ts');const web=globalThis as any,previous=web.WorkbenchFileSave,opens:string[]=[];
+  web.WorkbenchFileSave={open:async(name:string)=>{opens.push(name);return {write:async()=>{},close:async()=>{},abort:async()=>{}};}};
+  try{const first=await pickSaveDestination('a'),second=pickSaveDestination('b');await Promise.resolve();assert.deepEqual(opens,['a']);await (await first.open()).close();const next=await second;assert.deepEqual(opens,['a','b']);await next.discard();}finally{web.WorkbenchFileSave=previous;}
+});

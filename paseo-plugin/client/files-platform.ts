@@ -98,12 +98,25 @@ export class DownloadStaging {
 
 export type SaveWriter = { write(bytes: Uint8Array): Promise<void>; close(): Promise<void>; abort(): Promise<void> };
 export type SaveDestination = { open(): Promise<SaveWriter>; discard(): Promise<void> };
+const legacySaveLanes = new WeakMap<object, Promise<void>>();
 export function pickSaveDestination(name: string): Promise<SaveDestination> {
   // Called directly by a user gesture; waiting for an RPC first loses activation.
-  if (web.WorkbenchFileSave?.open) return web.WorkbenchFileSave.open(name).catch((error: Error) => { if (error.message === 'Save cancelled') error.name = 'AbortError'; throw error; }).then((writer: SaveWriter) => {
-    let closed = false;
-    return { open: async () => ({ write: (bytes: Uint8Array) => writer.write(bytes), close: async () => { await writer.close(); closed = true; }, abort: async () => { if (!closed) { await writer.abort(); closed = true; } } }), discard: async () => { if (!closed) { await writer.abort(); closed = true; } } };
-  });
+  if (web.WorkbenchFileSave?.open) {
+    const bridge=web.WorkbenchFileSave;let release=()=>{};
+    let opening:Promise<SaveWriter>;
+    if(bridge.capabilities?.multipleDestinations)opening=bridge.open(name);
+    else {
+      const previous=legacySaveLanes.get(bridge)||Promise.resolve();
+      const reservation=new Promise<void>(resolve=>{release=resolve;});
+      legacySaveLanes.set(bridge,previous.then(()=>reservation));
+      opening=previous.then(()=>bridge.open(name));
+    }
+    return opening.catch((error:Error)=>{release();if(error.message==='Save cancelled')error.name='AbortError';throw error;}).then((writer:SaveWriter)=>{
+      let closed=false;
+      const abort=async()=>{if(!closed){try{await writer.abort();}finally{closed=true;release();}}};
+      return {open:async()=>({write:(bytes:Uint8Array)=>writer.write(bytes),close:async()=>{await writer.close();closed=true;release();},abort}),discard:abort};
+    });
+  }
   // Choose the path now, but open its transactional writer only when bytes are ready.
   if (web.showSaveFilePicker) return web.showSaveFilePicker({ suggestedName: name }).then((handle: any) => ({ open: () => handle.createWritable(), discard: async () => {} }));
   return Promise.reject(new Error('Choose a browser with file saving support, or use Pocket'));

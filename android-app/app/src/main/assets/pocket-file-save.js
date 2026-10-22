@@ -9,17 +9,19 @@
     if (result.error) { const error = new Error(result.error); if (result.error === 'Save cancelled') error.name = 'AbortError'; entry.reject(error); } else entry.resolve(result);
   };
   const call = (action, data, wait = 60000) => new Promise((resolve, reject) => {
-    if (pending.size) { reject(new Error('Wait for the previous file save request')); return; }
     const id = 'save_' + Date.now() + '_' + (++counter);
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('File save request timed out')); }, wait);
     pending.set(id, { resolve, reject, timer });
     PocketFileSaveChannel.postMessage(JSON.stringify({ token, id, action, ...data }));
   });
   Object.defineProperty(window, 'WorkbenchFileSave', { configurable: false, writable: false, value: Object.freeze({
+    capabilities: Object.freeze({ protocol: 2, multipleDestinations: true }),
     async open(name) {
       const opened = await call('open', { name }, 10 * 60 * 1000); const saveId = opened.id; let offset = 0, closed = false;
+      let lane = Promise.resolve();
+      const serial = work => { const next = lane.then(work); lane = next.catch(() => {}); return next; };
       return {
-        async write(bytes) {
+        write(bytes) { return serial(async () => {
           if (closed) throw new Error('Save output is closed');
           for (let i = 0; i < bytes.length; i += 512 * 1024) {
             const part = bytes.subarray(i, i + 512 * 1024); let binary = '';
@@ -28,9 +30,9 @@
             if (result.offset !== offset + part.length) throw new Error('File save confirmation mismatch');
             offset = result.offset;
           }
-        },
-        async close() { if (!closed) { await call('close', { saveId }); closed = true; } },
-        async abort() { if (!closed) { await call('abort', { saveId }); closed = true; } }
+        }); },
+        close() { return serial(async () => { if (!closed) { await call('close', { saveId }); closed = true; } }); },
+        abort() { return serial(async () => { if (!closed) { await call('abort', { saveId }); closed = true; } }); }
       };
     }
   }) });

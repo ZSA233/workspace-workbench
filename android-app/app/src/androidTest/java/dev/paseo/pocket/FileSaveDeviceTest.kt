@@ -90,4 +90,30 @@ class FileSaveDeviceTest {
         assertEquals("\"AbortError\"", result)
         assertEquals("No writer or transfer after cancellation", "0", evaluate(view, "window.createdTransfers"))
     }
+    @Test(timeout = 120000) fun secondPickerAllowsFirstWriterAndIndependentCancellation() {
+        val (_, view) = trustedPage()
+        fun waitValue(expression: String, expected: String) {
+            val until = System.currentTimeMillis() + 20000
+            while (System.currentTimeMillis() < until) { if (evaluate(view, expression) == expected) return; Thread.sleep(100) }
+            assertEquals(expected, evaluate(view, expression))
+        }
+        fun savePicker() {
+            val save = device.wait(Until.findObject(By.text(Pattern.compile("(?i)save|保存"))), 15000)
+                ?: device.wait(Until.findObject(By.res("com.android.documentsui", "button1")), 5000)
+                ?: error("System save picker missing")
+            save.click()
+        }
+        val suffix = System.currentTimeMillis()
+        evaluate(view, "window.multiFirst='pending';window.multiSecond='pending';WorkbenchFileSave.open('qa-first-$suffix.txt').then(out=>{window.firstWriter=out;window.multiFirst='ready'}).catch(e=>window.multiFirst=e.message);WorkbenchFileSave.open('qa-cancel-$suffix.txt').then(out=>{window.secondWriter=out;window.multiSecond='ready'}).catch(e=>window.multiSecond=e.name);void 0")
+        savePicker(); waitValue("window.multiFirst", "\"ready\"")
+        device.wait(Until.findObject(By.text(Pattern.compile("(?i)save|保存"))), 15000) ?: error("Second picker not queued")
+        evaluate(view, "window.multiWrite='pending';firstWriter.write(new TextEncoder().encode('first while second choosing')).then(()=>window.multiWrite='written').catch(e=>window.multiWrite=e.message);void 0")
+        waitValue("window.multiWrite", "\"written\"")
+        device.pressBack(); waitValue("window.multiSecond", "\"AbortError\"")
+        evaluate(view, "window.multiClose='pending';firstWriter.close().then(()=>window.multiClose='closed');void 0")
+        waitValue("window.multiClose", "\"closed\"")
+        evaluate(view, "window.zeroSave='pending';WorkbenchFileSave.open('qa-empty-$suffix.txt').then(async out=>{await out.close();window.zeroSave='closed'}).catch(e=>window.zeroSave=e.message);void 0")
+        savePicker(); waitValue("window.zeroSave", "\"closed\"")
+    }
+
 }

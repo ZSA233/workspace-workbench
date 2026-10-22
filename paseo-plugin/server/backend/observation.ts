@@ -1,6 +1,7 @@
 import { workspaceCreator } from '../../shared/workspace-creator.ts';
 import { workspaceInstanceKey } from "../../shared/workspace-lineage.ts";
 import { RepositoryRefresh } from "./repository-refresh.ts";
+import { RepositoryStatus } from './repository-status.ts';
 import { randomUUID } from "node:crypto";
 import { DiffContent } from "./diff-content.ts";
 import { DiffReadTasks } from "./diff-read-tasks.ts";
@@ -55,6 +56,7 @@ export class Observation {
   activity: WorkspaceActivityIndex;
   diffContent: DiffContent;
   refresh: RepositoryRefresh;
+  status: RepositoryStatus;
   diffTasks = new DiffReadTasks();
   statistics = new FileStatistics();
   private linkedReads = new Map<string, AbortController>();
@@ -63,7 +65,7 @@ export class Observation {
     workspaces: Workspaces,
     runtime: Runtime | null,
     cache: ObservationCache,
-    scheduler = new ObservationScheduler(),
+    scheduler = new ObservationScheduler({ internalPaths: [workspaces.config.stateRoot, workspaces.config.workspaceRoot, workspaces.config.recordsRoot, workspaces.config.treesRoot, workspaces.config.socketPath, workspaces.config.socketPath + '.owner.json'] }),
   ) {
     this.workspaces = workspaces;
     this.runtime = runtime;
@@ -71,6 +73,7 @@ export class Observation {
     this.scheduler = scheduler;
     this.activity = new WorkspaceActivityIndex(workspaces.config);
     this.diffContent = new DiffContent(workspaces, cache, scheduler);
+    this.status = new RepositoryStatus(cache, scheduler, workspaces.config.gitTimeout);
     this.refresh = new RepositoryRefresh(this);
   }
   git(repo: Json, deadline?: number, signal?: AbortSignal) {
@@ -302,6 +305,7 @@ export class Observation {
       workspaces = this.workspaces.lineages.summaries(metadata.workspaces)
         .filter((w: Json) => (params.includeRemoved || w.state !== "removed") &&
           !(orphanIds.has(w.id) && ["record_invalid", "adopting", "adopt_failed"].includes(w.state)));
+    if (!metadata.workspaces.some((w: Json) => w.state === "record_invalid")) { this.cache.reconcileWorkspaces(metadata.workspaces); this.activity.reconcileWorkspaces(metadata.workspaces); this.scheduler.reconcileWorkspaces(metadata.workspaces); }
     const discovered = metadata.discovered;
     if (signal?.aborted) throw new WorkbenchError("observer_cancelled", "observation cancelled");
     return {
@@ -339,9 +343,9 @@ export class Observation {
     const requested = Array.isArray(params.workspaceIds)
       ? [...new Set(params.workspaceIds.slice(0, 500).filter((value: unknown): value is string => typeof value === "string" && value.length <= 256))]
       : [];
-    const requestedIds = new Set(requested),
-      workspaces = (await this.workspaces.observationRecords.request('list')).filter((workspace: Json) => requestedIds.has(workspace.id));
-    return this.activity.start(scanId, workspaces);
+    const requestedIds = new Set(requested), roster = await this.workspaces.observationRecords.request('list');
+    this.activity.reconcileWorkspaces(roster);
+    return this.activity.start(scanId, roster.filter((workspace: Json) => requestedIds.has(workspace.id)));
   }
   async close(): Promise<void> {
     this.closing = true;

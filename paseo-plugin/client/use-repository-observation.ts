@@ -26,7 +26,7 @@ export function useRepositoryObservation({ projectConfig, selectedWorkspaceId, s
         maxCommits: number;
     };
     foreground: boolean;
-    tab: 'workspace' | 'review';
+    tab: 'workspace' | 'review' | 'files';
     backendReady: boolean;
     listReady: boolean;
     refreshCapable: boolean;

@@ -42,6 +42,9 @@ function withRuntimeState(result: unknown, runtimeState: WorkspaceRuntimeState):
 
 export async function activeWorkspaceTasks(workspaceId: string, context: AgentContext): Promise<{ tasks: ActiveTask[]; error?: { code: string; message: string } }> {
   const tasks: ActiveTask[] = [];
+  const files = await queryObserver({ method: 'files.request', params: { action: 'activity', workspaceId } });
+  if (!files.ok) return { tasks, error: { code: 'workspace_task_status_unavailable', message: 'File task status could not be checked; retry after recovery' } };
+  for (const task of (files.result as { tasks?: { id: string; name: string; state: string; cleanupPending?: boolean }[] })?.tasks || []) tasks.push({ kind: 'file', id: task.id, label: task.name, status: task.cleanupPending ? 'cleanup_pending' : task.state });
   try {
     const binding = await handleWorkspaceBinding({ workspaceId }, context);
     if (binding.binding && binding.error && !binding.agent) return { tasks, error: binding.error };

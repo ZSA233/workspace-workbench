@@ -1,7 +1,8 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { workspaceInstanceKey } from '../../shared/workspace-lineage.ts';
 import { type Config } from "./config.ts";
 import { issue, optionalJson, stable, WorkbenchError, type Json } from "./storage.ts";
-import { writeDerivedJson } from './derived-json.ts';
+import { DerivedJsonWriter } from './derived-json.ts';
 
 /** Transport budget and refresh intent cannot change the identity of content. */
 export function observationCacheIdentity(params: Json): string {
@@ -15,6 +16,10 @@ type Entry = {
   time: number;
   bytes: number;
   fingerprintProbed?: boolean;
+  owners?: string[];
+  instances?: Record<string, string>;
+  repoPath?: string;
+  ownershipBytes?: number;
 };
 type Fingerprint = string | (() => Promise<string> | string);
 export type CachePublication = { workspaceId?: string; repoPath?: string };
@@ -34,8 +39,11 @@ export class ObservationCache {
   private failures = new Map<string, string>();
   private generation = 0;
   private workspaceGenerations = new Map<string, number>();
+  private workspaceInstances = new Map<string, string>();
+  private writer: DerivedJsonWriter;
+  private rosterSignature = '';
   workspaceEpoch(id: string) { return this.workspaceGenerations.get(id) || 0; }
-  invalidateWorkspace(id: string) { this.workspaceGenerations.set(id, this.workspaceEpoch(id) + 1); }
+  invalidateWorkspace(id: string) { if (this.workspaceGenerations.size >= 1000 && !this.workspaceGenerations.has(id)) { this.generation++; this.workspaceGenerations.clear(); } this.workspaceGenerations.set(id, this.workspaceEpoch(id) + 1); }
   private closed = false;
   onProduced?: (scope?: CachePublication) => void;
   config: Config;
@@ -45,6 +53,7 @@ export class ObservationCache {
     this.clock=clock;
     this.config = config;
     this.path = join(config.stateRoot, "observer-node-cache.json");
+    this.writer = new DerivedJsonWriter(this.path);
     try {
       const saved = optionalJson(this.path);
       if (saved.version === 1)
@@ -54,6 +63,52 @@ export class ObservationCache {
     } catch {
       this.entries.clear();
     }
+  }
+  private own(entry: Entry, scope?: CachePublication) {
+    if (scope?.workspaceId) {
+      entry.owners = [...new Set([...(entry.owners || []), scope.workspaceId])];
+      const instance = this.workspaceInstances.get(scope.workspaceId);
+      if (instance) entry.instances = { ...entry.instances, [scope.workspaceId]: instance };
+    }
+    if (scope?.repoPath) entry.repoPath = resolve(scope.repoPath);
+    if (entry.owners || entry.instances || entry.repoPath) { const bytes = Buffer.byteLength(JSON.stringify({ owners: entry.owners, instances: entry.instances, repoPath: entry.repoPath })); entry.bytes += bytes - (entry.ownershipBytes || 0); entry.ownershipBytes = bytes; this.trim(); }
+  }
+  evictWorkspace(id: string) {
+    this.invalidateWorkspace(id); this.generation++;
+    for (const [key, entry] of this.entries) {
+      const owners = entry.owners || [entry.value.workspaceId || entry.value.workspace?.id].filter(Boolean);
+      if (owners.includes(id)) {
+        entry.owners = owners.filter(owner => owner !== id);
+        if (entry.instances) delete entry.instances[id];
+        if (!entry.owners.length) { this.entries.delete(key); this.failures.delete(key); }
+      } else if (Array.isArray(entry.value.workspaces)) { this.entries.delete(key); this.failures.delete(key); }
+    }
+    this.writer.save({ version: 1, entries: [...this.entries] });
+  }
+  /** Only call with a complete, successfully decoded record roster. */
+  reconcileWorkspaces(workspaces: Json[]) {
+    if (workspaces.some(w => !w.id || w.state === 'record_invalid')) return;
+    const active = workspaces.filter(w => w.state !== 'removed');
+    const instances = new Map(active.map(w => [String(w.id), workspaceInstanceKey(w as Json & { id: string })]));
+    const signature = stable(active.map(w => ({ id: w.id, instance: instances.get(w.id), root: w.treePath || w.sourceRoot, repositories: (w.repositories || []).map((r: Json) => resolve(r.worktreePath || r.sourcePath)).sort() })).sort((a,b)=>a.id.localeCompare(b.id)));
+    if (signature === this.rosterSignature) return;
+    this.rosterSignature = signature;
+    const repositories = new Map<string, string[]>();
+    for (const w of active) for (const repo of w.repositories || []) { const path = resolve(repo.worktreePath || repo.sourcePath); repositories.set(path, [...(repositories.get(path) || []), w.id]); }
+    this.generation++; // Late producers from the retired roster cannot restore discarded entries.
+    for (const [key, entry] of this.entries) {
+      const value = entry.value, id = value.workspaceId || value.workspace?.id;
+      const repo = entry.repoPath || value.repoPath || value.repository?.repoPath;
+      const owners = id ? entry.owners || [id] : repo ? repositories.get(resolve(repo)) : entry.owners;
+      if (owners) {
+        entry.owners = owners.filter(owner => instances.has(owner) && (!entry.instances?.[owner] || entry.instances[owner] === instances.get(owner)));
+        if (entry.owners.length) { this.own(entry); continue; }
+      }
+      // Old unowned JSON snapshots are derived data, safe to recompute after migration.
+      this.entries.delete(key); this.failures.delete(key);
+    }
+    this.workspaceInstances = instances;
+    this.writer.save({ version: 1, entries: [...this.entries] });
   }
   private trim() {
     let bytes = [...this.entries.values()].reduce(
@@ -150,7 +205,7 @@ export class ObservationCache {
           else delete value.observation.lastSuccessfulAt;
         }
         const entry = {
-          value,
+          value, owners: previous?.owners, instances: previous?.instances, repoPath: previous?.repoPath,
           // A function fingerprint is deliberately evaluated after the
           // observation is produced.  A slow fingerprint must never delay an
           // existing cached snapshot (or the first useful response).
@@ -158,6 +213,7 @@ export class ObservationCache {
           time: this.clock(),
           bytes: Buffer.byteLength(JSON.stringify(value)),
         };
+        this.own(entry, scope);
         if (generation === this.generation && (!scope?.workspaceId || workspaceGeneration === this.workspaceEpoch(scope.workspaceId))) {
           this.entries.delete(key);
           this.entries.set(key, entry);
@@ -244,7 +300,8 @@ export class ObservationCache {
   publish(key: string, fingerprint: string, value: Json, scope?: CachePublication, expectedEpoch = this.generation): void {
     if (this.closed || expectedEpoch !== this.generation) return;
     this.failures.delete(key);
-    this.entries.set(key, { value, fingerprint, time: this.clock(), bytes: Buffer.byteLength(JSON.stringify(value)) });
+    const entry = { value, fingerprint, time: this.clock(), bytes: Buffer.byteLength(JSON.stringify(value)) }; this.own(entry, scope);
+    this.entries.set(key, entry);
     this.trim(); this.onProduced?.(scope);
   }
   peek(key: string, fingerprint: string): Json | undefined {
@@ -256,6 +313,7 @@ export class ObservationCache {
   async read(key: string, fingerprint: Fingerprint, work: () => Promise<Json>, versioned = false, waitFresh = false, scope?: CachePublication) {
     if (this.closed) throw new WorkbenchError("observer_closed", "observation cache is closed");
     const entry = this.entries.get(key);
+    if (entry) this.own(entry, scope);
     const fingerprintMatches =
       typeof fingerprint !== "string" || entry?.fingerprint === fingerprint;
     const healthy = !this.failures.has(key) && (!entry?.value.observation?.state || entry.value.observation.state === 'ready');
@@ -312,7 +370,7 @@ export class ObservationCache {
     this.generation++;
     while (this.flights.size || this.background.size)
       await Promise.allSettled([...this.flights.values(), ...this.background]);
-    await writeDerivedJson(this.path, { version: 1, entries: [...this.entries] });
+    this.writer.save({ version: 1, entries: [...this.entries] }); await this.writer.flush();
     this.entries.clear();
     this.failures.clear();
     this.probes.clear();

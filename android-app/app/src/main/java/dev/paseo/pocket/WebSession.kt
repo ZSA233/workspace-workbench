@@ -18,6 +18,7 @@ import android.webkit.WebViewClient
 import android.view.ViewGroup
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
+import dev.paseo.pocket.files.FileSaveBridge
 import dev.paseo.pocket.observation.ObservationBridge
 import dev.paseo.pocket.observation.ObservationController
 import java.io.File
@@ -27,12 +28,14 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
     private val observation: ObservationController,
     private val unavailable: (String) -> Unit,
     installed: File? = null,
+    private val chooseSave: (String, (Uri?) -> Unit) -> Unit = { _, reply -> reply(null) },
     private val chooseFiles: (ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams) -> Boolean) {
     val bundle = WebBundle(activity.assets, installed)
     val webView: WebView = WebView(activity)
     var destroyed = false
         private set
     private lateinit var bridge: ObservationBridge
+    private lateinit var fileSave: FileSaveBridge
 
     @SuppressLint("SetJavaScriptEnabled")
     fun start() {
@@ -51,11 +54,13 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, false)
         bridge = ObservationBridge(webView, bundle.version, observation::message, observation::unavailable)
         bridge.install()
+        fileSave = FileSaveBridge(webView, chooseSave)
+        fileSave.install()
         observation.bind(bridge)
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 if (destroyed) return
-                observation.pageStarted(); bridge.pageStarted()
+                observation.pageStarted(); bridge.pageStarted(); fileSave.pageStarted()
             }
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 bundle.intercept(request.url, request.isForMainFrame)
@@ -123,6 +128,7 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
         if (destroyed) return
         destroyed = true
         if (::bridge.isInitialized) { observation.unbind(bridge); bridge.close() }
+        if (::fileSave.isInitialized) fileSave.close()
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.stopLoading()
         webView.removeAllViews()

@@ -1,0 +1,140 @@
+{
+  "kind": "standalone-file-workbench-concept",
+  "actualPaseoHost": false,
+  "realFileTransfer": false,
+  "checks": [
+    "Four host-carousel variants render with actual icons",
+    "Workspace switch changes directory root and upload target while preserving existing queue destinations",
+    "New upload snapshots its destination; returning to a Workspace restores the previous folder",
+    "Demo transfer pause, cancel and retry update the task state",
+    "Visible file menu and right-click share copy/paste interactions with Workspace identities",
+    "Name-conflict dialog identifies destination and offers keep-both without overwriting by default",
+    "Cross-Workspace copy explicitly previews source and target",
+    "Mobile transfer drawer toggles and exposes conflict actions",
+    "All four layouts fit desktop, tablet, narrow and 320px-class conversation widths",
+    "Product surfaces respond to the active light/dark appearance"
+  ],
+  "screenshots": [
+    "previews/sidebar-tree.png",
+    "previews/full-workbench.png",
+    "previews/two-workspaces.png",
+    "previews/mobile-transfers.png",
+    "previews/name-conflict.png",
+    "previews/mobile-files.png"
+  ],
+  "layouts": [
+    {
+      "viewport": 1064,
+      "variant": "侧栏文件树",
+      "width": 1032,
+      "height": 1140,
+      "overflow": []
+    },
+    {
+      "viewport": 1064,
+      "variant": "完整文件工作台",
+      "width": 1032,
+      "height": 1140,
+      "overflow": []
+    },
+    {
+      "viewport": 1064,
+      "variant": "双工作区对照",
+      "width": 1032,
+      "height": 1140,
+      "overflow": []
+    },
+    {
+      "viewport": 1064,
+      "variant": "手机文件视图",
+      "width": 1032,
+      "height": 1140,
+      "overflow": []
+    },
+    {
+      "viewport": 776,
+      "variant": "侧栏文件树",
+      "width": 744,
+      "height": 1140,
+      "overflow": []
+    },
+    {
+      "viewport": 776,
+      "variant": "完整文件工作台",
+      "width": 744,
+      "height": 1140,
+      "overflow": []
+    },
+    {
+      "viewport": 776,
+      "variant": "双工作区对照",
+      "width": 744,
+      "height": 1140,
+      "overflow": []
+    },
+    {
+      "viewport": 776,
+      "variant": "手机文件视图",
+      "width": 744,
+      "height": 1140,
+      "overflow": []
+    },
+    {
+      "viewport": 430,
+      "variant": "侧栏文件树",
+      "width": 398,
+      "height": 1900,
+      "overflow": []
+    },
+    {
+      "viewport": 430,
+      "variant": "完整文件工作台",
+      "width": 398,
+      "height": 1900,
+      "overflow": []
+    },
+    {
+      "viewport": 430,
+      "variant": "双工作区对照",
+      "width": 398,
+      "height": 1900,
+      "overflow": []
+    },
+    {
+      "viewport": 430,
+      "variant": "手机文件视图",
+      "width": 398,
+      "height": 1900,
+      "overflow": []
+    },
+    {
+      "viewport": 360,
+      "variant": "侧栏文件树",
+      "width": 328,
+      "height": 1900,
+      "overflow": []
+    },
+    {
+      "viewport": 360,
+      "variant": "完整文件工作台",
+      "width": 328,
+      "height": 1900,
+      "overflow": []
+    },
+    {
+      "viewport": 360,
+      "variant": "双工作区对照",
+      "width": 328,
+      "height": 1900,
+      "overflow": []
+    },
+    {
+      "viewport": 360,
+      "variant": "手机文件视图",
+      "width": 328,
+      "height": 1900,
+      "overflow": []
+    }
+  ],
+  "pageErrors": []
+}

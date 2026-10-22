@@ -1,3 +1,7 @@
+import { FileTransfers, useFileConnection } from './files-transfer-panel';
+import { reconcileFilesTrees } from './files-tree-store';
+import { reconcileFileReviews } from './file-review-store';
+const FilesManager = lazy(() => import('./files-manager'));
 import { RepositoryCompare } from './components/repository-compare';
 import { readWorkspaceLineage, workspaceInstanceKey } from '../shared/workspace-lineage';
 import {
@@ -6,7 +10,7 @@ type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { useQuery,useQueryClient } from "@tanstack/react-query";
-import { useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState } from "react";
+import { lazy,Suspense,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState } from "react";
 import { AccessibilityInfo,LayoutAnimation,Platform,Pressable,Text,UIManager,View } from "react-native";
 import { type WorkbenchCopy,type WorkbenchLocale } from "../shared/copy";
 import { copyText,Modal,ScrollView,TextInput,useToast } from "./native-components";
@@ -223,6 +227,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     throw error;
   }
   const preferenceScopeKey = projectPreferenceScopeKey(projectConfig, hostWorkspaceId);
+  const filesScopeKey = `files:host:${props.host.id}:project:${projectConfig}`;
   const [panelWidth, setPanelWidth] = useState(0);
   const [panelHeight, setPanelHeight] = useState(0);
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -319,6 +324,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   // cold start the socket can exist before it is ready to serve, which used to
   // turn the initial workspace list into a misleading observer_timeout.
   const backendReady = backendQuery.data?.state === "ready";
+  const fileStore = useFileConnection(projectConfig, filesScopeKey, backendReady);
   reportNativeDiagnostic("project-panel-backend-readiness", { ready: String(backendReady), state: String(backendQuery.data?.state || "pending") });
   const observationTiming = useMemo(
     () => observationTimingFromWire(backendQuery.data?.timing),
@@ -332,7 +338,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     q.key[2] === kind && (kind === "workspace-list" || kind === "review" ||
       q.key[3] === selectedWorkspaceId && (kind === "workspace-detail" || q.key[4] === selectedRepoPath))),
     [queryClient, projectConfig, selectedWorkspaceId, selectedRepoPath]);
-  const [tab, setTab] = useState<"workspace" | "review">("workspace");
+  const [tab, setTab] = useState<"workspace" | "review" | "files">("workspace");
   const [reviewTab, setReviewTab] = useState<"set" | "agent">("set");
   const [reviewSessionId, setReviewSessionId] = useState("");
   const [mainReviewInstructions, setMainReviewInstructions] = useState("");
@@ -362,7 +368,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [preferenceScopeKey, selectedWorkspaceId]);
 
   const workspaceDirectory = paseoWorkspace?.directory || "";
-  const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab("workspace");},[]);
+  const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab(current => current === "files" ? "files" : "workspace");},[]);
   const onWorkspaceSelectionLost=useCallback(()=>{setSelectedRepoPath("");setSelectedCommit("");setSelectedFile("");scopeRepositoryIdentity.current="";},[]);
   const {selectionResolved, selectorOpen, activityScanProgress, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, stopWorkspaceActivityScan, closeWorkspaceSelector, openWorkspaceSelector, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
   const {mainRepositoriesOpen, setMainRepositoriesOpen, mainRepositoryFilter, setMainRepositoryFilter, mainRepositoryDraft, setMainRepositoryDraft, savingMainRepositories, linkedWorkspacesOpen, setLinkedWorkspacesOpen, linkedWorkspaceFilter, setLinkedWorkspaceFilter, linkedWorkspaceDraft, setLinkedWorkspaceDraft, savingLinkedWorkspaces, orphanId, setOrphanId, orphanBranches, setOrphanBranches, adoptingOrphan, orphanError, orphanPreviewQuery, orphanPreview, mainRepositoriesQuery, mainRepositories, linkedWorkspacesQuery, linkedWorkspaces, saveMainRepositories, saveLinkedWorkspaces, adoptSelectedOrphan}=useWorkspaceCatalog({projectConfig,backendReady,rpc,localizedCopy,refreshArea,onAdopted:selectCreatedWorkspace});
@@ -372,6 +378,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   // The active selection is independent from the selector's filter. Changing
   // from “all” to “dirty” must not make a clean selected workspace disappear
   // and trigger an unwanted fallback.
+  useEffect(() => { if (listResult?.observation?.state === "ready") { reconcileFilesTrees(filesScopeKey, observedWorkspaces); reconcileFileReviews(hostWorkspaceId, projectConfig, observedWorkspaces); } }, [filesScopeKey, observedWorkspaces, listResult?.observation?.state, hostWorkspaceId, projectConfig]);
   const selectedWorkspace = observedWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId);
   const selectedWorkspaceIsMain = isMainWorkspace(selectedWorkspace);
   useEffect(() => {
@@ -635,7 +642,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const collapseAll = useCallback(() => { animateSectionLayout(); preferences.setAllSectionsCollapsed(true); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.setAllSectionsCollapsed]);
   const expandAll = useCallback(() => { animateSectionLayout(); preferences.setAllSectionsCollapsed(false); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.setAllSectionsCollapsed]);
   const resetLayout = useCallback(() => { animateSectionLayout(); preferences.resetLayout(); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.resetLayout]);
-  const BodyContainer = tab === "review" || allocation.outerScroll ? ScrollView : View;
+  const BodyContainer = tab === "review" || tab === "workspace" && allocation.outerScroll ? ScrollView : View;
   return (
     <View
       ref={activity.ref}
@@ -827,6 +834,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <TabButton active={tab === "workspace"} label={localizedCopy.tabWorkspace} onPress={() => setTab("workspace")} theme={theme} styles={styles} />
         <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
         {selectedWorkspaceId && selectedWorkspace?.kind !== "linked-live" && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
+        <TabButton active={tab === "files"} label={locale === "zh-CN" ? "文件" : "Files"} onPress={() => setTab("files")} theme={theme} styles={styles} />
       </ScrollView>
       <View
         style={styles.bodyShell}
@@ -836,7 +844,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         }}
       >
         <SectionAllocationContext.Provider value={allocation}>
-        <BodyContainer {...(tab === "review" || allocation.outerScroll ? { scrollEnabled: !sectionDragging, contentContainerStyle: styles.bodyContent } : {})} style={[styles.body, tab === "workspace" && !allocation.outerScroll && styles.bodyContent, stableScrollbarStyle]}>
+        <BodyContainer {...(tab === "review" || tab === "workspace" && allocation.outerScroll ? { scrollEnabled: !sectionDragging, contentContainerStyle: styles.bodyContent } : {})} style={[styles.body, tab === "workspace" && !allocation.outerScroll && styles.bodyContent, stableScrollbarStyle]}>
           {backendQuery.data && backendQuery.data.state !== "ready" && !listReady ? (
             <View style={styles.warningCard}>
               <Text style={styles.warningTitle}>{localizedCopy.setupBackendTitle}</Text>
@@ -901,7 +909,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               styles={styles}
             />
             </View></View>
-          ) : reviewTab === "agent" ? <View>
+          ) : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
             {selectedWorkspaceIsMain ? <View style={styles.targetRow}>
               <Text style={styles.layoutMenuHint}>{localizedCopy.mainReviewHint}</Text>
               <TextInput value={mainReviewInstructions} onChangeText={setMainReviewInstructions} placeholder={localizedCopy.mainReviewInstructions} multiline style={styles.targetInput} />
@@ -927,6 +935,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         </BodyContainer>
         </SectionAllocationContext.Provider>
       </View>
+      <FileTransfers store={fileStore} theme={theme} />
       <AnchoredMenu open={statusMenuOpen} onClose={() => setStatusMenuOpen(false)} theme={theme}>
         <Text style={styles.layoutMenuHint}>{observationLabel}</Text>
         {backendReady && !basicCapable ? <Text style={styles.layoutMenuHint}>{localizedCopy.basicObservationCompatibility}</Text> : null}

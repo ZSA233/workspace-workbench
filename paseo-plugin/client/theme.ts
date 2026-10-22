@@ -5,7 +5,7 @@ export type ObserverTheme = {
   };
 };
 
-function surfaceLuminance(surface: string): number | null {
+export function surfaceLuminance(surface: string): number | null {
   const match = /^#([0-9a-f]{6})$/i.exec(surface.trim());
   if (!match) return null;
   const channels = [0, 2, 4].map((offset) => Number.parseInt(match[1].slice(offset, offset + 2), 16) / 255);

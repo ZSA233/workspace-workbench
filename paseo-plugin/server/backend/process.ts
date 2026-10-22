@@ -10,15 +10,18 @@ export async function command(
     maxBytes?: number;
     truncate?: boolean;
     signal?: AbortSignal;
+    /** Bounded UTF-8 stdin for NUL-delimited read commands. */
+    input?: string;
   },
 ) {
   if (options.signal?.aborted) throw new WorkbenchError("observer_cancelled", `${executable} cancelled before spawn`);
+  if (options.input !== undefined && Buffer.byteLength(options.input) > 64 * 1024) throw new WorkbenchError('input_limit', 'Command input exceeded limit');
   return new Promise<{ stdout: string; stderr: string; code: number; truncated: boolean; bytes: number }>(
     (resolve, reject) => {
       const child = spawn(executable, args, {
         cwd: options.cwd,
         env: options.env || process.env,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         detached: process.platform !== "win32",
       });
       const kill = () => {
@@ -65,8 +68,8 @@ export async function command(
       };
       if (options.signal?.aborted) onAbort();
       else options.signal?.addEventListener("abort", onAbort, { once: true });
-      child.stdout.on("data", (chunk) => collect(stdout, chunk));
-      child.stderr.on("data", (chunk) => collect(stderr, chunk));
+      child.stdout!.on("data", (chunk: Buffer) => collect(stdout, chunk));
+      child.stderr!.on("data", (chunk: Buffer) => collect(stderr, chunk));
       child.once("error", (error) => {
         settled = true;
         clearTimeout(timer);
@@ -88,6 +91,11 @@ export async function command(
               truncated, bytes,
           });
       });
+      child.stdin?.on('error', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'EPIPE' || settled) return;
+        failure = new WorkbenchError('process_input_failed', error.message); kill();
+      });
+      if (options.input !== undefined) child.stdin?.end(options.input, 'utf8');
     },
   );
 }

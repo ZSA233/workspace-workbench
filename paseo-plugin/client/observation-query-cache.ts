@@ -13,9 +13,9 @@ function queryKind(key: readonly unknown[], project: string): string {
 
 export function observationQueries(client: QueryClient, project: string): QueryView[] {
   const roster = client.getQueryData<ObserverResponse>(['workspace-workbench', project, 'workspace-list']);
-  const workspaces = (roster?.result as { workspaces?: { id: string }[] } | undefined)?.workspaces;
+  const workspaces = (roster?.result as { workspaces?: { id: string; state?: string }[] } | undefined)?.workspaces;
   if (roster?.ok && observationMeta(roster).state === 'ready' && Array.isArray(workspaces)) {
-    const ids = new Set(workspaces.map(workspace => workspace.id));
+    const ids = new Set(workspaces.filter(workspace => workspace.state !== "removed").map(workspace => workspace.id));
     for (const q of client.getQueryCache().getAll()) {
       if (q.isActive() || !kinds.has(queryKind(q.queryKey, project))) continue;
       const result = (q.state.data as ObserverResponse | undefined)?.result as { workspaceId?: string; workspace?: { id?: string } } | undefined;

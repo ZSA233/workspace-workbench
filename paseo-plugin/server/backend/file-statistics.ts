@@ -72,8 +72,10 @@ export class FileStatistics {
   private cache = new Map<string, FileStatisticsResult>();
   private tasks = new Map<string, { abort: AbortController; promise: Promise<void> }>();
   private closed = false;
+  private epoch = 0;
   bytes = 0;
   async read(path: string, root: string, budget: number, signal?: AbortSignal, complete?: () => void, deadline?: number): Promise<FileStatisticsResult> {
+    const epoch = this.epoch;
     const stat = await lstat(path).catch(() => null);
     if (!stat) return { ...deferred(), statisticsState: 'unavailable' };
     const key = `${path}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
@@ -82,7 +84,7 @@ export class FileStatistics {
     if (!budget) { this.schedule(key, path, root, complete); return deferred(); }
     const result = await countFile(path, root, Math.min(1048576, budget), signal, deadline);
     this.bytes += result.bytes;
-    if (result.statisticsState === 'ready') this.save(key, result);
+    if (result.statisticsState === 'ready' && epoch === this.epoch) this.save(key, result);
     else if (result.statisticsState === 'deferred') this.schedule(key, path, root, complete);
     return result;
   }
@@ -93,16 +95,24 @@ export class FileStatistics {
   private schedule(key: string, path: string, root: string, complete?: () => void) {
     if (this.closed || this.tasks.has(key) || this.tasks.size >= 32) return;
     const abort = new AbortController();
+    const epoch = this.epoch;
     const promise = (async () => {
       await yieldTurn();
       try {
         const result = await countFile(path, root, Number.MAX_SAFE_INTEGER, abort.signal, Date.now() + 30_000);
         this.bytes += result.bytes;
-        if (!this.closed && result.statisticsState === 'ready') { this.save(key, result); complete?.(); }
+        if (!this.closed && epoch === this.epoch && result.statisticsState === 'ready') { this.save(key, result); complete?.(); }
       } catch { /* observation can retry a deferred statistic later */ }
     })().finally(() => this.tasks.delete(key));
     this.tasks.set(key, { abort, promise });
   }
   health() { return { bytes: this.bytes, active: this.tasks.size, entries: this.cache.size }; }
+  evictPaths(paths: string[]) {
+    if (!paths.length) return;
+    this.epoch++;
+    const owned = (key: string) => paths.some(path => key.startsWith(path + '/') || key.startsWith(path + ':'));
+    for (const key of this.cache.keys()) if (owned(key)) this.cache.delete(key);
+    for (const [key, task] of this.tasks) if (owned(key)) task.abort.abort();
+  }
   async close() { this.closed = true; for (const task of this.tasks.values()) task.abort.abort(); await Promise.allSettled([...this.tasks.values()].map(t => t.promise)); this.cache.clear(); }
 }

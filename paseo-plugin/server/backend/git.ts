@@ -35,7 +35,7 @@ export class Git {
     this.deadline = deadline;
     this.signal = signal;
   }
-  async run(args: string[], check = true, output?: { maxBytes: number; truncate?: boolean }) {
+  async run(args: string[], check = true, output?: { maxBytes: number; truncate?: boolean; input?: string }) {
     if (this.signal?.aborted) throw new WorkbenchError("observer_cancelled", "Git request cancelled");
     let result;
     try {
@@ -49,7 +49,7 @@ export class Git {
           commands++;
           return command(
             "git",
-            ["--literal-pathspecs", "-c", "core.fsmonitor=false", "-C", this.path, ...args],
+            [...(args[0] === 'check-ignore' ? [] : ["--literal-pathspecs"]), "-c", "core.fsmonitor=false", "-C", this.path, ...args],
             {
               cwd: this.path,
               timeout: Math.max(1, Math.min(this.timeout, remaining)),
@@ -58,6 +58,7 @@ export class Git {
                 GIT_OPTIONAL_LOCKS: "0",
                 GIT_TERMINAL_PROMPT: "0",
                 GIT_EXTERNAL_DIFF: "",
+                ...(args[0] === 'check-ignore' ? { GIT_LITERAL_PATHSPECS: '0', GIT_GLOB_PATHSPECS: '0', GIT_NOGLOB_PATHSPECS: '0', GIT_ICASE_PATHSPECS: '0' } : {}),
               },
               signal: this.signal,
               ...output,
@@ -175,7 +176,7 @@ export class Git {
         path = value.slice(3);
       result.push([
         code,
-        /[RC]/.test(code[0]) && values[i + 1]
+        /[RC]/.test(code) && values[i + 1]
           ? `${path}\0${values[++i]}`
           : path,
       ]);

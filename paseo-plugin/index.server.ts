@@ -1,4 +1,6 @@
 import {changeNotesRpc} from './shared/change-notes-rpc';
+import { filesRpc } from './shared/file-rpc';
+import { queryObserver } from './server/observer';
 import {handleChangeNotes} from './server/change-notes';
 import { creationSource } from './server/workspace-creator';
 import { defineRpc } from "@getpaseo/plugin";
@@ -122,6 +124,20 @@ export default function contribute(server: PluginServerContext) {
     }),
   };
   withHost.handle(changeNotesRpc,(input,context)=>withProject(input,()=>handleChangeNotes(input,context)));
+  measured.handle(filesRpc, input => withProject(input, async () => {
+    const response = await queryObserver({ method: 'files.request', params: input.request });
+    if (input.request.action !== 'delegate' || !response.ok || (response.result as any)?.pending) return response;
+    try {
+      const target = response.result as { cwd: string; path: string };
+      return await host.run(async (_api, client) => {
+        if (!client.requestDownloadToken || !client.getLastServerInfoMessage) throw new Error('Host download capability is unavailable');
+        const token = await client.requestDownloadToken(target.cwd, target.path);
+        const serverId = client.getLastServerInfoMessage()?.serverId;
+        if (!token.token || token.error || !serverId) throw new Error(token.error || 'Host download token unavailable');
+        return { ok: true, result: { url: '/api/files/download?token=' + encodeURIComponent(token.token), serverId } };
+      });
+    } catch (error) { return { ok: false, error: { code: 'file_download_host_unavailable', message: error instanceof Error ? error.message : String(error) } }; }
+  }));
   measured.registerSettings(observerSettings);
   withHost.handle(workspaceHandoffPreview, (input, context) => withProject(input, () => orchestrate("preview", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)));
   withHost.handle(handoffMaterials, (input, context) => withProject(input, () => handleHandoffMaterials(input, context)));
@@ -165,7 +181,13 @@ export default function contribute(server: PluginServerContext) {
   measured.handle(workspacePreview, handleWorkspacePreview);
   measured.handle(projectSetupScan, handleProjectSetupScan);
   measured.handle(projectSetupSave, handleProjectSetupSave);
-  measured.handle(projectStorageQuery, handleProjectStorage);
+  measured.handle(projectStorageQuery, input => withProject(input, async () => {
+    const storage = await handleProjectStorage(input);
+    const [health, tasks] = await Promise.all([queryObserver({ method: 'observer.health', params: {} }), queryObserver({ method: 'files.request', params: { action: 'tasks', limit: 1 } })]);
+    if (!health.ok || !tasks.ok) return storage;
+    const memory = (health.result as any)?.cache?.memory, transfers = tasks.result as any;
+    return { ...storage, derived: { cacheBytes: memory?.bytes || 0, cacheLimit: memory?.maxBytes || 0, cacheEntries: memory?.entries || 0, temporaryBytes: transfers.temporaryBytes || 0, incompleteTasks: transfers.incompleteTasks || 0 } };
+  }));
   measured.handle(clientDiagnostic, handleClientDiagnostic);
   measured.handle(clientDiagnosticBatch, input => {
     let result = { ok: true, retained: 0 };

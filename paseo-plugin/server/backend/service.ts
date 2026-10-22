@@ -1,4 +1,5 @@
 import {ChangeNotes} from './change-notes.ts';
+import { WorkspaceFiles } from './files.ts';
 import { compareRepository, fetchComparisonRef } from './repository-comparison.ts';
 import type {ObservationScheduler} from './observation-scheduler.ts';
 import { RuntimeReadQueue } from './runtime-read-queue.ts';
@@ -30,6 +31,7 @@ export const managementMethods = new Set([
   "linked.workspaces.save",
 ]);
 export class Service {
+  files: WorkspaceFiles;
   notes: ChangeNotes;
   config: Config;
   workspaces: Workspaces;
@@ -41,7 +43,7 @@ export class Service {
   startedAt = Date.now();
   eventLoop = new EventLoopMetrics();
   version: string;
-  build = buildId(["../server/backend/service.ts", "../server/backend/change-notes.ts", "../server/backend/change-note-catalog.ts", "./change-notes.ts", "../server/backend/repository-comparison.ts", "../server/backend/diff-content.ts", "../server/backend/diff-context.ts", "./diff-context.ts", "./comparison.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts", "../server/backend/runtime-tools.ts", "../server/backend/runtime-layout.ts", "../server/backend/runtime-summary.ts", "../server/backend/runtime-observation.ts", "../server/backend/runtime-read-queue.ts", "../server/backend/environment-snapshots.ts", "../server/backend/workspaces.ts", "../server/backend/workspace-records.ts", "../server/backend/workspace-catalog.ts", "../server/backend/workspace-directory.ts", "../server/backend/workspace-creation.ts", "../server/backend/workspace-removal.ts", "../server/backend/workspace-deletion.ts", "../server/backend/workspace-activity-guard.ts", "../server/backend/workspace-record-encoding.ts", "../server/backend/workspace-infrastructure.ts", "../server/backend/workspace-scope.ts", "../server/backend/workspace-lineage.ts", "./workspace-lineage.ts"]);
+  build = buildId(["../server/backend/process.ts", "../server/backend/file-decorations.ts", "../server/backend/repository-status.ts", "./file-decorations.ts", "../server/backend/file-stage-ignore.ts", "../server/backend/file-io.ts", "../server/backend/file-cleanup.ts", "../server/backend/files.ts", "../server/backend/file-roots.ts", "../server/backend/file-journal.ts", "../server/backend/file-tasks.ts", "./files.ts","../server/backend/service.ts", "../server/backend/change-notes.ts", "../server/backend/change-note-catalog.ts", "./change-notes.ts", "../server/backend/repository-comparison.ts", "../server/backend/diff-content.ts", "../server/backend/diff-context.ts", "./diff-context.ts", "./comparison.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts", "../server/backend/runtime-tools.ts", "../server/backend/runtime-layout.ts", "../server/backend/runtime-summary.ts", "../server/backend/runtime-observation.ts", "../server/backend/runtime-read-queue.ts", "../server/backend/environment-snapshots.ts", "../server/backend/workspaces.ts", "../server/backend/workspace-records.ts", "../server/backend/workspace-catalog.ts", "../server/backend/workspace-directory.ts", "../server/backend/workspace-creation.ts", "../server/backend/workspace-removal.ts", "../server/backend/workspace-deletion.ts", "../server/backend/workspace-activity-guard.ts", "../server/backend/workspace-record-encoding.ts", "../server/backend/workspace-infrastructure.ts", "../server/backend/workspace-scope.ts", "../server/backend/workspace-lineage.ts", "./workspace-lineage.ts"]);
   constructor(config: Config, version = "0.1.3", dependencies:{scheduler?:ObservationScheduler;cacheClock?:()=>number}={}) {
     this.config = config;
     this.version = version;
@@ -60,6 +62,7 @@ export class Service {
     this.preparations = new PrepareTasks(this.workspaces, workspaceId => { this.observation.scheduler.published({workspaceId}); });
     this.workspaces.preparationActive = id => this.preparations.active(id);
     this.cache.onProduced = scope => this.observation.scheduler.published(scope);
+    this.files = new WorkspaceFiles(this.workspaces, this.cache, (id, paths) => this.observation.scheduler.filesChanged(id, paths), this.observation.status);
   }
   health() {
     const caps = this.workspaces.capabilities();
@@ -74,6 +77,8 @@ export class Service {
       environmentReads: this.environmentReads.health(),
       git: gitDiagnostics(),
       recordReads: this.workspaces.observationRecords.health(),
+      filesProtocol: 1,
+      fileDecorationsProtocol: 1,
       contextProtocol:1, diffRead: this.observation.diffTasks.health(),
       refreshProtocol: 1,
       refreshControls: this.observation.refresh.controlHealth(),
@@ -99,6 +104,7 @@ export class Service {
     };
   }
   async handle(method: string, params: Json = {}, signal?: AbortSignal): Promise<Json> {
+    if (method === 'files.request') return this.files.request(params);
     if (method === 'notes.read') return this.notes.read(params,signal);
     if (method === 'notes.write') return this.workspaces.mutations.run(()=>this.notes.write(params,params.author));
     if (method === 'notes.manage') return this.workspaces.mutations.run(()=>this.notes.manage(params));
@@ -133,8 +139,7 @@ export class Service {
         return {...await this.observation.scheduler.versions(Array.isArray(params.workspaceIds) ? params.workspaceIds.slice(0, 100).filter((id: unknown) => typeof id === "string") : []), notesRevision:this.notes.revision};
       case "observer.health":
         return this.health();
-      case "workspace.list":
-        return this.observation.list(params, signal);
+      case "workspace.list": { const result = await this.observation.list(params, signal); this.files.reconcile(result.workspaces); return result; }
       case "workspace.activity":
         return this.observation.activityRequest(params);
       case "workspace.orphan.preview":
@@ -245,6 +250,7 @@ export class Service {
     }
   }
   private async mutate(method: string, params: Json): Promise<Json> {
+    if (params.workspaceId && (method === "workspace.remove" || method === "workspace.addRepositories" || ["workspace.cleanup", "workspace.delete"].includes(method) && params.confirm === true)) this.files.assertIdle(String(params.workspaceId));
     if (method === "main.repositories.save") return this.workspaces.saveMainSelection(params);
     if (method === "linked.workspaces.save") return this.workspaces.saveLinkedSelection(params);
     if (method === "observer.reload") {
@@ -287,11 +293,26 @@ export class Service {
       return {...workspace, preparationOperationId:task.operationId, preparations:state.repositories.map((repo:Json)=>repo.result || {repositoryId:repo.id,status:repo.state,operationId:task.operationId})};
 
     }
-    if (method === "workspace.remove") return this.workspaces.remove(params);
-    if (method === "workspace.restore") return this.workspaces.restore(params);
-    return this.workspaces.cleanup(params, method === "workspace.delete");
+    if (method === "workspace.remove") { const prior = this.workspaces.get(String(params.workspaceId)); const result = await this.workspaces.remove(params); if (result.removed) this.retireDerived(String(params.workspaceId), prior); return result; }
+    if (method === "workspace.restore") { const result = await this.workspaces.restore(params); this.observation.scheduler.activateWorkspace(String(params.workspaceId)); return result; }
+    const prior = this.workspaces.get(String(params.workspaceId));
+    const result: Json = await this.workspaces.cleanup(params, method === "workspace.delete");
+    if (result.deleted || result.removed) this.retireDerived(String(params.workspaceId), prior);
+    return result;
+  }
+  private retireDerived(id: string, prior: Json) {
+    this.files.retire(id);
+    this.observation.diffTasks.retireWorkspace(id); this.observation.scheduler.retireWorkspace(id);
+    const remaining = this.workspaces.list().filter((w: Json) => w.state !== 'removed' && w.id !== id);
+    this.cache.reconcileWorkspaces(remaining); this.cache.evictWorkspace(id); this.observation.activity.reconcileWorkspaces(remaining);
+    if (!remaining.some((w: Json) => w.state === 'record_invalid')) {
+      const shared = new Set(remaining.flatMap((w: Json) => (w.repositories || []).map((r: Json) => r.worktreePath || r.sourcePath)));
+      this.observation.statistics.evictPaths((prior.repositories || []).map((r: Json) => r.worktreePath || r.sourcePath).filter((path: string) => !shared.has(path)));
+    }
   }
   async close() {
+    await this.files.close();
+    this.observation.status.close();
     this.eventLoop.close();
     await this.environmentReads.close();
     await this.preparations.close();

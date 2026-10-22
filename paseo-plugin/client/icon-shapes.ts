@@ -7,6 +7,8 @@ const path=(...points:number[]):IconPart[]=>Array.from({length:points.length/2-1
 const down=path(6,9,12,15,18,9),right=path(9,6,15,12,9,18),up=path(6,15,12,9,18,15);
 const swap=[...path(3,7,21,7,17,3),...path(21,17,3,17,7,21)];
 const info=[circle(12,12,9),circle(12,7,1,true),line(12,11,12,17)];
+const file=path(5,21,5,3,14,3,19,8,19,21,5,21);
+const folded=[...file,...path(14,3,14,8,19,8)];
 export const iconShapes:Record<string,IconPart[]>={
  ChevronDown:down,ChevronUp:up,ChevronRight:right,ChevronLeft:path(15,6,9,12,15,18),ChevronsUpDown:[...path(8,8,12,4,16,8),...path(8,16,12,20,16,16)],
  ArrowLeft:[...path(11,5,4,12,11,19),line(4,12,21,12)], ArrowLeftRight:swap,GitCompare:swap,
@@ -23,6 +25,14 @@ export const iconShapes:Record<string,IconPart[]>={
  RefreshCw:[...path(20,8,17,4,10,3,5,6,3,12,5,18,11,21,17,19,20,15),...path(20,3,20,8,15,8)],
  Columns2:[box(3,3,18,18,2),line(12,3,12,21)],Rows3:[box(3,3,18,18,2),line(3,9,21,9),line(3,15,21,15)],
  Folder:[...path(3,20,3,5,10,5,12,8,21,8,21,20,3,20)],
+ FolderOpen:[...path(3,19,3,5,10,5,12,8,20,8,20,10),...path(3,19,6,11,23,11,20,19,3,19)],
+ File:folded,
+ FileText:[...folded,line(8,12,16,12),line(8,16,15,16)],
+ FileCode:[...folded,...path(10,11,7,14,10,17),...path(14,11,17,14,14,17)],
+ FileConfig:[...folded,line(8,12,16,12),line(8,17,16,17),line(10,10,10,14),line(14,15,14,19)],
+ FileImage:[...folded,circle(9,10,1.2),...path(6,19,10,14,13,17,16,13,18,16)],
+ FileArchive:[...folded,...[5,8,11,14].map(y=>box(10,y,2,2,0,true)),box(9,17,4,3,0.5)],
+ FileLink:[...folded,...path(9,17,16,10,12,10),...path(16,10,16,14)],
  MessageSquare:path(4,3,20,3,20,17,10,17,4,21,4,3),
  Check:path(4,12,10,18,21,5),Pin:[...path(8,3,16,3,15,10,19,14,5,14,9,10,8,3),line(12,14,12,22)],
 };

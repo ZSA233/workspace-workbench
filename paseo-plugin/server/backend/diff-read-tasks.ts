@@ -125,6 +125,14 @@ export class DiffReadTasks {
     if (this.keys.get(task.key) === task.id) this.keys.delete(task.key);
     for (const [request, id] of this.requests) if (id === task.id) this.requests.delete(request);
   }
+  retireWorkspace(workspaceId: string) {
+    for (const task of this.tasks.values()) {
+      let owner: string | undefined; try { owner = JSON.parse(task.identity).workspace; } catch {}
+      if (owner !== workspaceId) continue;
+      if (!task.cleanupDone) { this.cancel(task, 'observer_cancelled'); void task.flight.finally(() => this.forget(task)); }
+      else this.forget(task);
+    }
+  }
   health() {
     const cutoff = Date.now() - 30_000;
     const events = this.events.filter(event => Date.parse(event.at) >= cutoff);

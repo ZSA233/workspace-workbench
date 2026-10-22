@@ -5,6 +5,8 @@ import type { WorkbenchCopy } from "../../shared/copy";
 import type { ProjectStorageInfo } from "../../shared/setup";
 import { AnchoredMenu } from "./navigation";
 import { useWorkbenchCopy } from "../i18n";
+import { useWorkbenchLocale } from '../i18n';
+import { fileBytes } from '../files-transfer-panel';
 
 type PanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 type Theme = PanelProps["theme"];
@@ -29,6 +31,7 @@ export function ProjectStorageMenu({
   theme: Theme;
 }) {
   const copy = useWorkbenchCopy();
+  const zh = useWorkbenchLocale() === 'zh-CN';
   return (
     <AnchoredMenu open={open} onClose={onClose} theme={theme} width={compact ? 240 : 290}>
       <View style={{ gap: 8, padding: 4 }}>
@@ -49,6 +52,10 @@ export function ProjectStorageMenu({
             <StorageRow copy={copy} label={copy.storageState} value={storage.state} theme={theme} />
             <StorageRow copy={copy} label={copy.storageSocket} value={storage.socket} theme={theme} />
             <StorageRow copy={copy} label={copy.gitLabel} text={gitIgnoreLabel(storage.ignoreMode, copy)} theme={theme} />
+            {storage.derived ? <>
+              <StorageRow copy={copy} label={zh ? '观察缓存（有界）' : 'Observation cache (bounded)'} text={`${fileBytes(storage.derived.cacheBytes)} / ${fileBytes(storage.derived.cacheLimit)} · ${storage.derived.cacheEntries}`} theme={theme}/>
+              <StorageRow copy={copy} label={zh ? '传输临时内容' : 'Temporary transfers'} text={`${fileBytes(storage.derived.temporaryBytes)} · ${storage.derived.incompleteTasks} ${zh ? '项待完成，可在传输队列取消清理' : 'pending; cancel in Transfers to clean up'}`} theme={theme}/>
+            </> : null}
           </>
         ) : null}
       </View>

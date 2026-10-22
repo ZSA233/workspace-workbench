@@ -16,6 +16,7 @@
     "paseo-plugin.json",
     "tsconfig.json",
     "README.md",
+    "FILES.md",
     "SESSION-WORKFLOW.md",
     "HANDOFF-MATERIALS.md",
     "CHANGE-NOTES.md",
@@ -33,11 +34,14 @@
   },
   "dependencies": {
     "@getpaseo/client": "^0.10.2",
+    "@noble/hashes": "^2.4.0",
     "@parcel/watcher": "^2.5.6",
     "prismjs": "^1.30.0",
     "react-native-svg": "^15.14.0",
     "smol-toml": "^1.9.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "yazl": "^3.3.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@getpaseo/plugin": "^0.10.2",
@@ -47,11 +51,11 @@
     "@types/prismjs": "^1.26.3",
     "@types/react": "~19.2.0",
     "@types/ws": "^8.18.1",
+    "@types/yazl": "^3.3.1",
     "esbuild": "^0.25.12",
     "playwright": "^1.62.1",
     "react": "^19.1.0",
     "react-native": "^0.81.5",
-    "typescript": "^5.7.2",
-    "zod": "^4.4.3"
+    "typescript": "^5.7.2"
   }
 }

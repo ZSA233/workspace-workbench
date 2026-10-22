@@ -3,13 +3,17 @@ import { BasicReads } from "./basic-reads.ts";
 import { Git, withBackgroundGit } from './git.ts';
 import { now, stable, issue, WorkbenchError, type Json } from './storage.ts';
 import { count, fileJson, protocol, type Observation } from './observation.ts';
+import type { RepositoryStatus } from './repository-status.ts';
+import { workspaceInstanceKey } from '../../shared/workspace-lineage.ts';
 
 /** One read generation owns its Git promises; no caller's abort leaks to another generation. */
 class SnapshotGit extends Git {
   private reads = new Map<string, ReturnType<Git['run']>>();
+  private statuses = new Map<string, Promise<Array<[string, string]>>>();
   readonly trace: Json[];
   basic?: BasicReads;
   sourceVersion = "";
+  statusReader?: { reader: RepositoryStatus; workspaceId: string; instance: string };
   phase = 'critical';
   constructor(path: string, timeout: number, deadline: number, signal: AbortSignal | undefined, trace: Json[]) { super(path, timeout, deadline, signal, true); this.trace = trace; }
   override run(args: string[], check = true, output?: { maxBytes: number; truncate?: boolean }) {
@@ -32,6 +36,15 @@ class SnapshotGit extends Git {
     const paths = scope === 'working' && namesOnly
       ? [...new Set((await this.status(ignoreSubmoduleContent)).filter(([code]) => code !== '??').flatMap(([, path]) => path.split('\0')))] : undefined;
     return super.files(scope, base, commit, ignoreSubmoduleContent, namesOnly, paths && paths.reduce((bytes, path) => bytes + Buffer.byteLength(path) + 1, 0) <= 64_000 ? paths : undefined);
+  }
+  override async status(ignoreSubmoduleContent: boolean | 'all' = false, includeIgnored = false, compact = false): Promise<Array<[string, string]>> {
+    if (!this.statusReader || includeIgnored || compact || ignoreSubmoduleContent === 'all') return super.status(ignoreSubmoduleContent, includeIgnored, compact);
+    const key = String(ignoreSubmoduleContent), old = this.statuses.get(key); if (old) return old;
+    const started = Date.now();
+    const promise = this.statusReader.reader.read(this.statusReader.workspaceId, this.path, ignoreSubmoduleContent, this.statusReader.instance).then(result => {
+      this.trace.push({ phase: this.phase, command: 'status', durationMs: Date.now() - started, ok: true, shared: true }); return result.rows;
+    });
+    this.statuses.set(key, promise); return promise;
   }
   override async range(scope: string, base?: string | null, commit?: string | null) {
     if (scope === 'working') { const head = await this.head(); return { args: ['diff', head || 'HEAD'], left: head, right: null }; }
@@ -67,20 +80,25 @@ export class RepositoryRefresh {
 
   private async cycle(params: Json, signal?: AbortSignal, deadline = Date.now() + 30_000, context?: {workspace:Json;repo:Json;path:string}) {
     const { workspace, repo, path } = context || await this.context(params);
+    if (params.force) this.observation.cache.invalidateWorkspace(workspace.id);
     const cacheEpoch = this.observation.cache.epoch;
     const workspaceEpoch = this.observation.cache.workspaceEpoch(workspace.id);
     const trace: Json[] = [];
     const git = new SnapshotGit(path, this.observation.workspaces.config.gitTimeout, deadline, signal, trace);
     git.basic = this.basic; git.sourceVersion = this.observation.scheduler.token(path) + `:${workspaceEpoch}`;
+    git.statusReader = { reader: this.observation.status, workspaceId: workspace.id, instance: workspaceInstanceKey(workspace as Json & { id: string }) };
     git.statistics = this.observation.statistics;
     git.statisticsComplete = () => this.observation.scheduler.statisticsChanged(path);
     if (await git.root() !== git.path) throw new WorkbenchError('repository_root_mismatch', 'Expected recorded repository root');
+    // Establish the lease revision before sharing raw status. Watcher/index preparation
+    // remains independent, so first registration cannot make a fresh snapshot obsolete.
+    await withBackgroundGit(() => this.observation.scheduler.register(workspace.id, path, () => this.prewarm(params), false));
+    git.sourceVersion = this.observation.scheduler.token(path) + `:${workspaceEpoch}`;
     const readStartedAt = Date.now();
     const token = this.observation.scheduler.token(path, 'working');
     const refsToken = this.observation.scheduler.token(path, 'refs');
     const meta = (scope: string) => ({ state: 'ready', readStartedAt, observedAt: now(), validationKey: `${path}#${scope}`, validationToken: scope === 'working' ? token : refsToken, validationDependencies: { [`${path}#${scope}`]: scope === 'working' ? token : refsToken } });
     // Registration prepares independently; an index scan never gates cached content.
-    void withBackgroundGit(() => this.observation.scheduler.register(workspace.id, path, () => this.prewarm(params))).catch(() => {});
     const base = async () => repo.baseSha || (await git.upstream())[1];
     const produce = async (area: string, namesOnly = true, partial?: (value: Json) => void): Promise<Json> => {
       const scope = params.scope || 'working';

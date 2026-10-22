@@ -131,6 +131,11 @@ export function clearFileReviews(hostWorkspaceId: string): void {
   activeKeysByHostWorkspace.delete(hostWorkspaceId);
   notify();
 }
+export function reconcileFileReviews(hostWorkspaceId: string, project: string, workspaces: { id: string; state?: string; instanceKey?: string }[]) {
+  if (workspaces.some(w => w.state === 'record_invalid')) return;
+  const active = new Map(workspaces.filter(w => w.state !== 'removed').map(w => [w.id, w]));
+  for (const selection of selectionsByHostWorkspace.get(hostWorkspaceId) || []) if (selection.projectConfig === project && (!active.has(selection.workspaceId) || selection.workspaceInstance && active.get(selection.workspaceId)?.instanceKey && selection.workspaceInstance !== active.get(selection.workspaceId)?.instanceKey)) closeFileReview(hostWorkspaceId, selectionKey(selection));
+}
 
 export function getFileReviews(hostWorkspaceId: string): FileReviewSelection[] {
   return selectionsByHostWorkspace.get(hostWorkspaceId) || emptySelections;

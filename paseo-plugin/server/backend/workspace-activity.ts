@@ -1,7 +1,8 @@
+import { workspaceInstanceKey } from '../../shared/workspace-lineage.ts';
 import { join, resolve } from "node:path";
 import { Git, withBackgroundGit } from "./git.ts";
 import type { Config } from "./config.ts";
-import { canonicalAsync, hash, now, optionalJson, type Json } from "./storage.ts";
+import { canonicalAsync, hash, now, optionalJson, stable, type Json } from "./storage.ts";
 import { DerivedJsonWriter } from './derived-json.ts';
 
 const CACHE_TTL_MS = 30 * 60_000;
@@ -9,6 +10,7 @@ const FAILURE_RETRY_MS = 5 * 60_000;
 const MAX_CACHE_ENTRIES = 10_000;
 
 type RepositoryActivity = {
+  owners?: Record<string, string>;
   head: string | null;
   latestCommitAt: string | null;
   checkedAt: string | null;
@@ -22,6 +24,7 @@ type ScanState = "running" | "complete" | "cancelled";
 
 type Scan = {
   id: string;
+  epoch: number;
   state: ScanState;
   workspaceIds: string[];
   total: number;
@@ -44,6 +47,23 @@ export class WorkspaceActivityIndex {
   private repositories = new Map<string, RepositoryActivity>();
   private scans = new Map<string, Scan>();
   private cancelledScanIds = new Set<string>();
+  private liveKeys?: Set<string>;
+  private owners = new Map<string, Record<string, string>>();
+  private rosterSignature = '';
+  private epoch = 0;
+  reconcileWorkspaces(workspaces: Json[]) {
+    if (workspaces.some(w => !w.id || w.state === 'record_invalid')) return;
+    const owners = new Map<string, Record<string, string>>();
+    for (const workspace of workspaces.filter(w => w.state !== 'removed')) for (const target of this.targets([workspace])) { const value = owners.get(target.key) || Object.create(null); value[workspace.id] = workspaceInstanceKey(workspace as Json & { id: string }); owners.set(target.key, value); }
+    const signature = stable([...owners].sort(([a], [b]) => a.localeCompare(b))); if (signature === this.rosterSignature) return;
+    this.rosterSignature = signature; this.epoch++; this.liveKeys = new Set(owners.keys());
+    for (const [key, entry] of this.repositories) {
+      const next = owners.get(key), previous = entry.owners;
+      if (!next || !previous || !Object.keys(next).some(id => previous[id] === next[id]) || Object.keys(next).some(id => previous[id] && previous[id] !== next[id])) this.repositories.delete(key);
+      else entry.owners = next;
+    }
+    this.owners = owners; this.persist();
+  }
   private activeScanId: string | null = null;
   private writer: DerivedJsonWriter;
 
@@ -60,6 +80,7 @@ export class WorkspaceActivityIndex {
             const latestCommitAt = typeof value.latestCommitAt === "string" && Number.isFinite(Date.parse(value.latestCommitAt)) ? value.latestCommitAt : null;
             const checkedAt = typeof value.checkedAt === "string" && Number.isFinite(Date.parse(value.checkedAt)) ? value.checkedAt : null;
             this.repositories.set(key, {
+              ...(value.owners && typeof value.owners === 'object' && !Array.isArray(value.owners) ? { owners: Object.fromEntries(Object.entries(value.owners).filter(([, instance]) => typeof instance === 'string')) as Record<string, string> } : {}),
               head: typeof value.head === "string" ? value.head : null,
               latestCommitAt,
               checkedAt,
@@ -135,6 +156,7 @@ export class WorkspaceActivityIndex {
     });
     const scan: Scan = {
       id: scanId,
+      epoch: this.epoch,
       state: stale.length ? "running" : "complete",
       workspaceIds,
       total: stale.length,
@@ -194,25 +216,29 @@ export class WorkspaceActivityIndex {
   private async run(scan: Scan, targets: RepositoryTarget[]): Promise<void> {
     try {
       for (const target of targets) {
+        if (scan.epoch !== this.epoch) break;
+        if (this.liveKeys && !this.liveKeys.has(target.key)) continue;
         if (scan.controller.signal.aborted) break;
-        const attemptedAt = now();
+        const attemptedAt = now(), epoch = scan.epoch;
         try {
           const timeout = Math.min(this.config.gitTimeout, this.config.foregroundGitTimeout || this.config.gitTimeout);
           const path = await canonicalAsync(target.path);
           const result = await withBackgroundGit(() => new Git(path, timeout, undefined, scan.controller.signal, true)
             .run(["show", "-s", "--format=%H%x00%cI", "HEAD"], false));
           if (scan.controller.signal.aborted) break;
+          if (epoch !== this.epoch || this.liveKeys && !this.liveKeys.has(target.key)) { scan.completed++; continue; }
           const [head, latestCommitAt] = result.stdout.trim().split("\0");
           if (result.code === 0 && head && Number.isFinite(Date.parse(latestCommitAt || ""))) {
-            this.repositories.set(target.key, { head, latestCommitAt, checkedAt: now(), attemptedAt });
+            this.repositories.set(target.key, { owners: this.owners.get(target.key), head, latestCommitAt, checkedAt: now(), attemptedAt });
           } else if (result.code === 0 && !head) {
-            this.repositories.set(target.key, { head: null, latestCommitAt: null, checkedAt: now(), attemptedAt });
+            this.repositories.set(target.key, { owners: this.owners.get(target.key), head: null, latestCommitAt: null, checkedAt: now(), attemptedAt });
           } else {
             this.recordError(target.key, attemptedAt, result.stderr.trim() || "commit_unavailable");
             scan.errors++;
           }
         } catch (error) {
           if (scan.controller.signal.aborted) break;
+          if (epoch !== this.epoch || this.liveKeys && !this.liveKeys.has(target.key)) { scan.completed++; continue; }
           this.recordError(target.key, attemptedAt, error instanceof Error ? error.message : String(error));
           scan.errors++;
         }
@@ -226,8 +252,10 @@ export class WorkspaceActivityIndex {
   }
 
   private recordError(key: string, attemptedAt: string, error: string): void {
+    if (this.liveKeys && !this.liveKeys.has(key)) return;
     const previous = this.repositories.get(key);
     this.repositories.set(key, {
+      owners: this.owners.get(key),
       head: previous?.head || null,
       latestCommitAt: previous?.latestCommitAt || null,
       checkedAt: previous?.checkedAt || null,

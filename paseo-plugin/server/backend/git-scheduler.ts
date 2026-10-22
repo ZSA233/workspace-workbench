@@ -10,7 +10,7 @@ export const withBackgroundGit = <T>(work: () => Promise<T>, progress?: Context[
 export const withObservationGit = <T>(work: () => Promise<T>, progress?: Context['progress']) => context.run({ intent: 'observation', progress }, work);
 export const withInteractiveGit = <T>(work: () => Promise<T>, progress?: Context['progress']) => context.run({ intent: 'interactive', progress }, work);
 export const withMutationGit = <T>(work: () => Promise<T>) => context.run({ intent: 'mutation' }, work);
-const reads = new Set(['rev-parse', 'rev-list', 'status', 'diff', 'diff-tree', 'ls-files', 'ls-tree', 'show', 'log', 'for-each-ref', 'show-ref', 'merge-base', 'cat-file', 'symbolic-ref']);
+const reads = new Set(['rev-parse', 'rev-list', 'status', 'check-ignore', 'diff', 'diff-tree', 'ls-files', 'ls-tree', 'show', 'log', 'for-each-ref', 'show-ref', 'merge-base', 'cat-file', 'symbolic-ref']);
 export function gitIntent(args: string[]): Context {
   const inherited = context.getStore();
   // Explicit write transactions retain their original scheduling and lifetime.

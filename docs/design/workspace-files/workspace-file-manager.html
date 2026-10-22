@@ -1,0 +1,493 @@
+<div id="ww-file-drafts">
+  <div class="ww-draft-caption"><span>Workspace Workbench · 文件管理布局草稿</span><span>示例文件与进度</span></div>
+  <div class="viz-carousel" aria-label="Workspace 文件工作台方案" data-previous-label="上一种方案" data-next-label="下一种方案">
+    <section data-variant="侧栏文件树" aria-label="侧栏文件树方案"><div class="ww-design-stage" data-design="sidebar"></div></section>
+    <section data-variant="完整文件工作台" aria-label="完整文件工作台方案" hidden><div class="ww-design-stage" data-design="expanded"></div></section>
+    <section data-variant="双工作区对照" aria-label="双工作区对照方案" hidden><div class="ww-design-stage" data-design="dual"></div></section>
+    <section data-variant="手机文件视图" aria-label="手机文件视图方案" hidden><div class="ww-design-stage ww-mobile-stage viz-dotted-background" data-design="mobile"></div></section>
+  </div>
+  <div class="ww-announcement" aria-live="polite"></div>
+</div>
+<style>
+  #ww-file-drafts { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; color: light-dark(#24272c,#e0e3e8); --ww-bg: light-dark(#ffffff,#16181c); --ww-shell: light-dark(#f7f8fa,#111316); --ww-panel: light-dark(#f3f5f8,#1c1f24); --ww-hover: light-dark(#e9edf3,#282d34); --ww-line: light-dark(#dde2e8,#30353e); --ww-fg: light-dark(#252a31,#e0e4eb); --ww-dim: light-dark(#646e7b,#9ca6b5); --ww-accent: light-dark(#2376bd,#68bbff); --ww-selected: light-dark(#e6f1fc,#20384b); --ww-ok: light-dark(#267a50,#85cba3); --ww-warn: light-dark(#93611e,#e1b779); --ww-bad: light-dark(#b83f45,#f18a92); --ww-code: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.55; }
+  #ww-file-drafts * { box-sizing: border-box; }
+  #ww-file-drafts button, #ww-file-drafts select, #ww-file-drafts input { font: inherit; color: inherit; }
+  #ww-file-drafts button { background: none; border: 0; padding: 0; text-align: left; }
+  #ww-file-drafts button:disabled { opacity: .45; }
+  #ww-file-drafts [hidden] { display: none !important; }
+  #ww-file-drafts .ww-draft-caption { display: flex; justify-content: space-between; gap: 12px; padding: 0 0 12px; color: var(--ww-dim); font-size: 12px; flex-wrap: wrap; }
+  #ww-file-drafts .ww-design-stage { min-height: 1140px; }
+  #ww-file-drafts .ww-window { background: var(--ww-bg); border: 1px solid var(--ww-line); border-radius: 10px; overflow: clip; min-height: 790px; position: relative; color: var(--ww-fg); }
+  #ww-file-drafts .ww-hostbar { min-height: 43px; background: var(--ww-shell); border-bottom: 1px solid var(--ww-line); display: flex; gap: 15px; align-items: center; padding: 8px 15px; }
+  #ww-file-drafts .ww-brand { font-weight: 600; letter-spacing: .07em; font-size: 12px; }
+  #ww-file-drafts .ww-hostpath { color: var(--ww-dim); flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+  #ww-file-drafts .ww-host-online { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ww-dim); white-space: nowrap; }
+  #ww-file-drafts .ww-host-online::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ww-ok); }
+  #ww-file-drafts .ww-shell { display: flex; min-height: 745px; }
+  #ww-file-drafts .ww-rail { width: 46px; background: var(--ww-shell); border-right: 1px solid var(--ww-line); padding: 13px 6px; display: flex; flex-direction: column; gap: 13px; align-items: center; flex-shrink: 0; }
+  #ww-file-drafts .ww-rail-item { width: 32px; height: 32px; display: grid; place-items: center; color: var(--ww-dim); border-radius: 6px; }
+  #ww-file-drafts .ww-rail-item.ww-active { color: var(--ww-accent); background: var(--ww-selected); }
+  #ww-file-drafts .ww-rail-bottom { margin-top: auto; }
+  #ww-file-drafts .ww-workbench { flex: 1; min-width: 0; }
+  #ww-file-drafts .ww-workbench-title { padding: 12px 15px 9px; display: flex; align-items: center; gap: 8px; font-weight: 500; }
+  #ww-file-drafts .ww-workbench-title small { font-size: 11px; color: var(--ww-dim); font-weight: 400; }
+  #ww-file-drafts .ww-spacebar { padding: 0 13px 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #ww-file-drafts .ww-spacepicker { display: flex; flex: 1; min-width: 150px; gap: 8px; background: var(--ww-panel); border: 1px solid var(--ww-line); border-radius: 6px; padding: 7px 9px; align-items: center; }
+  #ww-file-drafts .ww-spacepicker select { border: 0; outline-offset: 4px; background: transparent; width: 100%; min-width: 0; color: var(--ww-fg); }
+  #ww-file-drafts option { background: var(--ww-bg); }
+  #ww-file-drafts .ww-iconbutton { width: 28px; height: 28px; display: inline-grid; place-items: center; color: var(--ww-dim); border-radius: 4px; flex-shrink: 0; }
+  #ww-file-drafts .ww-iconbutton:hover, #ww-file-drafts .ww-action:hover { background: var(--ww-hover); }
+  #ww-file-drafts svg { flex-shrink: 0; }
+  #ww-file-drafts .ww-tabs { display: flex; gap: 20px; min-height: 39px; padding: 0 14px; border-bottom: 1px solid var(--ww-line); align-items: stretch; white-space: nowrap; }
+  #ww-file-drafts .ww-tab { color: var(--ww-dim); padding: 8px 0; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  #ww-file-drafts .ww-tab.ww-active { color: var(--ww-fg); border-bottom: 2px solid var(--ww-accent); }
+  #ww-file-drafts .ww-sidebar-layout { display: flex; min-height: 745px; }
+  #ww-file-drafts .ww-sidebar { width: var(--ww-tree-width,310px); border-right: 1px solid var(--ww-line); flex-shrink: 0; display: flex; flex-direction: column; background: var(--ww-bg); }
+  #ww-file-drafts .ww-tree-area { flex: 1; min-height: 337px; padding-bottom: 12px; }
+  #ww-file-drafts .ww-tree-toolbar { display: flex; align-items: center; gap: 7px; padding: 9px 13px 5px; min-height: 38px; }
+  #ww-file-drafts .ww-tiny-label { color: var(--ww-dim); font-size: 11px; font-weight: 500; flex: 1; letter-spacing: .03em; }
+  #ww-file-drafts .ww-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--ww-line); background: var(--ww-bg); border-radius: 5px; padding: 5px 9px; min-height: 29px; font-size: 12px; white-space: nowrap; }
+  #ww-file-drafts .ww-action.ww-primary { background: var(--ww-selected); color: var(--ww-accent); border-color: transparent; }
+  #ww-file-drafts .ww-action.ww-danger { color: var(--ww-bad); }
+  #ww-file-drafts .ww-rootpath { padding: 2px 14px 8px; color: var(--ww-dim); font-family: var(--ww-code); font-size: 11px; overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-tree { padding: 0 7px; }
+  #ww-file-drafts .ww-tree-row { display: flex; min-height: var(--ww-row-height,30px); align-items: center; gap: 6px; border-radius: 4px; padding: 2px 5px 2px calc(5px + var(--depth,0)*15px); position: relative; }
+  #ww-file-drafts .ww-tree-row:hover { background: var(--ww-panel); }
+  #ww-file-drafts .ww-tree-row.ww-selected { background: var(--ww-selected); }
+  #ww-file-drafts .ww-tree-row.ww-drop-on { outline: 1px dashed var(--ww-accent); outline-offset: -1px; background: var(--ww-selected); }
+  #ww-file-drafts .ww-tree-pick { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 26px; }
+  #ww-file-drafts .ww-tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ww-file-drafts .ww-tree-root { font-weight: 500; }
+  #ww-file-drafts .ww-folder-icon { color: var(--ww-accent); display: inline-flex; }
+  #ww-file-drafts .ww-file-icon { color: var(--ww-dim); display: inline-flex; }
+  #ww-file-drafts .ww-chevron { width: 11px; flex-shrink: 0; color: var(--ww-dim); }
+  #ww-file-drafts .ww-repo-tag { font-size: 10px; color: var(--ww-dim); margin-left: auto; padding-right: 3px; white-space: nowrap; }
+  #ww-file-drafts .ww-tree-more { width: 24px; height: 24px; display: grid; place-items: center; color: var(--ww-dim); }
+  #ww-file-drafts .ww-git-mark { font-size: 11px; color: var(--ww-warn); }
+  #ww-file-drafts .ww-drop-hint { margin: 8px 13px 0; padding: 9px 10px; border: 1px dashed var(--ww-accent); border-radius: 5px; background: var(--ww-selected); display: flex; gap: 8px; align-items: flex-start; }
+  #ww-file-drafts .ww-drop-hint strong { font-size: 12px; font-weight: 500; display: block; }
+  #ww-file-drafts .ww-drop-hint small { font-size: 11px; color: var(--ww-dim); display: block; overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-targetline { padding: 8px 13px; color: var(--ww-dim); background: var(--ww-shell); border-top: 1px solid var(--ww-line); font-size: 11px; overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-targetline b { color: var(--ww-fg); font-weight: 400; }
+  #ww-file-drafts .ww-preview { flex: 1; min-width: 0; background: var(--ww-bg); display: flex; flex-direction: column; }
+  #ww-file-drafts .ww-filetab { border-bottom: 1px solid var(--ww-line); min-height: 41px; background: var(--ww-shell); display: flex; gap: 7px; padding: 9px 15px; align-items: center; font-size: 12px; }
+  #ww-file-drafts .ww-filetab .ww-iconbutton { margin-left: auto; height: 22px; }
+  #ww-file-drafts .ww-breadcrumbs { padding: 10px 18px; display: flex; gap: 7px; color: var(--ww-dim); align-items: center; flex-wrap: wrap; font-size: 11px; border-bottom: 1px solid var(--ww-line); }
+  #ww-file-drafts .ww-document { margin: 34px auto 28px; width: calc(100% - 55px); max-width: 560px; }
+  #ww-file-drafts .ww-document .ww-doc-kicker { color: var(--ww-dim); font-size: 11px; letter-spacing: .08em; }
+  #ww-file-drafts .ww-document h2 { font-size: 23px; line-height: 1.4; font-weight: 500; margin: 12px 0; color: var(--ww-fg); }
+  #ww-file-drafts .ww-document p { color: var(--ww-dim); font-size: 13px; line-height: 1.8; margin: 12px 0 25px; }
+  #ww-file-drafts .ww-document h3 { font-size: 14px; font-weight: 500; margin: 23px 0 10px; }
+  #ww-file-drafts .ww-doc-file { display: flex; gap: 10px; padding: 12px 0; align-items: center; border-bottom: 1px solid var(--ww-line); }
+  #ww-file-drafts .ww-doc-file small { display: block; color: var(--ww-dim); font-size: 11px; }
+  #ww-file-drafts .ww-doc-note { margin-top: 25px; color: var(--ww-dim); padding-left: 12px; border-left: 2px solid var(--ww-line); font-size: 12px; line-height: 1.8; }
+  #ww-file-drafts .ww-preview-footer { margin-top: auto; padding: 10px 17px; border-top: 1px solid var(--ww-line); display: flex; align-items: center; gap: 8px; color: var(--ww-dim); font-size: 11px; flex-wrap: wrap; }
+  #ww-file-drafts .ww-queue { border-top: 1px solid var(--ww-line); background: var(--ww-shell); }
+  #ww-file-drafts .ww-queue-header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; min-height: 41px; }
+  #ww-file-drafts .ww-queue-toggle { flex: 1; display: flex; align-items: center; gap: 7px; font-size: 12px; }
+  #ww-file-drafts .ww-count { background: var(--ww-hover); border-radius: 4px; padding: 0 5px; font-size: 10px; }
+  #ww-file-drafts .ww-queue-filter { color: var(--ww-dim); font-size: 10px; }
+  #ww-file-drafts .ww-transfer { padding: 8px 13px 11px; border-top: 1px solid var(--ww-line); }
+  #ww-file-drafts .ww-transfer-top { display: flex; gap: 7px; align-items: center; }
+  #ww-file-drafts .ww-transfer-name { flex: 1; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-transfer-sub { margin: 3px 0 5px 21px; color: var(--ww-dim); font-size: 10px; overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-transfer-bottom { display: flex; justify-content: space-between; gap: 9px; font-size: 10px; color: var(--ww-dim); margin: 4px 0 0 21px; }
+  #ww-file-drafts .ww-meter { height: 3px; margin: 7px 0 0 21px; border-radius: 2px; background: var(--ww-hover); overflow: hidden; }
+  #ww-file-drafts .ww-meter span { display: block; height: 100%; background: var(--ww-accent); border-radius: 2px; }
+  #ww-file-drafts .ww-status-ok { color: var(--ww-ok); }
+  #ww-file-drafts .ww-status-warn { color: var(--ww-warn); }
+  #ww-file-drafts .ww-status-dim { color: var(--ww-dim); }
+  #ww-file-drafts .ww-transfer .ww-iconbutton { width: 22px; height: 22px; }
+  #ww-file-drafts .ww-toolbar { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--ww-line); }
+  #ww-file-drafts .ww-toolbar .ww-spacer { flex: 1; }
+  #ww-file-drafts .ww-wide-layout { display: flex; min-height: 380px; }
+  #ww-file-drafts .ww-wide-tree { width: 240px; flex-shrink: 0; border-right: 1px solid var(--ww-line); background: var(--ww-shell); padding-top: 7px; }
+  #ww-file-drafts .ww-directory { flex: 1; min-width: 0; }
+  #ww-file-drafts .ww-directory-title { padding: 14px 17px 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  #ww-file-drafts .ww-directory-title b { font-size: 16px; font-weight: 500; }
+  #ww-file-drafts .ww-directory-title small { font-size: 11px; color: var(--ww-dim); }
+  #ww-file-drafts .ww-file-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+  #ww-file-drafts .ww-file-table td, #ww-file-drafts .ww-file-table th { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--ww-line); font-weight: 400; overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-file-table th { padding-top: 7px; padding-bottom: 7px; color: var(--ww-dim); font-size: 11px; }
+  #ww-file-drafts .ww-file-table .ww-table-selected { background: var(--ww-selected); }
+  #ww-file-drafts .ww-file-table input { accent-color: var(--ww-accent); margin-right: 7px; }
+  #ww-file-drafts .ww-table-file { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; vertical-align: middle; }
+  #ww-file-drafts .ww-table-file span { overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-folder-empty { display: flex; justify-content: center; padding: 24px 15px; color: var(--ww-dim); font-size: 12px; }
+  #ww-file-drafts .ww-wide-queue .ww-transfer { display: grid; grid-template-columns: minmax(150px,1.2fr) minmax(160px,1fr) minmax(140px,1fr) 90px; gap: 12px; align-items: center; padding: 11px 15px; }
+  #ww-file-drafts .ww-wide-queue .ww-transfer-sub { margin: 3px 0 0; }
+  #ww-file-drafts .ww-wide-queue .ww-meter, #ww-file-drafts .ww-wide-queue .ww-transfer-bottom { margin-left: 0; }
+  #ww-file-drafts .ww-job-location { font-size: 11px; color: var(--ww-dim); overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-job-location b { color: var(--ww-fg); font-weight: 400; display: block; }
+  #ww-file-drafts .ww-job-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; font-size: 11px; }
+  #ww-file-drafts .ww-queue-tablehead { display: grid; grid-template-columns: minmax(150px,1.2fr) minmax(160px,1fr) minmax(140px,1fr) 90px; gap: 12px; padding: 3px 15px 7px; font-size: 10px; color: var(--ww-dim); }
+  #ww-file-drafts .ww-full-target { padding: 7px 15px; color: var(--ww-dim); font-size: 11px; background: var(--ww-panel); overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-dual-layout { display: grid; grid-template-columns: minmax(0,1fr) 42px minmax(0,1fr); min-height: 405px; }
+  #ww-file-drafts .ww-dual-pane { min-width: 0; padding: 12px 0 9px; }
+  #ww-file-drafts .ww-pane-caption { display: flex; align-items: center; gap: 6px; color: var(--ww-dim); font-size: 11px; padding: 0 14px 9px; }
+  #ww-file-drafts .ww-dual-between { border-left: 1px solid var(--ww-line); border-right: 1px solid var(--ww-line); background: var(--ww-shell); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; }
+  #ww-file-drafts .ww-dual-selection { margin: 12px 14px 2px; padding: 7px 9px; background: var(--ww-panel); border-radius: 5px; font-size: 11px; color: var(--ww-dim); overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-dual-selection b { color: var(--ww-fg); font-weight: 400; }
+  #ww-file-drafts .ww-hintbar { display: flex; gap: 7px; align-items: center; padding: 8px 14px; color: var(--ww-dim); background: var(--ww-shell); border-top: 1px solid var(--ww-line); font-size: 11px; flex-wrap: wrap; }
+  #ww-file-drafts .ww-toast { position: absolute; z-index: 8; left: 12px; right: 12px; bottom: 12px; background: var(--ww-panel); border: 1px solid var(--ww-line); border-radius: 6px; padding: 9px 12px; font-size: 12px; box-shadow: 0 3px 18px light-dark(#15203b18,#00000044); }
+  #ww-file-drafts .ww-menu { position: absolute; z-index: 12; right: 12px; top: 245px; width: 205px; max-width: calc(100% - 24px); padding: 5px; background: var(--ww-bg); border: 1px solid var(--ww-line); border-radius: 7px; box-shadow: 0 8px 30px light-dark(#23354b22,#00000066); }
+  #ww-file-drafts .ww-menu-title { padding: 7px 9px; color: var(--ww-dim); font-size: 11px; border-bottom: 1px solid var(--ww-line); overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-menu button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 4px; font-size: 12px; }
+  #ww-file-drafts .ww-menu button:hover { background: var(--ww-panel); }
+  #ww-file-drafts .ww-menu button small { margin-left: auto; color: var(--ww-dim); font-size: 10px; }
+  #ww-file-drafts .ww-menu-divider { border-top: 1px solid var(--ww-line); margin: 4px 0; }
+  #ww-file-drafts .ww-modal-backdrop { position: absolute; z-index: 15; inset: 0; background: light-dark(#17283b22,#00000077); display: flex; align-items: flex-start; justify-content: center; padding: 155px 20px 20px; }
+  #ww-file-drafts .ww-dialog { background: var(--ww-bg); border: 1px solid var(--ww-line); border-radius: 9px; width: 420px; max-width: 100%; padding: 20px; box-shadow: 0 18px 50px light-dark(#192a3a22,#00000055); }
+  #ww-file-drafts .ww-dialog h3 { font-weight: 500; font-size: 16px; margin: 0 0 15px; }
+  #ww-file-drafts .ww-dialog p { font-size: 12px; color: var(--ww-dim); overflow-wrap: anywhere; }
+  #ww-file-drafts .ww-dialog-path { padding: 9px 11px; background: var(--ww-panel); border-radius: 5px; font-size: 11px; overflow-wrap: anywhere; margin: 8px 0; }
+  #ww-file-drafts .ww-dialog-label { color: var(--ww-dim); display: block; margin-bottom: 3px; }
+  #ww-file-drafts .ww-dialog-actions { margin-top: 18px; display: flex; gap: 7px; justify-content: flex-end; flex-wrap: wrap; }
+  #ww-file-drafts .ww-dialog input[type=text] { background: var(--ww-panel); border: 1px solid var(--ww-line); border-radius: 5px; width: 100%; padding: 8px 10px; }
+  #ww-file-drafts .ww-dialog label { font-size: 11px; color: var(--ww-dim); }
+  #ww-file-drafts .ww-phone { width: 390px; max-width: 100%; min-height: 790px; margin: 0 auto; border-radius: 23px; border: 1px solid var(--ww-line); background: var(--ww-bg); position: relative; overflow: clip; color: var(--ww-fg); }
+  #ww-file-drafts .ww-mobile-stage { padding: 15px 0; }
+  #ww-file-drafts .ww-phone-status { display: flex; justify-content: space-between; padding: 12px 22px 4px; font-size: 12px; font-weight: 500; }
+  #ww-file-drafts .ww-phone-header { display: flex; gap: 8px; align-items: center; padding: 13px 14px; }
+  #ww-file-drafts .ww-phone-header b { font-weight: 500; flex: 1; }
+  #ww-file-drafts .ww-phone .ww-workbench-title { padding-top: 3px; }
+  #ww-file-drafts .ww-phone .ww-tree-row { min-height: 38px; }
+  #ww-file-drafts .ww-phone .ww-tree-more { min-height: 36px; width: 36px; }
+  #ww-file-drafts .ww-phone .ww-tree-toolbar { padding-top: 13px; }
+  #ww-file-drafts .ww-phone .ww-targetline { margin-top: 17px; }
+  #ww-file-drafts .ww-phone-transferbar { padding: 13px 15px; display: flex; align-items: center; gap: 10px; background: var(--ww-panel); border-top: 1px solid var(--ww-line); width: 100%; }
+  #ww-file-drafts .ww-phone-sheet { position: absolute; z-index: 10; bottom: 20px; left: 0; right: 0; background: var(--ww-bg); border-top: 1px solid var(--ww-line); border-radius: 14px 14px 0 0; box-shadow: 0 -14px 30px light-dark(#26374a18,#00000055); padding: 7px 0 15px; }
+  #ww-file-drafts .ww-sheet-grip { width: 30px; height: 3px; background: var(--ww-line); border-radius: 2px; margin: 0 auto 3px; }
+  #ww-file-drafts .ww-phone .ww-transfer { padding-top: 13px; padding-bottom: 14px; }
+  #ww-file-drafts .ww-phone .ww-transfer-name { font-size: 13px; }
+  #ww-file-drafts .ww-phone .ww-transfer-sub, #ww-file-drafts .ww-phone .ww-transfer-bottom { font-size: 11px; }
+  #ww-file-drafts .ww-phone .ww-transfer .ww-iconbutton { width: 34px; height: 34px; }
+  #ww-file-drafts .ww-home-indicator { height: 4px; width: 100px; background: var(--ww-fg); opacity: .7; border-radius: 4px; margin: 11px auto 8px; }
+  #ww-file-drafts .ww-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  @media (max-width: 780px) {
+    #ww-file-drafts .ww-sidebar { width: 275px; }
+    #ww-file-drafts .ww-wide-tree { width: 205px; }
+    #ww-file-drafts .ww-wide-queue .ww-transfer, #ww-file-drafts .ww-queue-tablehead { grid-template-columns: minmax(130px,1.1fr) minmax(125px,1fr) minmax(110px,1fr) 70px; gap: 8px; }
+    #ww-file-drafts .ww-optional-column { display: none; }
+    #ww-file-drafts .ww-document { width: calc(100% - 34px); }
+  }
+  @media (max-width: 640px) {
+    #ww-file-drafts .ww-design-stage { min-height: 1900px; }
+    #ww-file-drafts .ww-rail, #ww-file-drafts .ww-preview { display: none; }
+    #ww-file-drafts .ww-hostbar { gap: 10px; padding-left: 12px; }
+    #ww-file-drafts .ww-hostpath { font-size: 11px; }
+    #ww-file-drafts .ww-host-online { display: none; }
+    #ww-file-drafts .ww-sidebar { width: 100%; border-right: 0; }
+    #ww-file-drafts .ww-sidebar-layout, #ww-file-drafts .ww-shell { min-height: 740px; }
+    #ww-file-drafts .ww-tabs { gap: 16px; padding-left: 12px; }
+    #ww-file-drafts .ww-wide-layout { display: block; }
+    #ww-file-drafts .ww-wide-tree { width: 100%; border-right: 0; border-bottom: 1px solid var(--ww-line); padding-bottom: 10px; }
+    #ww-file-drafts .ww-wide-tree .ww-tree-row { min-height: 32px; }
+    #ww-file-drafts .ww-wide-queue .ww-transfer { grid-template-columns: minmax(0,1fr) 90px; gap: 5px 10px; }
+    #ww-file-drafts .ww-wide-queue .ww-job-location { grid-column: 1; }
+    #ww-file-drafts .ww-wide-queue .ww-job-progress { grid-column: 1; }
+    #ww-file-drafts .ww-wide-queue .ww-job-actions { grid-column: 2; grid-row: 1 / span 3; }
+    #ww-file-drafts .ww-queue-tablehead { display: none; }
+    #ww-file-drafts .ww-dual-layout { grid-template-columns: 1fr; }
+    #ww-file-drafts .ww-dual-between { border: 0; border-block: 1px solid var(--ww-line); padding: 6px; flex-direction: row; }
+    #ww-file-drafts .ww-dual-between svg { transform: rotate(90deg); }
+    #ww-file-drafts .ww-dual-pane { padding-top: 12px; }
+    #ww-file-drafts .ww-tree-area { min-height: 315px; }
+    #ww-file-drafts .ww-dialog { padding: 16px; }
+    #ww-file-drafts .ww-modal-backdrop { padding: 110px 12px 12px; }
+    #ww-file-drafts .ww-phone { border-radius: 15px; }
+    #ww-file-drafts .ww-workbench-title { flex-wrap: wrap; }
+  }
+  @media (pointer: coarse) {
+    #ww-file-drafts .ww-iconbutton, #ww-file-drafts .ww-tree-more { min-width: 42px; min-height: 42px; }
+    #ww-file-drafts .ww-tree-row { min-height: 44px; }
+    #ww-file-drafts .ww-action, #ww-file-drafts .ww-tab, #ww-file-drafts .ww-queue-toggle { min-height: 44px; }
+    #ww-file-drafts .ww-spacepicker select, #ww-file-drafts .ww-dialog input { font-size: 16px; }
+  }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('ww-file-drafts');
+  const spaces = {
+    assets: { name: '素材上传', branch: 'feature/assets', path: '/worktrees/asset-import' },
+    main: { name: '主工作区', branch: 'main', path: '/projects/paseo-app' },
+    login: { name: '修复登录', branch: 'fix/login', path: '/worktrees/fix-login' }
+  };
+  const initialJobs = () => [
+    { id:'upload-reference', name:'design-reference.png', direction:'up', space:'assets', path:'web/public/assets', total:20, progress:68, status:'active' },
+    { id:'download-logs', name:'logs.zip', direction:'down', space:'main', path:'server/logs', total:20, progress:31, status:'active' },
+    { id:'conflict-logo', name:'logo.svg', direction:'up', space:'assets', path:'web/public/assets', total:0.2, progress:0, status:'conflict' },
+    { id:'done-requirement', name:'requirements.pdf', direction:'up', space:'assets', path:'docs', total:2.4, progress:100, status:'done' }
+  ];
+  const defaults = () => ({ space:'assets', rightSpace:'assets', sourceSpace:'main', target:'web/public/assets', rightTarget:'web/public/assets', source:'web/public/assets/logo.svg', file:'README.md', expanded:new Set(['web','web/public','web/public/assets','docs']), jobs:initialJobs(), queueOpen:true, clipboard:null, menu:null, modal:null, selected:new Set(['design-reference.png']), hiddenFiles:false, dropHint:true, toast:'', memory:{} });
+  const states = new Map();
+  const icon = (name,cls='') => `<i data-lucide="${name}" class="${cls}" aria-hidden="true"></i>`;
+  const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const button = (action,label,ico,extra='') => `<button type="button" class="ww-action cursor-interaction ${action.startsWith('upload')?'ww-primary':''}" data-action="${action}" ${extra}>${ico?icon(ico):''}${label}</button>`;
+  const ib = (action,label,ico,extra='') => `<button type="button" class="ww-iconbutton cursor-interaction" aria-label="${esc(label)}" data-action="${action}" ${extra}>${icon(ico)}</button>`;
+  const shortPath = p => p || '根目录';
+  const allFiles = [
+    { path:'web', type:'folder', repo:true },
+    { path:'web/public', type:'folder' },
+    { path:'web/public/assets', type:'folder' },
+    { path:'web/public/assets/logo.svg', type:'file' },
+    { path:'web/public/assets/design-reference.png', type:'file', changed:true },
+    { path:'web/src', type:'folder' },
+    { path:'server', type:'folder', repo:true },
+    { path:'docs', type:'folder' },
+    { path:'docs/requirements.pdf', type:'file' },
+    { path:'README.md', type:'file' },
+    { path:'.env.example', type:'file', hidden:true }
+  ];
+  const labelFor = path => path.slice(path.lastIndexOf('/')+1);
+  function picker(space,role='space') {
+    return `<label class="ww-spacepicker">${icon('git-branch')}<select aria-label="${role==='sourceSpace'?'左侧 Workspace':role==='rightSpace'?'右侧 Workspace':'当前 Workspace'}" data-field="${role}">${Object.entries(spaces).map(([key,s])=>`<option value="${key}" ${key===space?'selected':''}>${s.name} · ${s.branch}</option>`).join('')}</select></label>`;
+  }
+  function tree(state,side='current') {
+    const space = side==='source'?state.sourceSpace:side==='right'?state.rightSpace:state.space;
+    const active = side==='source'?state.source:side==='right'?state.rightTarget:state.target;
+    const rows = [{ path:'',type:'folder',root:true },...allFiles].filter(item => {
+      if(item.hidden&&!state.hiddenFiles) return false;
+      const parts = item.path.split('/');
+      return parts.length<2 || parts.slice(0,-1).every((_,i)=>state.expanded.has(parts.slice(0,i+1).join('/')));
+    });
+    return `<div class="ww-tree" aria-label="${spaces[space].name}文件树">${rows.map(item=>{
+      const depth=item.root?0:item.path.split('/').length;
+      const expanded=item.root||state.expanded.has(item.path);
+      const picked=item.path===active;
+      return `<div class="ww-tree-row ${picked?'ww-selected':''} ${picked&&item.type==='folder'&&state.dropHint?'ww-drop-on':''}" style="--depth:${depth}" data-path="${esc(item.path)}" data-side="${side}" data-kind="${item.type}">
+        <button type="button" class="ww-tree-pick cursor-interaction" data-action="tree-pick" data-path="${esc(item.path)}" data-kind="${item.type}" data-side="${side}" ${item.type==='folder'?`aria-expanded="${expanded}"`:''} aria-label="${item.root?spaces[space].name+'根目录':esc(item.path)}">
+          <span class="ww-chevron">${item.type==='folder'?icon(expanded?'chevron-down':'chevron-right'):''}</span><span class="${item.type==='folder'?'ww-folder-icon':'ww-file-icon'}">${icon(item.root?'folder-git-2':item.type==='folder'?(expanded?'folder-open':'folder'):item.path.endsWith('.png')?'image':item.path.endsWith('.svg')?'image':'file-text')}</span><span class="ww-tree-name ${item.root?'ww-tree-root':''}">${item.root?esc(spaces[space].name):esc(labelFor(item.path))}</span>
+        </button>${item.repo?'<span class="ww-repo-tag">仓库</span>':''}${item.changed&&space==='assets'?'<span class="ww-git-mark">M</span>':''}<button type="button" class="ww-tree-more cursor-interaction" aria-label="${esc(item.root?'根目录':labelFor(item.path))}更多操作" data-action="menu" data-path="${esc(item.path)}" data-kind="${item.type}" data-side="${side}">${icon('ellipsis')}</button>
+      </div>`;
+    }).join('')}</div>`;
+  }
+  function tabs() {
+    return `<div class="ww-tabs"><button type="button" data-action="overview" class="ww-tab cursor-interaction">Workspace</button><button type="button" class="ww-tab ww-active cursor-interaction" data-action="files">${icon('folder-open')}文件</button><button type="button" data-action="review" class="ww-tab cursor-interaction">审核集</button></div>`;
+  }
+  function title() { return `<div class="ww-workbench-title">${icon('git-branch')}Workspace Workbench</div>`; }
+  function topbar() { return `<div class="ww-hostbar"><span class="ww-brand">PASEO</span><span class="ww-hostpath">paseo-app <span aria-hidden="true"> / </span> Workspace Workbench</span><span class="ww-host-online">开发机 · 已连接</span></div>`; }
+  function rail() { return `<aside class="ww-rail" aria-label="Paseo导航"><span class="ww-rail-item">${icon('panels-top-left')}</span><span class="ww-rail-item">${icon('messages-square')}</span><span class="ww-rail-item ww-active">${icon('git-branch')}</span><span class="ww-rail-item">${icon('terminal')}</span><span class="ww-rail-item ww-rail-bottom">${icon('settings')}</span></aside>`; }
+  function toolbar() { return `<div class="ww-tree-toolbar"><span class="ww-tiny-label">文件</span>${ib('new-folder','新建文件夹','folder-plus')}${button('upload','上传','upload')}</div>`; }
+  function targetLine(state) { return `<div class="ww-targetline">上传到 <b>${esc(spaces[state.space].name)} / ${esc(shortPath(state.target))}</b></div>`; }
+  function dropHint(state) { return state.dropHint?`<div class="ww-drop-hint">${icon('upload')}<div><strong>释放文件，上传到 ${esc(labelFor(state.target)||'根目录')}</strong><small>${esc(spaces[state.space].name)} / ${esc(shortPath(state.target))}</small></div></div>`:''; }
+  function jobsSummary(jobs) { const active=jobs.filter(j=>j.status==='active'||j.status==='paused').length; const conflicts=jobs.filter(j=>j.status==='conflict').length; return `${active} 进行中${conflicts?' · '+conflicts+' 待处理':''}`; }
+  function jobStatus(j) { return j.status==='done'?'已完成':j.status==='paused'?'已暂停':j.status==='cancelled'?'已取消':j.status==='conflict'?'同名文件，等待处理':j.status==='queued'?'排队中':`${j.progress}%`; }
+  function jobActions(j) {
+    if(j.status==='conflict')return button('resolve','处理','',`data-job="${j.id}"`);
+    if(j.status==='active')return ib('pause','暂停 '+j.name,'pause',`data-job="${j.id}"`)+ib('cancel','取消 '+j.name,'x',`data-job="${j.id}"`);
+    if(j.status==='paused')return ib('resume','继续 '+j.name,'play',`data-job="${j.id}"`)+ib('cancel','取消 '+j.name,'x',`data-job="${j.id}"`);
+    if(j.status==='cancelled')return ib('retry','重试 '+j.name,'rotate-ccw',`data-job="${j.id}"`);
+    if(j.status==='done')return `<span class="ww-status-ok">${icon('check')}</span>`;
+    return `<span class="ww-status-dim">等待</span>`;
+  }
+  function queue(state,wide=false,phone=false) {
+    const opened=state.queueOpen;
+    const amount=state.jobs.filter(j=>j.status!=='done'&&j.status!=='cancelled').length;
+    return `<section class="ww-queue ${wide?'ww-wide-queue':''}" aria-label="所有 Workspace 的传输队列"><div class="ww-queue-header"><button type="button" class="ww-queue-toggle cursor-interaction" data-action="queue" aria-expanded="${opened}">${icon(opened?'chevron-down':'chevron-up')}${icon('arrow-up-down')}传输 <span class="ww-count">${amount}</span></button><span class="ww-queue-filter">所有空间</span>${ib('queue',opened?'收起传输列表':'展开传输列表',opened?'minus':'plus')}</div>${opened?`${wide?'<div class="ww-queue-tablehead"><span>文件 / 方向</span><span>所属空间 / 路径</span><span>进度</span><span>操作</span></div>':''}${state.jobs.slice(0,phone?3:4).map(j=>{
+      const name=`<div class="ww-transfer-top"><span class="${j.status==='conflict'?'ww-status-warn':'ww-status-dim'}">${icon(j.status==='conflict'?'triangle-alert':j.direction==='up'?'arrow-up':'arrow-down')}</span><span class="ww-transfer-name">${esc(j.name)}</span>${!wide?jobActions(j):''}</div>`;
+      const location=`${esc(spaces[j.space].name)} / ${esc(j.path||'根目录')}`;
+      const meter=(j.status==='active'||j.status==='paused')?`<div class="ww-meter" role="progressbar" aria-label="${esc(j.name)}传输进度" aria-valuenow="${j.progress}" aria-valuemin="0" aria-valuemax="100"><span style="width:${j.progress}%"></span></div>`:'';
+      const status=`<div class="ww-transfer-bottom"><span class="${j.status==='conflict'?'ww-status-warn':j.status==='done'?'ww-status-ok':''}">${jobStatus(j)}${j.status==='active'||j.status==='paused'?' · '+(j.total*j.progress/100).toFixed(1)+' / '+j.total+' MB':''}</span>${j.status==='active'?'<span>2.4 MB/s</span>':''}</div>`;
+      return `<div class="ww-transfer" data-job-row="${j.id}">${wide?`<div>${name}<div class="ww-transfer-sub">${j.direction==='up'?'上传到远程':'下载到本机'}</div></div><div class="ww-job-location"><b>${esc(spaces[j.space].name)}</b>${esc(j.path||'根目录')}</div><div class="ww-job-progress">${meter}${status}</div><div class="ww-job-actions">${jobActions(j)}</div>`:`${name}<div class="ww-transfer-sub">${location}</div>${meter}${status}`}</div>`;
+    }).join('')}`:`<div class="ww-full-target">${jobsSummary(state.jobs)} · 已完成 ${state.jobs.filter(j=>j.status==='done').length}</div>`}</section>`;
+  }
+  function preview(state) {
+    const name=labelFor(state.file);
+    return `<div class="ww-preview"><div class="ww-filetab">${icon('file-text')}<span>${esc(name)}</span>${ib('download-file','下载当前文件','download')}</div><div class="ww-breadcrumbs"><span>${esc(spaces[state.space].name)}</span>${icon('chevron-right')}<span>${esc(state.file)}</span></div><div class="ww-document"><div class="ww-doc-kicker">PASEO APP / PROJECT FILES</div><h2>${name==='README.md'?'素材与开发资料':esc(name)}</h2><p>这里集中保存本次开发需要的设计参考、需求文档和测试素材。</p><h3>项目目录</h3><div class="ww-doc-file">${icon('folder-open')}<div>web / public / assets<small>页面使用的图片、图标与其他静态资源</small></div></div><div class="ww-doc-file">${icon('folder-open')}<div>docs<small>需求说明与交付文档</small></div></div><h3>本次工作</h3><p>更新上传交互，整理设计参考文件，并核对页面在远程环境中的显示效果。</p><div class="ww-doc-note">当前空间：${esc(spaces[state.space].name)}<br>分支：${esc(spaces[state.space].branch)}</div></div><div class="ww-preview-footer">${icon('eye')}文件预览<span>·</span><span>Markdown</span><span>·</span><span>UTF-8</span></div></div>`;
+  }
+  function sidebar(state) {
+    return `${topbar()}<div class="ww-sidebar-layout">${rail()}<aside class="ww-sidebar">${title()}<div class="ww-spacebar">${picker(state.space)}${ib('expand','展开文件工作台','panel-left-close')}</div>${tabs()}<div class="ww-tree-area">${toolbar()}<div class="ww-rootpath">${esc(spaces[state.space].path)}</div>${tree(state)}${dropHint(state)}</div>${targetLine(state)}${queue(state)}</aside>${preview(state)}</div>`;
+  }
+  function directory(state) {
+    const names=state.target==='web/public/assets'?['logo.svg','design-reference.png','product-cover.png']:state.target==='docs'?['requirements.pdf','README.md']:['assets','README.md'];
+    return `<div class="ww-directory"><div class="ww-breadcrumbs">${esc(spaces[state.space].name)}${icon('chevron-right')}${esc(shortPath(state.target))}</div><div class="ww-directory-title"><b>${esc(labelFor(state.target)||spaces[state.space].name)}</b><small>${names.length} 个项目</small></div><table class="ww-file-table"><colgroup><col style="width:63%"><col style="width:21%"><col style="width:16%"></colgroup><thead><tr><th>名称</th><th>大小</th><th>操作</th></tr></thead><tbody>${names.map((name,i)=>`<tr class="${state.selected.has(name)?'ww-table-selected':''}"><td><label class="ww-table-file"><input type="checkbox" data-select-file="${esc(name)}" aria-label="选择 ${esc(name)}" ${state.selected.has(name)?'checked':''}>${icon(name.includes('.')?name.endsWith('.png')?'image':'file-text':'folder')}<span>${esc(name)}</span></label></td><td>${name==='assets'?'—':i===0?'188 KB':i===1?'20 MB':'6.8 MB'}</td><td>${ib('menu',name+'更多操作','ellipsis',`data-path="${esc(state.target?state.target+'/'+name:name)}" data-kind="${name==='assets'?'folder':'file'}"`)}</td></tr>`).join('')}</tbody></table><div class="ww-folder-empty">可将本机文件拖入当前目录</div>${dropHint(state)}</div>`;
+  }
+  function expanded(state) {
+    return `${topbar()}<div class="ww-shell">${rail()}<div class="ww-workbench">${title()}<div class="ww-spacebar">${picker(state.space)}${button('new-folder','新建文件夹','folder-plus')}${button('upload','上传文件','upload')}</div>${tabs()}<div class="ww-toolbar">${button('download-selection','下载','download')}${button('cut-selection','剪切','scissors')}${button('copy-selection','复制','copy')}${button('paste','粘贴','clipboard-paste')}${button('move-selection','移动到…','folder-input')}<span class="ww-spacer"></span><span class="ww-status-dim">已选 ${state.selected.size} 项</span></div><div class="ww-wide-layout"><aside class="ww-wide-tree"><div class="ww-rootpath">${esc(spaces[state.space].path)}</div>${tree(state)}</aside>${directory(state)}</div><div class="ww-full-target">上传到 ${esc(spaces[state.space].name)} / ${esc(shortPath(state.target))}</div>${queue(state,true)}</div></div>`;
+  }
+  function dual(state) {
+    return `${topbar()}<div class="ww-shell">${rail()}<div class="ww-workbench">${title()}${tabs()}<div class="ww-toolbar"><span class="ww-tiny-label">工作区文件对照</span>${button('copy-across','复制到右侧','copy')}${button('upload-right','上传到右侧','upload')}</div><div class="ww-dual-layout"><section class="ww-dual-pane"><div class="ww-pane-caption">${icon('arrow-up-right')}来源</div><div class="ww-spacebar">${picker(state.sourceSpace,'sourceSpace')}</div><div class="ww-rootpath">${esc(spaces[state.sourceSpace].path)}</div>${tree(state,'source')}<div class="ww-dual-selection">已选 <b>${esc(state.source)}</b></div></section><div class="ww-dual-between">${ib('copy-across','将所选文件复制到右侧','arrow-right')}${ib('swap','交换左右 Workspace','arrow-left-right')}</div><section class="ww-dual-pane"><div class="ww-pane-caption">${icon('folder-input')}目标</div><div class="ww-spacebar">${picker(state.rightSpace,'rightSpace')}</div><div class="ww-rootpath">${esc(spaces[state.rightSpace].path)}</div>${tree(state,'right')}<div class="ww-dual-selection">目标 <b>${esc(shortPath(state.rightTarget))}</b></div></section></div><div class="ww-hintbar">${icon('copy')}复制保留源文件${icon('dot')}跨空间操作显示来源与目标${icon('dot')}${esc(spaces[state.sourceSpace].name)} → ${esc(spaces[state.rightSpace].name)}</div>${queue(state,true)}</div></div>`;
+  }
+  function mobile(state) {
+    return `<div class="ww-phone-status"><span>9:41</span><span>5G · 100%</span></div><div class="ww-phone-header">${icon('chevron-left')}<b>paseo-app</b>${icon('ellipsis')}</div>${title()}<div class="ww-spacebar">${picker(state.space)}</div>${tabs()}${toolbar()}<div class="ww-rootpath">${esc(spaces[state.space].path)}</div>${tree(state)}${targetLine(state)}<button type="button" class="ww-phone-transferbar cursor-interaction" data-action="queue" aria-expanded="${state.queueOpen}">${icon('arrow-up-down')}<span>传输 · ${jobsSummary(state.jobs)}</span>${icon('chevron-up')}</button>${state.queueOpen?`<div class="ww-phone-sheet"><div class="ww-sheet-grip"></div>${queue(state,false,true)}</div>`:''}<div class="ww-home-indicator"></div>`;
+  }
+  function menu(state) {
+    if(!state.menu)return '';
+    const m=state.menu;
+    const entry=(action,label,ico,key='')=>`<button type="button" class="cursor-interaction" data-action="${action}">${icon(ico)}${label}${key?`<small>${key}</small>`:''}</button>`;
+    return `<div class="ww-menu" role="menu" aria-label="文件操作"><div class="ww-menu-title">${esc(labelFor(m.path)||'根目录')}</div>${m.kind==='folder'?entry('upload-menu','上传到此处','upload')+entry('new-folder','新建文件夹','folder-plus'):''}${entry('download-menu','下载','download')}<div class="ww-menu-divider"></div>${m.path?entry('cut-menu','剪切','scissors','⌘X')+entry('copy-menu','复制','copy','⌘C'):''}${m.kind==='folder'?entry('paste-menu','粘贴到此处','clipboard-paste','⌘V'):''}${m.path?entry('rename','重命名','pencil')+entry('move-menu','移动到…','folder-input')+'<div class="ww-menu-divider"></div>'+entry('delete','删除…','trash-2'):''}${entry('close-menu','关闭','x')}</div>`;
+  }
+  function dialog(state) {
+    const m=state.modal;if(!m)return '';
+    let contents='';
+    if(m.type==='conflict') {
+      const j=state.jobs.find(j=>j.id===m.job);
+      if(!j)return '';
+      contents=`<h3>目标目录已有同名文件</h3><p>${esc(j.name)} 已存在。请选择这次上传的处理方式。</p><div class="ww-dialog-path"><span class="ww-dialog-label">上传到</span>${esc(spaces[j.space].name)} / ${esc(j.path)} / ${esc(j.name)}</div><label><input type="checkbox" data-field="all-conflicts"> 应用于本批同名文件</label><div class="ww-dialog-actions">${button('conflict-skip','跳过')}${button('conflict-keep','保留两份')}${button('conflict-replace','替换文件')}</div>`;
+    } else if(m.type==='copy-across') {
+      contents=`<h3>复制到另一个 Workspace</h3><div class="ww-dialog-path"><span class="ww-dialog-label">来源 · ${esc(spaces[state.sourceSpace].name)}</span>${esc(state.source)}</div><div class="ww-dialog-path"><span class="ww-dialog-label">目标 · ${esc(spaces[state.rightSpace].name)}</span>${esc(shortPath(state.rightTarget))} / ${esc(labelFor(state.source))}</div><p>源文件保留。如有同名文件，先询问如何处理。</p><div class="ww-dialog-actions">${button('close-modal','取消')}${button('confirm-copy','确认复制','copy')}</div>`;
+    } else if(m.type==='rename'||m.type==='new-folder') {
+      contents=`<h3>${m.type==='rename'?'重命名':'新建文件夹'}</h3><p>${esc(spaces[state.space].name)} / ${esc(shortPath(m.path||state.target))}</p><input type="text" data-field="name" aria-label="${m.type==='rename'?'新名称':'文件夹名称'}" value="${m.type==='rename'?esc(labelFor(m.path)):'新文件夹'}"><div class="ww-dialog-actions">${button('close-modal','取消')}${button('confirm-name','确定','check')}</div>`;
+    } else if(m.type==='delete') {
+      contents=`<h3>删除这个文件？</h3><div class="ww-dialog-path">${esc(spaces[state.space].name)} / ${esc(m.path)}</div><p>删除前移入恢复区，可从「最近删除」恢复。</p><div class="ww-dialog-actions">${button('close-modal','取消')}${button('confirm-delete','移到最近删除','trash-2')}</div>`;
+    } else if(m.type==='move') {
+      contents=`<h3>移动到目录</h3><div class="ww-dialog-path"><span class="ww-dialog-label">来源 · ${esc(spaces[state.space].name)}</span>${esc(m.path)}</div><label>目标 Workspace</label>${picker(state.space,'moveSpace')}<label>目标目录<input type="text" data-field="move-path" value="docs"></label><div class="ww-dialog-actions">${button('close-modal','取消')}${button('confirm-move','确认移动','folder-input')}</div>`;
+    } else if(m.type==='overview') {
+      contents=`<h3>${esc(spaces[state.space].name)}</h3><div class="ww-dialog-path">${esc(spaces[state.space].branch)}<br>2 个仓库 · 3 个文件变更</div><p>文件视图与 Workspace 概览共用上方的空间选择。</p><div class="ww-dialog-actions">${button('close-modal','返回文件')}</div>`;
+    }
+    return `<div class="ww-modal-backdrop"><div class="ww-dialog" role="dialog" aria-modal="true" aria-label="${m.type==='conflict'?'同名文件处理':m.type==='copy-across'?'跨 Workspace 复制确认':'文件操作'}">${contents}</div></div>`;
+  }
+  function refreshIcons() { if(typeof lucide!=='undefined') lucide.createIcons({ attrs:{width:15,height:15,'stroke-width':1.6} }); }
+  function render(stage) {
+    const state=states.get(stage); const kind=stage.dataset.design;
+    stage.innerHTML = kind==='mobile'?`<div class="ww-phone">${mobile(state)}${menu(state)}${dialog(state)}${state.toast?`<div class="ww-toast" role="status">${esc(state.toast)}</div>`:''}</div>`:`<div class="ww-window">${kind==='sidebar'?sidebar(state):kind==='expanded'?expanded(state):dual(state)}${menu(state)}${dialog(state)}${state.toast?`<div class="ww-toast" role="status">${esc(state.toast)}</div>`:''}</div>`;
+    refreshIcons();
+  }
+  const saved=window.openai?.widgetState;
+  function applySaved(snapshot) {
+    const info=snapshot?.privateContent?.views;
+    if(!info)return;
+    for(const [stage,state] of states) {
+      const prior=info[stage.dataset.design];
+      if(!prior)continue;
+      if(spaces[prior.space])state.space=prior.space;
+      if(spaces[prior.sourceSpace])state.sourceSpace=prior.sourceSpace;
+      if(spaces[prior.rightSpace])state.rightSpace=prior.rightSpace;
+      if(typeof prior.queueOpen==='boolean')state.queueOpen=prior.queueOpen;
+      render(stage);
+    }
+  }
+  function persist(stage) {
+    const views={}; for(const [node,s] of states)views[node.dataset.design]={space:s.space,sourceSpace:s.sourceSpace,rightSpace:s.rightSpace,queueOpen:s.queueOpen};
+    const state=states.get(stage);
+    if(window.openai?.setWidgetState) window.openai.setWidgetState({modelContent:{lastInteractedDesign:stage.dataset.design,workspace:spaces[state.space].name},privateContent:{views}}).catch(()=>{});
+  }
+  function toast(stage,message) {
+    const s=states.get(stage);s.toast=message;root.querySelector('.ww-announcement').textContent=message;
+    setTimeout(()=>{if(s.toast===message){s.toast='';render(stage);}},3500);
+  }
+  function addJob(state,{name='product-cover.png',space=state.space,path=state.target,direction='up',total=6.8}={}) {
+    const job={id:'demo-'+Date.now()+'-'+Math.random().toString(36).slice(2,6),name,space,path,direction,total,progress:0,status:'active'};
+    state.jobs.unshift(job);state.queueOpen=true; return job;
+  }
+  function simulate(stage,job) {
+    if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){job.progress=100;job.status='done';render(stage);return;}
+    const tick=()=>{if(job.status!=='active')return;job.progress=Math.min(100,job.progress+8);if(job.progress===100)job.status='done';render(stage);if(job.status==='active')setTimeout(tick,450);};
+    setTimeout(tick,450);
+  }
+  function chosen(state) { return [...state.selected][0]||'design-reference.png'; }
+  for(const stage of root.querySelectorAll('[data-design]')) {
+    const state=defaults();states.set(stage,state);render(stage);
+    stage.addEventListener('change',event=>{
+      const field=event.target.dataset.field;
+      if(field&&['space','sourceSpace','rightSpace'].includes(field)&&spaces[event.target.value]) {
+        if(field==='space') {
+          state.memory[state.space]={target:state.target,file:state.file,expanded:[...state.expanded]};
+          state.space=event.target.value;
+          const memory=state.memory[state.space];
+          state.target=memory?.target||'';state.file=memory?.file||'README.md';state.expanded=new Set(memory?.expanded||['web','docs']);
+        } else state[field]=event.target.value;
+        state.menu=null;state.modal=null;render(stage);persist(stage);
+      }
+      if(event.target.dataset.selectFile) {
+        const name=event.target.dataset.selectFile;
+        if(event.target.checked)state.selected.add(name);else state.selected.delete(name);
+        render(stage);
+      }
+    });
+    stage.addEventListener('contextmenu',event=>{
+      const row=event.target.closest('[data-path][data-kind]');if(!row)return;
+      event.preventDefault();state.menu={path:row.dataset.path,kind:row.dataset.kind,side:row.dataset.side};render(stage);
+    });
+    stage.addEventListener('dragover',event=>{
+      const row=event.target.closest('.ww-tree-row');if(!row)return;
+      event.preventDefault();stage.querySelectorAll('.ww-live-drop').forEach(el=>el.classList.remove('ww-live-drop','ww-drop-on'));row.classList.add('ww-live-drop','ww-drop-on');
+    });
+    stage.addEventListener('drop',event=>{
+      const row=event.target.closest('.ww-tree-row');if(!row)return;
+      event.preventDefault();
+      const path=row.dataset.kind==='folder'?row.dataset.path:row.dataset.path.split('/').slice(0,-1).join('/');
+      const space=row.dataset.side==='right'?state.rightSpace:row.dataset.side==='source'?state.sourceSpace:state.space;
+      const names=Array.from(event.dataTransfer?.files||[]).map(f=>f.name);
+      for(const name of names.length?names:['product-cover.png'])simulate(stage,addJob(state,{name,path,space}));
+      toast(stage,`已加入示例队列 · ${spaces[space].name} / ${shortPath(path)}`);render(stage);
+    });
+    stage.addEventListener('click',event=>{
+      const btn=event.target.closest('[data-action]');if(!btn)return;
+      const action=btn.dataset.action;
+      const job=state.jobs.find(j=>j.id===btn.dataset.job);
+      const m=state.menu;
+      if(action==='tree-pick') {
+        const path=btn.dataset.path;const side=btn.dataset.side;
+        if(btn.dataset.kind==='folder') {
+          if(side==='right')state.rightTarget=path;else if(side==='source')state.source=path;else state.target=path;
+          if(path){if(state.expanded.has(path))state.expanded.delete(path);else state.expanded.add(path);}
+        } else {
+          if(side==='source')state.source=path;
+          else if(side==='right')state.rightTarget=path.split('/').slice(0,-1).join('/');
+          else{state.file=path;state.target=path.split('/').slice(0,-1).join('/');}
+        }
+        state.menu=null;
+      } else if(action==='menu') {
+        state.menu={path:btn.dataset.path,kind:btn.dataset.kind,side:btn.dataset.side};
+      } else if(action==='close-menu')state.menu=null;
+      else if(action==='queue')state.queueOpen=!state.queueOpen;
+      else if(action==='upload'||action==='upload-menu'||action==='upload-right') {
+        const space=action==='upload-right'?state.rightSpace:m?.side==='source'?state.sourceSpace:m?.side==='right'?state.rightSpace:state.space;
+        const path=action==='upload-menu'?m?.path:action==='upload-right'?state.rightTarget:state.target;
+        simulate(stage,addJob(state,{space,path}));state.menu=null;toast(stage,'示例上传已加入队列，切换 Workspace 后目标保持不变');
+      } else if(['pause','resume','cancel','retry'].includes(action)&&job) {
+        job.status=action==='pause'?'paused':action==='cancel'?'cancelled':'active';
+        if(action==='retry')job.progress=0;
+        if(action==='resume'||action==='retry')simulate(stage,job);
+      } else if(action==='resolve'&&job)state.modal={type:'conflict',job:job.id};
+      else if(action.startsWith('conflict-')) {
+        const j=state.jobs.find(item=>item.id===state.modal?.job);
+        if(j){if(action==='conflict-skip')j.status='cancelled';else{if(action==='conflict-keep')j.name='logo (1).svg';j.status='active';simulate(stage,j);}}
+        state.modal=null;
+      } else if(['copy-menu','cut-menu','copy-selection','cut-selection'].includes(action)) {
+        const menuAction=action.endsWith('menu');
+        const side=m?.side;
+        state.clipboard={path:menuAction?m.path:(state.target?state.target+'/':'')+chosen(state),space:side==='source'?state.sourceSpace:side==='right'?state.rightSpace:state.space,mode:action.startsWith('cut')?'move':'copy'};
+        state.menu=null;toast(stage,`${state.clipboard.mode==='move'?'已剪切':'已复制'} ${labelFor(state.clipboard.path)}`);
+      } else if(action==='paste'||action==='paste-menu') {
+        if(state.clipboard){const to=action==='paste-menu'?m.path:state.target;const toSpace=m?.side==='right'?state.rightSpace:m?.side==='source'?state.sourceSpace:state.space;toast(stage,`示例${state.clipboard.mode==='move'?'移动':'复制'}：${spaces[state.clipboard.space].name} → ${spaces[toSpace].name} / ${shortPath(to)}`);}
+        else toast(stage,'请先在文件菜单选择复制或剪切');state.menu=null;
+      } else if(action==='copy-across')state.modal={type:'copy-across'};
+      else if(action==='confirm-copy') {state.modal=null;toast(stage,`示例复制：${spaces[state.sourceSpace].name} → ${spaces[state.rightSpace].name} / ${shortPath(state.rightTarget)}`);}
+      else if(action==='swap') {const left=state.sourceSpace;state.sourceSpace=state.rightSpace;state.rightSpace=left;}
+      else if(['download-file','download-selection','download-menu'].includes(action)) {
+        const path=action==='download-menu'?m.path:action==='download-file'?state.file:(state.target?state.target+'/':'')+chosen(state);
+        const space=m?.side==='source'?state.sourceSpace:m?.side==='right'?state.rightSpace:state.space;
+        simulate(stage,addJob(state,{name:labelFor(path),space,path:path.split('/').slice(0,-1).join('/'),direction:'down'}));state.menu=null;toast(stage,'下载已加入示例队列');
+      } else if(action==='new-folder'||action==='rename'||action==='delete') {
+        state.modal={type:action,path:m?.path||state.target};state.menu=null;
+      } else if(action==='confirm-name') {
+        const name=stage.querySelector('[data-field="name"]')?.value?.trim();
+        if(name){toast(stage,'示例操作完成：'+name);state.modal=null;}
+      } else if(action==='confirm-delete') {toast(stage,'示例文件已移到最近删除');state.modal=null;}
+      else if(action==='move-menu'||action==='move-selection') {state.modal={type:'move',path:m?.path||(state.target?state.target+'/':'')+chosen(state)};state.menu=null;}
+      else if(action==='confirm-move') {const dest=stage.querySelector('[data-field="move-path"]')?.value||'docs';const space=stage.querySelector('[data-field="moveSpace"]')?.value||state.space;toast(stage,'示例移动到 '+spaces[space].name+' / '+dest);state.modal=null;}
+      else if(action==='close-modal')state.modal=null;
+      else if(action==='overview')state.modal={type:'overview'};
+      else if(action==='review')toast(stage,'审核集继续使用现有入口，文件浏览不改变审核范围');
+      else if(action==='expand')toast(stage,'可切到「完整文件工作台」草稿查看展开布局');
+      render(stage);persist(stage);
+      if(state.modal?.type==='rename'||state.modal?.type==='new-folder')stage.querySelector('[data-field="name"]')?.focus();
+    });
+    stage.addEventListener('keydown',event=>{if(event.key==='Escape'){state.menu=null;state.modal=null;render(stage);}});
+  }
+  applySaved(saved);
+  window.addEventListener('openai:set_globals',event=>{if(event.detail?.globals?.widgetState)applySaved(event.detail.globals.widgetState);});
+  if(typeof Tweak!=='undefined') {
+    for(const [stage,state] of states) {
+      const settings={treeWidth:310,showHidden:false,dropHighlight:true};
+      const tweak=new Tweak({container:stage,onChange:()=>{stage.style.setProperty('--ww-tree-width',settings.treeWidth+'px');state.hiddenFiles=settings.showHidden;state.dropHint=settings.dropHighlight;render(stage);}});
+      if(stage.dataset.design==='sidebar')tweak.addSlider(settings,'treeWidth',{label:'文件树宽度',min:270,max:360,step:10,unit:'px'});
+      tweak.addToggle(settings,'showHidden',{label:'显示隐藏文件'});
+      if(stage.dataset.design!=='mobile')tweak.addToggle(settings,'dropHighlight',{label:'拖入目录高亮'});
+    }
+  }
+})();
+</script>

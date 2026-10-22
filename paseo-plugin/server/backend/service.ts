@@ -79,6 +79,7 @@ export class Service {
       recordReads: this.workspaces.observationRecords.health(),
       filesProtocol: 1,
       fileDecorationsProtocol: 1,
+      downloadSelectionProtocol: 1,
       contextProtocol:1, diffRead: this.observation.diffTasks.health(),
       refreshProtocol: 1,
       refreshControls: this.observation.refresh.controlHealth(),

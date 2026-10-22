@@ -1,4 +1,4 @@
-import type { DirectoryPage, FileEntry } from '../shared/files.ts';
+import type { DirectoryPage, FileEntry, FileChange } from '../shared/files.ts';
 import { readPreference, writePreference, removePreference } from './files-platform.ts';
 import type { FilesCall } from './files-store.ts';
 import { FilesDecorationsState } from './files-decorations-store.ts';
@@ -16,6 +16,9 @@ export class FilesTreeState {
   private listeners = new Set<() => void>();
   private revision = 0;
   private epoch = 0;
+  private directoryEpochs = new Map<string, number>();
+  private dirty = new Set<string>();
+  private changesFlight?: Promise<void>;
   readonly key: string;
   readonly workspaceId: string;
   readonly decorations: FilesDecorationsState;
@@ -28,22 +31,29 @@ export class FilesTreeState {
   snapshot = () => this.revision;
   emit() { this.revision++; this.listeners.forEach(fn => fn()); }
   save() { writePreference(this.key, { instance: this.instance, expanded: [...this.expanded], selected: [...this.selected], scroll: this.scroll }); }
-  clear() { this.epoch++; this.decorations.clear(); this.pages.clear(); this.expanded = new Set(['']); this.selected.clear(); this.scroll = 0; this.instance = ''; removePreference(this.key); this.emit(); }
+  clear() { this.epoch++; this.directoryEpochs.clear(); this.dirty.clear(); this.flights.clear(); this.refreshing.clear(); this.changesFlight = undefined; this.decorations.clear(); this.pages.clear(); this.expanded = new Set(['']); this.selected.clear(); this.scroll = 0; this.instance = ''; removePreference(this.key); this.emit(); }
   toggle(path: string, rpc: FilesCall) { if (this.expanded.has(path)) this.expanded.delete(path); else { this.expanded.add(path); void this.load(path, rpc); } this.save(); this.emit(); }
-  async load(path: string, rpc: FilesCall, more = false) {
-    if (this.flights.has(path)) return this.flights.get(path);
+  async load(path: string, rpc: FilesCall, more = false, fresh = false): Promise<void> {
     const epoch = this.epoch;
+    if (this.flights.has(path)) {
+      const pending = this.flights.get(path)!;
+      if (!fresh) return pending;
+      await pending;
+      if (epoch !== this.epoch) return;
+      return this.load(path, rpc, more, fresh);
+    }
+    const directoryEpoch = this.directoryEpochs.get(path) || 0;
     this.refreshing.add(path); this.emit();
     const flight = (async () => {
       try {
-        const old = this.pages.get(path), request = { action: 'list', workspaceId: this.workspaceId, ...(this.instance ? { instance: this.instance } : {}), path, limit: 200 };
+        const old = this.pages.get(path), request = { action: 'list', workspaceId: this.workspaceId, ...(this.instance ? { instance: this.instance } : {}), path, limit: 200, ...(fresh ? { fresh: true } : {}) };
         let page = await rpc({ ...request, ...(more && old?.cursor ? { cursor: old.cursor } : {}) }) as DirectoryPage;
         if (!more && old && old.entries.length > 200) {
           let collected = page.entries;
           while (page.cursor && collected.length < old.entries.length) { page = await rpc({ ...request, cursor: page.cursor }) as DirectoryPage; collected = [...collected, ...page.entries]; }
           page = { ...page, entries: collected };
         }
-        if (epoch !== this.epoch) return;
+        if (epoch !== this.epoch || directoryEpoch !== (this.directoryEpochs.get(path) || 0)) return;
         if (this.instance && this.instance !== page.instance) { this.clear(); return; }
         this.instance = page.instance;
         // Replace only when a complete page arrived. A failed refresh retains every visible row.
@@ -54,11 +64,48 @@ export class FilesTreeState {
         const code = (e as any)?.code;
         if (code === 'workspace_instance_changed') this.clear();
         this.error = e instanceof Error ? e.message : String(e);
-      } finally { this.refreshing.delete(path); this.emit(); }
-    })().finally(() => this.flights.delete(path));
+      }
+    })().finally(() => { if (this.flights.get(path) === flight) { this.flights.delete(path); this.refreshing.delete(path); this.emit(); } });
     this.flights.set(path, flight); return flight;
   }
+  changed(change: FileChange, rpc: FilesCall) {
+    if (change.workspaceId !== this.workspaceId || change.instance !== this.instance) return;
+    const removed = (path: string) => change.removed?.some(value => path === value || path.startsWith(value + '/'));
+    if (change.removed?.length) {
+      for (const path of new Set([...this.pages.keys(), ...this.flights.keys(), ...this.expanded])) if (removed(path)) {
+        this.pages.delete(path); this.expanded.delete(path); this.dirty.delete(path);
+        this.directoryEpochs.set(path, (this.directoryEpochs.get(path) || 0) + 1);
+      }
+      for (const page of this.pages.values()) page.entries = page.entries.filter(entry => !removed(entry.path));
+      for (const path of this.selected) if (removed(path)) this.selected.delete(path);
+      for (const path of this.decorations.entries.keys()) if (removed(path)) this.decorations.entries.delete(path);
+    }
+    for (const path of change.paths) {
+      const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+      for (const directory of [parent, path]) if (this.pages.has(directory)) {
+        this.directoryEpochs.set(directory, (this.directoryEpochs.get(directory) || 0) + 1);
+        this.dirty.add(directory);
+      }
+    }
+    this.save(); this.emit();
+    if (this.listeners.size) void this.refreshChanges(rpc);
+  }
+  private refreshChanges(rpc: FilesCall): Promise<void> {
+    if (this.changesFlight) return this.changesFlight;
+    const epoch = this.epoch;
+    const flight = (async () => {
+      // Merge completions from a batch; progress updates never reach this path.
+      await new Promise(resolve => setTimeout(resolve, 40));
+      while (epoch === this.epoch && this.dirty.size) {
+        const paths = [...this.dirty]; this.dirty.clear();
+        for (const path of paths) await this.load(path, rpc, false, true);
+      }
+      if (epoch === this.epoch) await this.decorations.refresh([...this.decorations.entries.keys()], rpc, true);
+    })().finally(() => { if (this.changesFlight === flight) this.changesFlight = undefined; });
+    this.changesFlight = flight; return flight;
+  }
   async validate(rpc: FilesCall) {
+    if (this.dirty.size) await this.refreshChanges(rpc);
     if (!this.instance) return this.load('', rpc);
     const paths = [...this.expanded].filter(p => this.pages.has(p)).slice(0, 200);
     try {
@@ -81,6 +128,9 @@ export class FilesTreeState {
   }
 }
 const states = new Map<string, FilesTreeState>();
+export function filesTreesChanged(scope: string, changes: FileChange[], rpc: FilesCall) {
+  for (const [key, state] of states) if (key.startsWith(scope + ':files-tree:')) for (const change of changes) state.changed(change, rpc);
+}
 export function filesTreeState(scope: string, workspaceId: string) {
   const key = scope + ':files-tree:' + workspaceId;
   const keys: string[] = readPreference(scope + ':files-tree-keys') || [];

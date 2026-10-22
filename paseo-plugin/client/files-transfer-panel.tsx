@@ -6,11 +6,13 @@ import { fileTransferStore, type FileTransferStore } from './files-store';
 import { canSave, DownloadStaging, pickFiles } from './files-platform';
 import { useWorkbenchLocale } from './i18n';
 import { ScrollView } from './native-components';
+import { filesTreesChanged } from './files-tree-store';
 
 export const fileBytes = (n: number | null) => n === null ? '—' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KiB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MiB' : (n / 1073741824).toFixed(2) + ' GiB';
-export function useFileConnection(project: string, scope: string, enabled: boolean) {
+export function useFileConnection(project: string, scope: string, enabled: boolean, downloadSelection = false) {
   const call = useRpc(filesRpc), store = fileTransferStore(scope);
-  useEffect(() => enabled ? store.bind(async request => { const result = await call({ projectConfig: project, request: request as any }); if (!result.ok) { const error = new Error(result.error?.message || 'File request failed') as Error & { code?: string }; error.code = result.error?.code; throw error; } return result.result; }) : undefined, [call, project, store, enabled]);
+  useEffect(() => store.subscribeChanges(changes => filesTreesChanged(scope, changes, request => store.call(request))), [store, scope]);
+  useEffect(() => enabled ? store.bind(async request => { const result = await call({ projectConfig: project, request: request as any }); if (!result.ok) { const error = new Error(result.error?.message || 'File request failed') as Error & { code?: string }; error.code = result.error?.code; throw error; } return result.result; }, { downloadSelection }) : undefined, [call, project, store, enabled, downloadSelection]);
   return store;
 }
 export function FileTransfers({ store, theme }: { store: FileTransferStore; theme: any }) {
@@ -47,7 +49,8 @@ export function FileTransfers({ store, theme }: { store: FileTransferStore; them
           {!['complete', 'cancelled', 'delegated', 'conflict'].includes(task.state) ? <>
             {task.needsSource ? button(zh ? '重新选择原文件' : 'Select original file', () => pickFiles(false, files => { if (files[0]) run(() => store.attach(task.id, files[0])); })) : null}
             {['active', 'preparing', 'queued'].includes(task.state) && !task.localError ? button(zh ? '暂停' : 'Pause', () => control(task.id, 'pause')) : button(zh ? '继续 / 重试' : 'Resume / retry', () => control(task.id, 'resume'))}
-            {task.direction === 'download' && !task.saving && task.size !== null && canSave() && (task.state === 'ready_to_save' || !DownloadStaging.supported()) ? button(zh ? '保存到本机' : 'Save to device', () => { void store.save(task.id); }) : null}
+            {task.destinationSelected && !task.saving ? <Text style={{ color: c.foregroundMuted, fontSize: 11 }}>{zh ? '保存位置已选择 · 完成后自动保存' : 'Destination selected · saves automatically'}</Text> : null}
+            {task.direction === 'download' && !task.destinationSelected && !task.saving && task.size !== null && canSave() && (task.state === 'ready_to_save' || !DownloadStaging.supported()) ? button(zh ? '保存到本机' : 'Save to device', () => { void store.save(task.id); }) : null}
             {task.saving ? <Text style={{ color: c.foregroundMuted, fontSize: 11 }}>{zh ? '正在保存…' : 'Saving…'}</Text> : null}
             {task.direction === 'download' && !task.saving && task.localError && ['active', 'ready_to_save'].includes(task.state) && canSave() ? button(zh ? '直接保存到本机' : 'Save directly to device', () => { void store.save(task.id, true); }) : null}
             {task.direction === 'download' && task.size !== null && !canSave() ? button(zh ? '交由浏览器下载' : 'Browser download', () => run(() => store.delegate(task.id))) : null}

@@ -324,7 +324,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   // cold start the socket can exist before it is ready to serve, which used to
   // turn the initial workspace list into a misleading observer_timeout.
   const backendReady = backendQuery.data?.state === "ready";
-  const fileStore = useFileConnection(projectConfig, filesScopeKey, backendReady);
+  const fileStore = useFileConnection(projectConfig, filesScopeKey, backendReady, backendQuery.data?.readCapabilities?.downloadSelectionProtocol === 1);
   reportNativeDiagnostic("project-panel-backend-readiness", { ready: String(backendReady), state: String(backendQuery.data?.state || "pending") });
   const observationTiming = useMemo(
     () => observationTimingFromWire(backendQuery.data?.timing),
@@ -832,9 +832,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       </Modal>:null}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabs}>
         <TabButton active={tab === "workspace"} label={localizedCopy.tabWorkspace} onPress={() => setTab("workspace")} theme={theme} styles={styles} />
+        <TabButton active={tab === "files"} label={locale === "zh-CN" ? "文件" : "Files"} onPress={() => setTab("files")} theme={theme} styles={styles} />
         <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
         {selectedWorkspaceId && selectedWorkspace?.kind !== "linked-live" && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
-        <TabButton active={tab === "files"} label={locale === "zh-CN" ? "文件" : "Files"} onPress={() => setTab("files")} theme={theme} styles={styles} />
       </ScrollView>
       <View
         style={styles.bodyShell}

@@ -310,7 +310,7 @@ export class ObservationCache {
     this.entries.delete(key); this.entries.set(key, entry);
     return this.metadata(entry);
   }
-  async read(key: string, fingerprint: Fingerprint, work: () => Promise<Json>, versioned = false, waitFresh = false, scope?: CachePublication) {
+  async read(key: string, fingerprint: Fingerprint, work: () => Promise<Json>, versioned = false, waitFresh = false, scope?: CachePublication): Promise<Json> {
     if (this.closed) throw new WorkbenchError("observer_closed", "observation cache is closed");
     const entry = this.entries.get(key);
     if (entry) this.own(entry, scope);
@@ -334,6 +334,13 @@ export class ObservationCache {
           issues: [{ code: issue(error).code }] } };
       }
       return this.metadata(entry, true, this.failures.get(key));
+    }
+    // A producer started before a mutation may still carry the old fingerprint.
+    // A caller awaiting fresh data must recheck after that producer settles.
+    const active = this.flights.get(key);
+    if (waitFresh && active) {
+      await active.catch(() => {});
+      return this.read(key, fingerprint, work, versioned, waitFresh, scope);
     }
     return this.produce(key, fingerprint, work, scope);
   }

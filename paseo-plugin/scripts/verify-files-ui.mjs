@@ -11,7 +11,7 @@ import WebSocket from 'ws';
 const plugin = resolve(import.meta.dirname, '..'), output = resolve(process.env.WORKBENCH_VERIFY_OUTPUT || join(plugin, '../.local/verification/files'));
 await mkdir(output, { recursive: true });
 let child, client, browser, ui, logs = '';
-const report = { kind: 'actual-paseo-files-chromium', checks: [], errors: [], screenshots: [], limitations: ['Chromium on macOS; Windows native drag and native Save picker require Windows acceptance. Save export uses a real OPFS-backed file handle in this harness.'] };
+const report = { kind: 'actual-paseo-files-chromium', checks: [], errors: [], console: [], screenshots: [], limitations: ['Chromium on macOS; Windows native drag and native Save picker require Windows acceptance. Save export uses a real OPFS-backed file handle in this harness.'] };
 const check = message => { report.checks.push(message); console.log(JSON.stringify({ check: message })); };
 const pause = ms => new Promise(r => setTimeout(r, ms));
 const wait = async (fn, timeout = 20000) => { const until = Date.now()+timeout; while (Date.now()<until) { const value = await fn(); if (value) return value; await pause(100); } throw Error('Timed out waiting for file proof'); };
@@ -31,12 +31,15 @@ try {
   const created = await observer('workspace.create', { name: 'file-proof-space', repositories: ['one'] });
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } }); page.on('pageerror', e => report.errors.push(e.message));
+  page.on('console', message => { if (['warning', 'error'].includes(message.type())) report.console.push({ type: message.type(), text: message.text() }); });
   await page.addInitScript(() => {
-    window.showSaveFilePicker = async () => { const root = await navigator.storage.getDirectory(); const handle = await root.getFileHandle('workbench-proof-export', { create: true }); return handle; };
+    window.__proofPickerCalls = [];
+    window.showSaveFilePicker = async options => { window.__proofPickerCalls.push({ name: options.suggestedName, activated: navigator.userActivation.isActive }); const root = await navigator.storage.getDirectory(); const handle = await root.getFileHandle('workbench-proof-export', { create: true }); return handle; };
     window.__proofReads = [];
+    window.__proofMutations = [];
     const send = WebSocket.prototype.send;
     WebSocket.prototype.send = function(data) {
-      const inspect = value => { if (typeof value === 'string' && /^[\[{]/.test(value)) { try { inspect(JSON.parse(value)); } catch {} } else if (value && typeof value === 'object') { if (value.action === 'read' && typeof value.id === 'string') window.__proofReads.push({ id: value.id, offset: value.offset }); for (const child of Object.values(value)) inspect(child); } };
+      const inspect = value => { if (typeof value === 'string' && /^[\[{]/.test(value)) { try { inspect(JSON.parse(value)); } catch {} } else if (value && typeof value === 'object') { if (value.action === 'read' && typeof value.id === 'string') window.__proofReads.push({ id: value.id, offset: value.offset }); if (value.action === 'mutate' && typeof value.id === 'string') window.__proofMutations.push(value); for (const child of Object.values(value)) inspect(child); } };
       if (typeof data === 'string') inspect(data);
       return send.call(this, data);
     };
@@ -46,11 +49,30 @@ try {
   if (await page.getByText('Add project', { exact: true }).first().isVisible().catch(() => false)) { await page.getByText('Add project', { exact: true }).first().click(); await page.getByText('Search for directory', { exact: true }).click(); await page.getByPlaceholder('Search directories or enter a path...').fill(ui.project); await page.getByText('Open this path', { exact: true }).click(); }
   await page.getByText('Workspace Workbench', { exact: true }).first().click();
   await page.getByText('Repositories', { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 20000 });
+  const gitTab = page.getByRole('tab', { name: 'Git', exact: true }), filesTab = page.getByRole('tab', { name: 'Files', exact: true });
+  const gitBox = await gitTab.boundingBox(), filesBox = await filesTab.boundingBox();
+  assert.ok(filesBox.x > gitBox.x && filesBox.x < gitBox.x + gitBox.width + 24, 'Files is immediately right of Git');
+  check('Git is the default tab and Files follows it immediately');
   await page.getByText('Files', { exact: true }).click(); await page.locator('[data-file-path=""]').waitFor({ timeout: 20000 }); await page.locator('[data-file-path="one"]').waitFor({timeout:20000});
   const rootEntry = page.locator('[data-file-path=""]');
   await rootEntry.dispatchEvent('drop', { dataTransfer: await page.evaluateHandle(() => { const data = new DataTransfer(); data.items.add(new File(['drag upload proof\n'], 'drag-proof.txt', { type: 'text/plain', lastModified: 123 })); return data; }) });
   await wait(async () => { try { return await readFile(join(ui.project, 'drag-proof.txt'), 'utf8') === 'drag upload proof\n'; } catch { return false; } });
-  await page.locator('[data-file-path="drag-proof.txt"]').waitFor({ timeout: 20000 }); check('external file drop uploads to the pinned main Workspace root');
+  const uploadCommitted = Date.now();
+  await page.locator('[data-file-path="drag-proof.txt"]').waitFor({ timeout: 1200 }); report.uploadListDelayMs = Date.now() - uploadCommitted; check('external file drop uploads to the pinned main Workspace root and appears without a periodic refresh');
+  const beforeChoice = (await rpc({ action: 'tasks', limit: 200 })).tasks.map(task => task.id).sort();
+  await page.evaluate(() => { window.__proofRealPicker = window.showSaveFilePicker; window.showSaveFilePicker = () => new Promise((_resolve, reject) => { window.__proofCancelChoice = reject; }); });
+  await page.locator('[data-file-path="drag-proof.txt"]').click({ button: 'right' }); await page.getByText('Download / ZIP', { exact: true }).click();
+  await page.waitForFunction(() => Boolean(window.__proofCancelChoice));
+  assert.deepEqual((await rpc({ action: 'tasks', limit: 200 })).tasks.map(task => task.id).sort(), beforeChoice, 'an unconfirmed picker creates no remote task');
+  await page.evaluate(() => { window.__proofCancelChoice(new DOMException('User cancelled', 'AbortError')); window.showSaveFilePicker = window.__proofRealPicker; }); await pause(150);
+  assert.deepEqual((await rpc({ action: 'tasks', limit: 200 })).tasks.map(task => task.id).sort(), beforeChoice, 'cancelling leaves the original task list unchanged');
+  assert.equal(await page.getByText('User cancelled', { exact: true }).count(), 0);
+  check('waiting for or cancelling the initial save location never creates a task or requires a queue action');
+  await page.locator('[data-file-path="drag-proof.txt"]').click({ button: 'right' }); await page.getByText('Download / ZIP', { exact: true }).click();
+  await wait(async () => (await rpc({ action: 'tasks', limit: 200 })).tasks.some(t => t.direction === 'download' && t.name === 'drag-proof.txt' && t.state === 'complete'));
+  assert.deepEqual(await page.evaluate(() => window.__proofPickerCalls), [{ name: 'drag-proof.txt', activated: true }]);
+  assert.equal(await page.evaluate(async () => (await (await (await navigator.storage.getDirectory()).getFileHandle('workbench-proof-export')).getFile()).text()), 'drag upload proof\n');
+  check('the initial Download gesture opens a save destination before RPC and saves automatically without a second queue action');
   await page.getByText('+ Folder', { exact: true }).click(); await page.getByText('New folder',{exact:true}).waitFor(); await page.getByRole('textbox').last().fill('drop-target'); await page.getByText('Confirm', { exact: true }).last().click();
   await page.locator('[data-file-path="drop-target"]').waitFor({ timeout: 20000 });
   const target = page.locator('[data-file-path="drop-target"]');
@@ -59,11 +81,29 @@ try {
   await wait(async () => { try { return await readFile(join(ui.project, 'drop-target/nested.txt'), 'utf8') === 'nested proof'; } catch { return false; } }); check('hovered directory expands and receives a dropped file');
   const file = page.locator('[data-file-path="drag-proof.txt"]'); await file.click(); await page.getByText(/1 selected$/).waitFor({ timeout: 5000 }); await file.press('Control+c'); await target.click(); await target.press('Control+v');
   await wait(async () => { try { return await readFile(join(ui.project, 'drop-target/drag-proof.txt'), 'utf8') === 'drag upload proof\n'; } catch { return false; } }); check('keyboard Copy and Paste copies into the selected directory');
-  await target.click({ button: 'right' }); await page.getByText('Download / ZIP', { exact: true }).click();
+  const beforeNoops = (await rpc({ action: 'tasks', limit: 200 })).tasks.map(task => task.id).sort(), mutationCount = await page.evaluate(() => window.__proofMutations.length);
+  for (const [source, landing] of [[file, rootEntry], [file, file], [target, target]]) {
+    const data = await page.evaluateHandle(() => new DataTransfer());
+    await source.dispatchEvent('dragstart', { dataTransfer: data }); await landing.dispatchEvent('dragover', { dataTransfer: data });
+    assert.equal(await data.evaluate(value => value.dropEffect), 'none');
+    await landing.dispatchEvent('drop', { dataTransfer: data }); await source.dispatchEvent('dragend', { dataTransfer: data });
+  }
+  await pause(250); assert.equal(await page.evaluate(() => window.__proofMutations.length), mutationCount);
+  assert.deepEqual((await rpc({ action: 'tasks', limit: 200 })).tasks.map(task => task.id).sort(), beforeNoops);
+  check('dragging back to the same folder, onto the file itself or onto its own directory creates neither an RPC nor a transfer row');
+  await file.click(); await page.getByRole('button', { name: 'More file actions', exact: true }).click();
+  const menuSelection = page.getByTestId('files-menu-selection');
+  assert.match(await menuSelection.innerText(), /1 selected/); assert.match(await menuSelection.innerText(), /drag-proof\.txt/); assert.match(await menuSelection.innerText(), /Upload \/ new folder \/ paste into: \//);
+  await page.screenshot({ path: join(output, 'file-menu-selected-path.png') }); report.screenshots.push('file-menu-selected-path.png');
+  await page.getByText('Copy', { exact: true }).last().click();
+  await file.click(); await target.click({ modifiers: ['Meta'] }); await page.getByRole('button', { name: 'More file actions', exact: true }).click();
+  assert.match(await menuSelection.innerText(), /2 selected/); assert.match(await menuSelection.innerText(), /drag-proof\.txt/); assert.match(await menuSelection.innerText(), /drop-target/);
+  await page.getByText('Copy', { exact: true }).last().click();
+  check('the toolbar menu lists single and multiple selected paths separately from the upload/new-folder/paste directory');
+  await page.evaluate(()=>{window.__proofNormalPicker=window.showSaveFilePicker;window.showSaveFilePicker=async options=>({createWritable:async()=>{const output=await(await window.__proofNormalPicker(options)).createWritable();return{write:bytes=>output.write(bytes),close:async()=>{await output.abort();throw new Error('Injected save cancellation')},abort:async()=>{await output.abort().catch(()=>{})}}}});});
+  await target.click(); await target.click({ button: 'right' }); await page.getByText('Download / ZIP', { exact: true }).click();
   await page.getByRole('button', { name: 'Transfers', exact: true }).click();
-  await page.getByText('Save to device', { exact: true }).first().waitFor({ timeout: 20000 });
-  await page.evaluate(()=>{window.__proofNormalPicker=window.showSaveFilePicker;window.showSaveFilePicker=async()=>({createWritable:async()=>{const output=await(await window.__proofNormalPicker()).createWritable();return{write:bytes=>output.write(bytes),close:async()=>{await output.abort();throw new Error('Injected save cancellation')},abort:async()=>{await output.abort().catch(()=>{})}}}});});
-  await page.getByText('Save to device', { exact: true }).first().click();await page.getByText('Injected save cancellation',{exact:true}).waitFor({timeout:15000});
+  await page.getByText('Injected save cancellation',{exact:true}).waitFor({timeout:15000});
   assert.equal((await rpc({action:'tasks',limit:200})).tasks.find(t=>t.direction==='download'&&t.name==='drop-target.zip').state,'ready_to_save');
   check('a cancelled final writer retains the staged download and never marks it complete');
   await page.evaluate(()=>{window.showSaveFilePicker=window.__proofNormalPicker;});
@@ -92,7 +132,8 @@ try {
   await page.getByRole('textbox').last().fill('renamed-proof.txt'); await page.getByText('Confirm', { exact: true }).last().click();
   await wait(async()=>{try{return await readFile(join(ui.project,'renamed-proof.txt'),'utf8')==='nested proof';}catch{return false;}});
   await page.locator('[data-file-path="renamed-proof.txt"]').waitFor({timeout:15000}); await page.locator('[data-file-path="renamed-proof.txt"]').click({button:'right'}); await page.getByText('Delete permanently…',{exact:true}).click();
-  await page.getByText('Confirm permanent deletion',{exact:true}).waitFor(); await page.getByText('Delete permanently',{exact:true}).click();
+  await page.getByText('Confirm permanent deletion',{exact:true}).waitFor(); const deleteStarted = Date.now(); await page.getByText('Delete permanently',{exact:true}).click();
+  await page.locator('[data-file-path="renamed-proof.txt"]').waitFor({state:'detached',timeout:1500}); report.deleteListDelayMs = Date.now() - deleteStarted;
   await wait(async()=>!(await readFile(join(ui.project,'renamed-proof.txt')).then(()=>true,()=>false)));check('rename shortcut and reviewed permanent deletion work through real UI actions');
   await file.click(); await file.press('Control+c'); await page.getByText(/1 copied$/).waitFor({timeout:5000});
   await page.getByText('Main workspace',{exact:true}).first().click(); await page.getByText('file-proof-space',{exact:true}).first().click();
@@ -100,13 +141,13 @@ try {
   await page.locator('[data-file-path=""]').press('Control+v');
   await wait(async()=>{try{return await readFile(join(created.treePath,'drag-proof.txt'),'utf8')==='drag upload proof\n';}catch{return false;}});
   check('Workspace switching retains Files tab and clipboard pastes into the new Workspace root');
-  await page.getByText('Workspace',{exact:true}).click(); await page.getByRole('button',{name:'Transfers',exact:true}).waitFor(); check('transfer summary stays mounted on the Git Workspace tab');
+  await page.getByText('Git',{exact:true}).click(); await page.getByRole('button',{name:'Transfers',exact:true}).waitFor(); check('transfer summary stays mounted on the Git Workspace tab');
   await page.getByText('Files',{exact:true}).filter({visible:true}).click();
 
   const currentRoot = page.locator('[data-file-path=""]');
   await page.locator('[data-file-path="one"]').waitFor({ timeout: 15000 });
   await currentRoot.dispatchEvent('drop', { dataTransfer: await page.evaluateHandle(() => { const data = new DataTransfer(); const bytes = new Uint8Array(2*1024*1024+17); bytes.fill(0x5a); data.items.add(new File([bytes], 'pinned-large.bin', { lastModified: 42 })); return data; }) });
-  await page.getByText('Workspace', {exact:true}).click(); await page.getByText('file-proof-space',{exact:true}).first().click(); await page.getByText('Main workspace',{exact:true}).first().click();
+  await page.getByText('Git', {exact:true}).click(); await page.getByText('file-proof-space',{exact:true}).first().click(); await page.getByText('Main workspace',{exact:true}).first().click();
   await wait(async()=>{try{return (await readFile(join(created.treePath,'pinned-large.bin'))).length===2*1024*1024+17;}catch{return false;}});
   assert.equal(await readFile(join(ui.project,'pinned-large.bin')).then(()=>true,()=>false),false);
   check('multi-chunk upload stays pinned to its original Workspace after switching tabs and spaces');
@@ -161,13 +202,16 @@ try {
   check('browser refresh recovers closed OPFS chunks before a lost ACK, continues at the next offset and exports the complete file');
   await page.getByText('Files',{exact:true}).filter({visible:true}).click(); await page.locator('[data-file-path="drag-proof.txt"]').waitFor({timeout:15000});
   await page.evaluate(()=>{window.__proofPicker=window.showSaveFilePicker;window.showSaveFilePicker=undefined;});
+  const delegatedDownload = page.waitForEvent('download');
   await page.locator('[data-file-path="drag-proof.txt"]').click({button:'right'}); await page.getByText('Download / ZIP',{exact:true}).click();
-  const browserDownload = page.waitForEvent('download'); await page.getByText('Browser download',{exact:true}).first().click(); const downloaded = await browserDownload;
+  const downloaded = await delegatedDownload;
   const downloadPath = join(output,'browser-download-proof.txt');await downloaded.saveAs(downloadPath);assert.equal(await readFile(downloadPath,'utf8'),'drag upload proof\n');
   await page.getByText('Handed to browser',{exact:false}).first().waitFor({timeout:15000});check('verified same-origin host token delegates a download and reports browser ownership without a false completion');
   await page.evaluate(()=>{window.showSaveFilePicker=window.__proofPicker;});
 
   await page.screenshot({ path: join(output, 'files-tree-and-transfers.png') }); report.screenshots.push('files-tree-and-transfers.png');
+  report.page = { url: page.url(), title: await page.title(), nonBlank: (await page.locator('body').innerText()).includes('Workspace Workbench'), frameworkOverlay: await page.locator('vite-error-overlay,nextjs-portal').count() };
+  assert.ok(report.page.nonBlank); assert.equal(report.page.frameworkOverlay, 0); assert.equal(report.console.some(message => message.type === 'error'), false);
   assert.deepEqual(report.errors, []); report.ok = true;
 } catch (e) { report.ok = false; report.error = e.stack || String(e); if (browser) { const page = browser.contexts()[0]?.pages()[0]; if (page) { await page.screenshot({ path: join(output, 'files-failure.png') }).catch(() => {}); await writeFile(join(output, 'files-failure.txt'), await page.locator('body').innerText().catch(() => '')); } } process.exitCode=1; }
 finally { await browser?.close(); await client?.close(); if (ui && child) { await writeFile(ui.continueFile, 'done'); await Promise.race([new Promise(r => child.once('exit', r)), pause(30000)]); } await writeFile(join(output, 'files-ui-report.json'), JSON.stringify(report,null,2)); await writeFile(join(output, 'files-ui-host.log'), logs); console.log(JSON.stringify(report,null,2)); }

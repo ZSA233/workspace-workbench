@@ -68,9 +68,10 @@ export class WorkspaceFiles {
     const input = parsed.data;
     if (input.action === 'upload') return this.workspaces.mutations.run(() => this.tasks.upload(input));
     if (input.action === 'chunk') return this.tasks.chunk(input);
-    if (input.action === 'finish') return this.tasks.finish(input.id);
+    if (input.action === 'finish') { await this.tasks.finish(input.id); return this.tasks.settled(input.id); }
     if (input.action === 'verify') return this.tasks.verify(input);
     if (input.action === 'download') return this.workspaces.mutations.run(() => this.tasks.download(input));
+    if (input.action === 'download-selection') return this.workspaces.mutations.run(() => this.tasks.appendDownloadSelection(input));
     if (input.action === 'read') return this.tasks.read(input);
     if (input.action === 'ack') return this.tasks.ack(input);
     if (input.action === 'control') return this.tasks.control(input);
@@ -78,7 +79,7 @@ export class WorkspaceFiles {
     if (input.action === 'delegate') return this.tasks.delegation(input.id);
     if (input.action === 'activity') return { tasks: this.tasks.active(input.workspaceId).map(t => this.tasks.journal.view(t)) };
     if (input.action === 'tasks') return this.tasks.list(input.before, input.limit, input.activeOnly);
-    if (input.action === 'mutate') return this.workspaces.mutations.run(() => this.tasks.operation(input));
+    if (input.action === 'mutate') { const result = await this.workspaces.mutations.run(() => this.tasks.operation(input)); return 'noop' in result ? result : this.tasks.settled(input.id); }
     const context = await this.roots.context(input.workspaceId, input.instance, input.action === 'mkdir');
     if (input.action === 'decorations') return this.decorations.query(context, input.paths, input.force);
     if (input.action === 'versions') {
@@ -134,7 +135,7 @@ export class WorkspaceFiles {
       entries.sort((a,b) => Number(b.kind === 'directory')-Number(a.kind === 'directory') || a.name.localeCompare(b.name));
       const page: DirectoryPage = { workspaceId: input.workspaceId, instance: context.instance, path: input.path, version, entries, ...(more ? { cursor: Buffer.from(JSON.stringify({ version: contentVersion, offset: index-1 })).toString('base64url') } : {}) };
       return page;
-    }, true, false, { workspaceId: input.workspaceId, repoPath: context.root });
+    }, true, input.fresh, { workspaceId: input.workspaceId, repoPath: context.root });
   }
   assertIdle(id: string) { this.tasks.assertIdle(id); }
   async close() { this.closed = true; for (const entry of this.changes.values()) clearTimeout(entry.timer); this.changes.clear(); clearInterval(this.timer); for (const value of this.directories.values()) { value.watcher?.close(); clearTimeout(value.timer); } this.directories.clear(); await this.tasks.close(); if (this.ownScheduler) this.decorations.status.close(); await this.ownScheduler?.close(); }

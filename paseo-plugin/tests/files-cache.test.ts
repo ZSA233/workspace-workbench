@@ -84,3 +84,38 @@ test('commit activity retains shared owners and fences a late result from a repl
     assert.equal(activity.summary(newest).latestCommitAt, null, 'retired result stays absent after reopening');
   } finally { release?.(); Git.prototype.run = originalRun; await activity.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+test('confirmed changes update cached trees immediately and fence an older directory response', async () => {
+  const state = new FilesTreeState('immediate-change', 'a');
+  const entry = { path: 'deleted', name: 'deleted', kind: 'file' as const, size: 1, modifiedAt: 1, version: 'v1', protected: false, repository: false };
+  const page = { workspaceId: 'a', instance: 'one', path: '', version: 'v1', entries: [entry] };
+  await state.load('', async () => structuredClone(page)); state.selected.add('deleted'); state.scroll = 123;
+  const unsubscribe = state.subscribe(() => {});
+  let release!: (value: any) => void;
+  const old = state.load('', () => new Promise(resolve => { release = resolve; }));
+  const calls: any[] = [];
+  const rpc = async (input: any) => { calls.push(input); if (input.action === 'list') return { ...page, version: 'v2', entries: [] }; if (input.action === 'versions') return { versions: { '': 'v2' } }; return { workspaceId: 'a', instance: 'one', entries: [], freshness: 'fresh', observedAt: '', issues: [] }; };
+  state.changed({ workspaceId: 'a', instance: 'one', paths: ['deleted'], removed: ['deleted'] }, rpc);
+  assert.equal(state.pages.get('')?.entries.length, 0, 'confirmed deletion disappears before another directory request');
+  assert.equal(state.selected.size, 0); assert.equal(state.scroll, 123);
+  release(structuredClone(page)); await old;
+  assert.equal(state.pages.get('')?.entries.length, 0, 'a pre-delete request cannot restore the deleted row');
+  await state.validate(rpc);
+  assert.ok(calls.some(input => input.action === 'list' && input.fresh === true)); assert.equal(state.pages.get('')?.version, 'v2');
+  state.changed({ workspaceId: 'a', instance: 'replacement', paths: ['deleted'] }, rpc);
+  assert.equal(state.pages.get('')?.version, 'v2');
+  unsubscribe();
+});
+
+test('fresh reads wait past an older producer and use the post-mutation fingerprint', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wb-files-fresh-')), configFile = join(root, 'project.json');
+  await writeFile(configFile, JSON.stringify({ sourceRoot: root })); const cache = new ObservationCache(loadConfig(configFile));
+  try {
+    let release!: (value: any) => void;
+    const old = cache.read('directory', 'before', () => new Promise(resolve => { release = resolve; }), true, true);
+    let produced = 0;
+    const fresh = cache.read('directory', 'after', async () => { produced++; return { version: 'after', entries: [] }; }, true, true);
+    release({ version: 'before', entries: ['removed'] }); await old;
+    assert.equal((await fresh).version, 'after'); assert.equal(produced, 1); assert.equal(cache.retained('directory')?.version, 'after');
+  } finally { await cache.close(); await rm(root, { recursive: true, force: true }); }
+});

@@ -273,7 +273,7 @@ try {
   report.checks.push('main workspace exposes the independent read-only Agent Review tab');
   }
   // Interactive latency evidence on a fixed large fixture in this isolated host.
-  await page.getByText('Workspace', { exact: true }).first().click();
+  await page.getByText('Git', { exact: true }).first().click();
   await page.getByText('one', { exact: true }).filter({ visible: true }).first().click();
   // Measure actual pointer-to-visible completion, separately from locator actionability.
   if(!await page.getByText(/current ref:/i).count())await page.getByText('one',{exact:true}).filter({visible:true}).first().click();

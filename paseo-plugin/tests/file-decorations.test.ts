@@ -147,6 +147,39 @@ test('failed refresh retains useful decorations and initial incomplete results s
   } finally { Git.prototype.run = original; await f.close(); }
 });
 
+test('an unregistered outer checkout supplies ignore rules without expanding Workspace execution scope', async () => {
+  const f = await fixture();
+  try {
+    const before = f.service.workspaces.get(f.id).repositories;
+    git(f.root, 'init', '-q'); git(f.root, 'config', 'user.name', 'Fixture'); git(f.root, 'config', 'user.email', 'fixture@example.invalid');
+    await put(join(f.root, '.gitignore'), '.drafts/\nrepo/\nstate/\nworkspaces/\nproject.json\n');
+    await put(join(f.root, '.drafts/tracked.md'), 'tracked notes');
+    git(f.root, 'add', '.gitignore'); git(f.root, 'add', '-f', '.drafts/tracked.md'); git(f.root, 'commit', '-qm', 'outer checkout');
+    await put(join(f.root, '.drafts/image.png'), 'ignored image'); await put(join(f.root, '.drafts/build/output.txt'), 'ignored build');
+    let rows = entries(await f.query(['', '.drafts', '.drafts/tracked.md', '.drafts/image.png', '.drafts/build', '.drafts/build/output.txt']));
+    assert.equal(rows.get('.drafts')?.ignored, undefined, 'Git does not ignore a directory containing tracked paths');
+    assert.equal(rows.get('.drafts')?.mark, undefined);
+    assert.equal(rows.get('.drafts/tracked.md')?.ignored, undefined);
+    for (const path of ['.drafts/image.png', '.drafts/build', '.drafts/build/output.txt']) { assert.equal(rows.get(path)?.repository, ''); assert.equal(rows.get(path)?.ignored?.pattern, '.drafts/'); }
+    await put(join(f.root, '.drafts/tracked.md'), 'tracked note edited');
+    rows = entries(await f.query(['.drafts', '.drafts/tracked.md']));
+    assert.equal(rows.get('.drafts/tracked.md')?.mark, 'M'); assert.equal(rows.get('.drafts')?.directory?.modified, 1);
+    assert.deepEqual(f.service.workspaces.get(f.id).repositories, before, 'display discovery does not register a new execution or review repository');
+  } finally { await f.close(); }
+});
+
+test('visible unregistered nested checkouts own their files and ignore rules', async () => {
+  const f = await fixture();
+  try {
+    const nested = join(f.root, 'group/unregistered'); await init(nested);
+    await put(join(nested, '.gitignore'), 'build/\n'); git(nested, 'add', '.gitignore'); git(nested, 'commit', '-qm', 'ignore build');
+    await put(join(nested, 'build/file'), 'generated'); await put(join(nested, 'mod.txt'), 'changed');
+    const rows = entries(await f.query(['group', 'group/unregistered', 'group/unregistered/build', 'group/unregistered/mod.txt']));
+    assert.ok(rows.get('group/unregistered/build')?.ignored); assert.equal(rows.get('group/unregistered/mod.txt')?.repository, 'group/unregistered'); assert.equal(rows.get('group/unregistered/mod.txt')?.mark, 'M');
+    assert.equal(rows.get('group')?.directory?.modified, 1);
+  } finally { await f.close(); }
+});
+
 test('decoration batches obey item/byte limits and cannot escape through symlink parents', async () => {
   const f = await fixture();
   try {

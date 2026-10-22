@@ -6,7 +6,7 @@
     let result; try { result = JSON.parse(event.data); } catch { return; }
     const entry = pending.get(result.id); if (!entry) return;
     pending.delete(result.id); clearTimeout(entry.timer);
-    if (result.error) entry.reject(new Error(result.error)); else entry.resolve(result);
+    if (result.error) { const error = new Error(result.error); if (result.error === 'Save cancelled') error.name = 'AbortError'; entry.reject(error); } else entry.resolve(result);
   };
   const call = (action, data, wait = 60000) => new Promise((resolve, reject) => {
     if (pending.size) { reject(new Error('Wait for the previous file save request')); return; }

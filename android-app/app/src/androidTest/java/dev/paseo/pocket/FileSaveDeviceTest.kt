@@ -29,7 +29,7 @@ class FileSaveDeviceTest {
         instrumentation.runOnMainSync { web.evaluateJavascript(script) { queue.offer(it) } }
         return queue.poll(15, TimeUnit.SECONDS) ?: error("No JavaScript response")
     }
-    @Test(timeout = 90000) fun trustedPageSavesThroughSystemDocumentPicker() {
+    private fun trustedPage(): Pair<MainActivity, WebView> {
         device.executeShellCommand("am start -n ${instrumentation.targetContext.packageName}/dev.paseo.pocket.MainActivity")
         var activity: MainActivity? = null
         var web: WebView? = null
@@ -44,6 +44,10 @@ class FileSaveDeviceTest {
         }
         val view = web ?: error("No WebView")
         assertEquals("Trusted page save bridge installed", "true", evaluate(view, "typeof WorkbenchFileSave === 'object'"))
+        return Pair(activity!!, view)
+    }
+    @Test(timeout = 90000) fun trustedPageSavesThroughSystemDocumentPicker() {
+        val (activity, view) = trustedPage()
         evaluate(view, "window.saveProof='pending';WorkbenchFileSave.open('workbench-save-proof.txt').then(async out=>{await out.write(new TextEncoder().encode('Pocket bounded save proof'));await out.close();window.saveProof='complete'}).catch(e=>window.saveProof='error:'+e.message);void 0")
         var savedUri: Uri? = null
         instrumentation.runOnMainSync {
@@ -62,6 +66,28 @@ class FileSaveDeviceTest {
         val uri = savedUri ?: error("No system-selected destination")
         val content = instrumentation.targetContext.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }
         assertEquals("Pocket bounded save proof", content)
+        evaluate(view, "window.uploadProof='pending';const input=document.createElement('input');input.type='file';input.accept='text/plain';input.onchange=async()=>window.uploadProof=input.files.length?await input.files[0].text():'cancelled';const button=document.createElement('button');button.textContent='Choose proof file';button.style.cssText='position:fixed;top:96px;left:12px;z-index:2147483647;padding:16px';button.onclick=()=>input.click();document.body.append(input,button);void 0")
+        device.wait(Until.findObject(By.text("Choose proof file")), 10000)?.click() ?: error("Upload proof control not found")
+        device.wait(Until.findObject(By.text("workbench-save-proof.txt")), 15000)?.click() ?: error("Saved proof file not available in system picker")
+        val uploadedUntil = System.currentTimeMillis() + 15000
+        var uploaded = ""
+        while (System.currentTimeMillis() < uploadedUntil) { uploaded = evaluate(view, "window.uploadProof"); if (uploaded != "\"pending\"") break; Thread.sleep(100) }
+        assertEquals("\"Pocket bounded save proof\"", uploaded)
         android.provider.DocumentsContract.deleteDocument(instrumentation.targetContext.contentResolver, uri)
+    }
+    @Test(timeout = 90000) fun cancelledPickerNeverCreatesAWriterOrTransfer() {
+        val (_, view) = trustedPage()
+        evaluate(view, "window.saveChoice='pending';window.createdTransfers=0;WorkbenchFileSave.open('workbench-cancel-proof.txt').then(async out=>{window.createdTransfers++;await out.abort();window.saveChoice='unexpected'}).catch(e=>window.saveChoice=e.name);void 0")
+        val picker = device.wait(Until.findObject(By.text(Pattern.compile("(?i)save|保存"))), 15000)
+            ?: device.wait(Until.findObject(By.res("com.android.documentsui", "button1")), 5000)
+            ?: error("System picker did not open")
+        assertNotNull(picker)
+        assertEquals("No transfer before Save confirmation", "0", evaluate(view, "window.createdTransfers"))
+        device.pressBack()
+        val until = System.currentTimeMillis() + 15000
+        var result = ""
+        while (System.currentTimeMillis() < until) { result = evaluate(view, "window.saveChoice"); if (result != "\"pending\"") break; Thread.sleep(100) }
+        assertEquals("\"AbortError\"", result)
+        assertEquals("No writer or transfer after cancellation", "0", evaluate(view, "window.createdTransfers"))
     }
 }

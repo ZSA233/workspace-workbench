@@ -46,6 +46,24 @@ export class FileTasks {
   private async context(task: StoredTask, write = false) { return this.roots.context(task.workspaceId, task.instance, write); }
   private check(task: StoredTask) { if (this.closed || this.controlFlags.has(task.id)) throw new WorkbenchError('file_task_paused', 'Task paused'); }
   private save(task: StoredTask, overrideControl = false) { const current = this.journal.get(task.id); if (!overrideControl && current && ['paused', 'cancelled'].includes(current.state) && task.state !== 'complete') task.state = current.state; this.journal.save(task); return this.journal.view(task); }
+  private recordChange(task: StoredTask, workspaceId: string, instance: string, path: string, removed = false) {
+    const changes = task.changes ||= [];
+    let change = changes.find(item => item.workspaceId === workspaceId && item.instance === instance);
+    if (!change) { change = { workspaceId, instance, paths: [] }; changes.push(change); }
+    if (!change.paths.includes(path)) change.paths.push(path);
+    if (removed && !(change.removed ||= []).includes(path)) change.removed.push(path);
+    this.changed(workspaceId, [path]);
+  }
+  /** Return small filesystem operations promptly, without holding a request for long jobs. */
+  async settled(id: string) {
+    const flight = this.running.get(id);
+    if (flight) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { await Promise.race([flight, new Promise<void>(resolve => { timer = setTimeout(resolve, 250); })]); }
+      finally { clearTimeout(timer); }
+    }
+    return this.journal.view(this.journal.require(id));
+  }
   private async free(path: string, needed: number) { const s = await statfs(path); if (s.bavail * s.bsize < needed) throw new WorkbenchError('file_disk_full', 'Not enough disk space; confirmed progress is retained'); }
   async upload(input: Extract<FileRequest, { action: 'upload' }>) {
     return this.lock(input.id, async () => {
@@ -148,7 +166,7 @@ export class FileTasks {
       const oldPhase = task.private.publish;
       if (oldPhase) {
         const current = await fileStat(target);
-        if (oldPhase.published || current && `${current.dev}:${current.ino}` === oldPhase.inode) { task.state = 'complete'; this.save(task); await this.cleanupPublished(task); await rm(this.part(id), { force: false }).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; }); if (task.private.stage && !await fileStat(task.private.stage)) delete task.private.stage; this.changed(task.workspaceId, [task.path ? task.path + '/' + task.name : task.name]); return this.save(task); }
+        if (oldPhase.published || current && `${current.dev}:${current.ino}` === oldPhase.inode) { task.state = 'complete'; this.save(task); await this.cleanupPublished(task); await rm(this.part(id), { force: false }).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; }); if (task.private.stage && !await fileStat(task.private.stage)) delete task.private.stage; this.recordChange(task, task.workspaceId, task.instance, task.path ? task.path + '/' + task.name : task.name); return this.save(task); }
       }
       await this.stageIgnore.prepare(this.roots, context, target, task, () => { this.save(task); this.check(task); });
       const stage = join(dirname(target), `.workbench-transfer-${hash(task.id).slice(0, 24)}-upload`);
@@ -164,7 +182,7 @@ export class FileTasks {
       this.check(task); await this.roots.path(context, task.path ? task.path + '/' + task.name : task.name, { mutate: true });
       await this.publish(task, stage, target, task.private.expected);
       task.state = 'complete'; this.save(task); await this.cleanupPublished(task); await rm(this.part(id), { force: false }).catch(() => {});
-      if (task.private.stage && !await fileStat(task.private.stage)) delete task.private.stage; this.changed(task.workspaceId, [task.path ? task.path + '/' + task.name : task.name]); return this.save(task);
+      if (task.private.stage && !await fileStat(task.private.stage)) delete task.private.stage; this.recordChange(task, task.workspaceId, task.instance, task.path ? task.path + '/' + task.name : task.name); return this.save(task);
   }
   private async hashFile(file: Awaited<ReturnType<typeof open>>, task: StoredTask) {
     const h = createHash('sha256'), buffer = Buffer.alloc(FILE_CHUNK_BYTES); let offset = 0;
@@ -188,7 +206,8 @@ export class FileTasks {
   async download(input: Extract<FileRequest, { action: 'download' }>) {
     const context = await this.roots.context(input.workspaceId, input.instance);
     const name = input.paths.length === 1 ? basename(input.paths[0]) : 'files';
-    const candidate = this.base(input, context, 'download', name, dirname(input.paths[0]) === '.' ? '' : dirname(input.paths[0]));
+    const { defer, ...legacyInput } = input;
+    const candidate = this.base(defer ? input : legacyInput, context, 'download', name, dirname(input.paths[0]) === '.' ? '' : dirname(input.paths[0]));
     if (this.journal.get(input.id)) return this.journal.view(this.journal.create(candidate));
     candidate.private.selectionVersions = Object.create(null);
     for (const path of input.paths) {
@@ -196,9 +215,37 @@ export class FileTasks {
       const info = await lstat(await this.roots.path(context, path)); candidate.private.selectionVersions[path] = fileVersion(info);
       if (input.paths.length === 1 && info.isFile()) candidate.private.version = fileVersion(info);
     }
+    if (input.defer) { candidate.selectionPending = true; candidate.selectionCount = input.paths.length; }
     const task = this.journal.create(candidate);
-    if (task.state === 'queued') this.enqueue(task.id);
+    if (!task.selectionPending && task.state === 'queued') this.enqueue(task.id);
     return this.journal.view(task);
+  }
+  async appendDownloadSelection(input: Extract<FileRequest, { action: 'download-selection' }>) {
+    return this.lock(input.id, async () => {
+      const task = this.journal.require(input.id), context = await this.context(task);
+      if (task.direction !== 'download' || ['cancelled', 'failed', 'complete', 'delegated'].includes(task.state)) throw new WorkbenchError('file_task_not_active', 'Download selection is not active');
+      const paths: string[] = task.private.request.paths;
+      if (input.offset > paths.length) throw new WorkbenchError('file_offset_conflict', 'Query the confirmed download selection before continuing');
+      if (input.offset < paths.length) {
+        if (stable(paths.slice(input.offset, input.offset + input.paths.length)) !== stable(input.paths) || input.final && input.offset + input.paths.length !== paths.length) throw new WorkbenchError('file_request_conflict', 'Confirmed download selection differs');
+        if (!input.final || !task.selectionPending) return this.journal.view(task);
+      } else {
+        if (!task.selectionPending) throw new WorkbenchError('file_request_conflict', 'Download selection is already complete');
+        const versions: Json = Object.create(null);
+        for (const path of input.paths) {
+          if (!path || this.roots.metadata(context, path)) throw new WorkbenchError('path_protected', 'Select files or ordinary directories');
+          const version = fileVersion(await lstat(await this.roots.path(context, path))), previous = task.private.selectionVersions[path] || versions[path];
+          if (previous && previous !== version) throw new WorkbenchError('file_source_changed', 'Selected source changed after the download was queued');
+          versions[path] = version;
+        }
+        paths.push(...input.paths); Object.assign(task.private.selectionVersions, versions);
+      }
+      task.name = 'files'; task.selectionCount = paths.length; delete task.private.version;
+      if (input.final) { task.selectionPending = false; if (task.state !== 'paused') task.state = 'queued'; }
+      this.save(task);
+      if (!task.selectionPending && task.state === 'queued') this.enqueue(task.id);
+      return this.journal.view(task);
+    });
   }
   async operation(input: Extract<FileRequest, { action: 'mutate' }>) {
     const first = input.entries[0], context = await this.roots.context(first.workspaceId, first.instance, input.operation !== 'copy');
@@ -212,17 +259,22 @@ export class FileTasks {
       const c = await this.roots.context(item.workspaceId, item.instance, input.operation !== 'copy');
       const source = await this.roots.path(c, item.path, { mutate: input.operation !== 'copy' }), info = await lstat(source);
       if (item.version && item.version !== fileVersion(info)) throw new WorkbenchError('file_source_changed', 'Selected source changed');
-      pinned.push({ ...item, instance: c.instance, version: fileVersion(info) });
       if (input.operation !== 'delete') {
         const dest = input.destination || { workspaceId: item.workspaceId, instance: c.instance, path: dirname(item.path) === '.' ? '' : dirname(item.path) };
         const targetContext = await this.roots.context(dest.workspaceId, dest.instance, true);
         const name = input.operation === 'rename' ? this.roots.name(input.name || '') : basename(item.path);
         const target = await this.roots.path(targetContext, dest.path ? dest.path + '/' + name : name);
+        // A move/rename back to the same path is not a transfer and has no journal row.
+        if (source === target && input.operation !== 'copy') continue;
+        const descendant = relative(source, target);
+        if (info.isDirectory() && descendant && descendant !== '..' && !descendant.startsWith('..' + sep) && !isAbsolute(descendant)) throw new WorkbenchError('file_destination_invalid', 'Cannot move or copy a directory into itself');
         const exists = await fileStat(target), directory = await lstat(dirname(target));
         targets[target] = { expected: exists ? fileVersion(exists) : null, parent: `${directory.dev}:${directory.ino}` };
         if (input.destination) task.private.destination = { ...dest, instance: targetContext.instance };
       }
+      pinned.push({ ...item, instance: c.instance, version: fileVersion(info) });
     }
+    if (!pinned.length) return { noop: true as const };
     if (input.operation !== 'copy') for (const item of pinned) {
       const info = await lstat(await this.roots.path(await this.roots.context(item.workspaceId, item.instance), item.path));
       if (!info.isDirectory()) continue;
@@ -236,7 +288,7 @@ export class FileTasks {
       }
     }
     task.private.entries = pinned; task.private.targets = targets;
-    task.operation = input.operation; task.files = entries.length; task.processed = 0;
+    task.operation = input.operation; task.files = pinned.length; task.processed = 0;
     const created = this.journal.create(task); if (created.state === 'queued') this.enqueue(created.id); return this.journal.view(created);
   }
   private enqueue(id: string) { if (!this.waiting.includes(id) && !this.running.has(id)) this.waiting.push(id); this.dispatch(); }
@@ -260,8 +312,9 @@ export class FileTasks {
     if (stat.isDirectory()) { const directory = await import('node:fs/promises').then(fs => fs.opendir(full)); for await (const entry of directory) yield* this.walk(context, value + '/' + entry.name, readOnly, skipped); }
   }
   private async prepareDownload(task: StoredTask) {
+    if (task.selectionPending) throw new WorkbenchError('file_selection_incomplete', 'The download selection is incomplete; finish selecting or cancel and select again');
     const context = await this.context(task), input = task.private.request as Extract<FileRequest, { action: 'download' }>;
-    const selectedPaths = [...new Set(input.paths)].filter(path => !input.paths.some(other => other !== path && path.startsWith(other + '/')));
+    const unique = new Set(input.paths), selectedPaths = [...unique].filter(path => { const parts = this.roots.parts(path); for (let n = 1; n < parts.length; n++) if (unique.has(parts.slice(0, n).join('/'))) return false; return true; });
     const parents = selectedPaths.map(path => this.roots.parts(path).slice(0,-1));
     const common = [...parents[0]]; for (const parts of parents.slice(1)) while (common.length && common.some((part, i) => parts[i] !== part)) common.pop();
     for (const path of selectedPaths) if (task.private.selectionVersions?.[path] && fileVersion(await lstat(await this.roots.path(context, path))) !== task.private.selectionVersions[path]) throw new WorkbenchError('file_source_changed', 'Selected source changed after the download was queued; create a new download');
@@ -355,7 +408,11 @@ export class FileTasks {
       const phase = task.private.publish;
       if (phase && (phase.published || await fileStat(phase.target) && `${(await lstat(phase.target)).dev}:${(await lstat(phase.target)).ino}` === phase.inode)) {
         if (task.private.removeSource) await this.removeCopiedSource(task);
-        await this.cleanupPublished(task); task.processed = i + 1; delete task.private.policy; delete task.private.conflictTarget; delete task.private.expected; this.save(task); this.changed(item.workspaceId, [dirname(item.path)]); continue;
+        const destination = input.destination || { workspaceId: item.workspaceId, instance: item.instance, path: dirname(item.path) === '.' ? '' : dirname(item.path) };
+        const targetContext = await this.roots.context(destination.workspaceId, destination.instance, true);
+        this.recordChange(task, destination.workspaceId, targetContext.instance, relative(targetContext.root, phase.target).split(sep).join('/'));
+        this.recordChange(task, item.workspaceId, sourceContext.instance, item.path, input.operation !== 'copy');
+        await this.cleanupPublished(task); task.processed = i + 1; delete task.private.policy; delete task.private.conflictTarget; delete task.private.expected; this.save(task); continue;
       }
       const info = await lstat(source);
       if (item.version && fileVersion(info) !== item.version) throw new WorkbenchError('file_source_changed', 'Selected source changed; select it again');
@@ -409,9 +466,9 @@ export class FileTasks {
         await this.publish(task, stage, target, exists ? fileVersion(exists) : null);
         if (crossDevice) await this.removeCopiedSource(task);
         await this.cleanupPublished(task); if (task.private.stage && !await fileStat(task.private.stage)) delete task.private.stage;
-        this.changed(dest.workspaceId, [value]);
+        this.recordChange(task, dest.workspaceId, targetContext.instance, value);
       }
-      this.changed(item.workspaceId, [item.path]);
+      this.recordChange(task, item.workspaceId, sourceContext.instance, item.path, input.operation !== 'copy');
       task.processed = i + 1; delete task.private.policy; delete task.private.conflictTarget; delete task.private.expected; task.state = 'preparing'; this.save(task);
     }
     task.state = 'complete'; this.save(task);
@@ -440,6 +497,7 @@ export class FileTasks {
       }
       if (input.command === 'pause') return this.journal.view(task);
       await this.context(task, task.direction !== 'download');
+      if (task.selectionPending) throw new WorkbenchError('file_selection_incomplete', 'The download selection is incomplete; cancel and select the files again');
       if (task.private.sourceChanged && ['resume', 'retry'].includes(input.command)) throw new WorkbenchError('file_source_changed', 'Source changed; cancel this task and select the source again');
       if (input.command === 'complete') { if (task.direction !== 'download' || task.offset !== task.size) throw new WorkbenchError('file_download_incomplete', 'Download has not been saved completely'); task.state = 'complete'; if (task.private.archive || task.private.snapshot) await rm(this.part(task.id), { force: false }).catch(() => {}); return this.save(task); }
       if (input.command === 'delegated') { if (task.direction !== 'download') throw new WorkbenchError('file_task_invalid', 'Only downloads can be delegated'); task.state = 'delegated'; task.private.delegatedAt = Date.now(); return this.save(task); }
@@ -474,6 +532,7 @@ export class FileTasks {
   active(id: string) { return [...new Map([...this.journal.db.prepare('SELECT data FROM tasks WHERE terminal=0').iterate()].map(r => { const task = JSON.parse(r.data as string) as StoredTask; return [task.id, task] as const; }).concat([...new Set([...this.running.keys(), ...this.locks.keys()])].map(key => [key, this.journal.get(key)] as const).filter((pair): pair is readonly [string, StoredTask] => Boolean(pair[1])))).values()].filter(t => t.workspaceId === id || t.private.request?.entries?.some((e: Json) => e.workspaceId === id) || t.private.request?.destination?.workspaceId === id); }
   async delegation(id: string) {
     const task = this.journal.require(id); await this.context(task);
+    if (task.selectionPending) throw new WorkbenchError('file_selection_incomplete', 'The download selection is incomplete');
     if (task.direction !== 'download' || !['queued', 'preparing', 'active', 'ready_to_save', 'delegated'].includes(task.state)) throw new WorkbenchError('file_task_not_active', task.error || 'Download is not ready');
     if (!task.private.archive && !task.private.snapshot) {
       if (!this.running.has(id)) { task.private.delegating = true; task.state = 'queued'; this.save(task); this.enqueue(id); }

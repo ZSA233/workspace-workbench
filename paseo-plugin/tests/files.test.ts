@@ -106,6 +106,47 @@ test('confirming one replacement does not authorize the next conflicting file in
   } finally { await f.close(); }
 });
 
+test('small deletions and upload commits return confirmed changes and an authoritative directory page', async () => {
+  const f = await fixture();
+  try {
+    await mkdir(join(f.root, 'docs')); await writeFile(join(f.root, 'docs/remove.txt'), 'remove');
+    const page = await f.call({ action: 'list', workspaceId: f.main, path: 'docs' }); assert.equal(page.entries.length, 1);
+    const deleted = await f.call({ action: 'mutate', id: 'quick_delete', operation: 'delete', entries: [{ workspaceId: f.main, instance: page.instance, path: 'docs/remove.txt' }], confirm: true });
+    assert.equal(deleted.state, 'complete', 'small operations settle in the initial response');
+    assert.deepEqual(deleted.changes, [{ workspaceId: f.main, instance: page.instance, paths: ['docs/remove.txt'], removed: ['docs/remove.txt'] }]);
+    const fresh = await f.call({ action: 'list', workspaceId: f.main, path: 'docs', fresh: true }); assert.equal(fresh.entries.length, 0);
+    await f.call({ action: 'upload', id: 'quick_upload', workspaceId: f.main, path: 'docs', name: 'new.txt', size: 0, modifiedAt: 1 });
+    const uploaded = await f.call({ action: 'finish', id: 'quick_upload' }); assert.equal(uploaded.state, 'complete');
+    assert.deepEqual(uploaded.changes, [{ workspaceId: f.main, instance: page.instance, paths: ['docs/new.txt'] }]);
+    assert.equal((await f.call({ action: 'list', workspaceId: f.main, path: 'docs', fresh: true })).entries[0].name, 'new.txt');
+    await mkdir(join(f.root, 'protected/.git'), { recursive: true }); await writeFile(join(f.root, 'protected/keep'), 'keep');
+    const failed = await f.call({ action: 'mutate', id: 'failed_delete', operation: 'delete', entries: [{ workspaceId: f.main, path: 'protected' }], confirm: true });
+    assert.equal(failed.state, 'failed'); assert.equal(failed.changes, undefined); assert.equal(await readFile(join(f.root, 'protected/keep'), 'utf8'), 'keep');
+  } finally { await f.close(); }
+});
+
+test('same-path moves and renames create no journal entries; invalid descendants are rejected before queuing', async () => {
+  const f = await fixture();
+  try {
+    await mkdir(join(f.root, 'folder/sub'), { recursive: true }); await writeFile(join(f.root, 'folder/photo.jpg'), 'photo');
+    const count = f.files.tasks.journal.list().length;
+    for (const [id, operation, path, destination, name] of [
+      ['file_noop', 'move', 'folder/photo.jpg', 'folder', undefined],
+      ['folder_noop', 'move', 'folder', '', undefined],
+      ['rename_noop', 'rename', 'folder/photo.jpg', 'folder', 'photo.jpg'],
+    ] as const) {
+      const result = await f.call({ action: 'mutate', id, operation, entries: [{ workspaceId: f.main, path }], destination: { workspaceId: f.main, path: destination }, name });
+      assert.deepEqual(result, { noop: true });
+    }
+    await assert.rejects(f.call({ action: 'mutate', id: 'invalid_self', operation: 'move', entries: [{ workspaceId: f.main, path: 'folder' }], destination: { workspaceId: f.main, path: 'folder/sub' } }), /into itself/);
+    assert.equal(f.files.tasks.journal.list().length, count); assert.equal(await readFile(join(f.root, 'folder/photo.jpg'), 'utf8'), 'photo');
+    await writeFile(join(f.root, 'other.txt'), 'other');
+    const mixed = await f.call({ action: 'mutate', id: 'mixed_move', operation: 'move', entries: ['folder/photo.jpg', 'other.txt'].map(path => ({ workspaceId: f.main, path })), destination: { workspaceId: f.main, path: 'folder' } });
+    assert.equal(mixed.state, 'complete'); assert.equal(mixed.files, 1); assert.equal(await readFile(join(f.root, 'folder/other.txt'), 'utf8'), 'other');
+    assert.ok(mixed.changes[0].removed.includes('other.txt')); assert.ok(!mixed.changes[0].removed.includes('folder/photo.jpg'));
+  } finally { await f.close(); }
+});
+
 test('download chunks stop on source change; directories generate streaming ZIPs', async () => {
   const f = await fixture();
   try {
@@ -117,6 +158,26 @@ test('download chunks stop on source change; directories generate streaming ZIPs
     const archive = await f.call({ action: 'read', id: 'zip', offset: 0 }); assert.equal(Buffer.from(archive.data, 'base64').readUInt32LE(0), 0x04034b50);
     await f.call({ action: 'ack', id: 'zip', offset: zip.size }); assert.equal((await f.call({ action: 'task', id: 'zip' })).state, 'ready_to_save');
     await f.call({ action: 'control', id: 'zip', command: 'complete' }); assert.equal((await f.call({ action: 'task', id: 'zip' })).state, 'complete');
+  } finally { await f.close(); }
+});
+
+test('download selections cross request batches and restarts without starting a partial archive', async () => {
+  const f = await fixture();
+  try {
+    await mkdir(join(f.root, 'many'));
+    const paths = Array.from({ length: 201 }, (_, n) => `many/file-${n}.txt`);
+    await Promise.all(paths.map(path => writeFile(join(f.root, path), path)));
+    const task = await f.call({ action: 'download', id: 'selection', workspaceId: f.main, paths: paths.slice(0, 200), defer: true });
+    assert.equal(task.selectionPending, true); assert.equal(task.selectionCount, 200);
+    await assert.rejects(f.call({ action: 'delegate', id: task.id }), /incomplete/);
+    await f.restart(); await assert.rejects(f.call({ action: 'control', id: task.id, command: 'resume' }), /incomplete/);
+    const final = { action: 'download-selection', id: task.id, offset: 200, paths: paths.slice(200), final: true };
+    const selected = await f.call(final); assert.equal(selected.selectionCount, 201); assert.equal(selected.selectionPending, false);
+    await f.call(final); // A lost confirmation can replay exactly the same last selection batch.
+    await assert.rejects(f.call({ ...final, paths: ['many/file-0.txt'] }), /differs/);
+    const ready = await f.wait(task.id, ['active', 'failed']); assert.equal(ready.state, 'active', ready.error); assert.equal(ready.processed, 201);
+    const result = await f.call({ action: 'read', id: task.id, offset: 0 }), zip = Buffer.from(result.data, 'base64');
+    assert.equal(zip.subarray(0, 2).toString(), 'PK'); assert.ok(zip.includes(Buffer.from('file-0.txt'))); assert.ok(zip.includes(Buffer.from('file-200.txt')));
   } finally { await f.close(); }
 });
 

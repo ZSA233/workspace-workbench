@@ -7,10 +7,11 @@
 [下载已签名 APK](https://github.com/ZSA233/workspace-workbench/releases?q=android-v&expanded=true) ·
 [自动发版与签名配置](../docs/releasing-android.md)
 
+[0.1.6 文件上传与保存](../docs/releases/paseo-pocket-0.1.6.md) ·
 [0.1.5 升级功能与验收记录](../docs/releases/paseo-pocket-0.1.5.md)
 
 维护时在仓库根目录运行 `make` 查看快捷指令：`make android-check` 检查项目，
-`make android-package` 本地打包，`make android-release VERSION=0.1.5` 创建并推送新版本。
+`make android-package` 本地打包，`make android-release VERSION=0.1.6` 创建并推送新版本。
 
 ## 使用
 
@@ -102,6 +103,15 @@ CPU 和 PSS 属于 App 本进程，不包含整个 WebView；单核 100%，多�
 
 镜像生成命令见 [web-assets/README.md](../web-assets/README.md)。无需部署 GitHub Pages，
 也无需更改现有 relay；本项目不自动发布任何线上资源。
+
+## Workspace 文件传输
+
+配合 Workbench 插件 0.6.0，「文件」菜单的下载会先打开 Android 系统保存选择器。
+确认文件名与位置后才创建任务；取消选择不会传输或留下队列记录。保存使用仅向可信主页面开放的独立桥，按块写入系统选中的文档，关闭成功后才确认完成。
+
+上传继续使用系统文件选择器，不要求手动浏览本地目录后再复制。前台传输可暂停、继续及取消；页面重建后必要时重新选择目标。应用不增加文件传输后台常驻服务。
+
+已安装 0.1.5 的用户需要升级 APK 才能使用原生保存窗口；仅更新网页资源无法添加原生桥。使用「应用升级」检查 0.1.6，Workbench 插件另行更新到 0.6.0。
 
 ## Pocket 应用升级
 

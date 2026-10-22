@@ -96,10 +96,16 @@ export class DownloadStaging {
   }
 }
 
-export function saveTarget(name: string): Promise<any> {
+export type SaveWriter = { write(bytes: Uint8Array): Promise<void>; close(): Promise<void>; abort(): Promise<void> };
+export type SaveDestination = { open(): Promise<SaveWriter>; discard(): Promise<void> };
+export function pickSaveDestination(name: string): Promise<SaveDestination> {
   // Called directly by a user gesture; waiting for an RPC first loses activation.
-  if (web.WorkbenchFileSave?.open) return web.WorkbenchFileSave.open(name);
-  if (web.showSaveFilePicker) return web.showSaveFilePicker({ suggestedName: name }).then((handle: any) => handle.createWritable());
+  if (web.WorkbenchFileSave?.open) return web.WorkbenchFileSave.open(name).catch((error: Error) => { if (error.message === 'Save cancelled') error.name = 'AbortError'; throw error; }).then((writer: SaveWriter) => {
+    let closed = false;
+    return { open: async () => ({ write: (bytes: Uint8Array) => writer.write(bytes), close: async () => { await writer.close(); closed = true; }, abort: async () => { if (!closed) { await writer.abort(); closed = true; } } }), discard: async () => { if (!closed) { await writer.abort(); closed = true; } } };
+  });
+  // Choose the path now, but open its transactional writer only when bytes are ready.
+  if (web.showSaveFilePicker) return web.showSaveFilePicker({ suggestedName: name }).then((handle: any) => ({ open: () => handle.createWritable(), discard: async () => {} }));
   return Promise.reject(new Error('Choose a browser with file saving support, or use Pocket'));
 }
 export function canSave() { return Boolean(web.showSaveFilePicker || web.WorkbenchFileSave?.open); }

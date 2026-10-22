@@ -1,5 +1,5 @@
 import { lstat, realpath } from 'node:fs/promises';
-import { join, relative, isAbsolute, sep } from 'node:path';
+import { join, relative, isAbsolute, sep, dirname } from 'node:path';
 import { directoryGitMark, emptyGitCounts, gitCountKey, gitMark, type FileDecoration, type FileDecorations, type GitMark } from '../../shared/file-decorations.ts';
 import { FileRoots, type FileRoot } from './file-roots.ts';
 import { RepositoryStatus } from './repository-status.ts';
@@ -32,8 +32,6 @@ export class FileDecorationsService {
       const path = await realpath(configured).catch(() => configured);
       if (inside(context.root, path)) repos.push({ path, gitlinkRoot: record.role === 'gitlink-root' });
     }
-    repos.sort((a, b) => b.path.length - a.path.length);
-    const owner = (path: string) => repos.find(repo => inside(repo.path, path));
     const requested = await Promise.all(paths.map(async path => {
       if (this.roots.metadata(context, path)) return { path, full: join(context.root, path), directory: false, metadata: true, valid: true };
       try {
@@ -41,6 +39,22 @@ export class FileDecorationsService {
         return { path, full, directory: stat.isDirectory() && !stat.isSymbolicLink(), metadata: false, valid: true };
       } catch { return { path, full: join(context.root, path), directory: false, metadata: false, valid: false }; }
     }));
+    // File display follows real checkouts, independently of the execution/review roster.
+    // Probe only ancestors of safe requested paths, never walk an ignored directory.
+    const directories = new Set<string>([context.root]);
+    for (const p of requested) if (p.valid && !p.metadata) {
+      let directory = p.directory ? p.full : dirname(p.full);
+      while (inside(context.root, directory)) {
+        if (directories.has(directory)) break;
+        directories.add(directory); directory = dirname(directory);
+      }
+    }
+    for (const directory of directories) if (!repos.some(repo => repo.path === directory)) {
+      const marker = await lstat(join(directory, '.git')).catch((error: NodeJS.ErrnoException) => { if (['ENOENT', 'ENOTDIR'].includes(error.code || '')) return null; throw error; });
+      if (marker?.isDirectory() || marker?.isFile()) repos.push({ path: directory, gitlinkRoot: true });
+    }
+    repos.sort((a, b) => b.path.length - a.path.length);
+    const owner = (path: string) => repos.find(repo => inside(repo.path, path));
     const relevant = repos.filter(repo => requested.some(p => !p.metadata && (owner(p.full) === repo || p.directory && inside(p.full, repo.path))));
     // Registration and watcher preparation do not block the directory RPC or its initial paint.
     await Promise.all(relevant.map(repo => this.status.scheduler.register(id, repo.path)));

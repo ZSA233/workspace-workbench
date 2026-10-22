@@ -68,7 +68,7 @@ function statusFor(
   const connectionState = connection(route);
   return {
     state,
-    ...(health?.diffRead?.protocol === DIFF_READ_PROTOCOL ? { readCapabilities: { protocol: DIFF_READ_PROTOCOL, refreshProtocol: health.refreshProtocol, contextProtocol:health.contextProtocol, prepareProtocol: health.prepareProtocol, environmentProtocol: health.environmentProtocol, basicSummaryProtocol: health.basicSummaryProtocol, fileDecorationsProtocol: health.fileDecorationsProtocol, pluginBuild: DIFF_READ_BUILD, pluginGeneration: readerGeneration, backendBuild: String(health.buildId || ""), backendGeneration: String(health.diffRead.generation) } } : {}),
+    ...(health?.diffRead?.protocol === DIFF_READ_PROTOCOL ? { readCapabilities: { protocol: DIFF_READ_PROTOCOL, refreshProtocol: health.refreshProtocol, contextProtocol:health.contextProtocol, prepareProtocol: health.prepareProtocol, environmentProtocol: health.environmentProtocol, basicSummaryProtocol: health.basicSummaryProtocol, fileDecorationsProtocol: health.fileDecorationsProtocol, downloadSelectionProtocol: health.downloadSelectionProtocol, pluginBuild: DIFF_READ_BUILD, pluginGeneration: readerGeneration, backendBuild: String(health.buildId || ""), backendGeneration: String(health.diffRead.generation) } } : {}),
     ...(message || state !== 'ready' && connectionState.message ? { message: message || connectionState.message } : {}),
     socketPath: route.socketPath,
     ...(timing ? { timing } : {}),

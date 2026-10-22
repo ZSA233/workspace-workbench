@@ -27,7 +27,7 @@ export function fileGitDescription(entry: FileDecoration | undefined, zh: boolea
     const keys = { '!': counts.conflicts, D: counts.deleted, R: counts.renamed, C: counts.copied, T: counts.typeChanged, M: counts.modified, A: counts.added, U: counts.untracked };
     lines.push(Object.entries(keys).filter(([, count]) => count).map(([key, count]) => `${label(key, zh)} ${count}`).join(' · '));
   } else if (entry.mark) lines.push(`Git：${label(entry.mark, zh)}`);
-  else lines.push(entry.repository === undefined ? zh ? '不在已登记 Git 仓库范围内' : 'Outside registered Git repositories' : zh ? 'Git：无未提交变动' : 'Git: no uncommitted changes');
+  else lines.push(entry.repository === undefined ? zh ? '不在 Git 仓库范围内' : 'Outside Git repositories' : zh ? 'Git：无未提交变动' : 'Git: no uncommitted changes');
   for (const change of entry.changes || []) {
     if (change.index === '?' && change.worktree === '?') continue;
     const rawLabel = (code: string) => code === 'U' ? zh ? '未合并' : 'Unmerged' : label(code, zh);

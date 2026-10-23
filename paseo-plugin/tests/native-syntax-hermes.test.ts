@@ -10,7 +10,9 @@ const available=existsSync(binary)&&(process.platform==='darwin'||!!process.env.
 test('Hermes lazy-source loader initializes native syntax and colors all supported languages',{skip:!available&&'Set HERMES_BINARY for native-engine verification'},()=>{
  const entry=`import('./client/native-syntax-engine.ts').then(function(m){
   var jobs=[],publications=0;
-  var engine=m.createNativeSyntaxEngine({publish:function(){publications++;},onError:function(e){print('FAILED: '+e.stack);},schedule:function(fn){jobs.push(fn);return jobs.length;},cancel:function(){},now:function(){return Date.now();}});
+  // This checks Hermes parsing, not wall-clock scheduling. Lazy compilation can consume
+  // the production 4 ms turn before the first token; native-syntax.test.ts tests that budget.
+  var engine=m.createNativeSyntaxEngine({publish:function(){publications++;},onError:function(e){print('FAILED: '+e.stack);},schedule:function(fn){jobs.push(fn);return jobs.length;},cancel:function(){},now:function(){return 0;}});
   var fixtures=[['go','package sample'],['go','import "fmt"'],['go','type Record struct {'],['go','// comment'],['javascript','const x = 12'],['typescript','interface Record {'],['json','{"value": true}']];
   fixtures.forEach(function(pair){engine.update(pair[0],[pair[1]]);var budget=100;while(jobs.length&&--budget)jobs.shift()();var spans=engine.read(pair[1]);if(!spans||!spans.some(function(s){return s.kind!=='plain';}))throw Error('missing color for '+pair[0]);if(spans.map(function(s){return pair[1].slice(s.start,s.end);}).join('')!==pair[1])throw Error('text changed');});
   engine.stop();if(publications!==fixtures.length)throw Error('publication missing');print('native-syntax-hermes-ok');

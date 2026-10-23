@@ -48,7 +48,7 @@ export async function connectDevice(serial, { chrome = false, packageName = 'dev
   }
   return { send, events, async evaluate(expression) {
     const result = await send('Runtime.evaluate', { expression: `Promise.resolve((${expression}))`, returnByValue: true, awaitPromise: true });
-    if (result.exceptionDetails) throw new Error('Test JavaScript failed: ' + result.exceptionDetails.text);
+    if (result.exceptionDetails) throw new Error('Test JavaScript failed: ' + (result.exceptionDetails.exception?.description || result.exceptionDetails.text));
     return result.result.value;
   }, async close() { ws.close(); await adb(serial, ['forward', '--remove', `tcp:${port}`]); } };
 }

@@ -82,6 +82,9 @@ test('an indefinitely slow non-current repository does not hold the current refr
   try {
     const workspaceId = (await f.service.handle('workspace.list', {})).workspaces[0].id;
     const background = await f.service.handle('observer.refresh', { workspaceId, repoPath: 'two', scope: 'working', requestId: 'blocked-other', prefetch: true });
+    // Admission is asynchronous; prove the background job actually reached the
+    // controlled Git gate before checking that the foreground job can pass it.
+    for (const deadline = Date.now() + 5000; !blocked && Date.now() < deadline;) await sleep(10);
     assert.equal(blocked, true);
     const current = await finish(f.service, { workspaceId, repoPath: 'one', scope: 'working', requestId: 'visible-current', force: true });
     for (const region of Object.values(current.result.regions) as any[]) assert.equal(region.state, 'ready');

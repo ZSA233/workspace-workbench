@@ -1,0 +1,131 @@
+{
+  "verifiedAt": "2026-10-23T22:26:40.279470+00:00",
+  "versions": {
+    "plugin": "0.7.8",
+    "pocket": "0.1.11",
+    "versionCode": 12,
+    "paseo": "0.12.0",
+    "protocol": 1
+  },
+  "browser": {
+    "kind": "actual-Paseo-012-two-plugins-Pocket-extension-QA",
+    "ok": true,
+    "checks": [
+      "Two real plugins expose nine extension tabs; unopened panels do not mount, the close control remains visible, and Workbench loads actual repository/graph data without navigation.",
+      "Unopened Workbench starts zero business RPCs; the hidden idle Files panel stops its version/list/decorations queries and preserves its expanded directory on return.",
+      "Sixty retained-panel switches keep two mounts and eight initial example RPCs; collected heap and DOM counters are recorded after each batch.",
+      "All eight independent example panels use their own real RPC and correct agent context; only two mounts survive LRU eviction, all share the installation query cache, and update() changes the title in place.",
+      "Closing/reopening and full document reload restore the stable extension selection.",
+      "Two different Paseo Workspaces retain separate selections and validated agent ownership.",
+      "Opening a real Markdown file from Workbench closes the mobile sidebar and uses the existing File Viewer in the workspace.",
+      "Returning to files restores the existing Workbench file selection and Files Tab.",
+      "A real fixed comparison opens its existing Diff viewer and closes the sidebar; reopening retains Workbench.",
+      "Actual host reload retires the old plugin generation, remounts its new RPC context and preserves the selected stable Tab.",
+      "Temporary network loss retains the selected plugin Tab and cached content.",
+      "Confirmed plugin removal clears its tabs and mounts while preserving the original sidebar and Workbench registration.",
+      "With an incompatible fingerprint the actual original page retains its built-in Files sidebar, without a Pocket API or extension tabs."
+    ],
+    "pageErrors": [],
+    "unopenedBusinessRequests": [],
+    "hiddenBusinessRequests": [],
+    "retention": {
+      "mounted": 2,
+      "maximum": 2,
+      "cacheShared": true,
+      "reads": 8
+    },
+    "retainedMemory": [
+      {
+        "heapBytes": 93153948,
+        "nodes": 1995
+      },
+      {
+        "heapBytes": 92882332,
+        "nodes": 1994
+      },
+      {
+        "heapBytes": 93092396,
+        "nodes": 1994
+      }
+    ]
+  },
+  "android": {
+    "kind": "actual-Pocket-Android-client-extensions",
+    "package": "dev.paseo.pocket.qa",
+    "sdk": 37,
+    "abi": "arm64",
+    "webView": "145.0.7632.218",
+    "ok": true,
+    "checks": [
+      "The actual APK injects into the original local HTTPS bundle, adds a right Tab, lazily loads real Workbench data, and retains the current conversation route and agent context.",
+      "System Back closes the sidebar before navigation; reopening restores Workbench, and selecting Files keeps the original file browser usable.",
+      "A real QA process restart restores the conversation and last selected extension Tab without another WebView or manual plugin reload."
+    ],
+    "pageErrors": [],
+    "screenshots": "Android compositor; actual wm landscape rotation",
+    "restart": "Home, six seconds for WebView UI preference commit, force-stop, restart",
+    "fileSaveAndChooserInstrumentationTests": 9
+  },
+  "images": {
+    "ok": true,
+    "checks": [
+      "Connected the actual full QA app to only the owned isolated TLS host",
+      "Native cancellation returned without a pill; the next selection remained available",
+      "Real native PhotoPicker confirmation produced expected pills and byte-identical IndexedDB PNGs",
+      "The real send path delivered each original PNG to fake Codex with matching SHA-256",
+      "Continuous DOM observation found no image processing or failure overlay throughout successful selection and send"
+    ],
+    "scenarios": {
+      "images": 2,
+      "cancelFirst": true,
+      "chooserDelayMs": 0
+    },
+    "sourceHashes": [
+      "5d1d65dbff546da967625ed6ca6a4aa6880eff2ce732093dbdeeecd7895bce1a",
+      "e8b71408af849f1d870d01b6cd94a8a74158a1a64de682b012052a4a2177b893"
+    ],
+    "persistedHashes": [
+      "5d1d65dbff546da967625ed6ca6a4aa6880eff2ce732093dbdeeecd7895bce1a",
+      "e8b71408af849f1d870d01b6cd94a8a74158a1a64de682b012052a4a2177b893"
+    ],
+    "deliveredHashes": [
+      "5d1d65dbff546da967625ed6ca6a4aa6880eff2ce732093dbdeeecd7895bce1a",
+      "e8b71408af849f1d870d01b6cd94a8a74158a1a64de682b012052a4a2177b893"
+    ],
+    "overlays": [],
+    "pageErrors": []
+  },
+  "regressions": {
+    "pluginTypecheck": true,
+    "pluginNode": 749,
+    "pluginFailures": 0,
+    "Hermes": "Actual entry/reload and native syntax engine passed; syntax compatibility uses a deterministic injected clock.",
+    "pocketNode": 72,
+    "bundledAdapters": 54,
+    "webAssetsNode": 5,
+    "androidJvm": 43,
+    "lintErrors": 0,
+    "releaseBuild": true,
+    "lockedApkWebAssets": 39
+  },
+  "performance": {
+    "file": "performance.json",
+    "samplesPerVersion": 20,
+    "interleaved": true,
+    "passed": true,
+    "regressions": []
+  },
+  "sourceSha256": {
+    "android-app/app/src/main/assets/pocket-extensions-core.js": "895ec47b73f6737b570e8b37b349df70275c3a866f5b1843033183c309242ecd",
+    "android-app/app/src/main/assets/pocket-extensions-paseo-0.12.js": "887e4ed63757fca058ea728bbd9146da975cf3998fdeafa07399a80c66dbe858",
+    "android-app/app/src/main/assets/pocket-extensions.js": "47733d0fe1d53ac22aa9fd8bbb018feabd35e264e528a201f4a83fbb75689735",
+    "android-app/app/src/main/java/dev/paseo/pocket/PocketExtensionsBridge.kt": "d024e4bc7622e35c592fb87ffbdfbd47b235cdd821bf655adb8bcd9489ef46da",
+    "paseo-plugin/client/pocket-sdk/index.ts": "99dcf88399a42e7e284a51e1cbf9838b841925077b7dee67d776b37ecb4a4cb5",
+    "paseo-plugin/index.client.tsx": "30c31f2baa2c33fbad8512857db50e051ee1f2a34d05e1a6b87c8f376e075e36"
+  },
+  "limitations": [
+    "Windows actual client and physical Pocket device were not available.",
+    "WebView localStorage commits asynchronously; immediate force-stop after a click can restore the preceding Tab.",
+    "Browser lifecycle/ownership tests include synthetic adapters and a real isolated Paseo host; only the stated Android checks are actual APK evidence."
+  ]
+}

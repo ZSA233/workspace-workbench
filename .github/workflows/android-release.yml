@@ -78,7 +78,7 @@ jobs:
       - name: Verify bundled adapters when present
         working-directory: release-source
         run: |
-          for adapter_test in observation image-input; do
+          for adapter_test in observation image-input extensions; do
             if test -f "android-app/scripts/test/$adapter_test.test.mjs"; then
               POCKET_VERIFY_BUNDLED_ADAPTER=1 node --test "android-app/scripts/test/$adapter_test.test.mjs"
             fi

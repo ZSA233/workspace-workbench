@@ -134,24 +134,26 @@ async function nativeTap(node) {
   await adb(serial, ['shell', 'input', 'tap', String(point.x), String(point.y)]); await delay(300);
 }
 async function domTarget(selector, texts = []) {
-  return cdp.evaluate(`(() => {const texts=${JSON.stringify(texts)};const nodes=[...document.querySelectorAll(${JSON.stringify(selector)})];
+  return cdp.evaluate(`(async () => {const texts=${JSON.stringify(texts)};const nodes=[...document.querySelectorAll(${JSON.stringify(selector)})];
     for(const node of nodes){const r=node.getBoundingClientRect(),s=getComputedStyle(node);if(r.width<=0||r.height<=0||s.display==='none'||s.visibility==='hidden'||s.opacity==='0')continue;
       const text=(node.textContent||'').trim();if(texts.length&&!texts.includes(text)&&!texts.includes(node.getAttribute('aria-label')))continue;
       if(node.disabled||node.getAttribute('aria-disabled')==='true')continue;
       if(r.top<0||r.left<0||r.bottom>innerHeight||r.right>innerWidth){node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});return null;}
-      const point={x:r.x+r.width/2,y:r.y+r.height/2},hit=document.elementFromPoint(point.x,point.y);
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      const next=node.getBoundingClientRect();if(Math.abs(next.x-r.x)>0.5||Math.abs(next.y-r.y)>0.5||Math.abs(next.width-r.width)>0.5||Math.abs(next.height-r.height)>0.5)return null;
+      const point={x:next.x+next.width/2,y:next.y+next.height/2},hit=document.elementFromPoint(point.x,point.y);
       if(!hit||!(node.contains(hit)||hit.contains(node)))continue;return point;}return null;})()`);
 }
 async function webTap(selector, texts = []) {
   const point = await wait(() => domTarget(selector, texts), `visible web target ${texts.join('/') || selector}`);
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...point });
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...point });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 }
 async function fill(selector, text) {
-  await webTap(selector);
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', modifiers: 2, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', modifiers: 2, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
+  // Android WebView treats desktop Ctrl+A differently from a desktop browser.
+  await wait(() => cdp.evaluate(`(()=>{const input=document.querySelector(${JSON.stringify(selector)});if(!input)return false;input.focus();input.select();return true;})()`), 'form field ' + selector);
   await cdp.send('Input.insertText', { text });
+  await wait(() => cdp.evaluate(`document.querySelector(${JSON.stringify(selector)}).value === ${JSON.stringify(text)}`), 'filled ' + selector);
 }
 async function approveQaNetworkPrompt() {
   const nodes = await readUiNodes(), text = nodes.map(node => node.text ?? '').join(' ');
@@ -210,11 +212,12 @@ try {
   const existing = await cdp.evaluate('window.__paseoHostRuntimeStore.getHosts()');
   assert(existing.every(host => host.connections.every(connection => connection.type === 'directTcp' && connection.endpoint === endpoint)), 'QA app contains another host; rerun without --keep-qa-state');
   if (!existing.length) {
-    await webTap('[role="button"], div', ['Direct connection', '直接连接']);
+    await wait(() => cdp.evaluate('(()=>{const node=[...document.querySelectorAll("[role=button],div")].find(n=>["Direct connection","直接连接"].includes((n.textContent||"").trim()));if(!node)return false;node.click();return true;})()'), 'Direct connection form');
     await fill('[data-testid="direct-host-input"]', 'localhost');
     await fill('[data-testid="direct-port-input"]', String(port));
-    if (!(await cdp.evaluate('!!document.querySelector("[data-testid=direct-ssl-toggle-checked]")'))) await webTap('[data-testid="direct-ssl-toggle"]');
-    await webTap('[data-testid="direct-host-submit"]'); await approveQaNetworkPrompt();
+    if (!(await cdp.evaluate('!!document.querySelector("[data-testid=direct-ssl-toggle-checked]")'))) await cdp.evaluate('document.querySelector("[data-testid=direct-ssl-toggle]").click()');
+    await wait(() => cdp.evaluate('!!document.querySelector("[data-testid=direct-ssl-toggle-checked]")'), 'SSL checked');
+    await cdp.evaluate('document.querySelector("[data-testid=direct-host-submit]").click()'); await approveQaNetworkPrompt();
   }
   const hosts = await wait(async () => { const rows = await cdp.evaluate('window.__paseoHostRuntimeStore.getHosts()'); return rows.length ? rows : null; }, 'full app direct TLS connection');
   assert.equal(hosts.length, 1); assert(hosts[0].connections.every(connection => connection.type === 'directTcp' && connection.endpoint === endpoint));

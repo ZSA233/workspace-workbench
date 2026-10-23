@@ -12,6 +12,8 @@ import {sessionOverrides,publishSessionEnvironment} from '../server/session-envi
 import {symlinkSync} from 'node:fs';
 import {registerAgentIntegration} from '../server/agent-integration.ts';
 import {closeBackends} from '../server/backend-manager.ts';
+import {queryObserver} from '../server/observer.ts';
+import {withProject} from '../server/projects.ts';
 import {EventEmitter} from 'node:events';
 
 function fixture(extra:any) { const root=mkdtempSync(join(tmpdir(),'wb-session-env-')); mkdirSync(join(root,'one')); for(const args of [['init','-q'],['config','user.email','test@example.invalid'],['config','user.name','Test']])execFileSync('git',['-C',join(root,'one'),...args]); writeFileSync(join(root,'one/file'),'initial');execFileSync('git',['-C',join(root,'one'),'add','.']);execFileSync('git',['-C',join(root,'one'),'commit','-qm','initial']);const path=join(root,'project.json');writeFileSync(path,JSON.stringify({sourceRoot:root,workspaceRoot:join(root,'workspaces'),stateRoot:join(root,'state'),repositories:[{id:'one',path:'one'}],management:{enabled:true},discovery:{mode:'manual'},...extra}));return {root,config:loadConfig(path)}; }
@@ -94,6 +96,9 @@ test('ordinary Agent hooks reuse the ready child environment without exclusive w
   assert.equal((await s.preparations.wait(task.operationId,30000)).state,'ready');
   const cwd=w.repositories[0].worktreePath,ready=await s.handle('workspace.environment',{cwd,prepare:false});await s.close();
   process.env.WORKSPACE_WORKBENCH_CONFIG=join(f.root,'project.json');process.env.WORKSPACE_WORKBENCH_PLUGIN_ROOT=process.cwd();
+  // This case tests reuse of a ready environment. Worker compilation/startup
+  // is covered separately and must not consume the hook's optional 2 s budget.
+  assert.equal((await withProject({projectConfig:join(f.root,'project.json')},()=>queryObserver({method:'workspace.environment',params:{cwd,prepare:false}}))).ok,true);
   const hooks=new Map<string,any>();cleanup=registerAgentIntegration({before:(name:any,hook:any)=>{hooks.set(name,hook);return ()=>{};},on:()=>()=>{},handle:()=>{}} as any);
   const actual=await hooks.get('agent.create')({request:{config:{provider:'codex',cwd},env:{GOCACHE:'/caller/cache'}}});
   assert.equal(actual.env.NPM_CONFIG_CACHE,runtimeEnvironment(ready).NPM_CONFIG_CACHE);assert.equal(actual.env.GOCACHE,'/caller/cache');assert.ok(actual.env.PATH.startsWith(ready.environment.pathEntries.join(':')));

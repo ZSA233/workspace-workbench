@@ -4,11 +4,19 @@ import type { FilesCall } from './files-store.ts';
 import { FilesDecorationsState } from './files-decorations-store.ts';
 
 export type TreeRow = { key: string; path: string; depth: number; entry?: FileEntry; more?: boolean; loading?: boolean };
+type DirectoryView = { root: string; filter: string; expanded: Set<string>; selected: Set<string>; scroll: number };
+const parent = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
 export class FilesTreeState {
   pages = new Map<string, DirectoryPage>();
   expanded = new Set<string>(['']);
   selected = new Set<string>();
   scroll = 0;
+  root = '';
+  filter = '';
+  navigationRevision = 0;
+  private history: DirectoryView[] = [];
+  get canGoBack() { return this.history.length > 0; }
+  get backFilter() { return this.history.at(-1)?.filter || ''; }
   instance = '';
   error = '';
   refreshing = new Set<string>();
@@ -32,13 +40,35 @@ export class FilesTreeState {
   constructor(key: string, workspaceId: string) {
     this.key = key; this.workspaceId = workspaceId;
     this.decorations = new FilesDecorationsState(workspaceId, () => this.instance, () => this.emit('view'));
-    const saved = readPreference(key); if (saved) { this.expanded = new Set(['', ...(saved.expanded || [])]); this.selected = new Set(saved.selected || []); this.scroll = saved.scroll || 0; this.instance = saved.instance || ''; }
+    const saved = readPreference(key); if (saved) { this.root = typeof saved.root === 'string' ? saved.root : ''; this.filter = typeof saved.filter === 'string' ? saved.filter : ''; this.expanded = new Set([this.root, ...(saved.expanded || [])]); this.selected = new Set(saved.selected || []); this.scroll = saved.scroll || 0; this.instance = saved.instance || ''; }
   }
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   snapshot = () => this.revision;
   emit(kind: 'structure' | 'view' = 'structure') { if(kind==='structure')this.structureRevision++; this.revision++; this.listeners.forEach(fn => fn()); }
-  save() { writePreference(this.key, { instance: this.instance, expanded: [...this.expanded], selected: [...this.selected], scroll: this.scroll }); }
-  clear() { this.epoch++; this.sortReady.clear(); this.directoryEpochs.clear(); this.dirty.clear(); this.flights.clear(); this.refreshing.clear(); this.changesFlight = undefined; this.decorations.clear(); this.pages.clear(); this.expanded = new Set(['']); this.selected.clear(); this.scroll = 0; this.instance = ''; removePreference(this.key); this.emit(); }
+  save() { writePreference(this.key, { instance: this.instance, root: this.root, filter: this.filter, expanded: [...this.expanded], selected: [...this.selected], scroll: this.scroll }); }
+  clear() { this.epoch++; this.history = []; this.root = ''; this.filter = ''; this.navigationRevision++; this.sortReady.clear(); this.directoryEpochs.clear(); this.dirty.clear(); this.flights.clear(); this.refreshing.clear(); this.changesFlight = undefined; this.decorations.clear(); this.pages.clear(); this.expanded = new Set(['']); this.selected.clear(); this.scroll = 0; this.instance = ''; removePreference(this.key); this.emit(); }
+  setFilter(filter: string) {
+    if (this.filter === filter) return;
+    this.filter = filter; this.scroll = 0; this.navigationRevision++;
+    this.save(); this.emit('view');
+  }
+  enter(path: string, rpc: FilesCall) {
+    if (path === this.root && !this.filter) return;
+    this.history.push({ root: this.root, filter: this.filter, expanded: new Set(this.expanded), selected: new Set(this.selected), scroll: this.scroll });
+    if (this.history.length > 32) this.history.shift();
+    // Directory browsing keeps Workspace-relative identities. Only the visible
+    // root changes; cached pages and in-flight transfers keep their destinations.
+    this.root = path; this.filter = ''; this.expanded = new Set([path]); this.selected = new Set(); this.scroll = 0; this.navigationRevision++;
+    this.save(); this.emit('view');
+    void this.load(path, rpc, false, false, true);
+  }
+  back(rpc: FilesCall) {
+    const view = this.history.pop();
+    if (!view) return;
+    this.root = view.root; this.filter = view.filter; this.expanded = view.expanded; this.selected = view.selected; this.scroll = view.scroll; this.navigationRevision++;
+    this.save(); this.emit('view');
+    if (!this.pages.has(this.root)) void this.load(this.root, rpc);
+  }
   toggle(path: string, rpc: FilesCall) { if (this.expanded.has(path)) this.expanded.delete(path); else { this.expanded.add(path); void this.load(path, rpc, false, false, true); } this.save(); this.emit(); }
   async load(path: string, rpc: FilesCall, more = false, fresh = false, reopened = false): Promise<void> {
     const epoch = this.epoch;
@@ -90,6 +120,15 @@ export class FilesTreeState {
     if (change.workspaceId !== this.workspaceId || change.instance !== this.instance) return;
     const removed = (path: string) => change.removed?.some(value => path === value || path.startsWith(value + '/'));
     if (change.removed?.length) {
+      this.history = this.history.filter(view => !removed(view.root));
+      for (const view of this.history) {
+        for (const path of view.expanded) if (removed(path)) view.expanded.delete(path);
+        for (const path of view.selected) if (removed(path)) view.selected.delete(path);
+      }
+      if (removed(this.root)) {
+        while (this.root && removed(this.root)) this.root = parent(this.root);
+        this.expanded.add(this.root); this.selected.clear(); this.filter = ''; this.scroll = 0; this.navigationRevision++;
+      }
       for (const path of new Set([...this.pages.keys(), ...this.flights.keys(), ...this.expanded])) if (removed(path)) {
         this.pages.delete(path); this.expanded.delete(path); this.dirty.delete(path);
         this.directoryEpochs.set(path, (this.directoryEpochs.get(path) || 0) + 1);
@@ -125,7 +164,7 @@ export class FilesTreeState {
   }
   async validate(rpc: FilesCall) {
     if (this.dirty.size) await this.refreshChanges(rpc);
-    if (!this.instance) return this.load('', rpc);
+    if (!this.instance || !this.pages.has(this.root)) return this.load(this.root, rpc);
     const paths = [...this.expanded].filter(p => this.pages.has(p)).slice(0, 200);
     try {
       const result = await rpc({ action: 'versions', workspaceId: this.workspaceId, instance: this.instance, paths, ...(this.sortedListing?{listingProtocol:2}:{}) });
@@ -133,9 +172,9 @@ export class FilesTreeState {
       for (const path of paths) { if(result.orders?.[path]==='ready' && this.pages.get(path)?.order==='native')this.sortReady.add(path);if(result.versions[path]!==this.pages.get(path)?.version || this.sortReady.has(path) && this.canReorder())await this.load(path,rpc); }
     } catch (e) { if ((e as any)?.code === 'workspace_instance_changed') this.clear(); this.error = e instanceof Error ? e.message : String(e); this.emit(); }
   }
-  rows(filter = '') {
+  rows(filter = this.filter) {
     filter = filter.toLocaleLowerCase();
-    const result: TreeRow[] = [{ key: 'root', path: '', depth: 0 }];
+    const result: TreeRow[] = [{ key: 'root', path: this.root, depth: 0 }];
     const visit = (path: string, depth: number) => {
       const page = this.pages.get(path);
       for (const entry of page?.entries || []) {
@@ -144,17 +183,17 @@ export class FilesTreeState {
       }
       if (page?.cursor) result.push({ key: path + '/:more', path, depth, more: true });
     };
-    if (this.expanded.has('')) visit('', 1);
+    if (this.expanded.has(this.root)) visit(this.root, 1);
     if (!filter) return result;
     // Keep just the matches and the ancestors needed to locate them. Directory
     // rows are context, not unconditional matches; do not fetch while filtering.
-    const retained = new Set(['']);
+    const retained = new Set([this.root]);
     for (const row of result) {
       if (!row.entry?.name.toLocaleLowerCase().includes(filter)) continue;
       let path = row.path;
       while (!retained.has(path)) {
         retained.add(path);
-        path = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+        path = parent(path);
       }
     }
     return result.filter(row => retained.has(row.path));

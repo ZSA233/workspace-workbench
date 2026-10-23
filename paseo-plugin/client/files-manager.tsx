@@ -1,4 +1,4 @@
-import { createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createElement, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { View, Text, Pressable, Platform, useWindowDimensions } from 'react-native';
 import { Modal, FlatList, TextInput, ScrollView } from './native-components';
 import { useWorkbenchLocale } from './i18n';
@@ -22,7 +22,8 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   const clipboard = useSyncExternalStore(subscribeFileClipboard, getFileClipboard);
   const tree = useMemo(() => filesTreeState(scope, workspace.id), [scope, workspace.id]);
   const revision = useSyncExternalStore(foreground ? tree.subscribe : noSubscription, tree.snapshot);
-  const [filter, setFilter] = useState(''), [menu, setMenu] = useState<string | null>(null), [dialog, setDialog] = useState<'mkdir' | 'rename' | 'delete' | null>(null), [name, setName] = useState(''), [error, setError] = useState(''), [drop, setDrop] = useState<string | null>(null), [preview, setPreview] = useState<{ name: string; text: string; size: number } | null>(null);
+  const filter = tree.filter;
+  const [menu, setMenu] = useState<string | null>(null), [dialog, setDialog] = useState<'mkdir' | 'rename' | 'delete' | null>(null), [name, setName] = useState(''), [error, setError] = useState(''), [drop, setDrop] = useState<string | null>(null), [preview, setPreview] = useState<{ name: string; text: string; size: number } | null>(null);
   const [dialogEntries, setDialogEntries] = useState<FileEntry[]>([]), [dialogPath, setDialogPath] = useState('');
   const [visibleStart, setVisibleStart] = useState(0), [listHeight, setListHeight] = useState(800);
   const touching = useRef(false), pointerPressed=useRef(false), interaction=useRef(false);
@@ -30,7 +31,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   const pointer = useRef({ id: -1, x: 0, y: 0 });
   const longPressClick = useRef<{ id: number; x: number; y: number; until: number } | null>(null);
   const rootRef = useRef<any>(null), listRef = useRef<any>(null), hover = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), busy = useRef(false), anchor = useRef('');
-  const rows = useMemo(() => tree.rows(filter), [tree, tree.structureRevision, filter]);
+  const rows = useMemo(() => tree.rows(filter), [tree, tree.structureRevision, tree.navigationRevision, filter]);
   const decorationPaths = [...new Set(['', ...rows.slice(Math.max(0, visibleStart-8), visibleStart + Math.ceil(listHeight/rowHeight)+16).filter(row => !row.more).map(row => row.path)])];
   const decorationPathsKey = JSON.stringify(decorationPaths), decorationPathsRef = useRef(decorationPaths);
   decorationPathsRef.current = decorationPaths;
@@ -39,7 +40,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   const entries = useMemo(() => new Map([...tree.pages.values()].flatMap(p => p.entries).map(e => [e.path, e])), [tree, tree.structureRevision]);
   const selected = [...tree.selected].map(p => entries.get(p)).filter(Boolean) as FileEntry[];
   const topLevel = (values: FileEntry[]) => { const paths = new Set(values.map(entry => entry.path)); return values.filter(entry => { for (let value = parent(entry.path); value; value = parent(value)) if (paths.has(value)) return false; return true; }); };
-  const targetPath = menu !== null ? menu && entries.get(menu)?.kind !== 'directory' ? parent(menu) : menu : selected.length === 1 && selected[0].kind === 'directory' ? selected[0].path : selected.length ? parent(selected[0].path) : '';
+  const targetPath = menu !== null ? menu !== tree.root && entries.get(menu)?.kind !== 'directory' ? parent(menu) : menu : selected.length === 1 && selected[0].kind === 'directory' ? selected[0].path : selected.length ? parent(selected[0].path) : tree.root;
   const readOnly = workspace.kind === 'linked-live';
   const call = (input: Record<string, any>) => store.call(input);
   const run = (work: () => Promise<unknown>) => { setError(''); void work().catch(e => setError(String(e.message || e))); };
@@ -49,7 +50,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     let disposed = false, timer: ReturnType<typeof setTimeout>;
     const update = async () => { await tree.validate(call); if (!disposed && decorationsEnabled) await tree.decorations.refresh(decorationPathsRef.current, call); if (!disposed) timer = setTimeout(update, 3000); };
     void update();
-    void (async () => { if(!tree.pages.has(''))await tree.load('', call); for (const path of tree.expanded) if (path && !disposed && !tree.pages.has(path)) await tree.load(path, call); })();
+    void (async () => { if(!tree.pages.has(tree.root))await tree.load(tree.root, call); for (const path of tree.expanded) if (!disposed && !tree.pages.has(path)) await tree.load(path, call); })();
     return () => { disposed = true; clearTimeout(timer); clearTimeout(hover.current); tree.foreground=false; tree.save(); };
   }, [tree, store, decorationsEnabled, foreground, sortedListing]);
   useEffect(() => {
@@ -57,7 +58,10 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   }, [tree, store, decorationsEnabled, foreground, tree.instance, decorationPathsKey]);
   interaction.current=menu!==null || dialog!==null || drop!==null || dragged.current.length>0 || busy.current || !!filter;
   useEffect(()=>{tree.interacting=pointerPressed.current || interaction.current;if(foreground)void tree.applySorted(call);},[tree,foreground,visibleStart,tree.selected.size,menu,dialog,drop,filter]);
-  useEffect(() => { if (tree.pages.size) listRef.current?.scrollToOffset?.({ offset: tree.scroll, animated: false }); }, [tree, Boolean(tree.pages.size)]);
+  useLayoutEffect(() => {
+    setVisibleStart(Math.floor(tree.scroll / rowHeight));
+    listRef.current?.scrollToOffset?.({ offset: tree.scroll, animated: false });
+  }, [tree, tree.navigationRevision, Boolean(tree.pages.has(tree.root)), rowHeight]);
   useEffect(() => {
     const document = (globalThis as any).document;
     if (Platform.OS !== 'web' || !document) return;
@@ -81,8 +85,8 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
       const a = rows.findIndex(r => r.path === anchor.current), b = rows.findIndex(r => r.path === path);
       if (!e.ctrlKey && !e.metaKey) tree.selected.clear();
       if (a >= 0 && b >= 0) for (const row of rows.slice(Math.min(a,b), Math.max(a,b)+1)) if (row.entry) tree.selected.add(row.path);
-    } else if (e.ctrlKey || e.metaKey) { if (tree.selected.has(path)) tree.selected.delete(path); else if (path) tree.selected.add(path); anchor.current = path; }
-    else { tree.selected = new Set(path ? [path] : []); anchor.current = path; }
+    } else if (e.ctrlKey || e.metaKey) { if (tree.selected.has(path)) tree.selected.delete(path); else if (path !== tree.root) tree.selected.add(path); anchor.current = path; }
+    else { tree.selected = new Set(path !== tree.root ? [path] : []); anchor.current = path; }
     tree.save(); tree.emit('view');
   };
   const copy = (operation: 'copy' | 'move') => {
@@ -136,8 +140,13 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     const suggestedName = values.length === 1 ? entry.kind === 'file' ? entry.name : entry.name.replace(/\.zip$/i, '') + '.zip' : 'files.zip';
     run(() => store.download(workspace.id, tree.instance, values.map(e => e.path), suggestedName)); setMenu(null);
   };
+  const navigate = (path?: string) => {
+    clearTimeout(hover.current); setDrop(null); setMenu(null); setError('');
+    if (path === undefined) tree.back(call); else tree.enter(path, call);
+    anchor.current = [...tree.selected].at(-1) || tree.root;
+  };
   const open = (row: TreeRow) => {
-    if (!row.entry || row.entry.kind === 'directory') { if (!row.entry?.protected || row.entry.repository || !row.path) tree.toggle(row.path, call); }
+    if (!row.entry || row.entry.kind === 'directory') { if (!row.entry?.protected || row.entry.repository || !row.path) { if (filter && row.entry) navigate(row.path); else tree.toggle(row.path, call); } }
     else if(onOpenDocument){setMenu(null);onOpenDocument(row.path,tree.instance);}
     else run(async () => { const data = await call({ action: 'preview', ...destination(row.path), offset: 0 }); const bytes = decode(data.data); const text = bytes.includes(0) ? (zh ? '二进制文件，请使用下载。' : 'Binary file. Use Download.') : new TextDecoder().decode(bytes); setPreview({ name: row.path, text, size: data.size }); });
   };
@@ -166,14 +175,14 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
       event.preventDefault(); const row = rows.find(item => item.path === anchor.current) || rows[0];
       if (event.key === 'Enter') open(row);
       else if (event.key === 'ArrowRight' && (!row.entry || row.entry.kind === 'directory') && !tree.expanded.has(row.path)) open(row);
-      else if (event.key === 'ArrowLeft') { if (tree.expanded.has(row.path)) tree.toggle(row.path, call); else selection(parent(row.path)); }
+      else if (event.key === 'ArrowLeft') { if (tree.expanded.has(row.path)) tree.toggle(row.path, call); else if (row.path !== tree.root) selection(parent(row.path)); }
     } else if (event.key === 'Delete' && selected.length && !readOnly && !selected.some(e => e.protected)) { event.preventDefault(); showDialog('delete'); }
     else if (event.key === 'F2' && selected.length === 1 && !selected[0].protected && !readOnly) { event.preventDefault(); showDialog('rename'); }
     else if (event.key === 'Escape') { setMenu(null); tree.selected.clear(); tree.emit('view'); }
   };
   const dragOver = (event: any, row: TreeRow) => {
     event.preventDefault(); event.stopPropagation(); if (readOnly) return;
-    const path = row.entry?.kind === 'directory' ? row.path : parent(row.path);
+    const path = !row.entry || row.entry.kind === 'directory' ? row.path : parent(row.path);
     if (row.entry?.protected && !row.entry.repository) return;
     const target = destination(path);
     if (dragged.current.length && (dragged.current.some(source => destinationInsideSource(source, target)) || !event.ctrlKey && dragged.current.every(source => unchangedFileMove(source, target)))) {
@@ -185,7 +194,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   const onDrop = (event: any, row: TreeRow) => {
     event.preventDefault(); event.stopPropagation(); clearTimeout(hover.current); setDrop(null);
     if (readOnly || row.entry?.protected && !row.entry.repository) return;
-    const path = row.entry?.kind === 'directory' ? row.path : parent(row.path), data = event.dataTransfer.getData('application/x-workbench-files');
+    const path = !row.entry || row.entry.kind === 'directory' ? row.path : parent(row.path), data = event.dataTransfer.getData('application/x-workbench-files');
     if (data) run(async () => { const parsed = JSON.parse(data); if (parsed.scope !== scope) throw new Error('Use Copy and Paste within this project'); const target = destination(path); if (parsed.entries.some((source: FileLocation) => destinationInsideSource(source, target))) return; await store.operation({ operation: event.ctrlKey ? 'copy' : 'move', entries: parsed.entries, destination: target, policy: 'ask', confirm: false }); });
     else { const items = droppedFiles(event.dataTransfer); run(() => upload(items, path, true)); }
   };
@@ -193,12 +202,13 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     if (row.more) return <Pressable onPress={() => run(() => tree.load(row.path, call, true))} style={{ height: rowHeight, justifyContent: 'center', paddingHorizontal: 8, paddingLeft: 8+row.depth*indent }}><Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{zh ? '加载更多…' : 'Load more…'}</Text></Pressable>;
     const entry = row.entry, directory = !entry || entry.kind === 'directory', selectedRow = tree.selected.has(row.path), landing = drop !== null && drop === (directory ? row.path : null);
     const record = decorationsEnabled ? tree.decorations.entries.get(row.path) : undefined, decoration = record?.entry;
-    const details = decorationsEnabled ? fileGitDescription(decoration, zh, record?.freshness !== 'fresh') : '';
+    const details = [decorationsEnabled ? fileGitDescription(decoration, zh, record?.freshness !== 'fresh') : '', directory && entry && filter ? zh ? '进入目录，浏览全部内容' : 'Enter folder to browse all contents' : ''].filter(Boolean).join('\n');
+    const label = entry?.name || (tree.root ? tree.root.slice(tree.root.lastIndexOf('/')+1) : workspace.displayName || workspace.id);
     const color = fileGitColor(decoration, palette, c.foreground), iconColor = decoration?.ignored ? palette.ignored : c.foregroundMuted;
-    const content = <Pressable accessibilityRole="button" accessibilityLabel={entry?.path || workspace.displayName || workspace.id} accessibilityHint={details} accessibilityState={{ selected: selectedRow, ...(directory ? { expanded: tree.expanded.has(row.path) } : {}) }} onPress={Platform.OS === "web" ? undefined : e => { selection(row.path, e); open(row); }} onLongPress={() => { if (Platform.OS === 'web' && !touching.current) return; if (Platform.OS === 'web') longPressClick.current = { ...pointer.current, until: Infinity }; if (!tree.selected.has(row.path)) selection(row.path); setMenu(row.path); }} style={{ height: rowHeight, width: '100%', paddingRight: 8, paddingLeft: 8+row.depth*indent, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: landing ? '#3269a655' : selectedRow ? c.surface2 || '#ffffff14' : 'transparent' }}>
+    const content = <Pressable accessibilityRole="button" accessibilityLabel={row.path || workspace.displayName || workspace.id} accessibilityHint={details} accessibilityState={{ selected: selectedRow, ...(directory ? { expanded: tree.expanded.has(row.path) } : {}) }} onPress={Platform.OS === "web" ? undefined : e => { selection(row.path, e); open(row); }} onLongPress={() => { if (Platform.OS === 'web' && !touching.current) return; if (Platform.OS === 'web') longPressClick.current = { ...pointer.current, until: Infinity }; if (!tree.selected.has(row.path)) selection(row.path); setMenu(row.path); }} style={{ height: rowHeight, width: '100%', paddingRight: 8, paddingLeft: 8+row.depth*indent, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: landing ? '#3269a655' : selectedRow ? c.surface2 || '#ffffff14' : 'transparent' }}>
       <View style={{ width: 11 }}>{directory ? <GeometricIcon name={tree.expanded.has(row.path) ? 'ChevronDown' : 'ChevronRight'} size={11} color={iconColor}/> : null}</View>
       <GeometricIcon name={fileTreeIcon(entry?.name || '', directory ? 'directory' : entry!.kind, tree.expanded.has(row.path))} size={14} color={iconColor}/>
-      <Text style={{ color, fontSize: 12, flex: 1 }} numberOfLines={1}>{entry?.name || workspace.displayName || workspace.id}</Text>
+      <Text style={{ color, fontSize: 12, flex: 1 }} numberOfLines={1}>{label}</Text>
       <View style={{ width: 14, alignItems: 'center', justifyContent: 'center' }}>{decoration?.mark ? directory ? <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }}/> : <Text style={{ color, fontSize: 10, fontWeight: '600', lineHeight: 14 }}>{decoration.mark}</Text> : null}</View>
       <View style={{ width: 53, alignItems: 'flex-end' }}>{tree.refreshing.has(row.path) ? <GeometricIcon name="RefreshCw" size={10} color={c.foregroundMuted}/> : entry && !directory ? <Text style={{ color: c.foregroundMuted, fontSize: 10 }}>{fileBytes(entry.size)}</Text> : null}</View>
       {landing ? <View pointerEvents="none" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderWidth: 1, borderColor: '#78a9ff' }}/> : null}
@@ -212,10 +222,16 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
       {button(zh ? '+ 文件夹' : '+ Folder', () => showDialog('mkdir'), readOnly || !tree.instance, true)}
       {button(zh ? '↻ 刷新' : '↻ Refresh', () => run(async () => { for (const path of tree.expanded) await tree.load(path, call, false, true); if (decorationsEnabled) await tree.decorations.refresh(decorationPathsRef.current, call, true); }), false, true)}
       {button('⋯', () => setMenu(targetPath), false, true, zh ? '更多文件操作' : 'More file actions')}
-      <TextInput value={filter} onChangeText={setFilter} placeholder={zh ? '筛选文件或目录' : 'Filter files or folders'} accessibilityLabel={zh ? '筛选已加载的文件或目录' : 'Filter loaded files or folders'} style={{ flex: 1, minWidth: 130, height: Math.max(dense ? 23 : 29, Math.ceil(16 * fontScale) + 6), marginHorizontal: 4, marginVertical: 3, paddingHorizontal: 6, paddingVertical: 2, fontSize: 12, color: c.foreground, borderWidth: 1, borderColor: c.border || '#ffffff22', borderRadius: 3 }} />
+      <TextInput value={filter} onChangeText={value => tree.setFilter(value)} placeholder={zh ? '筛选文件或目录' : 'Filter files or folders'} accessibilityLabel={zh ? '筛选已加载的文件或目录' : 'Filter loaded files or folders'} style={{ flex: 1, minWidth: 130, height: Math.max(dense ? 23 : 29, Math.ceil(16 * fontScale) + 6), marginHorizontal: 4, marginVertical: 3, paddingHorizontal: 6, paddingVertical: 2, fontSize: 12, color: c.foreground, borderWidth: 1, borderColor: c.border || '#ffffff22', borderRadius: 3 }} />
     </View>
+    {tree.root || tree.canGoBack ? <View testID="files-navigation" style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 3, borderBottomWidth: 1, borderBottomColor: c.border || '#ffffff18' }}>
+      {button(zh ? tree.backFilter ? '← 搜索结果' : '← 返回' : tree.backFilter ? '← Results' : '← Back', () => navigate(), !tree.canGoBack, true, zh ? tree.backFilter ? '返回搜索结果' : '返回上一次浏览' : tree.backFilter ? 'Back to search results' : 'Back to previous view')}
+      {button('↑', () => navigate(parent(tree.root)), !tree.root, true, zh ? '上一级目录' : 'Parent folder')}
+      <Pressable accessibilityRole="button" accessibilityLabel={zh ? '工作区根目录' : 'Workspace root'} disabled={!tree.root} onPress={() => navigate('')} style={{ maxWidth: 140, paddingVertical: dense ? 4 : 7, paddingHorizontal: 5 }}><Text numberOfLines={1} style={{ color: c.foregroundMuted, fontSize: 11 }}>{workspace.displayName || workspace.id}</Text></Pressable>
+      <Text numberOfLines={1} ellipsizeMode="middle" accessibilityLabel={tree.root || '/'} style={{ flex: 1, minWidth: 0, color: c.foreground, fontSize: 11 }}>/{tree.root}</Text>
+    </View> : null}
     {error || tree.error ? <Text style={{ color: c.statusWarning || '#eabf6c', padding: 8, fontSize: 11 }}>{error || tree.error}</Text> : null}
-    <FlatList ref={listRef} style={{ flex: 1, minHeight: 160 }} data={rows} renderItem={renderRow} keyExtractor={row => row.key} getItemLayout={(_, i) => ({ length: rowHeight, offset: rowHeight*i, index: i })} initialNumToRender={45} maxToRenderPerBatch={30} windowSize={7} onLayout={event => setListHeight(event.nativeEvent.layout.height)} onScroll={event => { tree.scroll = event.nativeEvent.contentOffset.y; setVisibleStart(Math.floor(tree.scroll / rowHeight)); }} scrollEventThrottle={100} ListEmptyComponent={<Text style={{ color: c.foregroundMuted, padding: 10 }}>{zh ? '目录为空' : 'Empty directory'}</Text>} ListFooterComponent={filter && !rows.some(row => row.entry) ? <Text style={{ color: c.foregroundMuted, padding: 10, fontSize: 12 }}>{zh ? '未找到匹配的文件或目录（仅筛选已加载内容）' : 'No matching files or folders (loaded entries only)'}</Text> : null} />
+    <FlatList ref={listRef} style={{ flex: 1, minHeight: 160 }} data={rows} renderItem={renderRow} keyExtractor={row => row.key} getItemLayout={(_, i) => ({ length: rowHeight, offset: rowHeight*i, index: i })} initialNumToRender={45} maxToRenderPerBatch={30} windowSize={7} onLayout={event => setListHeight(event.nativeEvent.layout.height)} onScroll={event => { tree.scroll = event.nativeEvent.contentOffset.y; setVisibleStart(Math.floor(tree.scroll / rowHeight)); }} scrollEventThrottle={100} ListEmptyComponent={<Text style={{ color: c.foregroundMuted, padding: 10 }}>{zh ? '目录为空' : 'Empty directory'}</Text>} ListFooterComponent={!rows.some(row => row.entry) && (filter || tree.expanded.has(tree.root) && tree.pages.has(tree.root) && !tree.pages.get(tree.root)?.entries.length) ? <Text style={{ color: c.foregroundMuted, padding: 10, fontSize: 12 }}>{filter ? zh ? '未找到匹配的文件或目录（仅筛选已加载内容）' : 'No matching files or folders (loaded entries only)' : zh ? '目录为空' : 'Empty directory'}</Text> : null} />
     {/* Reuse the existing single-line status area so drag feedback cannot move the drop targets. */}
     <Text numberOfLines={1} style={{ paddingHorizontal: 7, paddingVertical: 3, lineHeight: 14, color: c.foregroundMuted, fontSize: 10 }}>{drop !== null ? `${zh ? '放到' : 'Drop into'} ${workspace.displayName || workspace.id}:/${drop}` : <>{readOnly ? zh ? '聚合工作区只读' : 'Aggregate workspace · read only' : zh ? `${entries.size} 项 · 拖入上传 · 右键操作` : `${entries.size} loaded · Drop to upload · Right click for actions`}{gitPending ? zh ? ' · Git 状态待更新' : ' · Git status pending update' : ''}{selected.length ? ` · ${selected.length} ${zh ? '项已选' : 'selected'}` : ''}{clipboard?.scope === scope ? ` · ${clipboard.entries.length} ${clipboard.operation === 'copy' ? zh ? '项已复制' : 'copied' : zh ? '项已剪切' : 'cut'}` : ''}</>}</Text>
     <Modal open={menu !== null && dialog === null} title={zh ? '文件操作' : 'File actions'} onOpenChange={open => { if (!open) setMenu(null); }}><Modal.Content contentContainerStyle={{ padding: 10 }}>
@@ -238,5 +254,5 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     </Modal.Content></Modal>
     <Modal open={Boolean(preview)} title={preview?.name || ''} onOpenChange={open => { if (!open) setPreview(null); }}><Modal.Content scrollable contentContainerStyle={{ padding: 12, gap: 8 }}><Text style={{ color: c.foregroundMuted, fontSize: 11 }}>{zh ? '预览前 64 KiB' : 'Preview first 64 KiB'} · {fileBytes(preview?.size || 0)}</Text><Text selectable style={{ color: c.foreground, fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>{preview?.text}</Text></Modal.Content></Modal>
   </View>;
-  return Platform.OS === 'web' ? createElement('div', { ref: rootRef, tabIndex: 0, onKeyDownCapture: keyDown, onDragOver: (event: any) => { if (event.currentTarget.contains(event.target)) dragOver(event, rows[0]); }, onDrop: (event: any) => { if (event.currentTarget.contains(event.target)) onDrop(event, rows[0]); }, onContextMenu: (event: any) => { if (!event.currentTarget.contains(event.target) || /input|textarea/i.test(event.target?.tagName || '')) return; event.preventDefault(); selection(''); setMenu(''); }, onDragEnd: () => { dragged.current = [];pointerPressed.current=false;tree.interacting=menu!==null || dialog!==null || busy.current || !!filter; setDrop(null); clearTimeout(hover.current); }, onDragLeave: (event: any) => { if (!event.currentTarget.contains(event.relatedTarget)) { setDrop(null); clearTimeout(hover.current); } }, style: { display: 'flex', flexDirection: 'column', width: '100%', flex: 1, minHeight: 0, outline: 'none' } } as any, body) : body;
+  return Platform.OS === 'web' ? createElement('div', { ref: rootRef, tabIndex: 0, onKeyDownCapture: keyDown, onDragOver: (event: any) => { if (event.currentTarget.contains(event.target)) dragOver(event, rows[0]); }, onDrop: (event: any) => { if (event.currentTarget.contains(event.target)) onDrop(event, rows[0]); }, onContextMenu: (event: any) => { if (!event.currentTarget.contains(event.target) || /input|textarea/i.test(event.target?.tagName || '')) return; event.preventDefault(); selection(tree.root); setMenu(tree.root); }, onDragEnd: () => { dragged.current = [];pointerPressed.current=false;tree.interacting=menu!==null || dialog!==null || busy.current || !!filter; setDrop(null); clearTimeout(hover.current); }, onDragLeave: (event: any) => { if (!event.currentTarget.contains(event.relatedTarget)) { setDrop(null); clearTimeout(hover.current); } }, style: { display: 'flex', flexDirection: 'column', width: '100%', flex: 1, minHeight: 0, outline: 'none' } } as any, body) : body;
 }

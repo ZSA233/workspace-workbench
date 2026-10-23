@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FilesTreeState } from '../client/files-tree-store.ts';
+import { FilesTreeState, filesTreeState, reconcileFilesTrees } from '../client/files-tree-store.ts';
 import type { DirectoryPage, FileEntry } from '../shared/files.ts';
 
 function fixture() {
@@ -47,4 +47,108 @@ test('changing and clearing the filter preserves expansion, selection, scroll an
   assert.deepEqual(tree.rows(''), before);
   assert.deepEqual([...tree.expanded], expanded); assert.deepEqual([...tree.selected], ['app/src/config.ts']);
   assert.equal(tree.scroll, 220); assert.deepEqual([...tree.pages.values()], pages);
+});
+
+test('entering a matched folder shows all direct children, with deeper folders initially collapsed', async () => {
+  const tree = fixture(), calls: any[] = [];
+  tree.setFilter('app');
+  const rpc = async (input: any) => { calls.push(input); return structuredClone(tree.pages.get(input.path)); };
+  tree.enter('app', rpc);
+  assert.equal(tree.filter, ''); assert.equal(tree.root, 'app');
+  assert.deepEqual(tree.rows().filter(row => !row.more).map(row => [row.path, row.depth]), [
+    ['app', 0], ['app/src', 1], ['app/assets', 1], ['app/package.json', 1],
+  ]);
+  assert.deepEqual([...tree.expanded], ['app']); assert.equal(tree.selected.size, 0);
+  await tree.load('app', rpc);
+  assert.equal(calls.length, 1, 'browse only the chosen directory, without scanning its children or ancestors');
+  assert.equal(calls[0].workspaceId, 'main'); assert.equal(calls[0].instance, 'one');
+  tree.toggle('app/src', rpc);
+  assert.ok(tree.rows().some(row => row.path === 'app/src/config.ts'), 'children no longer need to match the previous query');
+  await tree.load('app/src', rpc);
+});
+
+test('back restores the exact query, expanded paths, selection and scroll without rereading cached results', async () => {
+  const tree = fixture(); tree.setFilter('ASSETS'); tree.scroll = 220; tree.selected.add('app/assets');
+  const before = tree.rows(), expanded = [...tree.expanded], pages = [...tree.pages.values()];
+  const rpc = async (input: any) => structuredClone(tree.pages.get(input.path));
+  tree.enter('app/assets', rpc); await tree.load('app/assets', rpc);
+  assert.equal(tree.backFilter, 'ASSETS'); assert.equal(tree.scroll, 0);
+  let reads = 0;
+  tree.back(async () => { reads++; throw Error('Cached navigation must not wait for RPC'); });
+  assert.equal(reads, 0); assert.equal(tree.root, ''); assert.equal(tree.filter, 'ASSETS');
+  assert.equal(tree.scroll, 220); assert.deepEqual([...tree.selected], ['app/assets']);
+  assert.deepEqual([...tree.expanded], expanded); assert.deepEqual(tree.rows(), before);
+  assert.deepEqual([...tree.pages.values()], pages); assert.equal(tree.canGoBack, false);
+});
+
+test('nested navigation and parent navigation retain distinct return points', async () => {
+  const tree = fixture(), rpc = async (input: any) => structuredClone(tree.pages.get(input.path));
+  tree.setFilter('app'); tree.enter('app', rpc); await tree.load('app', rpc);
+  tree.setFilter('src'); tree.scroll = 44; tree.enter('app/src', rpc); await tree.load('app/src', rpc);
+  assert.deepEqual(tree.rows().map(row => row.path), ['app/src', 'app/src/config.ts', 'app/src/index.ts', 'app/src']);
+  assert.equal(tree.rows().at(-1)?.more, true, 'pagination uses the actual Workspace-relative directory');
+  tree.enter('app', rpc); await tree.load('app', rpc);
+  tree.back(rpc); assert.equal(tree.root, 'app/src'); assert.equal(tree.filter, '');
+  tree.back(rpc); assert.equal(tree.root, 'app'); assert.equal(tree.filter, 'src'); assert.equal(tree.scroll, 44);
+  tree.back(rpc); assert.equal(tree.root, ''); assert.equal(tree.filter, 'app');
+});
+
+test('returning while a folder is still loading keeps its late reply from changing the restored view', async () => {
+  const tree = fixture(); tree.setFilter('empty');
+  let finish!: (value: DirectoryPage) => void;
+  tree.enter('empty', () => new Promise(resolve => { finish = resolve; }));
+  const pending = tree.load('empty', async () => { throw Error('Must share the in-flight read'); });
+  assert.equal(tree.root, 'empty'); assert.equal(tree.rows().length, 1);
+  tree.back(async () => { throw Error('No cached result reread'); });
+  finish({ workspaceId: 'main', instance: 'one', path: 'empty', version: 'v1', entries: [] }); await pending;
+  assert.equal(tree.root, ''); assert.equal(tree.filter, 'empty');
+  assert.deepEqual(tree.rows().filter(row => !row.more).map(row => row.path), ['', 'empty']);
+});
+
+test('offline folder entry remains navigable back, and instance replacement clears its browsing history', async () => {
+  const tree = fixture(); tree.setFilter('assets');
+  const offline = async () => { throw Error('offline'); };
+  tree.enter('app/assets', offline); await tree.load('app/assets', offline);
+  assert.equal(tree.root, 'app/assets'); assert.equal(tree.error, 'offline');
+  assert.ok(tree.rows().some(row => row.path === 'app/assets/logo.png'), 'cached contents stay visible');
+  tree.back(offline); assert.equal(tree.filter, 'assets');
+  tree.enter('app/assets', offline); await tree.load('app/assets', offline);
+  await tree.load('app/assets', async () => ({ ...tree.pages.get('app/assets')!, instance: 'replacement' }));
+  assert.equal(tree.root, ''); assert.equal(tree.filter, ''); assert.equal(tree.canGoBack, false); assert.equal(tree.pages.size, 0);
+});
+
+test('removed folders cannot be revisited and a late listing cannot restore their contents', async () => {
+  const tree = fixture(), rpc = async (input: any) => structuredClone(tree.pages.get(input.path));
+  tree.setFilter('app'); tree.selected.add('app/src'); tree.enter('app', rpc); await tree.load('app', rpc);
+  tree.setFilter('src'); tree.enter('app/src', rpc); await tree.load('app/src', rpc);
+  let finish!: (value: DirectoryPage) => void;
+  const stale = structuredClone(tree.pages.get('app/src')!);
+  const pending = tree.load('app/src', () => new Promise(resolve => { finish = resolve; }));
+  tree.changed({ workspaceId: 'main', instance: 'one', paths: ['app'], removed: ['app'] }, rpc);
+  assert.equal(tree.root, ''); assert.equal(tree.filter, '');
+  finish(stale); await pending;
+  assert.equal(tree.pages.has('app/src'), false);
+  tree.back(rpc); assert.equal(tree.root, ''); assert.equal(tree.filter, 'app'); assert.equal(tree.selected.size, 0);
+  assert.ok(!tree.rows().some(row => row.path === 'app')); assert.equal(tree.canGoBack, false);
+});
+
+test('browsing and query changes reuse directory snapshots instead of invalidating the entry index', async () => {
+  const tree = fixture(), revision = tree.structureRevision, rpc = async (input: any) => structuredClone(tree.pages.get(input.path));
+  tree.setFilter('app'); tree.enter('app', rpc); await tree.load('app', rpc); tree.back(rpc);
+  assert.equal(tree.structureRevision, revision, 'only the view changes while the directory entries are unchanged');
+});
+
+test('Workspace browsing state and its search return point remain independent across switches and removal', async () => {
+  const scope = 'files-browse-workspace-test';
+  const a = filesTreeState(scope, 'a'), b = filesTreeState(scope, 'b');
+  const rpc = async (input: any) => ({ workspaceId: input.workspaceId, instance: 'one', path: input.path, version: 'v1', entries: [] });
+  try {
+    a.setFilter('folder-a'); a.scroll = 123; a.enter('folder-a', rpc); await a.load('folder-a', rpc);
+    b.setFilter('folder-b');
+    assert.equal(filesTreeState(scope, 'a'), a); assert.equal(a.root, 'folder-a'); assert.equal(a.filter, '');
+    a.back(rpc); assert.equal(a.filter, 'folder-a'); assert.equal(a.scroll, 123);
+    assert.equal(b.root, ''); assert.equal(b.filter, 'folder-b'); assert.equal(b.canGoBack, false);
+    reconcileFilesTrees(scope, [{ id: 'b' }]); assert.equal(a.root, ''); assert.equal(a.filter, ''); assert.equal(a.canGoBack, false);
+    assert.equal(b.filter, 'folder-b');
+  } finally { reconcileFilesTrees(scope, []); }
 });

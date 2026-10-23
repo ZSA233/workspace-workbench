@@ -37,6 +37,7 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
     private lateinit var bridge: ObservationBridge
     private lateinit var fileSave: FileSaveBridge
     private lateinit var imageInput: PocketImageInput
+    private lateinit var extensions: PocketExtensionsBridge
 
     @SuppressLint("SetJavaScriptEnabled")
     fun start() {
@@ -59,11 +60,13 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
         fileSave.install()
         imageInput = PocketImageInput(webView, bundle.version, diagnostics)
         imageInput.install()
+        extensions = PocketExtensionsBridge(webView, bundle, diagnostics)
+        extensions.install()
         observation.bind(bridge)
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 if (destroyed) return
-                observation.pageStarted(); bridge.pageStarted(); fileSave.pageStarted()
+                observation.pageStarted(); bridge.pageStarted(); fileSave.pageStarted(); extensions.pageStarted()
             }
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 bundle.intercept(request.url, request.isForMainFrame)
@@ -127,12 +130,16 @@ class WebSession(private val activity: Activity, private val prefs: ShellPrefere
         catch (_: ActivityNotFoundException) { /* No external handler installed. */ }
     }
 
+    fun foreground(value: Boolean) { if (!destroyed && ::extensions.isInitialized) extensions.foreground(value) }
+    fun handleExtensionBack(fallback: () -> Unit): Boolean = !destroyed && ::extensions.isInitialized && extensions.handleBack(fallback)
+
     fun destroy() {
         if (destroyed) return
         destroyed = true
         if (::bridge.isInitialized) { observation.unbind(bridge); bridge.close() }
         if (::fileSave.isInitialized) fileSave.close()
         if (::imageInput.isInitialized) imageInput.close()
+        if (::extensions.isInitialized) extensions.close()
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.stopLoading()
         webView.removeAllViews()

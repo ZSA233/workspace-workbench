@@ -1,0 +1,9 @@
+{
+  "name": "@paseo-pocket/plugin-sdk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Optional, dependency-free Pocket client extensions for Paseo plugins.",
+  "exports": { ".": { "types": "./index.ts", "default": "./index.ts" } },
+  "files": ["index.ts", "README.md"]
+}

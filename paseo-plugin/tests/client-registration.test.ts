@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import { buildSync } from "esbuild";
-import { createRegistrationScope } from "../client/initialization.ts";
+import { createRegistrationScope, CLIENT_GENERATION } from "../client/initialization.ts";
 import { createRecoveryClientStore } from "../client/recovery-store.ts";
 import { recoveryPolicySchema } from "../shared/session-recovery.ts";
 
@@ -106,7 +106,7 @@ for (const fail of ["surface:workbench-session-recovery", "sidebar:workbench-ses
     assert.ok(!f.calls.some(x => x === "rpc:list"));
     const error = f.diagnostics.find(x => x.phase === "registration-failed" && x.details.stage.startsWith("recovery:"));
     assert.ok(error); assert.match(error.details.message, /prototype/); assert.match(error.details.stack, /TypeError/);
-    assert.match(error.details.pluginGeneration, /init-v21/);
+    assert.equal(error.details.pluginGeneration, CLIENT_GENERATION);
     cleanup(); assert.equal(f.registered.size, 0);
   });
 }

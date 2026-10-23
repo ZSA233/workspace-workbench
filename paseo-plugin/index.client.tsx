@@ -14,6 +14,7 @@ import { clearWorkbenchWorkspaceSnapshots, markWorkbenchWorkspaceSnapshotsReady,
 import { createRegistrationQueue } from "./client/registration-queue";
 import { createDiagnosticSender } from "./client/diagnostic-sender";
 import { createAndroidWorkspaceContext } from "./client/android-workspace-context";
+import { connectPocket } from "./client/pocket-sdk/index";
 
 const observerSurfaceId = "workbench";
 
@@ -160,6 +161,16 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
     locations: ["explorer"],
     Component: platform === "android" ? ContextualWorkbenchPanel : WorkbenchPanel,
   });
+  if (platform === "web") {
+    const pocket = connectPocket(client);
+    if (pocket) {
+      scope.own("pocket-extension", () => pocket.dispose());
+      pocket.ui.registerPanel({
+        id: "workbench", title: copy.headerLabel, icon: "GitBranch", location: "right-sidebar",
+        content: { workspacePanelId: "workspace-workbench-workspace", agentPanelId: "workspace-workbench-agent" },
+      });
+    }
+  }
   registerOptionalPanel({
     id: "workspace-workbench-file",
     title: "Workspace Changes",

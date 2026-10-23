@@ -84,7 +84,8 @@
     const operation = { input, readTimers: [], observer: null, timer: null, delivered: false };
     operations.add(operation);
     pending = operation;
-    report('image_input_selected'); show('正在添加图片…');
+    // The composer thumbnail is the selection feedback; keep typing unobstructed.
+    hide(); report('image_input_selected');
     const composer = document.querySelector('[data-testid="message-input-root"]');
     const before = new Set(composer?.querySelectorAll(pill) || []);
     Promise.all(Array.from(input.files, file => prepare(file, operation))).then(files => {
@@ -111,7 +112,6 @@
         operation.observer.observe(composer, { childList: true, subtree: true });
         operation.timer = setTimeout(() => {
           finish(operation); report('image_attachment_unconfirmed');
-          show('图片仍在处理中，请等待缩略图出现在输入框后再发送。', false, 8000);
         }, 15000);
       } else { finish(operation); hide(); }
       operation.delivered = true;

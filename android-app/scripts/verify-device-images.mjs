@@ -99,7 +99,7 @@ const runId = randomUUID(), output = resolve(values.output ?? `/tmp/pocket-devic
 await mkdir(output, { recursive: true });
 const report = { kind: 'actual-Android-Pocket-native-image-pipeline', packageName, serial, runId,
   output, checks: [], scenarios: { images: count, cancelFirst: values['cancel-first'], chooserDelayMs },
-  screenshots: [], nativeTrees: [], sourceImages: [], events: [], pageErrors: [], ok: false };
+  screenshots: [], nativeTrees: [], sourceImages: [], events: [], noticeObservations: [], pageErrors: [], ok: false };
 let host, hostExited, fixture, cdp, reverseOwned = false, port, logs = '', phase = 'preflight';
 const mediaPaths = [];
 async function save() { await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n'); }
@@ -226,6 +226,19 @@ try {
   report.checks.push('Connected the actual full QA app to only the owned isolated TLS host');
   // Observe existing production handlers. Do not replace the picker, dispatch change, or set files.
   await cdp.evaluate(`(()=>{window.__pocketImageQaEvents=[];window.__pocketImageQaErrors=[];
+    window.__pocketImageQaNoticeObservations=[];window.__pocketImageQaNoticeMonitorStartedAt=performance.now();
+    const selector='[data-pocket-image-status]',seen=new WeakMap();
+    const captureNotice=(node,source,force=false)=>{if(!node||node.nodeType!==1)return;
+      const notices=[...(force||node.matches(selector)?[node]:[]),...node.querySelectorAll(selector)];
+      for(const notice of notices){const role=notice.getAttribute('role'),text=notice.textContent??'',connected=notice.isConnected;
+        const state=JSON.stringify([role,text,connected]);if(seen.get(notice)===state)continue;seen.set(notice,state);
+        window.__pocketImageQaNoticeObservations.push({at:performance.now(),source,role,text,connected});}};
+    const recordNotices=records=>{for(const record of records){captureNotice(record.target.nodeType===1?record.target:record.target.parentElement,'mutation',record.type==='attributes'&&record.attributeName==='data-pocket-image-status');
+      for(const node of record.addedNodes??[])captureNotice(node,'added');for(const node of record.removedNodes??[])captureNotice(node,'removed');}};
+    const noticeObserver=new MutationObserver(recordNotices);
+    noticeObserver.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['data-pocket-image-status','role','style']});
+    captureNotice(document.documentElement,'initial');
+    window.__pocketImageQaReadNotices=()=>{recordNotices(noticeObserver.takeRecords());return window.__pocketImageQaNoticeObservations;};
     window.addEventListener('change',event=>{const node=event.target;if(node?.type==='file')window.__pocketImageQaEvents.push({kind:'change',trusted:event.isTrusted,at:performance.now(),connected:node.isConnected,accept:node.accept,composerCount:document.querySelectorAll('[data-testid="message-input-root"]').length,files:[...node.files].map(file=>({name:file.name,type:file.type,size:file.size}))})},true);
     for(const kind of ['visibilitychange','focus','blur'])window.addEventListener(kind,event=>window.__pocketImageQaEvents.push({kind,trusted:event.isTrusted,at:performance.now(),visibility:document.visibilityState}));
     window.addEventListener('error',event=>window.__pocketImageQaErrors.push(String(event.message)));
@@ -282,6 +295,10 @@ try {
   report.delivery = { threadId: delivered.threadId, imageHashes: delivered.images.map(sha256), imageCount: delivered.images.length };
   assert.deepEqual(report.delivery.imageHashes.sort(), report.sourceImages.map(row => row.sha256).sort(), 'Codex input image hashes differ from the actual selected PNGs');
   await screenshot('05-message-delivered'); report.checks.push('The real send path delivered each original PNG to fake Codex with matching SHA-256');
+  phase = 'no-image-status-overlay';
+  report.noticeObservations = await cdp.evaluate('window.__pocketImageQaReadNotices()');
+  assert.deepEqual(report.noticeObservations, [], 'An image status overlay appeared during successful native selection, persistence, or send');
+  report.checks.push('Continuous DOM observation found no image processing or failure overlay throughout successful selection and send');
   report.ok = true;
 } catch (error) {
   report.failure = { phase, message: error.message, stack: error.stack };
@@ -290,8 +307,8 @@ try {
   process.exitCode = 1;
 } finally {
   if (cdp) {
-    await cdp.evaluate('({events:window.__pocketImageQaEvents??[],errors:window.__pocketImageQaErrors??[],pills:document.querySelectorAll("[data-testid=composer-image-attachment-pill]").length,notice:document.querySelector("[data-pocket-image-status]")?.textContent??""})')
-      .then(state => { report.events = state.events; report.pageErrors = state.errors; report.finalComposer = { pills: state.pills, notice: state.notice }; }).catch(() => {});
+    await cdp.evaluate('({events:window.__pocketImageQaEvents??[],errors:window.__pocketImageQaErrors??[],noticeObservations:window.__pocketImageQaReadNotices?.()??[],noticeMonitorStartedAt:window.__pocketImageQaNoticeMonitorStartedAt??null,pills:document.querySelectorAll("[data-testid=composer-image-attachment-pill]").length,notice:document.querySelector("[data-pocket-image-status]")?.textContent??""})')
+      .then(state => { report.events = state.events; report.noticeObservations = state.noticeObservations; report.noticeMonitorStartedAt = state.noticeMonitorStartedAt; report.pageErrors = state.errors; report.finalComposer = { pills: state.pills, notice: state.notice }; }).catch(() => {});
     await cdp.close().catch(() => {});
   }
   for (const path of mediaPaths) await adb(serial, ['shell', 'rm', '-f', path]).catch(() => {});

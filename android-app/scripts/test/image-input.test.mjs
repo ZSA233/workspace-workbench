@@ -163,7 +163,8 @@ test('image/jpg remains the original File and the real normalizer returns image/
 });
 test('normalized replay resolves the actual Expo picker, preserves bytes/name/time and follows original persistence', withBundle, async () => {
   const f = fixture(), file = new File([png], 'camera-original.bin', { type: 'application/octet-stream', lastModified: 1234 });
-  const result = f.pick(); f.select([file]); const picked = await result;
+  const result = f.pick(); f.select([file]); assert.equal(f.status(), ''); const picked = await result;
+  assert.equal(f.status(), '');
   assert.equal(picked.canceled, false); assert.equal(picked.assets.length, 1);
   const normalized = picked.assets[0].file;
   assert.equal(normalized.type, 'image/png'); assert.equal(normalized.name, file.name); assert.equal(normalized.lastModified, 1234);
@@ -198,12 +199,13 @@ test('unreadable selection resolves actual Expo cancellation, displays retry fee
   file.slice = () => ({ arrayBuffer: async () => { throw new Error('private content URI'); } });
   const result = f.pick(); f.select([file]); assert.equal((await result).canceled, true);
   assert.match(f.status(), /无法读取/); assert(f.reports.includes('image_input_unreadable'));
-  const retry = f.pick(); f.select([new File([png], 'retry.png', { type: 'image/png' })]); assert.equal((await retry).canceled, false);
+  const retry = f.pick(); f.select([new File([png], 'retry.png', { type: 'image/png' })]); assert.equal(f.status(), '');
+  assert.equal((await retry).canceled, false); assert.equal(f.status(), '');
   assert(!JSON.stringify(f.reports).includes('private')); f.api.dispose();
 });
-test('slow processing is marked uncertain without clearing input or suggesting duplicate selection; observers stop', withBundle, async () => {
+test('selection and slow processing stay unobstructed while bounded diagnostics still finish', withBundle, async () => {
   const f = fixture(), result = f.pick(); f.select([new File([png], 'slow.png', { type: 'image/png' })]); await result;
-  f.advance(15000); assert.match(f.status(), /仍在处理中/); assert(!f.status().includes('重新选择'));
+  assert.equal(f.status(), ''); f.advance(15000); assert.equal(f.status(), '');
   assert.equal(f.observers.size, 0); assert(f.reports.includes('image_attachment_unconfirmed')); f.api.dispose(); assert.equal(f.timers.size, 0);
 });
 test('a stalled provider read is cancelled with retry feedback and no lingering timers', withBundle, async () => {

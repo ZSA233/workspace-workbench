@@ -1,0 +1,50 @@
+{
+  "kind": "actual-Android-Pocket-native-image-pipeline",
+  "androidSdk": "37",
+  "apkVersion": "0.1.10",
+  "apkVersionCode": "11",
+  "scenarios": {
+    "images": 2,
+    "cancelFirst": true,
+    "chooserDelayMs": 0
+  },
+  "checks": [
+    "Connected the actual full QA app to only the owned isolated TLS host",
+    "Native cancellation returned without a pill; the next selection remained available",
+    "Real native PhotoPicker confirmation produced expected pills and byte-identical IndexedDB PNGs",
+    "The real send path delivered each original PNG to fake Codex with matching SHA-256",
+    "Continuous DOM observation found no image processing or failure overlay throughout successful selection and send"
+  ],
+  "noticeObservations": [],
+  "noticeMonitorStartedAt": 1087.6000000014901,
+  "persistedImages": [
+    {
+      "id": "att_msg_1792729637731_i5zojm7gd",
+      "fileName": "44.png",
+      "mimeType": "image/png",
+      "size": 3797,
+      "sha256": "5d1d65dbff546da967625ed6ca6a4aa6880eff2ce732093dbdeeecd7895bce1a"
+    },
+    {
+      "id": "att_msg_1792729637732_yz0ymi2bf",
+      "fileName": "45.png",
+      "mimeType": "image/png",
+      "size": 4099,
+      "sha256": "e8b71408af849f1d870d01b6cd94a8a74158a1a64de682b012052a4a2177b893"
+    }
+  ],
+  "delivery": {
+    "threadId": "c7d041d4-eb03-4293-9c5c-925df892c5f4",
+    "imageHashes": [
+      "5d1d65dbff546da967625ed6ca6a4aa6880eff2ce732093dbdeeecd7895bce1a",
+      "e8b71408af849f1d870d01b6cd94a8a74158a1a64de682b012052a4a2177b893"
+    ],
+    "imageCount": 2
+  },
+  "pageErrors": [],
+  "finalComposer": {
+    "pills": 0,
+    "notice": ""
+  },
+  "ok": true
+}

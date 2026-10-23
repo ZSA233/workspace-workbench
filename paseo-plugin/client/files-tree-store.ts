@@ -3,8 +3,8 @@ import { readPreference, writePreference, removePreference } from './files-platf
 import type { FilesCall } from './files-store.ts';
 import { FilesDecorationsState } from './files-decorations-store.ts';
 
-export type TreeRow = { key: string; path: string; depth: number; entry?: FileEntry; more?: boolean; loading?: boolean };
-type DirectoryView = { root: string; filter: string; expanded: Set<string>; selected: Set<string>; scroll: number };
+export type TreeRow = { key: string; path: string; depth: number; entry?: FileEntry; expanded?: boolean; more?: boolean; loading?: boolean };
+type DirectoryView = { root: string; filter: string; expanded: Set<string>; filterBrowsed: Set<string>; selected: Set<string>; scroll: number };
 const parent = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
 export class FilesTreeState {
   pages = new Map<string, DirectoryPage>();
@@ -13,6 +13,7 @@ export class FilesTreeState {
   scroll = 0;
   root = '';
   filter = '';
+  private filterBrowsed = new Set<string>();
   navigationRevision = 0;
   private history: DirectoryView[] = [];
   get canGoBack() { return this.history.length > 0; }
@@ -40,36 +41,48 @@ export class FilesTreeState {
   constructor(key: string, workspaceId: string) {
     this.key = key; this.workspaceId = workspaceId;
     this.decorations = new FilesDecorationsState(workspaceId, () => this.instance, () => this.emit('view'));
-    const saved = readPreference(key); if (saved) { this.root = typeof saved.root === 'string' ? saved.root : ''; this.filter = typeof saved.filter === 'string' ? saved.filter : ''; this.expanded = new Set([this.root, ...(saved.expanded || [])]); this.selected = new Set(saved.selected || []); this.scroll = saved.scroll || 0; this.instance = saved.instance || ''; }
+    const saved = readPreference(key); if (saved) { this.root = typeof saved.root === 'string' ? saved.root : ''; this.filter = typeof saved.filter === 'string' ? saved.filter : ''; this.filterBrowsed = new Set(this.filter ? saved.filterBrowsed || [] : []); this.expanded = new Set([this.root, ...(saved.expanded || [])]); this.selected = new Set(saved.selected || []); this.scroll = saved.scroll || 0; this.instance = saved.instance || ''; }
   }
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   snapshot = () => this.revision;
   emit(kind: 'structure' | 'view' = 'structure') { if(kind==='structure')this.structureRevision++; this.revision++; this.listeners.forEach(fn => fn()); }
-  save() { writePreference(this.key, { instance: this.instance, root: this.root, filter: this.filter, expanded: [...this.expanded], selected: [...this.selected], scroll: this.scroll }); }
-  clear() { this.epoch++; this.history = []; this.root = ''; this.filter = ''; this.navigationRevision++; this.sortReady.clear(); this.directoryEpochs.clear(); this.dirty.clear(); this.flights.clear(); this.refreshing.clear(); this.changesFlight = undefined; this.decorations.clear(); this.pages.clear(); this.expanded = new Set(['']); this.selected.clear(); this.scroll = 0; this.instance = ''; removePreference(this.key); this.emit(); }
+  save() { writePreference(this.key, { instance: this.instance, root: this.root, filter: this.filter, filterBrowsed: [...this.filterBrowsed], expanded: [...this.expanded], selected: [...this.selected], scroll: this.scroll }); }
+  clear() { this.epoch++; this.history = []; this.root = ''; this.filter = ''; this.filterBrowsed.clear(); this.navigationRevision++; this.sortReady.clear(); this.directoryEpochs.clear(); this.dirty.clear(); this.flights.clear(); this.refreshing.clear(); this.changesFlight = undefined; this.decorations.clear(); this.pages.clear(); this.expanded = new Set(['']); this.selected.clear(); this.scroll = 0; this.instance = ''; removePreference(this.key); this.emit(); }
   setFilter(filter: string) {
     if (this.filter === filter) return;
-    this.filter = filter; this.scroll = 0; this.navigationRevision++;
+    this.filter = filter; this.filterBrowsed.clear(); this.scroll = 0; this.navigationRevision++;
     this.save(); this.emit('view');
   }
   enter(path: string, rpc: FilesCall) {
     if (path === this.root && !this.filter) return;
-    this.history.push({ root: this.root, filter: this.filter, expanded: new Set(this.expanded), selected: new Set(this.selected), scroll: this.scroll });
+    this.history.push({ root: this.root, filter: this.filter, expanded: new Set(this.expanded), filterBrowsed: new Set(this.filterBrowsed), selected: new Set(this.selected), scroll: this.scroll });
     if (this.history.length > 32) this.history.shift();
     // Directory browsing keeps Workspace-relative identities. Only the visible
     // root changes; cached pages and in-flight transfers keep their destinations.
-    this.root = path; this.filter = ''; this.expanded = new Set([path]); this.selected = new Set(); this.scroll = 0; this.navigationRevision++;
+    this.root = path; this.filter = ''; this.filterBrowsed = new Set(); this.expanded = new Set([path]); this.selected = new Set(); this.scroll = 0; this.navigationRevision++;
     this.save(); this.emit('view');
     void this.load(path, rpc, false, false, true);
   }
   back(rpc: FilesCall) {
     const view = this.history.pop();
     if (!view) return;
-    this.root = view.root; this.filter = view.filter; this.expanded = view.expanded; this.selected = view.selected; this.scroll = view.scroll; this.navigationRevision++;
+    this.root = view.root; this.filter = view.filter; this.filterBrowsed = view.filterBrowsed; this.expanded = view.expanded; this.selected = view.selected; this.scroll = view.scroll; this.navigationRevision++;
     this.save(); this.emit('view');
     if (!this.pages.has(this.root)) void this.load(this.root, rpc);
   }
-  toggle(path: string, rpc: FilesCall) { if (this.expanded.has(path)) this.expanded.delete(path); else { this.expanded.add(path); void this.load(path, rpc, false, false, true); } this.save(); this.emit(); }
+  toggle(path: string, rpc: FilesCall, expanded = this.filter ? !!this.rows().find(row => !row.more && row.path === path)?.expanded : this.expanded.has(path)) {
+    if (this.filter && path !== this.root) this.filterBrowsed.add(path);
+    if (expanded) {
+      this.expanded.delete(path);
+      // Keep the collapsed search-context row so it can be opened again, even
+      // when its own name does not match the query. Forget deeper browsing.
+      for (const opened of this.filterBrowsed) if (opened !== path && (opened.startsWith(path + '/') || !path)) this.filterBrowsed.delete(opened);
+    } else {
+      this.expanded.add(path);
+      void this.load(path, rpc, false, false, true);
+    }
+    this.save(); this.emit();
+  }
   async load(path: string, rpc: FilesCall, more = false, fresh = false, reopened = false): Promise<void> {
     const epoch = this.epoch;
     if (this.flights.has(path)) {
@@ -123,11 +136,12 @@ export class FilesTreeState {
       this.history = this.history.filter(view => !removed(view.root));
       for (const view of this.history) {
         for (const path of view.expanded) if (removed(path)) view.expanded.delete(path);
+        for (const path of view.filterBrowsed) if (removed(path)) view.filterBrowsed.delete(path);
         for (const path of view.selected) if (removed(path)) view.selected.delete(path);
       }
       if (removed(this.root)) {
         while (this.root && removed(this.root)) this.root = parent(this.root);
-        this.expanded.add(this.root); this.selected.clear(); this.filter = ''; this.scroll = 0; this.navigationRevision++;
+        this.expanded.add(this.root); this.selected.clear(); this.filter = ''; this.filterBrowsed.clear(); this.scroll = 0; this.navigationRevision++;
       }
       for (const path of new Set([...this.pages.keys(), ...this.flights.keys(), ...this.expanded])) if (removed(path)) {
         this.pages.delete(path); this.expanded.delete(path); this.dirty.delete(path);
@@ -135,6 +149,7 @@ export class FilesTreeState {
       }
       for (const page of this.pages.values()) page.entries = page.entries.filter(entry => !removed(entry.path));
       for (const path of this.selected) if (removed(path)) this.selected.delete(path);
+      for (const path of this.filterBrowsed) if (removed(path)) this.filterBrowsed.delete(path);
       for (const path of this.decorations.entries.keys()) if (removed(path)) this.decorations.entries.delete(path);
     }
     for (const path of change.paths) {
@@ -173,30 +188,40 @@ export class FilesTreeState {
     } catch (e) { if ((e as any)?.code === 'workspace_instance_changed') this.clear(); this.error = e instanceof Error ? e.message : String(e); this.emit(); }
   }
   rows(filter = this.filter) {
+    const opened = filter === this.filter ? this.filterBrowsed : new Set<string>();
     filter = filter.toLocaleLowerCase();
-    const result: TreeRow[] = [{ key: 'root', path: this.root, depth: 0 }];
+    const retained = new Set([this.root]), parents = new Set<string>();
+    if (filter) {
+      const retain = (path: string) => {
+        while (path !== this.root && !retained.has(path)) {
+          retained.add(path); path = parent(path); parents.add(path);
+        }
+      };
+      // Inspect only the already expanded/loaded branches. Revealing one folder
+      // admits its direct children, without recursively opening unrelated pages.
+      const scan = (path: string) => {
+        for (const entry of this.pages.get(path)?.entries || []) {
+          if (entry.name.toLocaleLowerCase().includes(filter)) retain(entry.path);
+          if (entry.kind === 'directory' && this.expanded.has(entry.path)) scan(entry.path);
+        }
+      };
+      if (this.expanded.has(this.root)) scan(this.root);
+      for (const path of opened) retain(path);
+    }
+    const isExpanded = (path: string) => this.expanded.has(path) && (!filter || path === this.root || opened.has(path) || parents.has(path));
+    const result: TreeRow[] = [{ key: 'root', path: this.root, depth: 0, expanded: isExpanded(this.root) }];
     const visit = (path: string, depth: number) => {
       const page = this.pages.get(path);
       for (const entry of page?.entries || []) {
-        result.push({ key: entry.path, path: entry.path, depth, entry });
-        if (entry.kind === 'directory' && this.expanded.has(entry.path)) visit(entry.path, depth + 1);
+        if (filter && !retained.has(entry.path) && !opened.has(path)) continue;
+        const expanded = entry.kind === 'directory' ? isExpanded(entry.path) : undefined;
+        result.push({ key: entry.path, path: entry.path, depth, entry, expanded });
+        if (expanded) visit(entry.path, depth + 1);
       }
       if (page?.cursor) result.push({ key: path + '/:more', path, depth, more: true });
     };
     if (this.expanded.has(this.root)) visit(this.root, 1);
-    if (!filter) return result;
-    // Keep just the matches and the ancestors needed to locate them. Directory
-    // rows are context, not unconditional matches; do not fetch while filtering.
-    const retained = new Set([this.root]);
-    for (const row of result) {
-      if (!row.entry?.name.toLocaleLowerCase().includes(filter)) continue;
-      let path = row.path;
-      while (!retained.has(path)) {
-        retained.add(path);
-        path = parent(path);
-      }
-    }
-    return result.filter(row => retained.has(row.path));
+    return result;
   }
 }
 const states = new Map<string, FilesTreeState>();

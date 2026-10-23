@@ -146,13 +146,14 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     anchor.current = [...tree.selected].at(-1) || tree.root;
   };
   const open = (row: TreeRow) => {
-    if (!row.entry || row.entry.kind === 'directory') { if (!row.entry?.protected || row.entry.repository || !row.path) { if (filter && row.entry) navigate(row.path); else tree.toggle(row.path, call); } }
+    if (!row.entry || row.entry.kind === 'directory') { if (!row.entry?.protected || row.entry.repository || !row.path) tree.toggle(row.path, call, row.expanded); }
     else if(onOpenDocument){setMenu(null);onOpenDocument(row.path,tree.instance);}
     else run(async () => { const data = await call({ action: 'preview', ...destination(row.path), offset: 0 }); const bytes = decode(data.data); const text = bytes.includes(0) ? (zh ? '二进制文件，请使用下载。' : 'Binary file. Use Download.') : new TextDecoder().decode(bytes); setPreview({ name: row.path, text, size: data.size }); });
   };
   const button = (label: string, press: () => void, disabled = false, toolbar = false, accessibilityLabel = label) => <Pressable key={label} accessibilityRole="button" accessibilityLabel={accessibilityLabel} disabled={disabled} onPress={press} style={{ paddingVertical: toolbar && dense ? 4 : 7, paddingHorizontal: toolbar && dense ? 7 : 9, opacity: disabled ? 0.4 : 1 }}><Text style={{ color: c.foreground, fontSize: 12 }}>{label}</Text></Pressable>;
   const menuItems = <>
     {onOpenDocument&&selected.length===1&&selected[0].kind==='file'?button(zh?'打开':'Open',()=>{setMenu(null);onOpenDocument(selected[0].path,tree.instance);}):null}
+    {selected.length===1&&selected[0].kind==='directory'&&(!selected[0].protected||selected[0].repository)?button(zh?'进入目录浏览':'Browse this folder',()=>navigate(selected[0].path)):null}
     {button(zh ? '上传文件到此目录' : 'Upload here', () => { const path = targetPath; pickFiles(false, files => run(() => upload(files, path))); setMenu(null); }, readOnly)}
     {button(zh ? '新建文件夹' : 'New folder', () => showDialog('mkdir'), readOnly)}
     {button(zh ? '下载 / ZIP' : 'Download / ZIP', download, !selected.length || selected.some(e => e.protected && !e.repository))}
@@ -174,8 +175,8 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     } else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft' || event.key === 'Enter') {
       event.preventDefault(); const row = rows.find(item => item.path === anchor.current) || rows[0];
       if (event.key === 'Enter') open(row);
-      else if (event.key === 'ArrowRight' && (!row.entry || row.entry.kind === 'directory') && !tree.expanded.has(row.path)) open(row);
-      else if (event.key === 'ArrowLeft') { if (tree.expanded.has(row.path)) tree.toggle(row.path, call); else if (row.path !== tree.root) selection(parent(row.path)); }
+      else if (event.key === 'ArrowRight' && (!row.entry || row.entry.kind === 'directory') && !row.expanded) open(row);
+      else if (event.key === 'ArrowLeft') { if (row.expanded) tree.toggle(row.path, call, row.expanded); else if (row.path !== tree.root) selection(parent(row.path)); }
     } else if (event.key === 'Delete' && selected.length && !readOnly && !selected.some(e => e.protected)) { event.preventDefault(); showDialog('delete'); }
     else if (event.key === 'F2' && selected.length === 1 && !selected[0].protected && !readOnly) { event.preventDefault(); showDialog('rename'); }
     else if (event.key === 'Escape') { setMenu(null); tree.selected.clear(); tree.emit('view'); }
@@ -189,7 +190,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
       event.dataTransfer.dropEffect = 'none'; setDrop(null); clearTimeout(hover.current); return;
     }
     event.dataTransfer.dropEffect = event.dataTransfer.types?.includes('application/x-workbench-files') ? event.ctrlKey ? 'copy' : 'move' : 'copy';
-    if (drop !== path) { setDrop(path); clearTimeout(hover.current); if (!tree.expanded.has(path)) hover.current = setTimeout(() => { tree.expanded.add(path); tree.emit(); void tree.load(path, call); }, 650); }
+    if (drop !== path) { setDrop(path); clearTimeout(hover.current); if (!rows.find(row => !row.more && row.path === path)?.expanded) hover.current = setTimeout(() => tree.toggle(path, call, false), 650); }
   };
   const onDrop = (event: any, row: TreeRow) => {
     event.preventDefault(); event.stopPropagation(); clearTimeout(hover.current); setDrop(null);
@@ -202,12 +203,12 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     if (row.more) return <Pressable onPress={() => run(() => tree.load(row.path, call, true))} style={{ height: rowHeight, justifyContent: 'center', paddingHorizontal: 8, paddingLeft: 8+row.depth*indent }}><Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{zh ? '加载更多…' : 'Load more…'}</Text></Pressable>;
     const entry = row.entry, directory = !entry || entry.kind === 'directory', selectedRow = tree.selected.has(row.path), landing = drop !== null && drop === (directory ? row.path : null);
     const record = decorationsEnabled ? tree.decorations.entries.get(row.path) : undefined, decoration = record?.entry;
-    const details = [decorationsEnabled ? fileGitDescription(decoration, zh, record?.freshness !== 'fresh') : '', directory && entry && filter ? zh ? '进入目录，浏览全部内容' : 'Enter folder to browse all contents' : ''].filter(Boolean).join('\n');
+    const details = [decorationsEnabled ? fileGitDescription(decoration, zh, record?.freshness !== 'fresh') : '', directory && entry && filter ? zh ? '原地展开或收起目录，保留筛选' : 'Expand or collapse in place; keep the filter' : ''].filter(Boolean).join('\n');
     const label = entry?.name || (tree.root ? tree.root.slice(tree.root.lastIndexOf('/')+1) : workspace.displayName || workspace.id);
     const color = fileGitColor(decoration, palette, c.foreground), iconColor = decoration?.ignored ? palette.ignored : c.foregroundMuted;
-    const content = <Pressable accessibilityRole="button" accessibilityLabel={row.path || workspace.displayName || workspace.id} accessibilityHint={details} accessibilityState={{ selected: selectedRow, ...(directory ? { expanded: tree.expanded.has(row.path) } : {}) }} onPress={Platform.OS === "web" ? undefined : e => { selection(row.path, e); open(row); }} onLongPress={() => { if (Platform.OS === 'web' && !touching.current) return; if (Platform.OS === 'web') longPressClick.current = { ...pointer.current, until: Infinity }; if (!tree.selected.has(row.path)) selection(row.path); setMenu(row.path); }} style={{ height: rowHeight, width: '100%', paddingRight: 8, paddingLeft: 8+row.depth*indent, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: landing ? '#3269a655' : selectedRow ? c.surface2 || '#ffffff14' : 'transparent' }}>
-      <View style={{ width: 11 }}>{directory ? <GeometricIcon name={tree.expanded.has(row.path) ? 'ChevronDown' : 'ChevronRight'} size={11} color={iconColor}/> : null}</View>
-      <GeometricIcon name={fileTreeIcon(entry?.name || '', directory ? 'directory' : entry!.kind, tree.expanded.has(row.path))} size={14} color={iconColor}/>
+    const content = <Pressable accessibilityRole="button" accessibilityLabel={row.path || workspace.displayName || workspace.id} accessibilityHint={details} accessibilityState={{ selected: selectedRow, ...(directory ? { expanded: !!row.expanded } : {}) }} onPress={Platform.OS === "web" ? undefined : e => { selection(row.path, e); open(row); }} onLongPress={() => { if (Platform.OS === 'web' && !touching.current) return; if (Platform.OS === 'web') longPressClick.current = { ...pointer.current, until: Infinity }; if (!tree.selected.has(row.path)) selection(row.path); setMenu(row.path); }} style={{ height: rowHeight, width: '100%', paddingRight: 8, paddingLeft: 8+row.depth*indent, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: landing ? '#3269a655' : selectedRow ? c.surface2 || '#ffffff14' : 'transparent' }}>
+      <View style={{ width: 11 }}>{directory ? <GeometricIcon name={row.expanded ? 'ChevronDown' : 'ChevronRight'} size={11} color={iconColor}/> : null}</View>
+      <GeometricIcon name={fileTreeIcon(entry?.name || '', directory ? 'directory' : entry!.kind, !!row.expanded)} size={14} color={iconColor}/>
       <Text style={{ color, fontSize: 12, flex: 1 }} numberOfLines={1}>{label}</Text>
       <View style={{ width: 14, alignItems: 'center', justifyContent: 'center' }}>{decoration?.mark ? directory ? <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }}/> : <Text style={{ color, fontSize: 10, fontWeight: '600', lineHeight: 14 }}>{decoration.mark}</Text> : null}</View>
       <View style={{ width: 53, alignItems: 'flex-end' }}>{tree.refreshing.has(row.path) ? <GeometricIcon name="RefreshCw" size={10} color={c.foregroundMuted}/> : entry && !directory ? <Text style={{ color: c.foregroundMuted, fontSize: 10 }}>{fileBytes(entry.size)}</Text> : null}</View>

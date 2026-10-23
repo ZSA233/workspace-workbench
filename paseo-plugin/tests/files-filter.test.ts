@@ -152,3 +152,57 @@ test('Workspace browsing state and its search return point remain independent ac
     assert.equal(b.filter, 'folder-b');
   } finally { reconcileFilesTrees(scope, []); }
 });
+
+test('a directory-name match expands in place to show nonmatching children and keeps the query and scroll', async () => {
+  const tree = fixture(), requests: any[] = [];
+  const rpc = async (input: any) => { requests.push(input); return structuredClone(tree.pages.get(input.path)); };
+  tree.setFilter('ASSETS'); tree.scroll = 44;
+  assert.equal(tree.rows().find(row => row.path === 'app/assets')?.expanded, false, 'cached expansion alone does not reveal filtered contents');
+  tree.toggle('app/assets', rpc); await tree.load('app/assets', rpc);
+  assert.equal(tree.root, ''); assert.equal(tree.filter, 'ASSETS'); assert.equal(tree.scroll, 44); assert.equal(tree.canGoBack, false);
+  assert.deepEqual(tree.rows().filter(row => !row.more).map(row => row.path), ['', 'app', 'app/assets', 'app/assets/logo.png']);
+  assert.deepEqual(requests.map(input => input.path), ['app/assets'], 'no recursive or sibling reads');
+  tree.toggle('app/assets', rpc);
+  assert.deepEqual(tree.rows().filter(row => !row.more).map(row => row.path), ['', 'app', 'app/assets']);
+  assert.equal(tree.rows().find(row => row.path === 'app/assets')?.expanded, false);
+});
+
+test('a contextual parent can collapse and reopen without disappearing, while other matches stay filtered', async () => {
+  const tree = fixture(), rpc = async (input: any) => structuredClone(tree.pages.get(input.path));
+  tree.setFilter('config');
+  assert.equal(tree.rows().find(row => row.path === 'app/src')?.expanded, true);
+  tree.toggle('app/src', rpc);
+  assert.deepEqual(tree.rows().filter(row => !row.more).map(row => row.path), ['', 'app', 'app/src', 'docs', 'docs/CONFIG.md']);
+  tree.toggle('app/src', rpc); await tree.load('app/src', rpc);
+  assert.deepEqual(tree.rows().filter(row => !row.more).map(row => row.path), ['', 'app', 'app/src', 'app/src/config.ts', 'app/src/index.ts', 'docs', 'docs/CONFIG.md']);
+  assert.equal(tree.filter, 'config'); assert.equal(tree.root, '');
+  assert.ok(!tree.rows().some(row => row.path === 'docs/notes.md' || row.path === 'app/assets'));
+});
+
+test('revealing a folder leaves cached nonmatching deep branches collapsed until explicitly opened', async () => {
+  const tree = fixture(), rpc = async (input: any) => structuredClone(tree.pages.get(input.path));
+  tree.setFilter('app'); tree.toggle('app', rpc); await tree.load('app', rpc);
+  assert.deepEqual(tree.rows().filter(row => !row.more).map(row => row.path), ['', 'app', 'app/src', 'app/assets', 'app/package.json']);
+  assert.equal(tree.rows().find(row => row.path === 'app/src')?.expanded, false);
+  tree.toggle('app/src', rpc); await tree.load('app/src', rpc);
+  assert.ok(tree.rows().some(row => row.path === 'app/src/config.ts'));
+  tree.toggle('app', rpc); tree.toggle('app', rpc); await tree.load('app', rpc);
+  assert.ok(!tree.rows().some(row => row.path === 'app/src/config.ts'), 'reopening its parent does not spill deeper unrelated contents');
+});
+
+test('explicit folder navigation restores in-place search browsing, and a new query resets its exceptions', async () => {
+  const tree = fixture(), rpc = async (input: any) => structuredClone(tree.pages.get(input.path));
+  tree.setFilter('ASSETS'); tree.toggle('app/assets', rpc); await tree.load('app/assets', rpc);
+  const before = tree.rows(); tree.enter('app/assets', rpc); await tree.load('app/assets', rpc); tree.back(rpc);
+  assert.equal(tree.filter, 'ASSETS'); assert.deepEqual(tree.rows(), before);
+  tree.setFilter('config'); tree.setFilter('ASSETS');
+  assert.ok(!tree.rows().some(row => row.path === 'app/assets/logo.png'));
+});
+
+test('collapsing and reopening the tree root keeps unrelated branches filtered out', async () => {
+  const tree = fixture(), rpc = async (input: any) => structuredClone(tree.pages.get(input.path));
+  tree.setFilter('config'); const before = tree.rows();
+  tree.toggle('', rpc); assert.deepEqual(tree.rows().map(row => row.path), ['']);
+  tree.toggle('', rpc); await tree.load('', rpc);
+  assert.equal(tree.filter, 'config'); assert.deepEqual(tree.rows(), before);
+});

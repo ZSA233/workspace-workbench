@@ -24,7 +24,7 @@ import { useObservationVersions } from './use-observation-versions';
 import { fileReviewQueryKey } from './file-review-query';
 import { useComparisonBodies, type BodyJob } from './use-comparison-bodies';
 import { mergeVisibleContexts, comparisonFileRows, documentMetrics, documentAnchor, documentIndex, anchorOffset, type DocumentRow, type FileGap } from './comparison-reading-model';
-import { useFileReviews, useActiveFileReviewKey, selectionKey, setActiveFileReview, closeFileReview, openFileReview, getComparisonView, type FileReviewSelection } from './file-review-store';
+import { useFileReviews, useActiveFileReviewKey, selectionKey, setActiveFileReview, closeFileReviews, openFileReview, getComparisonView, type FileReviewSelection } from './file-review-store';
 import { parseUnifiedPatch, type ChangesResult, type DiffResult, type DiffDisplayRow, type DiffOverviewMarker } from './model';
 import { observationQueryOptions, displayedObservation } from './observation-content';
 import { useDiffCodeCopy } from './use-diff-code-copy';
@@ -323,7 +323,7 @@ export function ComparisonReviewPanel(props: Props) {
       return <ComparisonFileNotes key={path} registry={registry} selection={fileSelection(path)} diff={diffs.get(path)!} rows={localRows} visible={visible} foreground={foreground} theme={theme} jump={rowKey=>noteActions.current.go(path,rowKey)} reveal={a=>noteActions.current.reveal(path,a)} openOther={(a,n,d)=>noteActions.current.openOther(a,n,d)}/>;
     }),[demanded,document,fileSelections,foreground,theme,Platform.OS==='web'?null:visibleKeys]);
     return <View ref={activity.ref} testID="workbench-diff-panel" style={styles.screen} onLayout={e => setWidth(e.nativeEvent.layout.width)}>
-  <DiffToolbar selections={selections} activeKey={activeKey} selection={fileSelection(currentPath)} diff={diffs.get(currentPath) || null} reading={navigation} navigationLabel={files.length ? `${currentFile + 1}/${files.length}${hunks.length ? ` · ${currentHunk + 1}/${hunks.length}` : ''}` : undefined} extra={<ComparisonNoteToolbar registry={registry} path={currentPath}/>} onSelect={k => setActiveFileReview(host, k)} onClose={s => closeFileReview(host, selectionKey(s))} width={width} theme={theme} mode={mode} narrow={narrow} onMode={() => setMode(mode === 'split' ? 'unified' : 'split')} fontSize={display.fontSize} wrap={display.wrap} onDisplay={display.update} stale={false}/>
+  <DiffToolbar selections={selections} activeKey={activeKey} selection={fileSelection(currentPath)} diff={diffs.get(currentPath) || null} reading={navigation} navigationLabel={files.length ? `${currentFile + 1}/${files.length}${hunks.length ? ` · ${currentHunk + 1}/${hunks.length}` : ''}` : undefined} extra={<ComparisonNoteToolbar registry={registry} path={currentPath}/>} onSelect={k => setActiveFileReview(host, k)} onClose={(s,mode='current') => closeFileReviews(host, selectionKey(s),mode)} width={width} theme={theme} mode={mode} narrow={narrow} onMode={() => setMode(mode === 'split' ? 'unified' : 'split')} fontSize={display.fontSize} wrap={display.wrap} onDisplay={display.update} stale={false}/>
   <View ref={root} style={{ flex: 1, minHeight: 0 }}>
    {manifest.error || manifest.data?.ok === false ? <Pressable accessibilityRole="button" onPress={() => void manifest.refetch()}><Text style={styles.errorText}>{manifest.data?.error?.message || String(manifest.error)} · 重试</Text></Pressable> : null}
    {!manifestData ? <Text style={styles.emptyText}>正在读取固定比较的文件列表…</Text> : null}

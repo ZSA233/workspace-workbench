@@ -14,12 +14,16 @@ import {createDocumentReader} from './document-reader';
 import {DocumentMarkdown} from './document-markdown';
 import {HighlightedCode,editorCodeFontFamily} from './syntax';
 import {activateDocument,backToFiles,closeDocument,documentKey,openDocument,useActiveDocument,useDocuments,type DocumentSelection} from './document-store';
+import {EditorTab,TabContextMenu,type TabMenuTarget} from './components/editor-tab';
 type Props=PluginWorkspacePanelProps|PluginAgentPanelProps;
 export function DocumentPanel(props:Props){
   const selections=useDocuments(props.workspaceId),key=useActiveDocument(props.workspaceId),selection=selections.find(s=>documentKey(s)===key)||selections.at(-1),c=props.theme.colors;
+  const [menu,setMenu]=useState<TabMenuTarget|null>(null),zh=useWorkbenchLocale()==='zh-CN';
+  const menuSelection=menu?selections.find(s=>documentKey(s)===menu.key):undefined;
   const last=useRef<DocumentSelection|undefined>(undefined);if(selection)last.current=selection;
   return <View testID="workbench-document-panel" style={{flex:1,minHeight:0,backgroundColor:c.surface0}}>
-    <ScrollView horizontal style={{flexGrow:0,borderBottomWidth:1,borderColor:c.border}}>{selections.map(s=><View key={documentKey(s)} style={{flexDirection:'row',alignItems:'center',backgroundColor:s===selection?c.surface2:c.surface0}}><Pressable accessibilityRole="tab" accessibilityState={{selected:s===selection}} onPress={()=>activateDocument(s)} style={{padding:9}}><Text style={{color:c.foreground,fontSize:12}}>{s.path.split('/').at(-1)}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel={`Close ${s.path}`} onPress={()=>closeDocument(s)} style={{padding:8}}><Text style={{color:c.foregroundMuted}}>×</Text></Pressable></View>)}</ScrollView>
+    <ScrollView horizontal testID="document-file-tabs" style={{flexGrow:0,borderBottomWidth:1,borderColor:c.border}}>{selections.map(s=><EditorTab key={documentKey(s)} tabKey={documentKey(s)} onClose={()=>closeDocument(s)} onMenu={setMenu} style={{flexDirection:'row',alignItems:'center',backgroundColor:s===selection?c.surface2:c.surface0}}>{openMenu=><><Pressable accessibilityRole="tab" accessibilityLabel={s.path.split('/').at(-1)} accessibilityState={{selected:s===selection}} onPress={()=>activateDocument(s)} onLongPress={openMenu} {...(Platform.OS==='web'?{title:s.path,'aria-selected':s===selection}:{})} style={{padding:9}}><Text style={{color:c.foreground,fontSize:12}}>{s.path.split('/').at(-1)}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel={`${zh?'关闭':'Close'} ${s.path}`} onPress={()=>closeDocument(s)} style={{padding:8}}><Text style={{color:c.foregroundMuted}}>×</Text></Pressable></>}</EditorTab>)}</ScrollView>
+    {menu&&menuSelection?<TabContextMenu target={menu} keys={selections.map(documentKey)} label={menuSelection.path.split('/').at(-1)||menuSelection.path} description={`${menuSelection.workspaceName} / ${menuSelection.path}`} theme={props.theme} onClose={()=>setMenu(null)} onAction={mode=>closeDocument(menuSelection,mode)}/>:null}
     {selection?<DocumentBody key={documentKey(selection)} {...props} selection={selection}/>:<View style={{padding:16,gap:12}}><Text style={{color:c.foregroundMuted}}>Select a file in Workspace Workbench → Files.</Text>{last.current?<Pressable accessibilityRole="button" onPress={()=>backToFiles(last.current!)}><Text style={{color:c.accent}}>← Back to files</Text></Pressable>:null}</View>}
   </View>;
 }

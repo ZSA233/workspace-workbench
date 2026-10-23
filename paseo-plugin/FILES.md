@@ -41,6 +41,8 @@ PC 悬停显示暂存区与工作目录的状态、原路径、目录分类数�
 
 桌面双击文件（或按 Enter），触控点击文件，在主区域打开独立的只读查看页；「返回文件」回到原来的树。文件页保留路径、所属 Workspace、行号、源码搜索、换行、字号、复制和下载，多文件可以切换。它不接管会话消息中的路径，也不提供编辑。
 
+文件查看与 Git Diff 的文件页签均支持鼠标中键关闭，右键或触控长按打开菜单，可关闭当前、其他、左侧所有、右侧所有或全部页签。范围按当前面板这一排页签的顺序计算；关闭后台页签会保留当前阅读的文件，关闭当前页签优先切换到右侧相邻项，否则切换到左侧。批量关闭一次更新状态并清理对应的阅读位置和缓存。
+
 Markdown 默认显示排版，可切换「预览／源码」。标题、列表、表格、引用、链接和代码块通过 `markdown-it` 转换为结构化组件，不执行文档 HTML 或脚本。相对文件、PNG／JPEG／GIF／WebP 图片从文档所在目录解析，经认证 RPC 读取，不能越出 Workspace。单图 4 MiB、当前文档图片总量 8 MiB；排版、节点或代码块超过预览预算时切换到源码，原文件仍可下载。
 
 文件与 Git Diff 共用语言目录、后端 Prism 解析器、文本标记和深浅主题配色。覆盖 Go、JS／TS／JSX／TSX、Python、Java、Kotlin、Swift、C／C++／C#、Rust、Shell、SQL、JSON／JSONC／JSON5、YAML、TOML、INI、Properties、HTML／XML／SVG、CSS／SCSS／Less、Markdown、Dockerfile、Makefile 及常见配置文件名。未知类型按纯文本显示。

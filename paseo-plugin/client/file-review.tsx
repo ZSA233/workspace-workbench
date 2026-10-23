@@ -42,7 +42,7 @@ import {
 } from "./model";
 import {
   openFileReview,
-  closeFileReview,
+  closeFileReviews,
   getFileReviewPosition,
   selectionKey,
   setActiveFileReview,
@@ -55,6 +55,7 @@ import { useReviewModePreference } from "./review-preferences";
 import type { ReviewMode } from "./review-mode";
 import { useWorkbenchCopy,useWorkbenchLocale } from "./i18n";
 import { reportNativeDiagnostic } from "./native-diagnostics";
+import type {TabCloseMode} from './tab-close';
 
 type FilePanelProps = PluginWorkspacePanelProps | PluginAgentPanelProps;
 const MIN_SPLIT_PANEL_WIDTH = 900;
@@ -187,8 +188,8 @@ function SingleFileReviewPanel(props: FilePanelProps) {
   });
   const error = responseErrorLabel(diffQuery.data, diffQuery.error, Boolean(diff), copy);
 
-  function close(selection: FileReviewSelection): void {
-    closeFileReview(hostWorkspaceId, selectionKey(selection));
+  function close(selection: FileReviewSelection,mode:TabCloseMode='current'): void {
+    closeFileReviews(hostWorkspaceId, selectionKey(selection),mode);
   }
 
   return (

@@ -1,5 +1,6 @@
 import {useSyncExternalStore} from 'react';
 import {clearDocumentCache,evictDocumentCache} from './document-reader.ts';
+import {resolveTabClose,type TabCloseMode} from './tab-close.ts';
 export type DocumentSelection={hostWorkspaceId:string;agentId?:string;projectConfig:string;scope:string;workspaceId:string;instance:string;workspaceName:string;directory:string;path:string};
 type Open=(selection:DocumentSelection,back?:boolean)=>void;
 let opener:Open|undefined;
@@ -9,11 +10,20 @@ export const documentKey=(s:DocumentSelection)=>JSON.stringify([s.scope,s.worksp
 const emit=()=>listeners.forEach(f=>f());
 export function configureDocumentOpener(next:Open){opener=next;return()=>{if(opener===next)opener=undefined;};}
 export function openDocument(s:DocumentSelection){const values=selections.get(s.hostWorkspaceId)||[],key=documentKey(s);selections.set(s.hostWorkspaceId,[...values.filter(v=>documentKey(v)!==key),s].slice(-16));active.set(s.hostWorkspaceId,key);emit();opener?.(s);}
-export function closeDocument(s:DocumentSelection){evictDocumentCache(s.scope+'\0'+documentKey(s));const values=(selections.get(s.hostWorkspaceId)||[]).filter(v=>documentKey(v)!==documentKey(s));selections.set(s.hostWorkspaceId,values);active.set(s.hostWorkspaceId,values.at(-1)?documentKey(values.at(-1)!):'');emit();}
+export function closeDocument(s:DocumentSelection,mode:TabCloseMode='current'){
+ const result=resolveTabClose(getDocuments(s.hostWorkspaceId),documentKey,documentKey(s),getActiveDocumentKey(s.hostWorkspaceId),mode);
+ if(!result.removed.length)return;
+ for(const closed of result.removed)evictDocumentCache(closed.scope+'\0'+documentKey(closed));
+ if(result.values.length)selections.set(s.hostWorkspaceId,result.values);else selections.delete(s.hostWorkspaceId);
+ if(result.activeKey)active.set(s.hostWorkspaceId,result.activeKey);else active.delete(s.hostWorkspaceId);
+ emit();
+}
 export function backToFiles(s:DocumentSelection){returns.delete(s.scope);returns.set(s.scope,{...s});if(returns.size>16)returns.delete(returns.keys().next().value!);emit();opener?.(s,true);}
 export function activateDocument(s:DocumentSelection){active.set(s.hostWorkspaceId,documentKey(s));emit();}
-export function useDocuments(host:string){return useSyncExternalStore(f=>{listeners.add(f);return()=>{listeners.delete(f);};},()=>selections.get(host)||empty);}
-export function useActiveDocument(host:string){return useSyncExternalStore(f=>{listeners.add(f);return()=>{listeners.delete(f);};},()=>active.get(host)||'');}
+export function getDocuments(host:string){return selections.get(host)||empty;}
+export function getActiveDocumentKey(host:string){return active.get(host)||'';}
+export function useDocuments(host:string){return useSyncExternalStore(f=>{listeners.add(f);return()=>{listeners.delete(f);};},()=>getDocuments(host));}
+export function useActiveDocument(host:string){return useSyncExternalStore(f=>{listeners.add(f);return()=>{listeners.delete(f);};},()=>getActiveDocumentKey(host));}
 export function useDocumentReturn(scope:string){return useSyncExternalStore(f=>{listeners.add(f);return()=>{listeners.delete(f);};},()=>returns.get(scope));}
 export function consumeDocumentReturn(scope:string,target:DocumentSelection){if(returns.get(scope)===target){returns.delete(scope);emit();}}
 export function clearDocuments(host:string){for(const s of selections.get(host)||[])clearDocumentCache(s.scope,s.workspaceId);selections.delete(host);active.delete(host);emit();}

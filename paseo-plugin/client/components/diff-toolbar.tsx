@@ -2,7 +2,7 @@ import type {ReactNode} from 'react';
 import {useCallback,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {Platform,Pressable,Text,View} from 'react-native';
 import type {PluginWorkspacePanelProps} from '@getpaseo/plugin/client';
-import {Icon,ScrollView,useToast} from '../native-components';
+import {Icon,ScrollView} from '../native-components';
 import {IconButton} from './icon-button';
 import {ComparisonPopover,type PopoverAnchor} from './comparison-popover';
 import {selectionKey,type FileReviewSelection} from '../file-review-store';
@@ -12,19 +12,22 @@ import type {DiffReading} from '../use-diff-reading';
 import type {ReviewMode} from '../review-mode';
 import {useWorkbenchCopy,useWorkbenchLocale} from '../i18n';
 import {observerAccent} from '../theme';
+import {EditorTab,TabContextMenu,type TabMenuTarget} from './editor-tab';
+import type {TabCloseMode} from '../tab-close';
 
 type Props={extra?:ReactNode;selections:FileReviewSelection[];activeKey:string;selection?:FileReviewSelection;diff:DiffResult|null;reading:Pick<DiffReading,'hunkRowIndexes'|'currentHunk'|'jumpToHunk'|'parsed'>;navigationLabel?:string;
- onSelect(key:string):void;onClose(selection:FileReviewSelection):void;width:number;theme:PluginWorkspacePanelProps['theme'];
+ onSelect(key:string):void;onClose(selection:FileReviewSelection,mode?:TabCloseMode):void;width:number;theme:PluginWorkspacePanelProps['theme'];
  mode:ReviewMode;narrow:boolean;onMode():void;fontSize:number;wrap:boolean;onDisplay(patch:{fontSize?:number;wrap?:boolean}):void;stale:boolean;retry?:()=>void};
 export function DiffToolbar(props:Props){
  const {selections,activeKey,selection,diff,reading,width,theme,mode,narrow,onMode,fontSize,wrap,onDisplay,onSelect,onClose,stale,retry}=props;
- const copy=useWorkbenchCopy(),locale=useWorkbenchLocale(),toast=useToast(),zh=locale==='zh-CN';
+ const copy=useWorkbenchCopy(),locale=useWorkbenchLocale(),zh=locale==='zh-CN';
  const text=(cn:string,en:string)=>zh?cn:en;
  const colors=theme.colors,accent=observerAccent(theme),touch=Platform.OS!=='web',layout=diffToolbarLayout(width,touch);
  const labels=useMemo(()=>diffTabLabels(selections),[selections]);
  const references=diffReadingReferences(selection,diff);
  const [tabWidth,setTabWidth]=useState(0);
  const [overlay,setOverlay]=useState<'more'|'details'|null>(null);
+ const [tabMenu,setTabMenu]=useState<TabMenuTarget|null>(null);
  const [anchor,setAnchor]=useState<PopoverAnchor>({x:0,y:0,width:Math.max(width,280),height:layout.minHeight});
  const root=useRef<any>(null),tabs=useRef<any>(null),frames=useRef(new Map<string,{x:number;width:number}>()),viewport=useRef(0),offset=useRef(0);
  const reveal=useCallback(()=>{
@@ -32,8 +35,9 @@ export function DiffToolbar(props:Props){
   const next=frame.x<offset.current?frame.x:frame.x+frame.width>offset.current+viewport.current?Math.max(0,frame.x+frame.width-viewport.current):offset.current;
   if(next!==offset.current){offset.current=next;tabs.current?.scrollTo?.({x:next,animated:false});}
  },[activeKey]);
- useLayoutEffect(()=>{setOverlay(null);reveal();},[activeKey,reveal]);
- const open=(kind:'more'|'details')=>{root.current?.measureInWindow?.((x:number,y:number,w:number,height:number)=>setAnchor({x,y,width:w,height}));setOverlay(kind);};
+ useLayoutEffect(()=>{setOverlay(null);setTabMenu(null);reveal();},[activeKey,reveal]);
+ useLayoutEffect(()=>{const live=new Set(selections.map(selectionKey));for(const key of frames.current.keys())if(!live.has(key))frames.current.delete(key);},[selections]);
+ const open=(kind:'more'|'details')=>{setTabMenu(null);root.current?.measureInWindow?.((x:number,y:number,w:number,height:number)=>setAnchor({x,y,width:w,height}));setOverlay(kind);};
  const muted={color:colors.foregroundMuted,fontSize:12},normal={color:colors.foreground,fontSize:12};
  const closeLabel=text('关闭 Diff 设置','Close Diff settings');
  const item=(label:string,action:()=>void,disabled=false)=><Pressable accessibilityRole="button" disabled={disabled} accessibilityState={{disabled}} onPress={action} style={{paddingVertical:touch?12:8,opacity:disabled?0.5:1}}><Text style={normal}>{label}</Text></Pressable>;
@@ -46,17 +50,17 @@ export function DiffToolbar(props:Props){
     {selections.map((entry,index)=>{
       const key=selectionKey(entry),active=key===activeKey;
       const description=`${entry.workspaceId} / ${entry.repoPath} / ${entry.path}`;
-      return <View key={key} onLayout={event=>{frames.current.set(key,event.nativeEvent.layout);if(active)reveal();}}
-       {...(Platform.OS==='web'?{onAuxClick:(event:any)=>{if(event.button===1){event.preventDefault();onClose(entry);}}}:{} )}
+      return <EditorTab key={key} tabKey={key} onClose={()=>onClose(entry)} onMenu={target=>{setOverlay(null);setTabMenu(target);}} onLayout={event=>{frames.current.set(key,event.nativeEvent.layout);if(active)reveal();}}
        style={{flexDirection:'row',alignItems:'center',minHeight:layout.minHeight-1,borderBottomWidth:2,borderBottomColor:active?accent:'transparent',backgroundColor:active?colors.surface2:'transparent',flexShrink:0}}>
-       <Pressable accessibilityRole="tab" accessibilityLabel={labels[index]} accessibilityState={{selected:active}} onPress={()=>onSelect(key)} onLongPress={()=>toast.show(description)}
+       {openMenu=><><Pressable accessibilityRole="tab" accessibilityLabel={labels[index]} accessibilityState={{selected:active}} onPress={()=>onSelect(key)} onLongPress={openMenu}
         {...(Platform.OS==='web'?{title:description,'aria-selected':active}:{})} style={{flexDirection:'row',alignItems:'center',paddingHorizontal:8,minHeight:touch?44:30,gap:5,maxWidth:260}}>
         <Text style={{fontSize:12,fontWeight:'700',color:entry.status==='A'?colors.statusSuccess:entry.status==='D'?colors.statusDanger:entry.status==='R'?accent:colors.statusWarning}}>{entry.kind==='comparison'?'':entry.status||'M'}</Text>
         {active&&stale?<Icon name="CircleAlert" size={12} color={colors.statusWarning}/>:null}
         <Text numberOfLines={1} style={[normal,{flexShrink:1,maxWidth:tabWidth?Math.min(210,Math.max(24,tabWidth-(touch?76:58))):210}]}>{labels[index]}</Text>
        </Pressable>
        <IconButton label={`${text('关闭','Close')} ${labels[index]}`} icon="X" color={colors.foregroundMuted} onPress={()=>onClose(entry)}/>
-      </View>;
+       </>}
+      </EditorTab>;
     })}
     {!selections.length?<Text style={muted}>{copy.text_336884b48e}</Text>:null}
    </ScrollView>
@@ -73,6 +77,7 @@ export function DiffToolbar(props:Props){
     <IconButton label={text('Diff 阅读设置','Diff reading settings')} icon="Ellipsis" color={colors.foregroundMuted} onPress={()=>open('more')}/>
    </View>
   </View>
+  {tabMenu?(()=>{const index=selections.findIndex(entry=>selectionKey(entry)===tabMenu.key),entry=selections[index];return entry?<TabContextMenu target={tabMenu} keys={selections.map(selectionKey)} label={labels[index]} description={`${entry.workspaceId} / ${entry.repoPath} / ${entry.path}`} theme={theme} onClose={()=>setTabMenu(null)} onAction={mode=>onClose(entry,mode)}/>:null;})():null}
   {overlay?<ComparisonPopover title={overlay==='more'?text('Diff 阅读设置','Diff reading settings'):text('比较详情','Comparison details')} testID="diff-reading-popover" closeLabel={closeLabel} anchor={anchor} onClose={()=>setOverlay(null)} theme={theme}>
     {overlay==='more'?<>
       <Text style={muted}>{text('代码字号','Code size')}</Text>

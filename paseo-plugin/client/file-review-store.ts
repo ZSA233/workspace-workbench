@@ -1,5 +1,6 @@
 import { comparisonKey, type Comparison } from '../shared/comparison.ts';
 import { useSyncExternalStore } from "react";
+import {resolveTabClose,type TabCloseMode} from './tab-close.ts';
 
 export type FileReviewSelection = {
   kind?:'file'|'comparison';
@@ -90,24 +91,23 @@ export function openFileReview(
 }
 
 export function closeFileReview(hostWorkspaceId: string, closingKey: string): void {
-  comparisonViews.delete(JSON.stringify([hostWorkspaceId,closingKey]));
+  closeFileReviews(hostWorkspaceId, closingKey, 'current');
+}
+
+export function closeFileReviews(hostWorkspaceId: string, anchorKey: string, mode: TabCloseMode): void {
   const current = selectionsByHostWorkspace.get(hostWorkspaceId) || [];
-  const closingIndex = current.findIndex((item) => selectionKey(item) === closingKey);
-  const next = current.filter((item) => selectionKey(item) !== closingKey);
-  if (next.length === current.length) return;
+  const result = resolveTabClose(current, selectionKey, anchorKey, getActiveFileReviewKey(hostWorkspaceId), mode);
+  if (!result.removed.length) return;
   const positions = positionsByHostWorkspace.get(hostWorkspaceId);
-  positions?.delete(closingKey);
-  if (!positions?.size) positionsByHostWorkspace.delete(hostWorkspaceId);
-  if (next.length) selectionsByHostWorkspace.set(hostWorkspaceId, next);
-  else selectionsByHostWorkspace.delete(hostWorkspaceId);
-  const activeKey = activeKeysByHostWorkspace.get(hostWorkspaceId);
-  if (!next.length) {
-    activeKeysByHostWorkspace.delete(hostWorkspaceId);
-  } else if (activeKey === closingKey || !next.some((item) => selectionKey(item) === activeKey)) {
-    const fallback = next[closingIndex] || next[closingIndex - 1];
-    if (fallback) activeKeysByHostWorkspace.set(hostWorkspaceId, selectionKey(fallback));
-    else activeKeysByHostWorkspace.delete(hostWorkspaceId);
+  for (const selection of result.removed) {
+    const key = selectionKey(selection);
+    comparisonViews.delete(JSON.stringify([hostWorkspaceId,key])); positions?.delete(key);
   }
+  if (!positions?.size) positionsByHostWorkspace.delete(hostWorkspaceId);
+  if (result.values.length) selectionsByHostWorkspace.set(hostWorkspaceId, result.values);
+  else selectionsByHostWorkspace.delete(hostWorkspaceId);
+  if (result.activeKey) activeKeysByHostWorkspace.set(hostWorkspaceId, result.activeKey);
+  else activeKeysByHostWorkspace.delete(hostWorkspaceId);
   notify();
 }
 

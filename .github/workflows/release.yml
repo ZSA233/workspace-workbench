@@ -47,6 +47,15 @@ jobs:
           path: dist
       - name: Verify artifact checksums
         run: cd dist && sha256sum -c SHA256SUMS
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --title "$RELEASE_TAG" --verify-tag --generate-notes
+          fi
       - name: Promote released commit to stable
         if: github.event_name == 'push' || inputs.promote_stable == true
         shell: bash
@@ -71,12 +80,3 @@ jobs:
             exit 1
           fi
           echo "stable now points to $release_sha"
-      - name: Publish GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/* --clobber
-          else
-            gh release create "$RELEASE_TAG" dist/* --title "$RELEASE_TAG" --verify-tag --generate-notes
-          fi

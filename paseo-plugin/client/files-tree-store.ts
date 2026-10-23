@@ -139,12 +139,25 @@ export class FilesTreeState {
     const visit = (path: string, depth: number) => {
       const page = this.pages.get(path);
       for (const entry of page?.entries || []) {
-        if (!filter || entry.name.toLocaleLowerCase().includes(filter) || entry.kind === 'directory') result.push({ key: entry.path, path: entry.path, depth, entry });
+        result.push({ key: entry.path, path: entry.path, depth, entry });
         if (entry.kind === 'directory' && this.expanded.has(entry.path)) visit(entry.path, depth + 1);
       }
       if (page?.cursor) result.push({ key: path + '/:more', path, depth, more: true });
     };
-    if (this.expanded.has('')) visit('', 1); return result;
+    if (this.expanded.has('')) visit('', 1);
+    if (!filter) return result;
+    // Keep just the matches and the ancestors needed to locate them. Directory
+    // rows are context, not unconditional matches; do not fetch while filtering.
+    const retained = new Set(['']);
+    for (const row of result) {
+      if (!row.entry?.name.toLocaleLowerCase().includes(filter)) continue;
+      let path = row.path;
+      while (!retained.has(path)) {
+        retained.add(path);
+        path = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+      }
+    }
+    return result.filter(row => retained.has(row.path));
   }
 }
 const states = new Map<string, FilesTreeState>();

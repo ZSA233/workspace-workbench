@@ -22,7 +22,7 @@ const response = (sessions: any[] = []) => ({ sessions, policy, available: true,
 
 function fixture(options: { fail?: string; missing?: string; cleanupFailure?: string; throwRpc?: boolean; platform?: string; stateFailure?: boolean } = {}) {
   const registered = new Map<string, unknown>(), removed: string[] = [], calls: string[] = [], diagnostics: any[] = [], intervals = new Map<number, () => void>();
-  const requires: string[] = [];
+  const requires: string[] = [], panels: any[] = [];
   const frames = new Map<number, () => void>();
   let nextTimer = 1, sessions: any[] = [], disposedCalls = 0;
   const add = (name: string, value?: unknown) => {
@@ -36,7 +36,7 @@ function fixture(options: { fail?: string; missing?: string; cleanupFailure?: st
     addSurface: (id: string, component: unknown) => add(`surface:${id}`, component),
     addSidebarItem: (item: any) => add(`sidebar:${item.id}`),
     addSettingsScreen: (item: any) => add(`settings:${item.id}`, item.Component),
-    addWorkspacePanel: (item: any) => add(`panel:${item.id}`, item.Component),
+    addWorkspacePanel: (item: any) => { panels.push(item); return add(`panel:${item.id}`, item.Component); },
     addCommandCenterItem: (item: any) => add(`command:${item.id}`, item),
     addHeaderButton: (item: any) => ({ remove: add(`header:${item.workspaceId}`), update() {} }),
     addComposerPill: (item: any) => ({ remove: add(`pill:${item.agentId}`), update() { calls.push(`update:${item.agentId}`); if (options.fail === "pill:update") throw Error("pill update failed"); } }),
@@ -72,7 +72,7 @@ function fixture(options: { fail?: string; missing?: string; cleanupFailure?: st
   for (const name of ["window", "document", "Element", "Worker"]) Object.defineProperty(context, name, { get() { throw Error(`native entry accessed ${name}`); } });
   vm.runInNewContext(compiled, context);
   const contribute = context.module.exports.default;
-  return { contribute: () => contribute(client), client, registered, removed, calls, diagnostics, intervals, requires, context,
+  return { contribute: () => contribute(client), client, registered, removed, calls, diagnostics, intervals, requires, panels, context,
     frame() { const pending = [...frames.values()]; frames.clear(); pending.forEach(run => run()); }, frames,
     setSessions(value: any[]) { sessions = value; }, cleanupCalls: () => disposedCalls };
 }
@@ -251,4 +251,16 @@ test("recovery panel registration only imports the full UI on demand", () => {
   assert.ok(source.includes('import("./session-recovery-panel")'));
   assert.ok(!source.includes('from "./native-components"'));
   assert.ok(!source.includes("new RecoveryClientStore"));
+});
+
+test("web Explorer panels use the official host registration without accessing a Pocket SDK", async () => {
+  const f = fixture({ platform: "web" });
+  Object.defineProperty(f.context, "Pocket", { get() { throw new Error("obsolete Pocket SDK access"); } });
+  const cleanup = f.contribute(); await tick();
+  assert.deepEqual(f.panels.filter(panel => panel.locations.includes("explorer")).map(panel =>
+    [panel.id, panel.context, Array.from(panel.locations)]), [
+    ["workspace-workbench-workspace", "workspace", ["explorer"]],
+    ["workspace-workbench-agent", "agent", ["explorer"]],
+  ]);
+  cleanup(); assert.equal(f.registered.size, 0);
 });

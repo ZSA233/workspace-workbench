@@ -39,8 +39,6 @@ if (withWorkbench) {
   if (process.env.POCKET_TEST_EXTENSION_HELPER === '1') {
     examplePlugin = join(root, 'example-plugin');
     await cp(resolve('paseo-plugin/scripts/fixtures/pocket-example'), examplePlugin, { recursive: true });
-    await mkdir(join(examplePlugin, 'client'), { recursive: true });
-    await cp(resolve('paseo-plugin/client/pocket-sdk/index.ts'), join(examplePlugin, 'client/pocket-sdk.ts'));
     await symlink(resolve('paseo-plugin/node_modules'), join(examplePlugin, 'node_modules'));
     await writeFile(join(examplePlugin, 'package.json'), JSON.stringify({ name: 'pocket-example', version: '1.0.0', type: 'module' }));
     await writeFile(join(examplePlugin, 'paseo-plugin.json'), JSON.stringify({ id: 'pocket-example', requirements: { paseo: '>=0.12.0' } }));

@@ -8,10 +8,7 @@
 使用 Node.js 22.14+ 统一管理各项目的 TypeScript 后端，并在重载或卸载时回收属于自己的
 后端进程和 socket。
 
-Pocket 0.1.11 与受支持的 Paseo Web 0.12.0 会在右侧文件／变更栏追加 Workbench Tab，
-首次选中才加载工作台，复用本插件已有的 RPC、会话上下文和缓存。打开文件或 Diff 后收起侧栏，
-返回文件会重新展开工作台。普通浏览器、桌面和旧 Pocket 保留原入口。
-独立插件也可打包使用[可选的 Pocket SDK](client/pocket-sdk/README.md)。
+Paseo Web 0.13 的 Explorer 使用官方插件面板入口。在右侧“＋”中选择 Workspace Workbench，即可添加工作台标签；普通浏览器和 Pocket 使用相同注册。面板复用插件已有 RPC 和缓存，不依赖 Pocket 侧栏 SDK。
 
 ## 安装
 

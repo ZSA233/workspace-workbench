@@ -76,11 +76,30 @@
         "One WebView and unsent state across tools, appearance, orientation and background",
         "Real 0.13 observation bridge, bounded metrics and foreground recording"
       ]
+    },
+    "pluginCiNode": {
+      "tests": 747,
+      "passed": 740,
+      "skipped": 7,
+      "failed": 0
     }
   },
   "limitations": [
     "Android evidence uses an isolated API 37 emulator and QA package; no physical phone was connected.",
     "Actual Paseo 0.13 hosts and plugin RPC were used; model turns used a controlled Codex protocol substitute, not a real model.",
     "Image byte/send verification waits for persisted rows and invokes the actual public Send button handler; native PhotoPicker selection and cancellation use Android gestures."
-  ]
+  ],
+  "release": {
+    "sourceCommit": "cd485a781a5a5efe5407b13dc220a2ee7be03682",
+    "apkSha256": "3572dfce62bb18ff45031c5a33b69ade64f01a2465c5aac8daabf4851cf5a0fe",
+    "apkBytes": 12137496,
+    "certificateSha256": "2da3e1a4bf8a44e0e883c2d6989133c54857544b6caf9a35df5d54d3e01e7d69",
+    "androidRelease": "https://github.com/ZSA233/workspace-workbench/releases/tag/android-v0.1.12",
+    "pluginRelease": "https://github.com/ZSA233/workspace-workbench/releases/tag/v0.7.9",
+    "androidActions": "https://github.com/ZSA233/workspace-workbench/actions/runs/40090176295",
+    "pluginActions": "https://github.com/ZSA233/workspace-workbench/actions/runs/40090262131",
+    "publicDownloadsVerified": true,
+    "stableBranchVerified": true,
+    "globalLatest": "v0.7.9"
+  }
 }

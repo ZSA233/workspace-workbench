@@ -39,7 +39,7 @@ class ObservationBridge(private val webView: WebView, private val webVersion: St
         }
     }
     private fun installSupported() {
-        if (webVersion != "0.12.0") { unavailable("version"); return }
+        if (webVersion !in setOf("0.12.0", "0.13.0")) { unavailable("version"); return }
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) ||
             !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) { unavailable("capability"); return }
         val source = webView.context.assets.open("pocket-observer.js").bufferedReader().use { it.readText() }
@@ -84,7 +84,7 @@ class ObservationBridge(private val webView: WebView, private val webVersion: St
                 .also { handler.postDelayed(it, 15000) }
         }
         bucketStart = 0; bucketSize = 0
-        if (!installed) unavailable(if (webVersion == "0.12.0") "capability" else "version")
+        if (!installed) unavailable(if (webVersion in setOf("0.12.0", "0.13.0")) "capability" else "version")
     }
     fun foreground(value: Boolean, verify: Boolean = false) {
         foreground = value

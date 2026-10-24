@@ -36,10 +36,10 @@ const valid = [
 
 test('locked official signature is valid; mirror URL is not part of signed payload', async () => {
   const lock = JSON.parse(await readFile(new URL('../upstream.lock.json', import.meta.url)));
-  assert.equal(verifyMetadata(lock).version, '0.12.0');
+  assert.equal(verifyMetadata(lock).version, '0.13.0');
   lock.dist.tarball = 'https://mirror.test/server.tgz';
   assert.equal(verifyMetadata(lock).dist.tarball, lock.dist.tarball);
-  assert.throws(() => verifyMetadata({ ...lock, version: '0.13.0' }), /signature/);
+  assert.throws(() => verifyMetadata({ ...lock, version: '0.13.1' }), /signature/);
   assert.throws(() => verifyMetadata({ ...lock, name: 'other' }), /identity/);
   lock.dist.signatures = [{ keyid: 'unknown', sig: 'invalid' }];
   assert.throws(() => verifyMetadata(lock), /Untrusted/);

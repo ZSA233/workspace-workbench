@@ -71,8 +71,14 @@ class ShellDeviceTest {
                 val selector = if (text in setOf("跟随系统", "明亮", "深色")) By.clazz(RadioButton::class.java).text(text) else By.text(text)
                 var item = device.wait(Until.findObject(selector), 5000)
                 if (item == null || item.visibleBounds.isEmpty) {
-                    androidx.test.uiautomator.UiScrollable(androidx.test.uiautomator.UiSelector().scrollable(true)).scrollTextIntoView(text)
-                    item = device.wait(Until.findObject(selector), 5000)
+                    // UiSelector searches the active window, which can still be WebView.
+                    // BySelector finds the native sheet's scroll view across windows.
+                    for (step in 0 until 5) {
+                        val scroll = device.wait(Until.findObject(By.clazz("android.widget.ScrollView").scrollable(true)), 2000) ?: break
+                        scroll.scroll(androidx.test.uiautomator.Direction.DOWN, 0.75f)
+                        item = device.wait(Until.findObject(selector), 750)
+                        if (item != null && !item.visibleBounds.isEmpty) break
+                    }
                 }
                 val target = item ?: error("Missing UI: $text")
                 target.click(); device.waitForIdle(1000); return

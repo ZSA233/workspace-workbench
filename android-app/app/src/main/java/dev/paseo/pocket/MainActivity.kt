@@ -133,7 +133,7 @@ class MainActivity : AppCompatActivity() {
                             if (!session.destroyed && session.webView.canGoBack()) session.webView.goBack()
                             else moveTaskToBack(true)
                         }
-                        if (!session.handleExtensionBack(::navigateBack)) navigateBack()
+                        navigateBack()
                     }
                 }
             }
@@ -243,7 +243,7 @@ class MainActivity : AppCompatActivity() {
     }
     override fun onResume() {
         super.onResume()
-        if (::session.isInitialized && !session.destroyed) { session.webView.resumeTimers(); session.webView.onResume(); session.foreground(true) }
+        if (::session.isInitialized && !session.destroyed) { session.webView.resumeTimers(); session.webView.onResume() }
         observation.foreground(true, resumedAfterMs)
         appUpdateUi.foreground(true)
         resumedAfterMs = null
@@ -251,7 +251,7 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         appUpdateUi.foreground(false)
         observation.foreground(false)
-        if (::session.isInitialized && !session.destroyed) { session.foreground(false); session.webView.onPause() }
+        if (::session.isInitialized && !session.destroyed) { session.webView.onPause() }
         super.onPause()
     }
     override fun onStop() { background.background(); super.onStop() }

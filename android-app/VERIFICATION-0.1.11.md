@@ -2,7 +2,7 @@
 
 Pocket 客户端扩展接口 v1 已接入真实 Paseo Web 0.12.0。右侧栏保留文件和变更页，追加由已安装插件声明的 Tab。Workbench 首次选中才挂载，复用安装实例的 React、RPC、查询缓存、主题及上下文。SDK 不包含 React、网页选择器或原生模块，不增加安装体系或设备权限。
 
-[SDK 与接入示例](../paseo-plugin/client/pocket-sdk/README.md) · [适配维护](EXTENSIONS.md) · [结果与源码哈希](../docs/verification/pocket-extensions-0.1.11/summary.json)
+[SDK 与接入示例](https://github.com/ZSA233/workspace-workbench/tree/android-v0.1.11/paseo-plugin/client/pocket-sdk) · [适配维护](EXTENSIONS.md) · [结果与源码哈希](../docs/verification/pocket-extensions-0.1.11/summary.json)
 
 ## 实际验证
 

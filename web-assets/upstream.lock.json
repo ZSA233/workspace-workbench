@@ -1,12 +1,18 @@
 {
   "name": "@getpaseo/server",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "dist": {
-    "tarball": "https://registry.npmjs.org/@getpaseo/server/-/server-0.12.0.tgz",
-    "integrity": "sha512-tURu5huZFJCk4rjWLO3ipRXO9AQmV1XJETzf286xbEapAzmwmjRMM+F8daGsxTaKRHD+jWZpeBcxPCcI/+WxNA==",
-    "signatures": [{
-      "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
-      "sig": "MEQCIG+GdtHbLoKzFuRSe5BNtimbGpG9hUTSnq56W4isME1dAiBhf2kgK/n3ej5KEk7Srf/92fT8Nnh4rsUTb8I03Z822g=="
-    }]
+    "tarball": "https://registry.npmjs.org/@getpaseo/server/-/server-0.13.0.tgz",
+    "integrity": "sha512-snSnCVggqRtGgEnIZhWnWABA/ad0V5jfbV/Mr2ZmgEeszhZqAS+0+ifNnMop/8+cLaFcHVPXdI1f514ox7Cqyg==",
+    "signatures": [
+      {
+        "sig": "MEUCIGkk+USwHx4UIsQhfOGeypovzh6PnHgntgJ7ucHnCwoWAiEAvC1pDBcCugL56tK5B5iDvsHywW6rLTKzd2IQHlxnqEA=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      },
+      {
+        "sig": "MEUCIQD59bkdlonExti89aTreuEO4tRTPK6chwXijMp02YU/cgIgaHxtWisIfUFIY4Y/oJuxgnwx8lCSR+cQ+JOUeQaf4+A=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ]
   }
 }

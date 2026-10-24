@@ -246,6 +246,15 @@ try {
     for(const kind of ['visibilitychange','focus','blur'])window.addEventListener(kind,event=>window.__pocketImageQaEvents.push({kind,trusted:event.isTrusted,at:performance.now(),visibility:document.visibilityState}));
     window.addEventListener('error',event=>window.__pocketImageQaErrors.push(String(event.message)));
     window.addEventListener('unhandledrejection',event=>window.__pocketImageQaErrors.push(String(event.reason?.message??event.reason)));return true})()`);
+  // Optional instrumentation of only the owned QA page to diagnose storage races.
+  if (process.env.POCKET_IMAGE_TRACE_STORAGE === '1') await cdp.evaluate(`(()=>{
+    window.__pocketImageQaStorageEvents=[];
+    const record=(kind,id,extra={})=>window.__pocketImageQaStorageEvents.push({kind,id,at:performance.now(),...extra});
+    const put=IDBObjectStore.prototype.put,remove=IDBObjectStore.prototype.delete,cursorDelete=IDBCursor.prototype.delete;
+    IDBObjectStore.prototype.put=function(value,...rest){if(this.name==='attachments'){record('put',value.id,{name:value.fileName});this.transaction.addEventListener('complete',()=>record('commit',value.id));this.transaction.addEventListener('abort',()=>record('abort',value.id,{error:this.transaction.error?.name}));}return put.call(this,value,...rest)};
+    IDBObjectStore.prototype.delete=function(key){if(this.name==='attachments')record('delete',key);return remove.call(this,key)};
+    IDBCursor.prototype.delete=function(){if(this.source?.name==='attachments')record('collect',this.key);return cursorDelete.call(this)};
+    return true})()`);
   phase = 'seed-owned-images';
   for (let index = 0; index < count; index++) {
     const base64 = await cdp.evaluate(`(()=>{const canvas=document.createElement('canvas');canvas.width=160;canvas.height=100;const context=canvas.getContext('2d');context.fillStyle=${JSON.stringify(index ? '#c87c38' : '#319971')};context.fillRect(0,0,160,100);context.fillStyle='#ffffff';context.font='bold 24px sans-serif';context.fillText('Pocket QA ${index + 1}',8,56);return canvas.toDataURL('image/png').split(',')[1]})()`);
@@ -276,7 +285,9 @@ try {
   await nativeTap(done);
   phase = 'attachment-persistence';
   await wait(() => cdp.evaluate(`document.querySelectorAll('[data-testid="composer-image-attachment-pill"]').length===${count}`), 'native selection produced actual attachment pills');
-  const persisted = await idbImages();
+  // Pills can render after put.success, before all independent transactions commit.
+  // Wait for actual stored rows before checking bytes or cleaning up source photos.
+  const persisted = await wait(async () => { const rows = await idbImages(); return rows.length === count ? rows : null; }, 'all selected images persisted in IndexedDB');
   report.persistedImages = persisted.map(({ base64, ...row }) => ({ ...row, sha256: sha256(Buffer.from(base64, 'base64')) }));
   assert.deepEqual(report.persistedImages.map(row => row.sha256).sort(), report.sourceImages.map(row => row.sha256).sort(), 'Native selected image bytes differ from the generated source images');
   assert(report.persistedImages.every(row => row.mimeType === 'image/png'));
@@ -285,7 +296,10 @@ try {
   phase = 'send-through-actual-composer';
   const marker = `MANUAL_CONTINUE Pocket native image QA ${runId}`;
   await fill('[data-testid="message-input-root"] [contenteditable="true"], [data-testid="message-input-root"] textarea', marker);
-  await webTap('[data-testid="message-input-root"] [role="button"]', ['Send message', '发送消息', '发送訊息']);
+  // Exercise the actual public Send handler after the edited value has settled.
+  // Native picker gestures are tested above; avoid an IME/layout race in CDP coordinates here.
+  await wait(() => cdp.evaluate(`(()=>{const node=document.querySelector('[data-testid="message-input-root"] [contenteditable="true"], [data-testid="message-input-root"] textarea');return (node?.value??node?.textContent)===${JSON.stringify(marker)}})()`), 'composer contains the complete QA message');
+  assert.equal(await cdp.evaluate(`(()=>{const button=[...document.querySelectorAll('[data-testid="message-input-root"] [role="button"]')].find(n=>['Send message','发送消息','发送訊息'].includes(n.getAttribute('aria-label'))&&!n.disabled&&n.getAttribute('aria-disabled')!=='true');if(!button)return false;button.click();return true})()`), true);
   const delivered = await wait(async () => {
     for (const file of await readdir(join(fixture.home, 'codex'))) {
       if (!file.endsWith('.json')) continue;
@@ -310,8 +324,8 @@ try {
   process.exitCode = 1;
 } finally {
   if (cdp) {
-    await cdp.evaluate('({events:window.__pocketImageQaEvents??[],errors:window.__pocketImageQaErrors??[],noticeObservations:window.__pocketImageQaReadNotices?.()??[],noticeMonitorStartedAt:window.__pocketImageQaNoticeMonitorStartedAt??null,pills:document.querySelectorAll("[data-testid=composer-image-attachment-pill]").length,notice:document.querySelector("[data-pocket-image-status]")?.textContent??""})')
-      .then(state => { report.events = state.events; report.noticeObservations = state.noticeObservations; report.noticeMonitorStartedAt = state.noticeMonitorStartedAt; report.pageErrors = state.errors; report.finalComposer = { pills: state.pills, notice: state.notice }; }).catch(() => {});
+    await cdp.evaluate('({storageEvents:window.__pocketImageQaStorageEvents??[],events:window.__pocketImageQaEvents??[],errors:window.__pocketImageQaErrors??[],noticeObservations:window.__pocketImageQaReadNotices?.()??[],noticeMonitorStartedAt:window.__pocketImageQaNoticeMonitorStartedAt??null,pills:document.querySelectorAll("[data-testid=composer-image-attachment-pill]").length,notice:document.querySelector("[data-pocket-image-status]")?.textContent??""})')
+      .then(state => { report.storageEvents = state.storageEvents; report.events = state.events; report.noticeObservations = state.noticeObservations; report.noticeMonitorStartedAt = state.noticeMonitorStartedAt; report.pageErrors = state.errors; report.finalComposer = { pills: state.pills, notice: state.notice }; }).catch(() => {});
     await cdp.close().catch(() => {});
   }
   for (const path of mediaPaths) await adb(serial, ['shell', 'rm', '-f', path]).catch(() => {});

@@ -1,0 +1,78 @@
+{
+  "versions": {
+    "pocket": "0.1.12",
+    "versionCode": 13,
+    "plugin": "0.7.9",
+    "web": "0.13.0"
+  },
+  "browser": {
+    "kind": "actual-Paseo-013-official-sidebar",
+    "ok": true,
+    "checks": [
+      "Official + menu lazily opens the real Workbench panel, without Pocket API, module hooks or extra rendering containers.",
+      "Built-in Files and Workbench use the same official tab rail and preserve the workspace route.",
+      "Opening the actual Markdown file uses the existing File Viewer; Back to files restores the Workbench directory.",
+      "A real committed comparison opens the existing Diff viewer and returns to the official Workbench tab.",
+      "A second actual plugin opens through the same official API with its own RPC and workspace context.",
+      "Paseo restores the selected official plugin tab after a full document reload.",
+      "The same official panel survives appearance and compact-to-wide layout changes."
+    ],
+    "errors": []
+  },
+  "android": {
+    "kind": "actual-Pocket-Android-official-sidebar",
+    "ok": true,
+    "checks": [
+      "The real APK uses Paseo 0.13 official + and Workbench Tab, without window.Pocket, module hooks or injected sidebar.",
+      "Official Files and Workbench switch within the same workspace and WebView.",
+      "Independent connection observation and image compatibility adapters are active on the new official page.",
+      "The actual QA process restart restores pairing, conversation and official plugin tab without manually reloading the plugin."
+    ],
+    "errors": [],
+    "observation": {
+      "attached": true,
+      "imageAdapter": true,
+      "saveBridge": true
+    }
+  },
+  "images": {
+    "ok": true,
+    "checks": [
+      "Connected the actual full QA app to only the owned isolated TLS host",
+      "Native cancellation returned without a pill; the next selection remained available",
+      "Real native PhotoPicker confirmation produced expected pills and byte-identical IndexedDB PNGs",
+      "The real send path delivered each original PNG to fake Codex with matching SHA-256",
+      "Continuous DOM observation found no image processing or failure overlay throughout successful selection and send"
+    ],
+    "scenarios": {
+      "images": 2,
+      "cancelFirst": true,
+      "chooserDelayMs": 0
+    },
+    "sourceHashes": [
+      "5d1d65dbff546da967625ed6ca6a4aa6880eff2ce732093dbdeeecd7895bce1a",
+      "e8b71408af849f1d870d01b6cd94a8a74158a1a64de682b012052a4a2177b893"
+    ],
+    "persistedHashes": [
+      "5d1d65dbff546da967625ed6ca6a4aa6880eff2ce732093dbdeeecd7895bce1a",
+      "e8b71408af849f1d870d01b6cd94a8a74158a1a64de682b012052a4a2177b893"
+    ],
+    "pageErrors": []
+  },
+  "automated": {
+    "pocketNode": 62,
+    "webAssetsNode": 5,
+    "pluginRegistrationNode": 20,
+    "pluginTypecheck": true,
+    "androidJvm": 43,
+    "lint": "passed",
+    "debugBuild": "passed",
+    "signedReleaseBuild": "passed",
+    "webAssetsInApk": 40
+  },
+  "limitations": [
+    "Android evidence uses an isolated API 37 emulator and QA package; no physical phone was connected.",
+    "Actual Paseo 0.13 hosts and plugin RPC were used; model turns used a controlled Codex protocol substitute, not a real model.",
+    "Image byte/send verification waits for persisted rows and invokes the actual public Send button handler; native PhotoPicker selection and cancellation use Android gestures."
+  ]
+}

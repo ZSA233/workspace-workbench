@@ -1,7 +1,7 @@
 (function pocketImageInput(config) {
   'use strict';
   // APK-owned boundary adapter. The verified Paseo bundle, storage and send path stay intact.
-  if (window !== window.top || location.origin !== 'https://appassets.androidplatform.net' || config.webVersion !== '0.12.0') return null;
+  if (window !== window.top || location.origin !== 'https://appassets.androidplatform.net' || !['0.12.0', '0.13.0'].includes(config.webVersion)) return null;
   let disposed = false, pending = null, notice = null, noticeTimer = null;
   const replay = new WeakSet(), operations = new Set();
   const channel = window.PocketImageInputChannel;

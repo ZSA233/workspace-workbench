@@ -17,9 +17,9 @@ class PackageSecurityTest {
     @Test fun validatesRealNpmSignatureAndMirrorAddress() {
         val trust = PackageTrust.parse(JSONObject(File("../../web-assets/trust.json").readText()))
         val metadata = PackageMetadata.parse(JSONObject(File("../../web-assets/upstream.lock.json").readText()))
-        assertEquals("0.12.0", trust.verify(metadata).version)
+        assertEquals("0.13.0", trust.verify(metadata).version)
         trust.verify(metadata.copy(tarball = "https://mirror.test/server.tgz"))
-        failure("signature_invalid") { trust.verify(metadata.copy(version = "0.13.0")) }
+        failure("signature_invalid") { trust.verify(metadata.copy(version = "0.13.1")) }
         failure("identity_invalid") { trust.verify(metadata.copy(name = "another-package")) }
         failure("unknown_signing_key") { trust.verify(metadata.copy(signatures = listOf(PackageSignature("unknown", "")))) }
         for (url in listOf("http://test.local/", "https://u:p@test.local/", "https://test.local/#secret"))

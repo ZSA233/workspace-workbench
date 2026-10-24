@@ -18,7 +18,7 @@ class PocketImageInput(private val webView: WebView, private val webVersion: Str
     private val events = setOf("image_input_selected", "image_input_ready", "image_input_unsupported", "image_input_unreadable",
         "image_attachment_ready", "image_attachment_unconfirmed", "image_attachment_failed")
     fun install() {
-        if (webVersion != "0.12.0" || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) ||
+        if (webVersion !in setOf("0.12.0", "0.13.0") || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) ||
             !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
         runCatching {
             val source = webView.context.assets.open("pocket-image-input.js").bufferedReader().use { it.readText() }

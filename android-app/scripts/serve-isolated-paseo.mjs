@@ -31,7 +31,7 @@ if (withWorkbench) {
     execFileSync('git', ['-C', repository, 'add', '.']);
     execFileSync('git', ['-C', repository, 'commit', '-qm', 'Initial fixture']);
   }
-  await writeFile(projectConfig, JSON.stringify({ schemaVersion: 1, project: { id: 'pocket-extensions' }, sourceRoot: project,
+  await writeFile(projectConfig, JSON.stringify({ schemaVersion: 1, project: { id: 'pocket-sidebar' }, sourceRoot: project,
     stateRoot: join(project, 'state'), workspaceRoot: join(project, 'workspaces'), socketPath: join(project, 's.sock'),
     discovery: { mode: 'manual' }, repositories: ['one', 'two'].map(id => ({ id, path: id })), management: { enabled: true },
     limits: { cacheTtlSeconds: 0.5 } }));

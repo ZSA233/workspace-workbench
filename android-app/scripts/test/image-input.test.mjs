@@ -8,13 +8,14 @@ const bundleDir = new URL('../../app/src/main/assets/paseo/', import.meta.url);
 const hasBundle = existsSync(new URL('_workbench.json', bundleDir));
 function upstreamModule(marker) {
   const manifest = JSON.parse(readFileSync(new URL('_workbench.json', bundleDir), 'utf8'));
-  assert.equal(manifest.metadata.version, '0.12.0');
-  const code = readFileSync(new URL(manifest.files.find(file => /\/index-[\w]+\.js$/.test(file.path)).path, bundleDir), 'utf8');
+  assert.equal(manifest.metadata.version, '0.13.0');
+  const code = manifest.files.filter(file => /\/index-[\w]+\.js$/.test(file.path))
+    .map(file => readFileSync(new URL(file.path, bundleDir), 'utf8')).find(code => code.includes(marker)) || '';
   const at = code.indexOf(marker); assert(at >= 0, `Upstream contract missing: ${marker}`);
   return code.slice(code.lastIndexOf('\n__d(', at), code.indexOf('\n__d(', at));
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function fixture({ enabled = true, composer = true, setter = true, trusted = true, version = '0.12.0' } = {}) {
+function fixture({ enabled = true, composer = true, setter = true, trusted = true, version = '0.13.0' } = {}) {
   let now = 0, sequence = 0;
   const timers = new Map(), nodes = [], changes = [], errors = [], reports = [], observers = new Set(), windowListeners = new Map();
   const consoleErrors = [], alerts = [];
@@ -108,12 +109,11 @@ test('the real supported bundle retains the DOM input and composer selectors use
   assert(upstreamModule('testID:"message-input-root"').includes('testID:"message-input-root"'));
   assert(upstreamModule('testID:"composer-image-attachment-pill"').includes('testID:"composer-image-attachment-pill"'));
 });
-test('real Expo picker leaves an empty-MIME image Promise pending after its change handler rejects', withBundle, async () => {
-  const f = fixture({ enabled: false }); let settled = false;
-  f.pick().then(() => { settled = true; });
-  f.select([new File([png], 'photo.png')]); await tick();
-  assert.equal(settled, false);
-  assert.match(f.errors[0].message, /Unsupported file type/);
+test('real 0.13 Expo picker rejects unsupported empty MIME instead of leaving a pending picker', withBundle, async () => {
+  const f = fixture({ enabled: false });
+  const result = assert.rejects(f.pick(), /Unsupported file type/);
+  f.select([new File([png], 'photo.png')]); await result;
+  assert.equal(f.errors.length, 0);
 });
 test('real image attachment hook rejects an unadapted image/x-png File after the Expo picker succeeds', withBundle, async () => {
   const f = fixture({ enabled: false }), result = f.pickWithHook();
@@ -221,10 +221,16 @@ test('actual composer persistence failure still rejects and is diagnosed with vi
   f.reject(error); assert.match(f.status(), /未能保存到草稿/); assert(f.reports.includes('image_attachment_failed')); f.api.dispose();
 });
 test('adapter only attaches to the trusted main page and supported bundle version', () => {
-  assert.equal(fixture({ trusted: false }).api, null); assert.equal(fixture({ version: '0.13.0' }).api, null);
+  assert.equal(fixture({ trusted: false }).api, null); assert.equal(fixture({ version: '0.14.0' }).api, null);
 });
 test('generic Workbench file input is untouched', () => {
   const f = fixture(), input = f.document.createElement('input'); input.type = 'file'; input.accept = 'image/*';
   f.document.body.appendChild(input); f.select([new File([png], 'workbench.png')]);
   assert.equal(f.reports.length, 0); assert.equal(f.status(), ''); f.api.dispose();
+});
+
+test('previously selected 0.12 pages retain image compatibility without sidebar injection', withBundle, async () => {
+  const f = fixture({ version: '0.12.0' }), original = new File([png], 'legacy.png', { type: 'image/png' });
+  const result = f.pick(); f.select([original]);
+  assert.equal((await result).assets[0].file, original); f.api.dispose();
 });

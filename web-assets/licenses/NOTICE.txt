@@ -1,9 +1,9 @@
-Paseo Web 0.12.0
+Paseo Web 0.13.0
 Copyright (c) 2025-present Mohamed Boudra and contributors
-Source: https://github.com/getpaseo/paseo/tree/v0.12.0
-Package: https://registry.npmjs.org/@getpaseo/server/-/server-0.12.0.tgz
+Source: https://github.com/getpaseo/paseo/tree/v0.13.0
+Package: https://registry.npmjs.org/@getpaseo/server/-/server-0.13.0.tgz
 
 The npm archive does not include the repository's root LICENSE. The matching
-v0.12.0 LICENSE is retained here and bundled into the APK separately.
+v0.13.0 LICENSE is retained here and bundled into the APK separately.
 Upstream third-party notices embedded in the static files are preserved verbatim.
-See Paseo-0.12.0.txt for the upstream Apache 2.0 license and attribution.
+See Paseo-0.13.0.txt for the upstream Apache 2.0 license and attribution.

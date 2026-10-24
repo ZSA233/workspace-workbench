@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('../../app/src/main/assets/pocket-observer.js', import.meta.url), 'utf8');
-function fixture({ version = '0.12.0', withStore = true, supportedTasks = true } = {}) {
+function fixture({ version = '0.13.0', withStore = true, supportedTasks = true } = {}) {
   let time = 0, next = 0;
   const timers = new Map(), messages = [], all = new Set(), lists = new Set(), observers = new Set();
   const hosts = [{ serverId: 'private-host', password: 'private-password', endpoint: 'secret.example' }];
@@ -155,11 +155,18 @@ const bundleDir = new URL('../../app/src/main/assets/paseo/', import.meta.url);
 const hasBundle = existsSync(new URL('_workbench.json', bundleDir));
 test('locked real web bundle retains the exact adapter contract', { skip: !hasBundle && !process.env.POCKET_VERIFY_BUNDLED_ADAPTER }, () => {
   const manifest = JSON.parse(readFileSync(new URL('_workbench.json', bundleDir), 'utf8'));
-  assert.equal(manifest.metadata.version, '0.12.0');
-  const entry = manifest.files.find(f => /\/index-[\w]+\.js$/.test(f.path));
-  assert(entry, 'Missing bundled web entry');
-  const code = readFileSync(new URL(entry.path, bundleDir), 'utf8');
+  assert.equal(manifest.metadata.version, '0.13.0');
+  const entries = manifest.files.filter(f => /\/index-[\w]+\.js$/.test(f.path));
+  assert(entries.length, 'Missing bundled web entry');
+  const code = entries.map(entry => readFileSync(new URL(entry.path, bundleDir), 'utf8')).join('\n');
   for (const signature of ['__paseoHostRuntimeStore', 'getHosts(){', 'getSnapshot(e){', 'getClient(e){',
     'subscribeAll(e){', 'subscribeHostList(e){', 'ensureConnectedAll(e){', 'getLastLivenessRttMs(){', 'connectionVerification=null',
     'agentDirectoryStatus', 'activeConnection']) assert(code.includes(signature), `Adapter contract changed: ${signature}`);
+});
+
+test('previously selected 0.12 pages retain bounded connection observation', () => {
+  const f = fixture({ version: '0.12.0' }); f.activate();
+  assert.equal(f.latest('state').hosts[0].phase, 'ready');
+  assert.equal(f.all.size, 1); f.api.dispose();
+  assert.equal(f.all.size, 0); assert.equal(f.timers.size, 0);
 });

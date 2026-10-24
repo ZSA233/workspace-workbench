@@ -12,11 +12,11 @@ import { adb, connectDevice } from './device-browser.mjs';
 import { uiNodes } from './device-ui.mjs';
 
 const { values } = parseArgs({ options: { serial: { type: 'string' }, output: { type: 'string' } } });
-assert(values.serial, 'Usage: verify-device-extensions.mjs --serial QA_EMULATOR [--output /tmp/pocket-extensions]');
+assert(values.serial, 'Usage: verify-device-sidebar.mjs --serial QA_EMULATOR [--output /tmp/pocket-sidebar]');
 const serial = values.serial, packageName = 'dev.paseo.pocket.qa', origin = 'https://appassets.androidplatform.net';
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const output = resolve(values.output || '/tmp/pocket-device-extensions'); await mkdir(output, { recursive: true });
-const report = { kind: 'actual-Pocket-Android-client-extensions', serial, packageName, checks: [], screenshots: [], errors: [], ok: false };
+const output = resolve(values.output || '/tmp/pocket-device-sidebar'); await mkdir(output, { recursive: true });
+const report = { kind: 'actual-Pocket-Android-official-sidebar', serial, packageName, checks: [], screenshots: [], errors: [], ok: false };
 let host, fixture, cdp, port, logs = '', hostExited, reversed = false;
 const delay = ms => new Promise(r => setTimeout(r, ms));
 async function wait(check, label, timeout = 30000) {
@@ -28,7 +28,7 @@ async function wait(check, label, timeout = 30000) {
   throw Error(`Timed out: ${label}${last ? ': ' + last.message : ''}`);
 }
 async function visible(selector) {
-  return cdp.evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});if(!node)return false;const r=node.getBoundingClientRect();return r.width>0&&r.height>0&&getComputedStyle(node).visibility!=='hidden';})()`);
+  return cdp.evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});if(!node)return false;const r=node.getBoundingClientRect();return r.width>0&&r.height>0&&r.x<innerWidth&&r.right>0&&r.y<innerHeight&&r.bottom>0&&getComputedStyle(node).visibility!=='hidden';})()`);
 }
 async function tap(selector, texts = []) {
   const point = await wait(() => cdp.evaluate(`(async()=>{const texts=${JSON.stringify(texts)};for(const node of document.querySelectorAll(${JSON.stringify(selector)})){
@@ -68,8 +68,9 @@ async function allowLocalNetwork() {
   await adb(serial, ['shell', 'input', 'tap', String((bounds[0] + bounds[2]) / 2), String((bounds[1] + bounds[3]) / 2)]);
 }
 const toggle = '[data-testid="workspace-explorer-toggle"]';
-const workbenchTab = '[data-testid="pocket-tab-workspace-workbench-paseo-workbench"]';
-const workbench = '[data-testid="pocket-panel-workspace-workbench-paseo-workbench"]';
+const sidebar = '[data-testid="workspace-explorer-sidebar"]';
+const workbenchTab = '[data-testid="workspace-explorer-sidebar"] [role="button"][aria-label="Workspace Workbench"]';
+
 try {
   await adb(serial, ['shell', 'pm', 'path', packageName]);
   report.version = (await adb(serial, ['shell', 'dumpsys', 'package', packageName])).match(/versionName=([^\s]+)/)?.[1];
@@ -105,42 +106,41 @@ try {
   assert.equal(hosts.length, 1); assert(hosts[0].connections.every(connection => connection.type === 'directTcp' && connection.endpoint === `localhost:${port}`));
   await cdp.send('Page.navigate', { url: `${origin}/h/${hosts[0].serverId}/agent/${fixture.agents[0]}` });
   await wait(() => visible(toggle), 'real conversation');
-  assert.equal(await cdp.evaluate('isSecureContext && !!window.Pocket && !!window.__pocketExtensions'), true);
+  // CDP input alone does not grant native WebView focus on every provider.
+  // Focus the actual conversation with an Android touch before checking business data.
+  const web = (await uiNodes(serial)).find(node => node.class === 'android.webkit.WebView');
+  assert(web, 'Missing native WebView');
+  const webBounds = web.bounds.match(/\d+/g).map(Number);
+  await adb(serial, ['shell', 'input', 'tap', String((webBounds[0] + webBounds[2]) / 2), String((webBounds[1] + webBounds[3]) / 2)]);
+  assert.equal(await cdp.evaluate('isSecureContext && !window.Pocket && !window.__pocketExtensions'), true);
   const route = await cdp.evaluate('location.href');
-  await tap(toggle); await wait(() => visible(workbenchTab), 'right Workbench Tab');
+  await tap(toggle); await wait(() => visible(sidebar), 'official Explorer');
   assert.equal(await visible('[data-testid="workbench-graph-content"]'), false);
-  await screenshot('01-sidebar-before-open');
-  await tap(workbenchTab); await wait(() => visible('[data-testid="workbench-graph-content"]'), 'real Workbench repository graph', 45000);
+  await screenshot('01-official-sidebar-before-open');
+  await tap(sidebar + ' [role="button"]', ['New tab']);
+  await tap('[data-testid="workspace-new-tab-menu"] [role="menuitem"]', ['Workspace Workbench']);
+  await wait(() => visible('[data-testid="workbench-graph-content"]'), 'official Workbench panel', 45000);
+  await wait(() => cdp.evaluate("document.querySelector('[data-testid=workbench-graph-content]')?.textContent.includes('Initial fixture')"), 'real repository commit data', 45000);
   assert.equal(await cdp.evaluate('location.href'), route);
-  report.context = await cdp.evaluate('(()=>{const owner=window.__r(3680).pluginRegistry.getSnapshot().find(p=>p.id==="workspace-workbench-paseo");return window.Pocket.connect({paseo:owner.paseo}).context.getSnapshot()})()');
-  assert.equal(report.context.hostId, hosts[0].serverId); assert.equal(report.context.agentId, fixture.agents[0]);
-  await screenshot('02-workbench-in-sidebar');
-  report.checks.push('The actual APK injects into the original local HTTPS bundle, adds a right Tab, lazily loads real Workbench data, and retains the current conversation route and agent context.');
-
-  await adb(serial, ['shell', 'input', 'keyevent', 'KEYCODE_BACK']);
-  await wait(async () => !(await visible('[data-testid="explorer-header"]')), 'native Back closes sidebar');
+  await screenshot('02-official-workbench');
+  report.checks.push('The real APK uses Paseo 0.13 official + and Workbench Tab, without window.Pocket, module hooks or injected sidebar.');
+  await tap(sidebar + ' [role="button"]', ['Browse workspace files']);
+  await wait(() => visible('[data-testid="file-explorer-tree-scroll"]'), 'official Files');
+  await tap(workbenchTab); await wait(() => visible('[data-testid="workbench-graph-content"]'), 'Workbench reselect');
   assert.equal(await cdp.evaluate('location.href'), route);
-  await tap(toggle); await wait(() => visible(workbench), 'remembered Workbench');
-  assert.equal(await cdp.evaluate(`document.querySelector(${JSON.stringify(workbenchTab)}).getAttribute('aria-selected')`), 'true');
-  await tap('[data-testid="explorer-tab-files"]'); await wait(() => visible('[data-testid="file-explorer-tree-scroll"]'), 'original Files Tab');
-  await tap('[data-testid="explorer-close"]'); await tap(toggle);
-  assert.equal(await cdp.evaluate('document.querySelector("[data-testid=explorer-tab-files]").getAttribute("aria-selected")'), 'true');
-  await tap(workbenchTab); await wait(() => visible(workbench), 'Workbench reselect');
-  report.selectionBeforeRestart = await cdp.evaluate('localStorage.getItem("pocket.extensions.sidebar.v1")');
-  report.checks.push('System Back closes the sidebar before navigation; reopening restores Workbench, and selecting Files keeps the original file browser usable.');
-
-  // WebView localStorage commits UI preferences asynchronously. Exercise a normal
-  // background/process restart, allowing the browser's pending UI preference commit.
+  report.checks.push('Official Files and Workbench switch within the same workspace and WebView.');
+  report.observation = await cdp.evaluate('({attached: !!window.__pocketObservation, imageAdapter: !!window.__pocketImageInput, saveBridge: !!window.PocketFileSaveChannel})');
+  assert.equal(report.observation.attached, true); assert.equal(report.observation.imageAdapter, true);
+  await cdp.evaluate('window.__pocketObservation.verify()');
+  report.checks.push('Independent connection observation and image compatibility adapters are active on the new official page.');
   await adb(serial, ['shell', 'input', 'keyevent', 'KEYCODE_HOME']); await delay(6000);
   await cdp.close(); cdp = null; await adb(serial, ['shell', 'am', 'force-stop', packageName]);
   await adb(serial, ['shell', 'am', 'start', '-n', `${packageName}/dev.paseo.pocket.MainActivity`]); await attach();
-  report.selectionAtRestartDocument = await cdp.evaluate('localStorage.getItem("pocket.extensions.sidebar.v1")');
-  await wait(() => visible(toggle), 'restarted conversation'); await tap(toggle);
-  report.selectionAfterRestart = await cdp.evaluate('localStorage.getItem("pocket.extensions.sidebar.v1")');
-  await wait(() => visible(workbench), 'persistent sidebar choice');
-  await wait(() => visible('[data-testid="workbench-graph-content"]'), 'restarted Workbench data');
+  await wait(() => visible(toggle), 'restarted conversation');
+  if (!(await visible(sidebar))) await tap(toggle);
+  await wait(() => visible('[data-testid="workbench-graph-content"]'), 'official selection restored');
   assert.equal(await cdp.evaluate('location.href'), route);
-  report.checks.push('A real QA process restart restores the conversation and last selected extension Tab without another WebView or manual plugin reload.');
+  report.checks.push('The actual QA process restart restores pairing, conversation and official plugin tab without manually reloading the plugin.');
   await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
   await delay(300); await screenshot('03-dark-workbench');
   await adb(serial, ['shell', 'wm', 'user-rotation', 'lock', '1']);
@@ -153,7 +153,7 @@ try {
   report.failure = { message: error.message, stack: error.stack };
   if (cdp) {
     await screenshot('failure').catch(() => {}); report.body = await cdp.evaluate('document.body.innerText.slice(-5000)').catch(() => null);
-    report.debug = await cdp.evaluate('({fields:[...document.querySelectorAll("input")].map(n=>({id:n.dataset.testid,value:n.value,type:n.type})),selection:localStorage.getItem("pocket.extensions.sidebar.v1"),route:location.href})').catch(() => null);
+    report.debug = await cdp.evaluate('({fields:[...document.querySelectorAll("input")].map(n=>({id:n.dataset.testid,value:n.value,type:n.type})),route:location.href})').catch(() => null);
     await writeFile(join(output, 'failure-native.json'), JSON.stringify(await uiNodes(serial).catch(() => []), null, 2));
   }
   process.exitCode = 1;

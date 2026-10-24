@@ -80,7 +80,7 @@
   function attach() {
     attachTimer = null;
     if (disposed || !active || store) return;
-    if (config.webVersion !== '0.12.0') return fail('version');
+    if (!['0.12.0', '0.13.0'].includes(config.webVersion)) return fail('version');
     try {
       const candidate = window.__paseoHostRuntimeStore;
       if (!candidate) {

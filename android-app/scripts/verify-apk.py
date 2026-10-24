@@ -12,7 +12,9 @@ with zipfile.ZipFile(sys.argv[1]) as apk:
         content = apk.read('assets/paseo/' + item['path'])
         assert len(content) == item['size'], item['path']
         assert hashlib.sha256(content).hexdigest() == item['sha256'], item['path']
-    assert apk.read('assets/legal/Paseo-0.12.0.txt')
+    assert apk.read(f"assets/legal/Paseo-{manifest['metadata']['version']}.txt")
+    assert not any('pocket-extensions' in name for name in apk.namelist()), 'Obsolete sidebar injection must not ship'
+    assert not any(b'PocketExtensionsBridge' in apk.read(name) for name in apk.namelist() if name.endswith('.dex')), 'Obsolete native sidebar bridge must not ship'
     save_bridge = Path(__file__).resolve().parents[1] / 'app/src/main/assets/pocket-file-save.js'
     if save_bridge.exists():
         assert apk.read('assets/pocket-file-save.js') == save_bridge.read_bytes(), 'File-save bridge must be included unchanged'

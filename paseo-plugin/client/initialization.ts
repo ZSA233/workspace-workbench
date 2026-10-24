@@ -1,7 +1,7 @@
 // Bump this whenever the native entry or its dependency boundary changes.
 // Paseo can keep an Android bundle alive across a plugin reload; a changing
 // revision lets daemon.log prove which bundle actually rendered a surface.
-export const INITIALIZATION_REVISION = "init-v22-pocket-extensions";
+export const INITIALIZATION_REVISION = "init-v23-official-explorer";
 export const CLIENT_GENERATION = `client-${INITIALIZATION_REVISION}`;
 
 export function atInitializationStage<T>(stage: string, load: () => T): T {

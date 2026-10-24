@@ -68,7 +68,15 @@
     "lint": "passed",
     "debugBuild": "passed",
     "signedReleaseBuild": "passed",
-    "webAssetsInApk": 40
+    "webAssetsInApk": 40,
+    "androidDeviceInstrumentation": {
+      "passed": 5,
+      "scenarios": [
+        "System document save, cancellation and independent concurrent picker results",
+        "One WebView and unsent state across tools, appearance, orientation and background",
+        "Real 0.13 observation bridge, bounded metrics and foreground recording"
+      ]
+    }
   },
   "limitations": [
     "Android evidence uses an isolated API 37 emulator and QA package; no physical phone was connected.",

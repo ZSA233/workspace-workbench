@@ -43,7 +43,7 @@ class ToolSheet(private val activity: AppCompatActivity, private val prefs: Shel
         surface.addView(View(context).apply { ShellUi.paint(this, R.color.shell_line, radius = 2) },
             LinearLayout.LayoutParams(dp(32), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(10) })
         val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(ShellUi.icon(context, R.drawable.ic_route), LinearLayout.LayoutParams(dp(30), dp(30)).apply { marginEnd = dp(10) })
+        header.addView(ShellUi.icon(context, R.drawable.ic_pocket_mark), LinearLayout.LayoutParams(dp(30), dp(30)).apply { marginEnd = dp(10) })
         val heading = ShellUi.column(context).apply {
             addView(title); addView(ShellUi.text(context, "Paseo Pocket", 12f, muted = true))
         }

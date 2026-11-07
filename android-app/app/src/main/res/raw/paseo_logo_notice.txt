@@ -1,0 +1,7 @@
+Paseo Pocket logo
+
+The original Paseo mark is Copyright (c) 2025-present Mohamed Boudra.
+Source: https://github.com/getpaseo/paseo/blob/aac228e0a8ecb01cda1d56a4f2b4c3b2f00aa167/packages/website/public/logo.svg
+
+The mark is scaled, colored, and partially covered by a Pocket design.
+The Apache 2.0 license is reproduced in the Paseo section above.

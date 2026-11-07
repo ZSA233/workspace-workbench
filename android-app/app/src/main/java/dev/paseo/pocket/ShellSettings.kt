@@ -64,9 +64,10 @@ class ShellSettings(private val activity: AppCompatActivity, private val prefs: 
         ShellUi.add(this, ShellUi.button(context, "开源许可") {
             val bundledVersion = WebBundle(activity.assets).version
             val paseo = activity.assets.open("legal/Paseo-$bundledVersion.txt").bufferedReader().use { it.readText() }
+            val logo = activity.resources.openRawResource(R.raw.paseo_logo_notice).bufferedReader().use { it.readText() }
             val lucide = activity.resources.openRawResource(R.raw.lucide_license).bufferedReader().use { it.readText() }
             MaterialAlertDialogBuilder(activity).setTitle("开源许可")
-                .setMessage("Paseo · Apache 2.0\n\n$paseo\n\nLucide Icons\n\n$lucide").setPositiveButton("返回", null).show()
+                .setMessage("Paseo · Apache 2.0\n\n$paseo\n\n$logo\n\nLucide Icons\n\n$lucide").setPositiveButton("返回", null).show()
         })
     }
 

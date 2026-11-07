@@ -23,7 +23,7 @@ class FloatingTool(context: Context, private val prefs: ShellPreferences, onClic
     private var keyboardVisible = false
     private var edgeGestureWidth = 0
     private var renderedDockRight: Boolean? = null
-    private val mark = ShellUi.icon(context, R.drawable.ic_route)
+    private val mark = ShellUi.icon(context, R.drawable.ic_paseo_mark)
     private val face = FrameLayout(context)
     private fun dp(n: Int) = ShellUi.dp(context, n)
     private fun touchWidth() = dp(48) + edgeGestureWidth

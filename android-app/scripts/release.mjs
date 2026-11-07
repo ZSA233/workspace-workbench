@@ -90,7 +90,8 @@ export async function packageRelease({ root = repository, output = join(root, 'a
   await writeFile(join(output, 'release.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   await writeFile(join(output, 'SHA256SUMS'), `${manifest.sha256}  ${name}\n${await sha256(join(output, 'release.json'))}  release.json\n`);
   await writeFile(join(output, 'release-notes.md'), `Paseo Pocket ${metadata.versionName}（versionCode ${metadata.versionCode}）\n\n` +
-    `面向 Paseo 的社区 Android 薄壳。完整本地网页、路径标志贴边工具及手动网页更新。\n\n` +
+    `面向 Paseo 的社区 Android 薄壳。内置完整网页、贴边工具及手动网页更新。\n\n` +
+    `- 应用图标采用 Paseo Pocket 弧口袋设计，侧边浮柄使用 Paseo 标志。\n` +
     `- Android 8 / API 26 起，完整网页需要 Chromium 100+ 的系统 WebView。\n` +
     `- 内置 Paseo Web ${manifest.webVersion}；源码提交：\`${manifest.sourceCommit}\`。\n` +
     `- 已安装 Paseo Pocket 的用户可直接覆盖升级，保留配对和设置。\n` +

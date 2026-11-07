@@ -237,6 +237,9 @@ APK、网页资源工具、Workbench 插件版本分别维护。
 更新网页锁定版本时同时审查 `web-assets/upstream.lock.json`、`trust.json`、许可及兼容性；
 更新 npm 公钥必须随 APK 发布。第一版无推送、后台常驻或通用脚本 hook。
 
-路径 Logo 源稿在 [route.svg](../docs/design/paseo-pocket-tools/route.svg)，Android 资源使用同一路径。
+应用图标采用 [A2 弧口布袋 SVG](../docs/design/paseo-pocket-logo-options/a-pocket-study/a2-curved.svg)：
+官方 Paseo 标志置于口袋前片后方。桌面图标使用完整配色，面板及系统主题图标使用简化单色版本；
+空间较小的侧柄使用单色 Paseo 官方标志。
+标志的来源和许可见 [设计说明](../docs/design/paseo-pocket-logo-options/README.md) 与 App 内的开源许可。
 普通动作图标来自 [Lucide](https://github.com/lucide-icons/lucide)，许可保留于
 `app/src/main/res/raw/lucide_license.txt`，也可在 App 的开源许可中查看。

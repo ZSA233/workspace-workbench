@@ -32,3 +32,5 @@ Python comparisons use real temporary Git repositories when Python is available.
 Paseo home with an isolated project registry; it must not reload the user's normal
 plugin or register temporary projects in their normal registry. Distinguish this
 actual-host evidence from mocked Agent/session tests in execution reports.
+
+Browser file delegation may use the versioned same-origin Access HTTP download adapter. Validate capability, token, host identity and the returned fixed handoff path before navigation; never accept arbitrary download origins or expose a business JavaScript bridge. Retain the legacy native Pocket save owner and mark browser handoff as delegated, not locally completed.

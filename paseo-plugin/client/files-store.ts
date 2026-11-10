@@ -241,7 +241,7 @@ export class FileTransferStore {
     } catch (error) { if (!this.stopped.has(id) && (error as any)?.name !== 'AbortError') this.errors.set(id, error instanceof Error ? error.message : String(error)); }
     finally { this.discardDestination(id); this.saving.delete(id); this.emit(); }
   }
-  async delegate(id: string) { let result; this.stopped.delete(id); do { this.check(id); result = await this.call({ action: 'delegate', id }); if (result.pending) await new Promise(r => setTimeout(r, 1000)); } while (result.pending); this.check(id); await delegateDownload(result.url, result.serverId); this.accept(await this.call({ action: 'control', id, command: 'delegated' })); }
+  async delegate(id: string) { let result; this.stopped.delete(id); do { this.check(id); result = await this.call({ action: 'delegate', id }); if (result.pending) await new Promise(r => setTimeout(r, 1000)); } while (result.pending); this.check(id); await delegateDownload(result.url, result.serverId, this.tasks.get(id)?.name || 'download'); this.accept(await this.call({ action: 'control', id, command: 'delegated' })); }
 }
 const stores = new Map<string, FileTransferStore>();
 export function fileTransferStore(scope: string) { let store = stores.get(scope); if (!store) { store = new FileTransferStore(scope); stores.set(scope, store); } return store; }

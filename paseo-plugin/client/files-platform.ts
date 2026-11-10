@@ -122,7 +122,14 @@ export function pickSaveDestination(name: string): Promise<SaveDestination> {
   if (web.showSaveFilePicker) return web.showSaveFilePicker({ suggestedName: name }).then((handle: any) => ({ open: () => handle.createWritable(), discard: async () => {} }));
   return Promise.reject(new Error('Choose a browser with file saving support, or use Pocket'));
 }
-export function canSave() { return Boolean(web.showSaveFilePicker || web.WorkbenchFileSave?.open); }
+export function canSave() {
+  if (web.WorkbenchFileSave?.open) return true;
+  // Modern WebViews can expose showSaveFilePicker without this shell owning
+  // that browser writer. Access owns a held HTTP stream and its native picker;
+  // choosing the desktop API here bypasses that handoff entirely.
+  if (/\bAccessPocket\//.test(web.navigator?.userAgent || '')) return false;
+  return typeof web.showSaveFilePicker === 'function';
+}
 export async function delegateDownload(url: string, serverId: string, filename = 'download') {
   if (await tryAccessDownload(url, serverId, filename, web)) return;
   const parsed = new web.URL(url, web.location?.href);

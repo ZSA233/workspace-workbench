@@ -101,4 +101,6 @@ Access 域名提供下载交接 v1 时，浏览器委托会先把所选主机的
 
 Access Pocket 需 0.2.9 或更新版本。旧版提示更新，避免把交接提示保存成空文件。未提供该能力的普通部署仍使用原来的同源校验；原 Paseo Pocket 的文件保存桥保持兼容。
 
+Access Pocket 始终由 HTTP 交接调用原生保存器，即使 WebView 同时暴露 `showSaveFilePicker`，也不走桌面浏览器写入和 OPFS 暂存路径。仅检测这个函数存在，会绕过上述交接；旧独立 Pocket 的 `WorkbenchFileSave` 写入器和普通桌面浏览器保存行为保持原样。
+
 任务记录为 `delegated`，表示交给浏览器或系统保存，不能据此宣称本机文件已写完。私有主机地址、凭据和任意文件路径不会交给 Android 脚本桥。

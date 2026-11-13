@@ -108,7 +108,8 @@ writeFileSync(
     version: 1,
     pluginsEnabled: true,
     daemon: { listen: `0.0.0.0:${port}`, relay: { enabled: false }, mcp: { enabled: false, injectIntoAgents: false } },
-    features: { webUi: { enabled: process.env.WORKBENCH_LIVE_UI === "1" } },
+    features: { webUi: { enabled: process.env.WORKBENCH_LIVE_UI === "1",
+      ...(process.env.WORKBENCH_LIVE_UI === "1" && process.env.WORKBENCH_LIVE_WEB_DIST ? {distDir:resolve(process.env.WORKBENCH_LIVE_WEB_DIST)} : {}) } },
     ...(process.env.WORKBENCH_LIVE_RECOVERY === "1" ? { agents: { providers: { codex: {
       command: [process.execPath, join(plugin, "scripts/fixtures/recovery-codex.mjs")],
       env: { WORKBENCH_RECOVERY_FIXTURE_ROOT: join(root, "recovery-codex") },

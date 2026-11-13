@@ -67,7 +67,19 @@ jobs:
       - name: Verify actual plugin in an isolated compatible daemon
         run: |
           npm install --prefix .local/web-release/host --ignore-scripts @getpaseo/cli@0.15.4
-          PASEO_CLI="$PWD/.local/web-release/host/node_modules/.bin/paseo" node paseo-plugin/scripts/verify-live.mjs
+          npm install --prefix .local/web-release/browser --ignore-scripts playwright@1.64.1
+          .local/web-release/browser/node_modules/.bin/playwright install --with-deps chromium
+          export PASEO_CLI="$PWD/.local/web-release/host/node_modules/.bin/paseo"
+          export PLAYWRIGHT_MODULE_PATH="$PWD/.local/web-release/browser/node_modules/playwright/index.mjs"
+          export WORKBENCH_LIVE_WEB_DIST="$(node -p "require('path').resolve('.local/web-release/source/paseo-'+require('./.local/web-release/lock.json').source_commit+'/packages/server/dist/server/web-ui')")"
+          node web-assets/src/verify-host.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: web-verification
+          path: .local/web-release/evidence/
+          include-hidden-files: true
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v7
         with:
           name: verified-web

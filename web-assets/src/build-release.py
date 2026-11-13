@@ -47,6 +47,8 @@ def build(lock_path, work, output):
     lock=json.loads(lock_path.read_text())
     if not re.fullmatch(r'[a-z0-9-]+',lock['recipe']): raise ValueError('Invalid recipe identifier')
     recipe_dir=ROOT/'web-assets/recipes'/lock['recipe'];recipe=json.loads((recipe_dir/'recipe.json').read_text())
+    inventory={str(p.relative_to(recipe_dir)):sha(p.read_bytes()) for p in sorted(recipe_dir.rglob('*')) if p.is_file()}
+    if inventory!=lock['recipe_files']: raise ValueError('Resolved recipe changed')
     if not re.fullmatch(r'[0-9a-f]{40}',lock['source_commit']) or lock['version']!=lock['upstream_version']+'-'+recipe['recipe_version']: raise ValueError('Invalid build lock')
     expected=f"https://codeload.github.com/{recipe['repository']}/tar.gz/{lock['source_commit']}"
     if lock['source_url']!=expected or not re.fullmatch(recipe['version_pattern'],lock['upstream_version']): raise ValueError('Untrusted source')

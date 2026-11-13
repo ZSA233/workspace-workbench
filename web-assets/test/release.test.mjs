@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {recipeIdentity,verifyPublication,verifyExisting,verifyUploadedAssets} from '../src/release.mjs';
+import {recipeIdentity,verifyPublication,verifyExisting,verifyUploadedAssets,findRelease} from '../src/release.mjs';
 const recipe={schema:1,id:'paseo',recipe_version:'wb.1',version_pattern:'^0\\.15\\.[0-9]+$'};
+test('draft lookup survives a missing tag ref without creating another release',async()=>{
+ const draft={tag_name:'paseo-web-v0.15.4-wb.1',draft:true};
+ const api=async path=>path.includes('/tags/')?null:[draft];
+ assert.equal(await findRelease('owner/repo',draft.tag_name,api),draft);
+ assert.equal(await findRelease('owner/repo','another-version',api),null);
+ await assert.rejects(findRelease('owner/repo',draft.tag_name,async path=>path.includes('/tags/')?null:[draft,draft]));
+});
 test('web versions are independent of plugin and Android channels',()=>{
   assert.deepEqual(recipeIdentity(recipe,'0.15.4'),{version:'0.15.4-wb.1',tag:'paseo-web-v0.15.4-wb.1'});
   for(const version of ['0.16.0','0.15.4-beta','v0.15.4','0.15.4\n'])assert.throws(()=>recipeIdentity(recipe,version));

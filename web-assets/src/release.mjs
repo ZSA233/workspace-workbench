@@ -16,6 +16,21 @@ async function github(path, options={}) {
   if (!response.ok) throw new Error(`GitHub API status ${response.status}`);
   return response.json();
 }
+export async function findRelease(repository,tag,api=github) {
+  const published=await api(`repos/${repository}/releases/tags/${tag}`);
+  if(published)return published;
+  // A draft does not create its tag ref until publication, so GitHub's
+  // release-by-tag REST endpoint can return 404 for an existing draft.
+  for(let page=1;page<=10;page++) {
+    const releases=await api(`repos/${repository}/releases?per_page=100&page=${page}`);
+    if(!Array.isArray(releases))throw new Error('Release inventory unavailable');
+    const matches=releases.filter(release=>release.tag_name===tag);
+    if(matches.length>1)throw new Error('Ambiguous release drafts require operator review');
+    if(matches.length)return matches[0];
+    if(releases.length<100)return null;
+  }
+  throw new Error('Release inventory exceeds lookup limit');
+}
 export function verifyExisting(descriptor,identity,recipe,commit,inventory) {
   if(descriptor.schema!==1||descriptor.version!==identity.version||descriptor.source_commit!==commit||descriptor.recipe_version!==recipe.recipe_version)throw new Error('Published version or upstream tag drift');
   if(inventory&&JSON.stringify(Object.entries(descriptor.recipe_files||{}).sort())!==JSON.stringify(Object.entries(inventory).sort()))throw new Error('Recipe changed without a new recipe version');
@@ -41,7 +56,7 @@ export async function resolveRelease(recipe, version, repository,inventory) {
   let object=reference.object;
   for(let depth=0;object.type==='tag'&&depth<5;depth++)object=(await github(`repos/${recipe.repository}/git/tags/${object.sha}`)).object;
   if(object.type!=='commit'||!/^[a-f0-9]{40}$/.test(object.sha))throw new Error('Immutable upstream commit required');
-  const existing=await github(`repos/${repository}/releases/tags/${identity.tag}`);
+  const existing=await findRelease(repository,identity.tag);
   if(existing) {
     if(existing.draft||!existing.assets.some(a=>a.name==='frontend-release.json')||!existing.assets.some(a=>a.name==='SHA256SUMS')) throw new Error('Incomplete existing release requires operator review');
     const metadata=existing.assets.find(a=>a.name==='frontend-release.json');

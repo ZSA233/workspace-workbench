@@ -1,0 +1,244 @@
+--- a/packages/app/src/stores/download-store.ts
++++ b/packages/app/src/stores/download-store.ts
+@@ -5,6 +5,7 @@
+ import type { HostProfile } from "@/types/host-connection";
+ import { buildDaemonWebSocketUrl } from "@/utils/daemon-endpoints";
+ import { openExternalUrl } from "@/utils/open-external-url";
++import { tryAccessDownload } from "@/utils/access-download";
+ import { isWeb } from "@/constants/platform";
+ import { i18n } from "@/i18n/i18next";
+ 
+@@ -31,7 +32,7 @@
+   serverId: string;
+   scopeId: string;
+   fileName: string;
+-  status: "downloading" | "complete" | "error";
++  status: "downloading" | "delegated" | "complete" | "error";
+   message?: string;
+   progress?: DownloadProgress;
+   startedAt: number;
+@@ -109,6 +110,22 @@
+       }
+ 
+       const resolvedFileName = tokenResponse.fileName ?? fileName;
++      if (
++        await tryAccessDownload({
++          serverId,
++          token: tokenResponse.token,
++          filename: resolvedFileName,
++        })
++      ) {
++        set((state) => {
++          const current = state.downloads.get(id);
++          if (!current) return state;
++          const downloads = new Map(state.downloads);
++          downloads.set(id, { ...current, status: "delegated" });
++          return { downloads };
++        });
++        return;
++      }
+       const downloadTarget = resolveDaemonDownloadTarget(daemonProfile, activeConnectionId);
+       if (!downloadTarget) {
+         // Relay, SSH, socket and pipe hosts have no HTTP endpoint: read the file over the
+--- a/packages/app/src/stores/download-store.test.ts
++++ b/packages/app/src/stores/download-store.test.ts
+@@ -1,4 +1,4 @@
+-import { beforeEach, describe, expect, it } from "vitest";
++import { beforeEach, describe, expect, it, vi } from "vitest";
+ import { defaultHostAppearance } from "@/hosts/appearance";
+ import { i18n } from "@/i18n/i18next";
+ import {
+@@ -12,6 +12,21 @@
+   HostProfile,
+   RelayHostConnection,
+ } from "@/types/host-connection";
++
++const access = vi.hoisted(() => ({ web: true, handoff: vi.fn() }));
++vi.mock("@/constants/platform", () => ({
++  get isWeb() {
++    return access.web;
++  },
++  get isNative() {
++    return !access.web;
++  },
++}));
++vi.mock("@/utils/access-download", () => ({ tryAccessDownload: access.handoff }));
++beforeEach(() => {
++  access.web = true;
++  access.handoff.mockReset().mockResolvedValue(false);
++});
+ 
+ const FILE_BYTES = new TextEncoder().encode("relay download payload");
+ const FILE_PATH = "reports/données été.bin";
+@@ -263,3 +278,50 @@
+     expect(saver.savedFiles).toEqual([]);
+   });
+ });
++
++describe("Access HTTP download handoff", () => {
++  it("hands a routed host to the system without reading the full file or claiming completion", async () => {
++    access.web = true;
++    access.handoff.mockResolvedValue(true);
++    const token = createTokenRequest();
++    const reader = createFileReader(async () => ({
++      bytes: FILE_BYTES,
++      size: FILE_BYTES.byteLength,
++    }));
++    const saver = createFileSaver();
++    const download = await startDownload({
++      profile: profileWith([relayConnection]),
++      activeConnectionId: relayConnection.id,
++      token,
++      reader,
++      saver,
++    });
++    expect(download).toMatchObject({ status: "delegated" });
++    expect(token.requested).toEqual([FILE_PATH]);
++    expect(reader.requested).toEqual([]);
++    expect(saver.savedFiles).toEqual([]);
++    expect(access.handoff).toHaveBeenCalledWith({
++      serverId: "srv_remote",
++      token: "tok",
++      filename: FILE_NAME,
++    });
++  });
++  it("does not replay a rejected handoff through the legacy socket or save an empty file", async () => {
++    access.web = true;
++    access.handoff.mockRejectedValue(new Error("Access expired"));
++    const reader = createFileReader(async () => ({
++      bytes: FILE_BYTES,
++      size: FILE_BYTES.byteLength,
++    }));
++    const saver = createFileSaver();
++    const download = await startDownload({
++      profile: profileWith([relayConnection]),
++      activeConnectionId: relayConnection.id,
++      reader,
++      saver,
++    });
++    expect(download).toMatchObject({ status: "error", message: "Access expired" });
++    expect(reader.requested).toEqual([]);
++    expect(saver.savedFiles).toEqual([]);
++  });
++});
+--- a/packages/app/src/components/download-toast.tsx
++++ b/packages/app/src/components/download-toast.tsx
+@@ -5,7 +5,7 @@
+ import { Pressable, Text, View } from "react-native";
+ import { useSafeAreaInsets } from "react-native-safe-area-context";
+ import { StyleSheet, useUnistyles } from "react-native-unistyles";
+-import { Check, X, XCircle } from "lucide-react-native";
++import { Check, ArrowDownToLine, X, XCircle } from "lucide-react-native";
+ import { useDownloadStore, formatSpeed, formatEta, type Download } from "@/stores/download-store";
+ 
+ const AUTO_DISMISS_DELAY = 3000;
+@@ -17,6 +17,7 @@
+     }
+     return t("common.states.starting");
+   }
++  if (download.status === "delegated") return t("downloads.handedOff");
+   if (download.status === "complete") return t("common.states.downloadComplete");
+   return download.message ?? t("common.states.downloadFailed");
+ }
+@@ -75,7 +76,10 @@
+         {activeDownload.status === "complete" ? (
+           <Check size={18} color={theme.colors.primary} />
+         ) : null}
+-        {activeDownload.status !== "downloading" && activeDownload.status !== "complete" ? (
++        {activeDownload.status === "delegated" ? (
++          <ArrowDownToLine size={18} color={theme.colors.primary} />
++        ) : null}
++        {activeDownload.status === "error" ? (
+           <XCircle size={18} color={theme.colors.destructive} />
+         ) : null}
+         <View style={styles.textContainer}>
+--- a/packages/app/src/i18n/resources/pt-BR.ts
++++ b/packages/app/src/i18n/resources/pt-BR.ts
+@@ -1934,6 +1934,7 @@
+     dontAskAgain: "Não perguntar novamente",
+   },
+   downloads: {
++    handedOff: "Enviado ao gerenciador de downloads",
+     requestTokenFailed: "Falha ao solicitar token de download.",
+     hostUnavailable: "Host de download indisponível.",
+     cancelled: "Download cancelado.",
+--- a/packages/app/src/i18n/resources/zh-CN.ts
++++ b/packages/app/src/i18n/resources/zh-CN.ts
+@@ -1879,6 +1879,7 @@
+     dontAskAgain: "不再询问",
+   },
+   downloads: {
++    handedOff: "已交给系统保存",
+     requestTokenFailed: "请求下载 token 失败。",
+     hostUnavailable: "下载 Host 不可用。",
+     cancelled: "下载已取消。",
+--- a/packages/app/src/i18n/resources/ar.ts
++++ b/packages/app/src/i18n/resources/ar.ts
+@@ -1901,6 +1901,7 @@
+     dontAskAgain: "لا تسأل مرة أخرى",
+   },
+   downloads: {
++    handedOff: "تم التحويل إلى مدير التنزيلات في النظام",
+     requestTokenFailed: "فشل طلب رمز التنزيل.",
+     hostUnavailable: "مضيف التنزيل غير متاح.",
+     cancelled: "تم إلغاء التنزيل.",
+--- a/packages/app/src/i18n/resources/es.ts
++++ b/packages/app/src/i18n/resources/es.ts
+@@ -1949,6 +1949,7 @@
+     dontAskAgain: "no vuelvas a preguntar",
+   },
+   downloads: {
++    handedOff: "Enviado al gestor de descargas del sistema",
+     requestTokenFailed: "No se pudo solicitar el token de descarga.",
+     hostUnavailable: "El host de descarga no está disponible.",
+     cancelled: "La descarga fue cancelada.",
+--- a/packages/app/src/i18n/resources/en.ts
++++ b/packages/app/src/i18n/resources/en.ts
+@@ -1926,6 +1926,7 @@
+     dontAskAgain: "Don't ask again",
+   },
+   downloads: {
++    handedOff: "Handed to the system download manager",
+     requestTokenFailed: "Failed to request download token.",
+     hostUnavailable: "Download host is unavailable.",
+     cancelled: "Download was cancelled.",
+--- a/packages/app/src/i18n/resources/fr.ts
++++ b/packages/app/src/i18n/resources/fr.ts
+@@ -1947,6 +1947,7 @@
+     dontAskAgain: "Ne plus demander",
+   },
+   downloads: {
++    handedOff: "Transmis au gestionnaire de téléchargements",
+     requestTokenFailed: "Impossible d’obtenir le token de téléchargement.",
+     hostUnavailable: "L’hôte de téléchargement est indisponible.",
+     cancelled: "Téléchargement annulé.",
+--- a/packages/app/src/i18n/resources/ru.ts
++++ b/packages/app/src/i18n/resources/ru.ts
+@@ -1933,6 +1933,7 @@
+     dontAskAgain: "Больше не спрашивать",
+   },
+   downloads: {
++    handedOff: "Передано системному менеджеру загрузок",
+     requestTokenFailed: "Не удалось запросить токен загрузки.",
+     hostUnavailable: "Хост загрузки недоступен.",
+     cancelled: "Загрузка отменена.",
+--- a/packages/app/src/i18n/resources/ko.ts
++++ b/packages/app/src/i18n/resources/ko.ts
+@@ -1911,6 +1911,7 @@
+     dontAskAgain: "다시 묻지 않기",
+   },
+   downloads: {
++    handedOff: "시스템 다운로드로 전달됨",
+     requestTokenFailed: "다운로드 토큰을 요청하지 못했습니다.",
+     hostUnavailable: "다운로드 호스트를 사용할 수 없습니다.",
+     cancelled: "다운로드가 취소되었습니다.",
+--- a/packages/app/src/i18n/resources/ja.ts
++++ b/packages/app/src/i18n/resources/ja.ts
+@@ -1920,6 +1920,7 @@
+     dontAskAgain: "次回から確認しない",
+   },
+   downloads: {
++    handedOff: "システムの保存画面に引き渡しました",
+     requestTokenFailed: "ダウンロードトークンのリクエストに失敗しました。",
+     hostUnavailable: "ダウンロードホストが利用できません。",
+     cancelled: "ダウンロードがキャンセルされました。",

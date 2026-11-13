@@ -1,0 +1,114 @@
+name: Managed web release
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional official Paseo version; blank follows latest stable
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: workbench-managed-web-release
+  cancel-in-progress: false
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      needed: ${{ steps.resolve.outputs.needed }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_VERSION: ${{ inputs.version }}
+        run: node web-assets/src/release.mjs resolve --recipe paseo --output .local/web-release/lock.json --version "$UPSTREAM_VERSION"
+      - uses: actions/upload-artifact@v7
+        if: steps.resolve.outputs.needed == 'true'
+        with:
+          name: web-build-lock
+          path: .local/web-release/lock.json
+          include-hidden-files: true
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.needed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-build-lock
+          path: .local/web-release
+      - run: npm --prefix web-assets ci --ignore-scripts
+      - run: npm --prefix web-assets test
+      - run: python3 -m unittest discover -s web-assets/test -p 'test_*.py'
+      - run: python3 web-assets/src/build-release.py --lock .local/web-release/lock.json --work .local/web-release/source --output .local/web-release/output
+      - run: npm --prefix paseo-plugin ci --ignore-scripts
+      - run: npm --prefix paseo-plugin run typecheck
+      - run: npm --prefix paseo-plugin test
+      - name: Verify actual plugin in an isolated compatible daemon
+        run: |
+          npm install --prefix .local/web-release/host --ignore-scripts @getpaseo/cli@0.15.4
+          PASEO_CLI="$PWD/.local/web-release/host/node_modules/.bin/paseo" node paseo-plugin/scripts/verify-live.mjs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: verified-web
+          path: .local/web-release/output/*
+          include-hidden-files: true
+          if-no-files-found: error
+  publish:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      WEB_TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v8
+        with:
+          name: verified-web
+          path: .local/web-release/output
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-build-lock
+          path: .local/web-release
+      - name: Validate artifact and publish an independent immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd .local/web-release/output
+          sha256sum -c SHA256SUMS
+          cd ../../..
+          node --input-type=module - <<'JS'
+          import {readFile} from 'node:fs/promises';
+          import {verifyPublication} from './web-assets/src/release.mjs';
+          const dir='.local/web-release/output/';
+          const descriptor=JSON.parse(await readFile(dir+'frontend-release.json'));
+          const lock=JSON.parse(await readFile('.local/web-release/lock.json'));
+          verifyPublication(lock,descriptor,new Map([[descriptor.archive.name,await readFile(dir+descriptor.archive.name)]]));
+          JS
+          gh release create "$WEB_TAG" .local/web-release/output/* --target "$GITHUB_SHA" --latest=false --title "Paseo Web ${{ needs.resolve.outputs.version }}" --notes 'Official Paseo frontend with the reviewed Workbench/Access HTTP download adapter. Web assets only; plugin, APK and backend versions are independent. See frontend-release.json for source, compatibility and file checksums.'

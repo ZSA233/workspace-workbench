@@ -165,10 +165,10 @@ const daemon = spawn(
 );
 let logs = "";
 daemon.stdout.on("data", (b) => {
-  logs = (logs + b).slice(-200000);
+  logs = (logs + b).slice(-1000000);
 });
 daemon.stderr.on("data", (b) => {
-  logs = (logs + b).slice(-200000);
+  logs = (logs + b).slice(-1000000);
 });
 const client = new DaemonClient({
   url: `ws://127.0.0.1:${port}/ws`,
@@ -291,6 +291,7 @@ try {
   // growth across the measured interval and the plugin's own session identity.
   const connectionBaseline=pluginConnections().at(-1);
   assert.ok(connectionBaseline);
+  const connectionCountBaseline=pluginConnections().length;
   const initialPluginHeap = (await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "gc" })).heapUsed;
   for (let i = 0; i < 100; i++) {
     const dropped = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "drop" });
@@ -300,15 +301,15 @@ try {
     assert.equal(recovered.state, "connected");
   }
   const recoveredHost = await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.backend.status", { projectConfig: configs[0] });
-  assert.equal(recoveredHost.hostTransport.reconnects, 105);
+  // Newer SDKs can reconnect before HostConnection.api() observes the loss.
+  // Its diagnostic counter only counts explicit connect() attempts. Prove all
+  // 100 recoveries using the actual daemon's accepted hello connections.
+  assert.equal(recoveredHost.hostTransport.state, "connected");
   assert.equal(recoveredHost.hostTransport.active, 0);
   const recoveredPluginHeap = (await client.invokePluginRpc("workspace-workbench-paseo", "workspace.workbench.test.host-fault", { action: "gc" })).heapUsed;
   const retainedPluginHeapIncrease = recoveredPluginHeap - initialPluginHeap;
   assert.ok(retainedPluginHeapIncrease <= 20 * 1024 * 1024, `plugin heap grew by ${retainedPluginHeapIncrease} bytes after 100 reconnects`);
-  const hostConnections = logs.split("\n").flatMap(line => {
-    try { const value = JSON.parse(line); return value.msg === "Client connected via hello" && String(value.clientId || "").startsWith("workbench-plugin-") ? [value] : []; }
-    catch { return []; }
-  });
+  const hostConnections = await wait(async()=>{const connections=pluginConnections();return connections.length>=connectionCountBaseline+100?connections:null;});
   assert.ok(hostConnections.length > 0 && hostConnections.at(-1).resumed === true, "injected reconnects must reuse the host session");
   assert.ok(hostConnections.at(-1).totalSessions <= connectionBaseline.totalSessions, "injected reconnects accumulated host sessions");
   assert.equal(hostConnections.at(-1).sessionId,connectionBaseline.sessionId,"plugin reconnect changed session identity");

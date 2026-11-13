@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "id": "paseo",
+  "repository": "getpaseo/paseo",
+  "version_pattern": "^0\\.15\\.[0-9]+$",
+  "recipe_version": "wb.1",
+  "compatible_runtimes": { "@getpaseo/server": ["0.15.4"] },
+  "capabilities": ["access.download-handoff.v1"],
+  "patches": ["web/download-handoff.patch"],
+  "copies": {
+    "web/access-download.ts": "packages/app/src/utils/access-download.ts",
+    "web/access-download.web.ts": "packages/app/src/utils/access-download.web.ts"
+  },
+  "dist": "packages/server/dist/server/web-ui",
+  "licenses": {"LICENSE": "LICENSE-Paseo"},
+  "notice": "Official Paseo web UI with the reviewed Access HTTP download adapter. Apache-2.0; original notices apply.",
+  "commands": [
+    ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+    ["npm", "run", "postinstall"],
+    ["npm", "run", "build:app-deps"],
+    ["npm", "run", "lint", "--", "packages/app/src/utils/access-download.ts", "packages/app/src/utils/access-download.web.ts", "packages/app/src/stores/download-store.ts", "packages/app/src/components/download-toast.tsx"],
+    ["npm", "run", "test", "--workspace=@getpaseo/app", "--", "src/stores/download-store.test.ts", "--bail=1"],
+    ["npm", "run", "typecheck", "--workspace=@getpaseo/app"],
+    ["npm", "run", "build:daemon-web-ui"]
+  ]
+}

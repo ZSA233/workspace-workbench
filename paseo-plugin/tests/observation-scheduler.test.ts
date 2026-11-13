@@ -136,7 +136,10 @@ test('fixed commit observations reuse content across worktree edits while dynami
     const beforeToken = service.observation.scheduler.token(f.repo);
     writeFileSync(join(f.repo, 'file'), 'working edit\n');
     await until(() => service.observation.scheduler.token(f.repo) !== beforeToken);
-    await delay(300); // let the owned event-driven summary refresh finish
+    // The event-driven refresh can take longer than a fixed delay on a busy
+    // runner. Wait for its actual completion before measuring cache-hit work.
+    await until(() => !service.observation.scheduler.versions([workspaceId]).repositories
+      .find(repo => repo.path === f.repo)?.refreshing, 10_000);
     const before = commands;
     const reused = await service.handle('repository.diff', { ...input, observationBudgetMs: 4871 });
     assert.equal(commands, before);

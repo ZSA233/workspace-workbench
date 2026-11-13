@@ -17,6 +17,15 @@ def safe(value):
     path = Path(value)
     return value and not path.is_absolute() and '..' not in path.parts and str(path) == value
 
+def extract_source(archive, work):
+    with tarfile.open(archive) as tar:
+        members=tar.getmembers(); roots={m.name.split('/')[0] for m in members}
+        if len(roots)!=1 or any(not safe(m.name.rstrip('/')) or not (m.isfile() or m.isdir() or m.issym() or m.islnk()) for m in members): raise ValueError('Unsafe source archive')
+        # Source trees can contain internal documentation links. The data filter
+        # rejects outside/absolute links; runtime web archives still forbid links.
+        tar.extractall(work,filter='data')
+    return work/roots.pop()
+
 def package(dist, output, lock, recipe, recipe_dir, source_sha):
     output.mkdir(parents=True, exist_ok=False)
     web = output / 'web'
@@ -55,11 +64,7 @@ def build(lock_path, work, output):
     work.mkdir(parents=True,exist_ok=False); archive=work/'source.tar.gz'
     with urllib.request.urlopen(expected,timeout=180) as response, archive.open('xb') as out: shutil.copyfileobj(response,out)
     source_sha=sha(archive.read_bytes())
-    with tarfile.open(archive) as tar:
-        members=tar.getmembers(); roots={m.name.split('/')[0] for m in members}
-        if len(roots)!=1 or any(not safe(m.name.rstrip('/')) or not (m.isfile() or m.isdir()) for m in members): raise ValueError('Unsafe source archive')
-        tar.extractall(work,filter='data')
-    source=work/roots.pop()
+    source=extract_source(archive,work)
     for name in recipe['patches']:
         if not safe(name): raise ValueError('Unsafe patch path')
         subprocess.run(['patch','-p1','--batch','--forward'],cwd=source,input=(recipe_dir/name).read_bytes(),check=True)

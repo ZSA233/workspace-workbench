@@ -5,10 +5,22 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import io
 
 SPEC=importlib.util.spec_from_file_location('web_builder',Path(__file__).resolve().parents[1]/'src/build-release.py')
 builder=importlib.util.module_from_spec(SPEC);SPEC.loader.exec_module(builder)
 class PackageTests(unittest.TestCase):
+    def test_source_internal_links_are_supported_but_cannot_escape(self):
+        for target,allowed in [('README',True),('../../outside',False)]:
+            with tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);archive=root/'source.tar.gz'
+                with tarfile.open(archive,'w:gz') as tar:
+                    body=b'source';entry=tarfile.TarInfo('project/README');entry.size=len(body);tar.addfile(entry,io.BytesIO(body))
+                    link=tarfile.TarInfo('project/DOC');link.type=tarfile.SYMTYPE;link.linkname=target;tar.addfile(link)
+                if allowed:
+                    source=builder.extract_source(archive,root/'work');self.assertEqual((source/'DOC').read_bytes(),b'source')
+                else:
+                    with self.assertRaises(tarfile.FilterError):builder.extract_source(archive,root/'work')
     def test_another_recipe_produces_a_standard_archive_and_inventory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);source=root/'source';dist=source/'dist';dist.mkdir(parents=True)

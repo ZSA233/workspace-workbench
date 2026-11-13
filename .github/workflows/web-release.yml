@@ -123,4 +123,15 @@ jobs:
           const lock=JSON.parse(await readFile('.local/web-release/lock.json'));
           verifyPublication(lock,descriptor,new Map([[descriptor.archive.name,await readFile(dir+descriptor.archive.name)]]));
           JS
-          gh release create "$WEB_TAG" .local/web-release/output/* --target "$GITHUB_SHA" --latest=false --title "Paseo Web ${{ needs.resolve.outputs.version }}" --notes 'Official Paseo frontend with the reviewed Workbench/Access HTTP download adapter. Web assets only; plugin, APK and backend versions are independent. See frontend-release.json for source, compatibility and file checksums.'
+          node web-assets/src/release.mjs verify-tag --lock .local/web-release/lock.json
+          gh release create "$WEB_TAG" .local/web-release/output/* --draft --target "$GITHUB_SHA" --latest=false --title "Paseo Web ${{ needs.resolve.outputs.version }}" --notes 'Official Paseo frontend with the reviewed Workbench/Access HTTP download adapter. Web assets only; plugin, APK and backend versions are independent. See frontend-release.json for source, compatibility and file checksums.'
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$WEB_TAG" > .local/web-release/remote-release.json
+          node --input-type=module - <<'JS'
+          import {readFile,readdir} from 'node:fs/promises';
+          import {verifyUploadedAssets} from './web-assets/src/release.mjs';
+          const root='.local/web-release/output/';
+          const remote=JSON.parse(await readFile('.local/web-release/remote-release.json'));
+          if(!remote.draft||remote.target_commitish!==process.env.GITHUB_SHA)throw Error('Draft release identity mismatch');
+          verifyUploadedAssets(new Map(await Promise.all((await readdir(root)).map(async name=>[name,await readFile(root+name)]))),remote.assets);
+          JS
+          gh release edit "$WEB_TAG" --draft=false --latest=false

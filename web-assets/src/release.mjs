@@ -61,9 +61,23 @@ export function verifyPublication(lock,descriptor, files) {
   if(descriptor.schema!==1||descriptor.version!==lock.version||descriptor.source_commit!==lock.source_commit||descriptor.recipe_version!==lock.version.split('-').slice(1).join('-'))throw new Error('Release identity mismatch');
   if(!files.has(descriptor.archive.name)||createHash('sha256').update(files.get(descriptor.archive.name)).digest('hex')!==descriptor.archive.sha256)throw new Error('Release archive checksum mismatch');
 }
+export function verifyUploadedAssets(files,assets) {
+  if(assets.length!==files.size)throw new Error('Incomplete release assets');
+  for(const [name,bytes] of files) {
+    const asset=assets.find(a=>a.name===name);
+    if(!asset||asset.state!=='uploaded'||asset.size!==bytes.length||asset.digest!==`sha256:${createHash('sha256').update(bytes).digest('hex')}`)throw new Error('Uploaded release checksum mismatch');
+  }
+}
 async function main(){
  const [command,...args]=process.argv.slice(2);const opts=new Map();for(let i=0;i<args.length;i+=2)opts.set(args[i],args[i+1]);
- if(command!=='resolve')throw new Error('Use resolve --recipe paseo --output lock.json [--version X.Y.Z]');
+ if(command==='verify-tag') {
+   const lock=JSON.parse(await readFile(resolve(opts.get('--lock')),'utf8'));
+   if(!/^[a-z0-9-]+-web-v\d+\.\d+\.\d+-wb\.\d+$/.test(lock.tag)||!/^[a-f0-9]{40}$/.test(lock.builder_commit||''))throw new Error('Invalid builder tag identity');
+   let reference=await github(`repos/${process.env.GITHUB_REPOSITORY}/git/ref/tags/${lock.tag}`);
+   if(reference){let object=reference.object;for(let i=0;object.type==='tag'&&i<5;i++)object=(await github(`repos/${process.env.GITHUB_REPOSITORY}/git/tags/${object.sha}`)).object;if(object.type!=='commit'||object.sha!==lock.builder_commit)throw new Error('Existing tag points to a different builder commit');}
+   return;
+ }
+ if(command!=='resolve')throw new Error('Use resolve or verify-tag');
  const id=opts.get('--recipe')||'paseo';if(!/^[a-z0-9-]+$/.test(id))throw new Error('Invalid recipe');
  const recipe=JSON.parse(await readFile(resolve(root,`web-assets/recipes/${id}/recipe.json`),'utf8'));
  const lock=await resolveRelease(recipe,opts.get('--version'),process.env.GITHUB_REPOSITORY||'ZSA233/workspace-workbench',await recipeInventory(id));

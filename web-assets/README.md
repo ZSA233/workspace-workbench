@@ -6,6 +6,12 @@
 构建模板位于 `recipes/`，固定上游提交后应用源码补丁、运行回归并生成标准网页包。
 Paseo 模板保留同源 Access HTTP 下载交接，不读取正常 Paseo home。
 
+`wb.2` 修复转发通道在监听注册前关闭时丢失通知的问题；通道等待入口主机
+就绪，入口恢复后唤醒依赖连接，并在每次重连时重新取得入口客户端。
+补丁及回归用例位于 `recipes/paseo/runtime/routed-reconnect.patch`，
+基于官方 0.15.4（`1c00b365c9e0b74c1580eba33d905d693125ae21`）验证。
+发布检查同时覆盖 SDK 通道生命周期、网页主机运行时及原有下载交接。
+
 发布标签为 `paseo-web-v<上游版本>-wb.<配方版本>`；包含压缩包、
 `frontend-release.json` 和 `SHA256SUMS`。清单记录源码、配方、兼容后端及逐文件散列。
 发布不移动插件 `stable`、不改变默认 Latest，也不更新 Pocket APK 或其内置网页锁。

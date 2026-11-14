@@ -1,0 +1,582 @@
+--- a/packages/client/src/hosts/index.ts
++++ b/packages/client/src/hosts/index.ts
+@@ -30,14 +30,31 @@
+     const errors = new Set<(error: unknown) => void>();
+     let routeId: string | null = null;
+     let closed = false;
++    let closeReason: unknown;
++    let openingStarted = false;
++    let releasedRouteId: string | null = null;
++    const initial = first;
++    first = null;
+     const cleanups: (() => void)[] = [];
++    const own = (unsubscribe: () => void) => {
++      // A subscription can synchronously report a terminal parent state.
++      if (closed) unsubscribe();
++      else cleanups.push(unsubscribe);
++    };
++    const releaseRoute = (id: string) => {
++      if (releasedRouteId === id) return;
++      releasedRouteId = id;
++      origin.closeHostRoute(id);
++    };
+     const close = (error?: unknown) => {
+       if (closed) return;
+       closed = true;
++      closeReason = error;
+       if (error instanceof Error) Object.assign(error, { serverId });
+-      for (const cleanup of cleanups) cleanup();
++      for (const cleanup of cleanups.splice(0)) cleanup();
+       try {
+-        if (routeId) origin.closeHostRoute(routeId);
++        if (routeId) releaseRoute(routeId);
++        else if (initial) releaseRoute(initial);
+         else origin.cancelHostRoute(scopeId);
+       } catch {
+         /* Transport already closed. */
+@@ -45,7 +62,7 @@
+       if (error) for (const handler of errors) handler(error);
+       for (const handler of closes) handler(error);
+     };
+-    cleanups.push(
++    own(
+       origin.subscribeRawMessages((message) => {
+         if (message.type === "hosts.route.frame" && message.payload.subscriptionId === routeId) {
+           for (const handler of messages) handler(message.payload.data, false);
+@@ -59,31 +76,35 @@
+           );
+       }),
+     );
+-    cleanups.push(
++    own(
+       origin.subscribeHostFrames((frame) => {
+         if (frame.routeId === routeId) for (const handler of messages) handler(frame.payload, true);
+       }),
+     );
+-    cleanups.push(
++    const open = () => {
++      if (closed || openingStarted) return;
++      openingStarted = true;
++      let opening: Promise<string>;
++      if (initial) opening = Promise.resolve(initial);
++      else opening = link ? origin.openHostLink(scopeId) : origin.openHostRoute(serverId, scopeId);
++      void opening
++        .then((id) => {
++          if (closed) {
++            releaseRoute(id);
++            return;
++          }
++          routeId = id;
++          for (const handler of opens) handler();
++          return undefined;
++        })
++        .catch(close);
++    };
++    own(
+       origin.subscribeConnectionStatus((connectionState) => {
+-        if (connectionState.status !== "connected") close();
++        if (connectionState.status === "connected") open();
++        else if (openingStarted || connectionState.status === "disposed") close();
+       }),
+     );
+-    let opening: Promise<string>;
+-    if (first) opening = Promise.resolve(first);
+-    else opening = link ? origin.openHostLink(scopeId) : origin.openHostRoute(serverId, scopeId);
+-    first = null;
+-    void opening
+-      .then((id) => {
+-        if (closed) {
+-          origin.closeHostRoute(id);
+-          return;
+-        }
+-        routeId = id;
+-        for (const handler of opens) handler();
+-        return undefined;
+-      })
+-      .catch(close);
+     return {
+       get supportsDrain() {
+         return origin.supportsDrain;
+@@ -106,10 +127,29 @@
+         return () => opens.delete(handler);
+       },
+       onClose(handler) {
++        if (closed) {
++          let subscribed = true;
++          queueMicrotask(() => {
++            if (subscribed) handler(closeReason);
++          });
++          return () => {
++            subscribed = false;
++          };
++        }
+         closes.add(handler);
+         return () => closes.delete(handler);
+       },
+       onError(handler) {
++        if (closed) {
++          let subscribed = true;
++          if (closeReason)
++            queueMicrotask(() => {
++              if (subscribed) handler(closeReason);
++            });
++          return () => {
++            subscribed = false;
++          };
++        }
+         errors.add(handler);
+         return () => errors.delete(handler);
+       },
+--- a/packages/client/src/daemon-client.test.ts
++++ b/packages/client/src/daemon-client.test.ts
+@@ -8924,3 +8924,185 @@
+   expect(route.supportsDrain).toBe(false);
+   route.close();
+ });
++
++describe("routed channel recovery", () => {
++  async function fixture() {
++    const { createHostChannelTransport } = await import("./hosts/index.js");
++    const mock = createMockTransport();
++    const origin = new DaemonClient({
++      url: "ws://route-origin",
++      clientId: "route-origin",
++      transportFactory: () => mock.transport,
++      reconnect: { enabled: false },
++    });
++    clients.push(origin);
++    const open = vi.spyOn(origin, "openHostRoute").mockResolvedValue("fixture-route");
++    const release = vi.spyOn(origin, "closeHostRoute").mockImplementation(() => {});
++    const cancel = vi.spyOn(origin, "cancelHostRoute").mockImplementation(() => {});
++    const unsubscribed = vi.fn();
++    const subscribe = origin.subscribeConnectionStatus.bind(origin);
++    vi.spyOn(origin, "subscribeConnectionStatus").mockImplementation((listener) => {
++      const off = subscribe(listener);
++      return () => {
++        unsubscribed();
++        off();
++      };
++    });
++    const connect = async () => {
++      const pending = origin.connect();
++      mock.triggerOpen();
++      await pending;
++    };
++    const create = (initial: string | null = null) =>
++      createHostChannelTransport(
++        origin,
++        "srv_destination",
++        "scope",
++        initial,
++      )({ url: "ws://route" });
++    return {
++      origin,
++      mock,
++      open,
++      release,
++      cancel,
++      unsubscribed,
++      connect,
++      create,
++      createHostChannelTransport,
++    };
++  }
++
++  test("waits for its origin and opens once as soon as that origin connects", async () => {
++    const f = await fixture();
++    const route = f.create();
++    const opened = vi.fn();
++    const closed = vi.fn();
++    route.onOpen(opened);
++    route.onClose(closed);
++    expect(f.open).not.toHaveBeenCalled();
++    await f.connect();
++    await vi.waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
++    expect(f.open).toHaveBeenCalledTimes(1);
++    expect(closed).not.toHaveBeenCalled();
++    route.close();
++  });
++
++  test("does not open a canceled channel when its origin recovers", async () => {
++    const f = await fixture();
++    const route = f.create();
++    const opened = vi.fn();
++    const closed = vi.fn();
++    route.onOpen(opened);
++    route.onClose(closed);
++    route.close();
++    route.close();
++    expect(f.unsubscribed).toHaveBeenCalledTimes(1);
++    await f.connect();
++    expect(f.open).not.toHaveBeenCalled();
++    expect(opened).not.toHaveBeenCalled();
++    expect(closed).toHaveBeenCalledTimes(1);
++    expect(f.cancel).toHaveBeenCalledTimes(1);
++  });
++
++  test("reports a terminal origin even when close happened before client listeners existed", async () => {
++    const f = await fixture();
++    await f.origin.close();
++    const child = new DaemonClient({
++      url: "ws://route",
++      clientId: "terminal-origin-child",
++      transportFactory: f.createHostChannelTransport(f.origin, "srv_destination", "scope", null),
++      reconnect: { enabled: false },
++    });
++    clients.push(child);
++    await expect(child.connect()).rejects.toThrow(/closed/i);
++    expect(f.unsubscribed).toHaveBeenCalledTimes(1);
++    expect(f.open).not.toHaveBeenCalled();
++  });
++
++  test("unsubscribes a status listener registered during synchronous shutdown", async () => {
++    const f = await fixture();
++    await f.origin.close();
++    const route = f.create();
++    const canceled = vi.fn();
++    const received = vi.fn();
++    const off = route.onClose(canceled);
++    off();
++    route.onClose(received);
++    await Promise.resolve();
++    expect(canceled).not.toHaveBeenCalled();
++    expect(received).toHaveBeenCalledTimes(1);
++    expect(f.unsubscribed).toHaveBeenCalledTimes(1);
++  });
++
++  test("releases a route that finishes opening after cancellation without reopening it", async () => {
++    const f = await fixture();
++    await f.connect();
++    let complete!: (id: string) => void;
++    f.open.mockReturnValue(
++      new Promise<string>((resolve) => {
++        complete = resolve;
++      }),
++    );
++    const route = f.create();
++    const opened = vi.fn();
++    route.onOpen(opened);
++    route.close();
++    complete("late-route");
++    await vi.waitFor(() => expect(f.release).toHaveBeenCalledWith("late-route"));
++    expect(f.release).toHaveBeenCalledTimes(1);
++    expect(opened).not.toHaveBeenCalled();
++  });
++
++  test("retains a failed opening for error and close listeners added later", async () => {
++    const f = await fixture();
++    await f.connect();
++    const failure = new Error("fixture route failure");
++    f.open.mockRejectedValue(failure);
++    const route = f.create();
++    const closed = vi.fn();
++    route.onClose(closed);
++    await vi.waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
++    const failed = vi.fn();
++    const lateClose = vi.fn();
++    route.onError(failed);
++    route.onClose(lateClose);
++    await Promise.resolve();
++    expect(failed).toHaveBeenCalledWith(failure);
++    expect(lateClose).toHaveBeenCalledTimes(1);
++    route.close();
++    expect(closed).toHaveBeenCalledTimes(1);
++  });
++
++  test("releases an initial route canceled before its parent is ready exactly once", async () => {
++    const f = await fixture();
++    const route = f.create("initial-route");
++    route.close();
++    route.close();
++    await f.connect();
++    expect(f.release).toHaveBeenCalledExactlyOnceWith("initial-route");
++    expect(f.open).not.toHaveBeenCalled();
++  });
++
++  test("retired channels stay closed while a new attempt follows a recovered parent", async () => {
++    const f = await fixture();
++    const create = f.createHostChannelTransport(f.origin, "srv_destination", "scope", null);
++    const first = create({ url: "ws://route" });
++    const firstOpen = vi.fn();
++    const firstClose = vi.fn();
++    first.onOpen(firstOpen);
++    first.onClose(firstClose);
++    await f.connect();
++    await vi.waitFor(() => expect(firstOpen).toHaveBeenCalledTimes(1));
++    f.mock.triggerClose();
++    const second = create({ url: "ws://route" });
++    const secondOpen = vi.fn();
++    second.onOpen(secondOpen);
++    await f.connect();
++    await vi.waitFor(() => expect(secondOpen).toHaveBeenCalledTimes(1));
++    expect(firstClose).toHaveBeenCalledTimes(1);
++    expect(firstOpen).toHaveBeenCalledTimes(1);
++    expect(f.open).toHaveBeenCalledTimes(2);
++    second.close();
++  });
++});
+--- a/packages/app/src/runtime/host-runtime.ts
++++ b/packages/app/src/runtime/host-runtime.ts
+@@ -595,12 +595,14 @@
+         localCredential: () => readDesktopManagedLocalCredential(connection),
+       } satisfies Omit<DaemonClientConfig, "url">;
+       if (connection.type === "routed") {
+-        const origin = resolveOrigin(connection.originServerId);
+-        if (!origin) throw new Error(`Origin host ${connection.originServerId} is unavailable`);
+         return new DaemonClient({
+           ...base,
+           url: "ws://routed-host/ws",
+-          transportFactory: createHostChannelTransport(origin, host.serverId, clientId, null),
++          transportFactory: (request) => {
++            const origin = resolveOrigin(connection.originServerId);
++            if (!origin) throw new Error(`Origin host ${connection.originServerId} is unavailable`);
++            return createHostChannelTransport(origin, host.serverId, clientId, null)(request);
++          },
+         });
+       }
+       if (connection.type === "directSocket" || connection.type === "directPipe") {
+@@ -659,15 +661,16 @@
+         const origin = resolveOrigin(connection.originServerId);
+         if (!origin?.isConnected)
+           throw new Error(`Origin host ${connection.originServerId} is unavailable`);
++        const scopeId = crypto.randomUUID();
+         const client = new DaemonClient({
+           url: "ws://routed-host/ws",
+           clientId: crypto.randomUUID(),
+-          transportFactory: createHostChannelTransport(
+-            origin,
+-            host.serverId,
+-            crypto.randomUUID(),
+-            null,
+-          ),
++          transportFactory: (request) => {
++            const currentOrigin = resolveOrigin(connection.originServerId);
++            if (!currentOrigin)
++              throw new Error(`Origin host ${connection.originServerId} is unavailable`);
++            return createHostChannelTransport(currentOrigin, host.serverId, scopeId, null)(request);
++          },
+           reconnect: { enabled: false },
+           appVersion: resolveAppVersion() ?? undefined,
+           createPluginClientBundleStore: createHostPluginClientBundleStore,
+@@ -864,6 +867,22 @@
+ 
+   ensureConnected(options?: { verify?: boolean }): void {
+     this.activeClient?.ensureConnected(options);
++  }
++
++  originConnected(originServerId: string): void {
++    if (!this.started) return;
++    const connections = this.host.connections.filter(
++      (connection) => connection.type === "routed" && connection.originServerId === originServerId,
++    );
++    if (connections.length === 0) return;
++    for (const connection of connections) this.connectionLastProbedAt.delete(connection.id);
++    const active = findConnectionById(this.host, this.snapshot.activeConnectionId);
++    if (active?.type === "routed" && active.originServerId === originServerId)
++      this.activeClient?.ensureConnected();
++    // A slow unrelated probe must not hold the newly reachable route hostage.
++    // The new probe version retires old results; their clients close on completion.
++    this.probeCycleInFlight = null;
++    void this.runProbeCycleNow();
+   }
+ 
+   markAgentDirectorySyncLoading(): void {
+@@ -1614,6 +1633,7 @@
+ 
+ export class HostRuntimeStore {
+   private controllers = new Map<string, HostRuntimeController>();
++  private routedOriginClients = new Map<string, DaemonClient>();
+   private hostObservations = new Map<
+     string,
+     { client: DaemonClient; observation: OwnedSubscription<HostDirectory>; unsubscribe: () => void }
+@@ -2371,6 +2391,7 @@
+       this.hostObservations.get(serverId)?.unsubscribe();
+       void this.hostObservations.get(serverId)?.observation.release();
+       this.hostObservations.delete(serverId);
++      this.routedOriginClients.delete(serverId);
+       this.fleetDirectoryDemand.get(serverId)?.();
+       this.fleetDirectoryDemand.delete(serverId);
+       this.controllers.delete(serverId);
+@@ -2430,6 +2451,7 @@
+         const snapshot = controller.getSnapshot();
+         this.syncSessionReplica(snapshot.serverId, snapshot);
+         this.syncDirectoryConnection(snapshot.serverId);
++        this.syncRoutedDependents(snapshot.serverId);
+         this.syncHostDiscovery(snapshot.serverId);
+         this.emit(snapshot.serverId);
+       });
+@@ -2447,6 +2469,17 @@
+         });
+       this.emit(host.serverId);
+     }
++  }
++
++  private syncRoutedDependents(serverId: string): void {
++    const client = this.getClient(serverId);
++    if (!client?.isConnected) {
++      this.routedOriginClients.delete(serverId);
++      return;
++    }
++    if (this.routedOriginClients.get(serverId) === client) return;
++    this.routedOriginClients.set(serverId, client);
++    for (const controller of this.controllers.values()) controller.originConnected(serverId);
+   }
+ 
+   private syncHostDiscovery(serverId: string): void {
+--- a/packages/app/src/runtime/host-runtime.test.ts
++++ b/packages/app/src/runtime/host-runtime.test.ts
+@@ -712,6 +712,78 @@
+ }
+ 
+ describe("HostRuntimeController", () => {
++  it("immediately retries a routed startup probe when its origin is ready", async () => {
++    const route: HostConnection = {
++      id: "via:srv_origin",
++      type: "routed",
++      originServerId: "srv_origin",
++    };
++    const host = makeHost({ connections: [route], preferredConnectionId: route.id });
++    const latencies: Record<string, number | Error> = { [route.id]: new Error("origin pending") };
++    const clients: FakeDaemonClient[] = [];
++    const deps = makeDeps(latencies, clients);
++    const probe = vi.spyOn(deps, "connectToDaemon");
++    const controller = new HostRuntimeController({ host, deps });
++    try {
++      await controller.start({ autoProbe: false });
++      expect(probe).toHaveBeenCalledTimes(1);
++      controller.originConnected("unrelated-origin");
++      expect(probe).toHaveBeenCalledTimes(1);
++      latencies[route.id] = 8;
++      controller.originConnected("srv_origin");
++      await vi.waitFor(() => expect(controller.getSnapshot().connectionStatus).toBe("online"));
++      expect(probe).toHaveBeenCalledTimes(2);
++      expect(controller.getSnapshot().activeConnectionId).toBe(route.id);
++    } finally {
++      await controller.stop();
++    }
++    controller.originConnected("srv_origin");
++    expect(probe).toHaveBeenCalledTimes(2);
++  });
++
++  it("does not wait for an unrelated slow probe or adopt its stale result after origin recovery", async () => {
++    const route: HostConnection = {
++      id: "via:srv_origin",
++      type: "routed",
++      originServerId: "srv_origin",
++    };
++    const host = makeHost({
++      connections: [route, makeHost().connections[1]!],
++      preferredConnectionId: route.id,
++    });
++    const latencies: Record<string, number | Error> = {
++      [route.id]: new Error("origin pending"),
++      "relay:relay.paseo.sh:443": 20,
++    };
++    const clients: FakeDaemonClient[] = [];
++    const deps = makeDeps(latencies, clients);
++    const connect = deps.connectToDaemon;
++    const slow = createDeferred<void>();
++    const attempted: string[] = [];
++    deps.connectToDaemon = async (input) => {
++      attempted.push(input.connection.id);
++      if (input.connection.type === "relay") await slow.promise;
++      return connect(input);
++    };
++    const controller = new HostRuntimeController({ host, deps });
++    const starting = controller.start({ autoProbe: false });
++    try {
++      await vi.waitFor(() => expect(attempted).toHaveLength(2));
++      latencies[route.id] = 8;
++      controller.originConnected("srv_origin");
++      await vi.waitFor(() => expect(controller.getSnapshot().activeConnectionId).toBe(route.id));
++      slow.resolve();
++      await starting;
++      expect(controller.getSnapshot().activeConnectionId).toBe(route.id);
++      expect(attempted.filter((id) => id === route.id)).toHaveLength(2);
++      expect(clients.at(-1)?.getConnectionState().status).toBe("disconnected");
++    } finally {
++      slow.resolve();
++      await starting;
++      await controller.stop();
++    }
++  });
++
+   it("publishes an old host and mounts observations through the client interface", async () => {
+     const host = makeHost();
+     const client = new FakeDaemonClient();
+@@ -1809,6 +1881,75 @@
+ });
+ 
+ describe("HostRuntimeStore", () => {
++  it("wakes saved routed hosts once per origin recovery and retires wakeups on removal", async () => {
++    const originHost = makeHost({
++      serverId: "srv_origin",
++      connections: [makeHost().connections[0]!],
++    });
++    const route: HostConnection = {
++      id: "via:srv_origin",
++      type: "routed",
++      originServerId: "srv_origin",
++    };
++    const target = makeHost({
++      serverId: "srv_target",
++      connections: [route],
++      preferredConnectionId: route.id,
++    });
++    const origin = makeConnectedProbeClient(5);
++    const child = makeConnectedProbeClient(8);
++    const gate = createDeferred<void>();
++    let originReady = false;
++    let probes = 0;
++    const store = new HostRuntimeStore({
++      storage: createMemoryHostRuntimeStorage(),
++      deps: {
++        createClient: () => child as unknown as DaemonClient,
++        connectToDaemon: async ({ host }) => {
++          if (host.serverId === originHost.serverId) {
++            await gate.promise;
++            return {
++              client: origin as unknown as DaemonClient,
++              serverId: host.serverId,
++              hostname: null,
++            };
++          }
++          probes += 1;
++          if (!originReady) throw new Error("origin pending");
++          return {
++            client: child as unknown as DaemonClient,
++            serverId: host.serverId,
++            hostname: null,
++          };
++        },
++        getClientId: async () => "routed-recovery",
++      },
++    });
++    try {
++      store.syncHosts([originHost, target]);
++      await vi.waitFor(() => expect(probes).toBe(1));
++      originReady = true;
++      gate.resolve();
++      await waitForHostOnline(store, target.serverId);
++      expect(probes).toBe(2);
++      origin.setConnectionState({ status: "connected" });
++      origin.setConnectionState({ status: "connected" });
++      await Promise.resolve();
++      expect(probes).toBe(2);
++      const before = child.ensureConnectedCalls;
++      origin.setConnectionState({ status: "disconnected", reason: "fixture pause" });
++      origin.setConnectionState({ status: "connected" });
++      expect(child.ensureConnectedCalls).toBe(before + 1);
++      store.syncHosts([]);
++      origin.setConnectionState({ status: "disconnected" });
++      origin.setConnectionState({ status: "connected" });
++      expect(child.ensureConnectedCalls).toBe(before + 1);
++    } finally {
++      gate.resolve();
++      store.syncHosts([]);
++    }
++  });
++
+   it.each([false, true])(
+     "keeps B and C distinct with routed and direct candidates (B direct first: %s)",
+     async (directFirst) => {

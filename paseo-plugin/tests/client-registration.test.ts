@@ -159,6 +159,7 @@ test("workspace subscription and late roster responses cannot register headers a
   publish({ kind: "upsert", id: "first", workspace: { id: "first", directory: "/sample" } });
   f.frame();
   assert.ok(f.registered.has("header:first"));
+  await tick(); // The directory listing starts asynchronously after registration.
   cleanup(); assert.equal(subscribed, false);
   resolve({ entries: [{ id: "late", directory: "/sample" }] });
   publish({ kind: "upsert", id: "later", workspace: { id: "later", directory: "/sample" } });
@@ -233,6 +234,7 @@ for (const late of [false, true]) test(`workspace directory stream is released o
   const f = fixture({ platform: "web" }); let resolve!: (value: any) => void, released = 0;
   f.client.paseo = { workspaces: { list: () => new Promise(r => { resolve = r; }) } };
   const cleanup = f.contribute();
+  await tick(); // Let the deferred listing start before testing its late response.
   if (late) cleanup();
   resolve({ entries: [{ id: "workspace", directory: "/sample" }], subscription: { async release() { released++; } } });
   await tick(); cleanup(); await tick(); assert.equal(released, 1); assert.equal(f.registered.size, 0);

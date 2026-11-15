@@ -15,6 +15,7 @@ import {
 } from "./model";
 
 type PreferenceEvent =
+  | { scope: string; kind: 'workspaceView'; view: 'list' | 'tree' }
   | { scope: string; kind: "selection"; id: string }
   | { scope: string; kind: "section"; id: ObserverSectionId; patch: Partial<SectionLayoutPreference> }
   | { scope: string; kind: "collapse"; collapsed: boolean }
@@ -30,6 +31,7 @@ function emptySettingsValues(): ObserverSettingsValues {
     selectedWorkspaceByPaseoWorkspace: {},
     sectionLayoutByPaseoWorkspace: {},
     lastProjectByHost: {},
+    workspaceViewByScope: {},
     reviewModeByPaseoWorkspace: {},
     diffDisplay: {fontSize:14,wrap:false}, productionBranches: {},
   };
@@ -64,6 +66,8 @@ export type ObserverPreferences = {
   selectedWorkspaceId: string;
   savedWorkspaceId: string;
   sectionLayout: ObserverSectionLayout;
+  workspaceView: 'list' | 'tree';
+  setWorkspaceView(view: 'list' | 'tree'): void;
   selectWorkspace(id: string): void;
   updateSection(id: ObserverSectionId, patch: Partial<SectionLayoutPreference>): void;
   commitResize(sizes: Record<ObserverSectionId, number>): void;
@@ -85,13 +89,16 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
   const [hydratedKey, setHydratedKey] = useState("");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
   const [savedWorkspaceId, setSavedWorkspaceId] = useState("");
+  const [workspaceView, setWorkspaceView] = useState<'list' | 'tree'>('list');
   const [sectionLayout, setSectionLayout] = useState(defaultObserverSectionLayout);
   const writeQueue = useRef(Promise.resolve());
 
   useEffect(() => {
     const receive = (event: PreferenceEvent) => {
       if (event.scope !== scopeKey) return;
-      if (event.kind === "selection") {
+      if (event.kind === 'workspaceView') {
+        setWorkspaceView(event.view);
+      } else if (event.kind === "selection") {
         setSelectedWorkspaceId(event.id);
         setSavedWorkspaceId(event.id);
       } else if (event.kind === "section") {
@@ -163,6 +170,7 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
     const saved = values.selectedWorkspaceByPaseoWorkspace[scopeKey] || "";
     setSavedWorkspaceId(saved);
     setSelectedWorkspaceId(saved);
+    setWorkspaceView(values.workspaceViewByScope[scopeKey] || 'list');
     setSectionLayout(
       normalizeObserverSectionLayout(values.sectionLayoutByPaseoWorkspace[scopeKey]),
     );
@@ -196,6 +204,12 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
       }
     }).catch(() => { /* Local selection stays usable when persistence fails. */ });
   }, [readSettings, writeSettings]);
+
+  const setView = useCallback((view: 'list' | 'tree') => {
+    setWorkspaceView(view);
+    publishPreference({ scope: scopeKey, kind: 'workspaceView', view });
+    persist(values => ({ ...values, workspaceViewByScope: { ...values.workspaceViewByScope, [scopeKey]: view } }));
+  }, [persist, scopeKey]);
 
   const selectWorkspace = useCallback((id: string): void => {
     publishPreference({ scope: scopeKey, kind: "selection", id });
@@ -284,6 +298,8 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
     selectedWorkspaceId,
     savedWorkspaceId,
     sectionLayout,
+    workspaceView,
+    setWorkspaceView: setView,
     selectWorkspace,
     updateSection,
     commitResize,

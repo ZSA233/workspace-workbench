@@ -6,6 +6,7 @@ import { mkdirSync, writeFileSync, mkdtempSync, existsSync, unlinkSync, rmSync }
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { chromium } from 'playwright';
+import { openGlobalWorkbench } from './ui-project-selection.mjs';
 import { backendRequest } from '../server/backend-supervisor.ts';
 const exec = promisify(execFile);
 const plugin = resolve(import.meta.dirname, '..');
@@ -113,7 +114,7 @@ try {
   await page.getByText('Search for directory', { exact: true }).click();
   await page.getByPlaceholder('Search directories or enter a path...').fill(ui.project);
   await page.getByText('Open this path', { exact: true }).click();
-  await page.getByText('Workspace Workbench', { exact: true }).first().click();
+  await openGlobalWorkbench(page, 'a');
   await page.getByTestId('workbench-graph-content').waitFor({ timeout: 30000 });
   let current = 'Main workspace';
   report.coldSelections = [];

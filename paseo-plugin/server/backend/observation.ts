@@ -345,7 +345,7 @@ export class Observation {
       : [];
     const requestedIds = new Set(requested), roster = await this.workspaces.observationRecords.request('list');
     this.activity.reconcileWorkspaces(roster);
-    return this.activity.start(scanId, roster.filter((workspace: Json) => requestedIds.has(workspace.id)));
+    return this.activity.start(scanId, roster.filter((workspace: Json) => requestedIds.has(workspace.id) && workspace.state !== 'removed'), params.force === true);
   }
   async close(): Promise<void> {
     this.closing = true;

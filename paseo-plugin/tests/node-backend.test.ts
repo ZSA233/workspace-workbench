@@ -21,6 +21,7 @@ import { Service } from "../server/backend/service.ts";
 import { Git, gitDiagnostics } from "../server/backend/git.ts";
 import { ObservationCache } from "../server/backend/cache.ts";
 import { WorkspaceActivityIndex } from "../server/backend/workspace-activity.ts";
+import { activityHeadToken } from '../server/backend/activity-head.ts';
 import { type Json, WorkbenchError } from "../server/backend/storage.ts";
 async function prepareRuntime(service: Service, params: Json): Promise<Json> {
   try { return await service.handle("workspace.prepare", params); }
@@ -143,8 +144,9 @@ test("workspace activity scans HEAD metadata only on request, caches it, aggrega
 
     const afterFirstScan = gitDiagnostics().commands;
     const cached = await service.handle("workspace.activity", { action: "start", scanId: "scan-cached", workspaceIds });
-    assert.equal(cached.state, "complete");
-    assert.equal(cached.total, 0);
+    assert.equal(cached.state, "running");
+    for (let attempt = 0; attempt < 300 && (await service.handle('workspace.activity', { action: 'status', scanId: 'scan-cached' })).state === 'running'; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal((await service.handle('workspace.activity', { action: 'status', scanId: 'scan-cached' })).state, 'complete');
     assert.equal(gitDiagnostics().commands, afterFirstScan, "fresh activity cache must avoid Git commands");
     await service.close();
     service = new Service(f.config);
@@ -178,6 +180,63 @@ test("cancelling a workspace activity scan stops its queued repository lookups",
     await activity.close();
     rmSync(f.root, { recursive: true, force: true });
   }
+});
+
+test('activity refresh detects commits within the TTL, publishes one batch and discards cancelled generations', async () => {
+  const f = fixture(), activity = new WorkspaceActivityIndex(f.config);
+  const rows = ['one','two'].map(id => ({ id, repositories: [{ worktreePath: join(f.root, id) }] }));
+  const finish = async (id: string) => {
+    const deadline = Date.now() + 5000;
+    while (activity.status(id).state === 'running' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.notEqual(activity.status(id).state, 'running');
+  };
+  const original = Git.prototype.run;
+  let release: (() => void) | undefined;
+  try {
+    activity.reconcileWorkspaces(rows); activity.start('initial', rows); await finish('initial');
+    const old = rows.map(row => activity.summary(row).latestCommitAt);
+    for (const row of rows) {
+      const result = spawnSync('git', ['-C', row.repositories[0].worktreePath, 'commit', '--allow-empty', '-qm', 'New HEAD inside thirty minutes'], {
+        env: { ...process.env, GIT_AUTHOR_DATE: '2030-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2030-01-01T00:00:00Z' }, encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    let waiting = false;
+    Git.prototype.run = async function(...args: Parameters<Git['run']>) {
+      if (this.path === rows[1].repositories[0].worktreePath && args[0][0] === 'show') {
+        waiting = true; await new Promise<void>(resolve => { release = resolve; });
+      }
+      return original.apply(this, args);
+    };
+    activity.start('closed-popup', rows);
+    while (!waiting) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.deepEqual(rows.map(row => activity.summary(row).latestCommitAt), old, 'partial repository results must not reorder the list');
+    activity.cancel('closed-popup'); release!(); await finish('closed-popup');
+    Git.prototype.run = original;
+    activity.start('reopened-popup', rows); await finish('reopened-popup');
+    assert.deepEqual(rows.map(row => activity.summary(row).latestCommitAt), ['2030-01-01T00:00:00Z','2030-01-01T00:00:00Z']);
+    const before = gitDiagnostics().commands;
+    activity.start('manual-refresh', rows, true); await finish('manual-refresh');
+    assert.equal(gitDiagnostics().commands - before, 2, 'manual refresh must bypass unchanged HEAD snapshots');
+    // Invalid/unavailable metadata keeps the last successful timestamp.
+    renameSync(join(f.root, 'one', '.git'), join(f.root, 'one', '.git-away'));
+    activity.start('failed-read', rows); await finish('failed-read');
+    assert.equal(activity.summary(rows[0]).latestCommitState, 'partial');
+    assert.equal(activity.summary(rows[0]).latestCommitAt, '2030-01-01T00:00:00Z');
+  } finally { release?.(); Git.prototype.run = original; await activity.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('HEAD validation covers packed branch refs, linked worktrees and detached commits', async () => {
+  const f = fixture(), repo = join(f.root, 'one'), linked = join(f.root, 'linked');
+  try {
+    git(repo, ['pack-refs','--all']); const before = await activityHeadToken(repo);
+    git(repo, ['worktree','add','-q','-b','linked-proof', linked, 'HEAD']);
+    const token = await activityHeadToken(linked);
+    git(linked, ['commit','--allow-empty','-qm','linked HEAD changed']);
+    assert.notEqual(await activityHeadToken(linked), token); assert.equal(await activityHeadToken(repo), before);
+    git(linked, ['checkout','--detach','-q']); const detached = await activityHeadToken(linked);
+    git(linked, ['commit','--allow-empty','-qm','detached HEAD changed']);
+    assert.notEqual(await activityHeadToken(linked), detached);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
 test("project config rejects an observation budget below the derived minimum", () => {

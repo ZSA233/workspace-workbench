@@ -1,4 +1,5 @@
 import {ChangeNotes} from './change-notes.ts';
+import { CacheManagement } from './cache-management.ts';
 import { WorkspaceFiles } from './files.ts';
 import { compareRepository, fetchComparisonRef } from './repository-comparison.ts';
 import type {ObservationScheduler} from './observation-scheduler.ts';
@@ -31,6 +32,7 @@ export const managementMethods = new Set([
   "linked.workspaces.save",
 ]);
 export class Service {
+  cacheManagement: CacheManagement;
   files: WorkspaceFiles;
   notes: ChangeNotes;
   config: Config;
@@ -43,11 +45,12 @@ export class Service {
   startedAt = Date.now();
   eventLoop = new EventLoopMetrics();
   version: string;
-  build = buildId(["../server/backend/syntax-service.ts", "../server/backend/syntax-worker.ts", "../server/backend/documents.ts", "../server/backend/diff-syntax.ts", "./code-syntax.ts", "./document.ts", "../server/backend/process.ts", "../server/backend/file-decorations.ts", "../server/backend/repository-status.ts", "./file-decorations.ts", "../server/backend/file-stage-ignore.ts", "../server/backend/file-io.ts", "../server/backend/file-cleanup.ts", "../server/backend/files.ts", "../server/backend/file-roots.ts", "../server/backend/file-journal.ts", "../server/backend/file-tasks.ts", "./files.ts","../server/backend/service.ts", "../server/backend/change-notes.ts", "../server/backend/change-note-catalog.ts", "./change-notes.ts", "../server/backend/repository-comparison.ts", "../server/backend/diff-content.ts", "../server/backend/diff-context.ts", "./diff-context.ts", "./comparison.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts", "../server/backend/runtime-tools.ts", "../server/backend/runtime-layout.ts", "../server/backend/runtime-summary.ts", "../server/backend/runtime-observation.ts", "../server/backend/runtime-read-queue.ts", "../server/backend/environment-snapshots.ts", "../server/backend/workspaces.ts", "../server/backend/workspace-records.ts", "../server/backend/workspace-catalog.ts", "../server/backend/workspace-directory.ts", "../server/backend/workspace-creation.ts", "../server/backend/workspace-removal.ts", "../server/backend/workspace-deletion.ts", "../server/backend/workspace-activity-guard.ts", "../server/backend/workspace-record-encoding.ts", "../server/backend/workspace-infrastructure.ts", "../server/backend/workspace-scope.ts", "../server/backend/workspace-lineage.ts", "./workspace-lineage.ts"]);
+  build = buildId(["../server/backend/cache-management.ts", "../server/backend/cache-provider.ts", "../server/backend/cache-go.ts", "../server/backend/cache-measure.ts", "../server/backend/cache-lease.ts", "../server/backend/cache-guards.ts", "../server/backend/activity-head.ts", "./cache-management.ts", "../server/backend/syntax-service.ts", "../server/backend/syntax-worker.ts", "../server/backend/documents.ts", "../server/backend/diff-syntax.ts", "./code-syntax.ts", "./document.ts", "../server/backend/process.ts", "../server/backend/file-decorations.ts", "../server/backend/repository-status.ts", "./file-decorations.ts", "../server/backend/file-stage-ignore.ts", "../server/backend/file-io.ts", "../server/backend/file-cleanup.ts", "../server/backend/files.ts", "../server/backend/file-roots.ts", "../server/backend/file-journal.ts", "../server/backend/file-tasks.ts", "./files.ts","../server/backend/service.ts", "../server/backend/change-notes.ts", "../server/backend/change-note-catalog.ts", "./change-notes.ts", "../server/backend/repository-comparison.ts", "../server/backend/diff-content.ts", "../server/backend/diff-context.ts", "./diff-context.ts", "./comparison.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts", "../server/backend/runtime-tools.ts", "../server/backend/runtime-layout.ts", "../server/backend/runtime-summary.ts", "../server/backend/runtime-observation.ts", "../server/backend/runtime-read-queue.ts", "../server/backend/environment-snapshots.ts", "../server/backend/workspaces.ts", "../server/backend/workspace-records.ts", "../server/backend/workspace-catalog.ts", "../server/backend/workspace-directory.ts", "../server/backend/workspace-creation.ts", "../server/backend/workspace-removal.ts", "../server/backend/workspace-deletion.ts", "../server/backend/workspace-activity-guard.ts", "../server/backend/workspace-record-encoding.ts", "../server/backend/workspace-infrastructure.ts", "../server/backend/workspace-scope.ts", "../server/backend/workspace-lineage.ts", "./workspace-lineage.ts"]);
   constructor(config: Config, version = "0.1.3", dependencies:{scheduler?:ObservationScheduler;cacheClock?:()=>number}={}) {
     this.config = config;
     this.version = version;
     this.workspaces = new Workspaces(config);
+    this.cacheManagement = new CacheManagement(this.workspaces);
     this.notes = new ChangeNotes(this.workspaces,path=>String(this.observation.scheduler.token(path,'working')));
     this.runtime = config.toolchain ? new Runtime(config) : null;
     this.cache = new ObservationCache(config,dependencies.cacheClock);
@@ -89,6 +92,7 @@ export class Service {
       refreshControls: this.observation.refresh.controlHealth(),
       prepareProtocol: 1,
       environmentProtocol: 1,
+      cacheManagementProtocol: 1,
       basicSummaryProtocol: 1,
       fileStatistics: this.observation.statistics.health(),
       project: {
@@ -109,6 +113,10 @@ export class Service {
     };
   }
   async handle(method: string, params: Json = {}, signal?: AbortSignal): Promise<Json> {
+    if (method === 'cache.list') return this.cacheManagement.list();
+    if (method === 'cache.scan') return this.cacheManagement.scan(params);
+    if (method === 'cache.task') return this.cacheManagement.task(params);
+    if (method === 'cache.cleanup') return this.cacheManagement.cleanup(params);
     if (method === 'files.request') return this.files.request(params,signal);
     if (method === 'notes.read') return this.notes.read(params,signal);
     if (method === 'notes.write') return this.workspaces.mutations.run(()=>this.notes.write(params,params.author));
@@ -316,6 +324,7 @@ export class Service {
     }
   }
   async close() {
+    await this.cacheManagement.close();
     await this.files.close();
     this.observation.status.close();
     this.eventLoop.close();

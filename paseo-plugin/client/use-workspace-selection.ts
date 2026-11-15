@@ -4,7 +4,7 @@ import type { WorkbenchCopy } from '../shared/copy';
 import type { ObservationTiming } from '../shared/observation-timing';
 import type { ObserverMethod, ObserverResponse } from '../shared/observer';
 import { queryFailureForDisplay, resultOf } from './components/ui';
-import { matchesWorkspaceFilter, resolveWorkspaceSelection, sortWorkspaces, sortWorkspacesByLatestCommit, type ListResult, type WorkspaceFilter } from './model';
+import { matchesWorkspaceFilter, resolveWorkspaceSelection, sortWorkspacesByLatestCommit, type ListResult, type WorkspaceFilter } from './model';
 import { reportNativeDiagnostic } from './native-diagnostics';
 import { initialContentState, useLastSuccessfulResponse } from './observation';
 import { observationQueryOptions } from './observation-content';
@@ -39,7 +39,8 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
         completed: number;
         total: number;
     } | null>(null);
-    const [sortByLatestCommit, setSortByLatestCommit] = useState(false);
+    const activityRpcRef = useRef(rpc);
+    const requestedActivityRoster = useRef('');
     const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>("all");
     const newlyCreatedWorkspace = useRef<string | null>(null);
     useEffect(() => setSelectionResolved(false), [preferenceScopeKey]);
@@ -62,8 +63,8 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
     const listUnavailable = listContentState === 'unavailable';
     const observedWorkspaces = useMemo(() => {
         const rows = listReady ? listResult?.workspaces || [] : [];
-        return sortByLatestCommit ? sortWorkspacesByLatestCommit(rows) : sortWorkspaces(rows);
-    }, [listReady, listResult?.workspaces, sortByLatestCommit]);
+        return sortWorkspacesByLatestCommit(rows);
+    }, [listReady, listResult?.workspaces]);
     const allWorkspaces = useMemo(() => observedWorkspaces.filter((workspace) => workspace.state !== "removed"), [observedWorkspaces]);
     const historyWorkspaces = useMemo(() => observedWorkspaces.filter((workspace) => workspace.state === "removed"), [observedWorkspaces]);
     const workspacePool = workspaceFilter === "history" ? historyWorkspaces : allWorkspaces;
@@ -74,21 +75,18 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
         setActivityScanId("");
         setActivityScanProgress(null);
         if (scanId)
-            void rpcRef.current({ method: "workspace.activity", params: { action: "cancel", scanId } });
+            void activityRpcRef.current({ method: "workspace.activity", params: { action: "cancel", scanId } }).catch(() => {});
     }, []);
     const closeWorkspaceSelector = useCallback(() => { setSelectorOpen(false); stopWorkspaceActivityScan(); }, [stopWorkspaceActivityScan]);
-    const openWorkspaceSelector = useCallback(() => {
-        if (selectorOpen) {
-            closeWorkspaceSelector();
-            return;
-        }
-        setSelectorOpen(true);
-        setSortByLatestCommit(false);
+    const refreshWorkspaceActivity = useCallback((force = false) => {
+        stopWorkspaceActivityScan();
         const scanId = `selector-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        const scanRpc = rpcRef.current;
+        activityRpcRef.current = scanRpc;
         activityScanIdRef.current = scanId;
-        void rpcRef.current({
+        void scanRpc({
             method: "workspace.activity",
-            params: { action: "start", scanId, workspaceIds: observedWorkspaces.map((workspace) => workspace.id) },
+            params: { action: "start", scanId, force, workspaceIds: observedWorkspaces.filter(workspace => workspace.state !== 'removed').map((workspace) => workspace.id) },
         }).then((response) => {
             if (activityScanIdRef.current !== scanId)
                 return;
@@ -96,7 +94,7 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
                 activityScanIdRef.current = "";
                 setActivityScanId("");
                 setActivityScanProgress(null);
-                void refreshArea("workspace-list").finally(() => setSortByLatestCommit(true));
+                void refreshArea("workspace-list");
                 return;
             }
             const status = response.result as {
@@ -112,25 +110,36 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
                 activityScanIdRef.current = "";
                 setActivityScanId("");
                 setActivityScanProgress(null);
-                void refreshArea("workspace-list").finally(() => setSortByLatestCommit(true));
+                void refreshArea("workspace-list");
             }
         }).catch(() => {
             if (activityScanIdRef.current !== scanId)
                 return;
             activityScanIdRef.current = "";
-            void rpcRef.current({ method: "workspace.activity", params: { action: "cancel", scanId } });
+            void scanRpc({ method: "workspace.activity", params: { action: "cancel", scanId } }).catch(() => {});
             setActivityScanId("");
             setActivityScanProgress(null);
-            setSortByLatestCommit(true);
         });
-    }, [closeWorkspaceSelector, listQuery.refetch, observedWorkspaces, selectorOpen]);
+    }, [stopWorkspaceActivityScan, observedWorkspaces, refreshArea]);
+    const openWorkspaceSelector = useCallback(() => {
+        if (selectorOpen) { closeWorkspaceSelector(); return; }
+        requestedActivityRoster.current = '';
+        setSelectorOpen(true);
+    }, [selectorOpen, closeWorkspaceSelector]);
+    const activityRoster = observedWorkspaces.filter(workspace => workspace.state !== 'removed')
+        .map(workspace => `${workspace.id}:${workspace.instanceKey || ''}:${workspace.repositoryCount}`).sort().join('\0');
     useEffect(() => {
-        if (!selectorOpen || !foreground || !activityScanId)
+        if (!foreground || !selectorOpen || !listReady || requestedActivityRoster.current === activityRoster) return;
+        requestedActivityRoster.current = activityRoster;
+        refreshWorkspaceActivity();
+    }, [foreground, selectorOpen, listReady, activityRoster, refreshWorkspaceActivity]);
+    useEffect(() => {
+        if (!foreground || !activityScanId)
             return;
         let stopped = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
         const poll = async () => {
-            const response = await rpcRef.current({ method: "workspace.activity", params: { action: "status", scanId: activityScanId } }).catch(() => null);
+            const response = await activityRpcRef.current({ method: "workspace.activity", params: { action: "status", scanId: activityScanId } }).catch(() => null);
             if (stopped || activityScanIdRef.current !== activityScanId)
                 return;
             const status = response?.ok ? response.result as {
@@ -150,22 +159,21 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
             activityScanIdRef.current = "";
             setActivityScanId("");
             setActivityScanProgress(null);
-            void refreshArea("workspace-list").finally(() => setSortByLatestCommit(true));
+            void refreshArea("workspace-list");
         };
         void poll();
         return () => { stopped = true; if (timer)
             clearTimeout(timer); };
-    }, [activityScanId, foreground, listQuery.refetch, selectorOpen]);
+    }, [activityScanId, foreground, refreshArea]);
     useEffect(() => {
-        if (foreground || !activityScanIdRef.current)
+        if (foreground || !selectorOpen && !activityScanIdRef.current)
             return;
         closeWorkspaceSelector();
-    }, [closeWorkspaceSelector, foreground]);
-    useEffect(() => () => {
-        const scanId = activityScanIdRef.current;
-        if (scanId)
-            void rpcRef.current({ method: "workspace.activity", params: { action: "cancel", scanId } });
-    }, []);
+    }, [closeWorkspaceSelector, foreground, selectorOpen]);
+    useEffect(() => {
+        setSelectorOpen(false);
+        return stopWorkspaceActivityScan;
+    }, [projectConfig, stopWorkspaceActivityScan]);
     const identifyQuery = useQuery({
         queryKey: ["workspace-workbench", projectConfig, "identify", workspaceDirectory],
         queryFn: () => rpc({ method: "workspace.identify", params: { directory: workspaceDirectory } }),
@@ -239,5 +247,5 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
         setSelectorOpen(false);
     }
     const selectCreatedWorkspace = (id: string) => { newlyCreatedWorkspace.current = id; selectWorkspace(id); };
-    return { selectionResolved, selectorOpen, activityScanProgress, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, stopWorkspaceActivityScan, closeWorkspaceSelector, openWorkspaceSelector, identifyQuery, selectWorkspace, selectCreatedWorkspace };
+    return { selectionResolved, selectorOpen, activityScanProgress, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, stopWorkspaceActivityScan, closeWorkspaceSelector, openWorkspaceSelector, refreshWorkspaceActivity, identifyQuery, selectWorkspace, selectCreatedWorkspace };
 }

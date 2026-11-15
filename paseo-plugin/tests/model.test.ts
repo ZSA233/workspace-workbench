@@ -62,12 +62,12 @@ test("workspace sorting and filters preserve the main workspace and activity ord
   assert.equal(matchesWorkspaceFilter(workspace("gone", { state: "removed" }), "all"), false);
 });
 
-test("workspace commit sorting is newest first, preserves ties, and puts unknown commits last", () => {
+test("workspace commit sorting is newest first, uses stable IDs for ties, and puts unknown commits last", () => {
   const rows = [
     workspace("older", { latestCommitAt: "2026-09-01T00:00:00Z" }),
     workspace("main", { kind: "live", managed: false, latestCommitAt: "2026-08-01T00:00:00Z" }),
-    workspace("tie-a", { latestCommitAt: "2026-09-20T00:00:00Z" }),
     workspace("tie-b", { latestCommitAt: "2026-09-20T00:00:00Z" }),
+    workspace("tie-a", { latestCommitAt: "2026-09-20T00:00:00Z", updatedAt: '2000-01-01T00:00:00Z' }),
     workspace("unknown"),
   ];
   assert.deepEqual(sortWorkspacesByLatestCommit(rows).map((item) => item.id), ["tie-a", "tie-b", "older", "main", "unknown"]);

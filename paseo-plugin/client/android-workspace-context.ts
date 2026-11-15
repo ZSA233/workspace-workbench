@@ -1,8 +1,9 @@
 import { clearWorkbenchWorkspaceSnapshots, markWorkbenchWorkspaceSnapshotsReady, setWorkbenchWorkspaceSnapshot } from "./surface-context";
+import { workspaceDirectorySnapshot, type WorkspaceDirectoryEntry } from "./workspace-directory";
 
 export type WorkspaceDirectoryReader = {
   list?: (options?: { page?: { limit: number; cursor?: string } }) => Promise<{
-    entries: Array<{ id: string; directory?: string | null; workspaceDirectory?: string | null; name?: string | null }>;
+    entries: WorkspaceDirectoryEntry[];
     pageInfo?: { hasMore: boolean; nextCursor?: string | null };
   }>;
 };
@@ -25,8 +26,8 @@ export function createAndroidWorkspaceContext(api: WorkspaceDirectoryReader | un
           const result = await api?.list?.({ page: { limit: 100, ...(cursor ? { cursor } : {}) } });
           if (closed || !observers || epoch !== generation) return;
           for (const workspace of result?.entries || []) {
-            const directory = workspace.directory || workspace.workspaceDirectory;
-            if (directory) setWorkbenchWorkspaceSnapshot({ id: workspace.id, directory, name: workspace.name || workspace.id });
+            const snapshot = workspaceDirectorySnapshot(workspace);
+            if (snapshot) setWorkbenchWorkspaceSnapshot(snapshot);
           }
           if (!result?.pageInfo?.hasMore) { markWorkbenchWorkspaceSnapshotsReady(Boolean(result)); return; }
           cursor = result.pageInfo.nextCursor || undefined;

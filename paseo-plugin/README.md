@@ -27,10 +27,14 @@ paseo plugin install /path/to/workspace-workbench/paseo-plugin --json
 paseo plugin reload workspace-workbench-paseo --json
 ```
 
-首次使用时在 Paseo 的“设置 → 插件”中启用插件。打开没有项目配置的 Git 目录后，插件
-会自动扫描并列出可用仓库；确认后生成 `.workspace-workbench/project.json`，并自动登记
-项目、准备配置和启动后端。用户不需要编辑 JSON、维护项目注册表或手动创建 worktree。
+首次使用时在 Paseo 的“设置 → 插件”中启用插件，从当前工作区的“＋”菜单打开 Workbench。
+打开没有项目配置的目录后，插件会自动扫描并列出可用仓库；确认后生成
+`.workspace-workbench/project.json`，并自动登记项目、准备配置和启动后端。目录本身不是
+Git 仓库时也支持发现下方多个仓库并一起选择，默认向下扫描三层。用户不需要编辑 JSON、
+维护项目注册表或手动创建 worktree。
 如果同一源码根目录已有登记的项目配置，向导会打开该项目，不再生成第二份配置或覆盖其仓库清单。
+全局入口没有当前工作区上下文，需要手动选择已登记项目；无法读取工作区目录时，插件不会
+自动打开其他项目。
 
 ## 观察时序
 
@@ -47,7 +51,7 @@ paseo plugin reload workspace-workbench-paseo --json
 
 这里分为两个动作：
 
-1. **自动发现**：初始化向导扫描 Git 根目录和嵌套仓库，供用户确认项目配置范围。
+1. **自动发现**：初始化向导扫描 Git 根目录和嵌套仓库，或非 Git 目录下的仓库，供用户确认项目配置范围。
 2. **加入已有 Workspace**：在 Workspace 面板点击“添加仓库”后，插件自动列出项目配置
    中尚未加入当前 Workspace 的仓库。用户确认仓库和 base ref，系统自动创建隔离分支、
    更新 manifest、准备运行时并记录逐库结果。
@@ -237,6 +241,9 @@ Git watcher/reconciliation 可能向上发现外层仓库并重复扫描；用
 无头浏览器验收可运行 `npm --prefix paseo-plugin run test:plugin-ui`；首次使用先执行
 `npm --prefix paseo-plugin exec -- playwright install chromium`。测试会启动隔离的
 真实 Paseo 页面，验证自动刷新与崩溃恢复，并在 `.local/verification/ui/` 保存截图。
+工作区目录识别和非 Git 多仓初始化的专项验收可运行
+`node paseo-plugin/scripts/verify-workspace-routing-ui.mjs`；该脚本使用隔离的 Paseo home、
+项目注册表和临时仓库，不会重载用户正在使用的插件。
 
 ## Session tools and project caches
 
@@ -356,3 +363,41 @@ Diff 右侧概览支持点击色块定位修改、点击空白轨道定位文档
 ## Workspace 文件工作台
 
 在当前 Workspace 选择器下打开「文件」Tab，可拖拽上传文件和目录、操作远程文件树并查看独立传输队列。支持跨空间复制粘贴、ZIP64 下载与持久任务恢复。使用、平台保存能力与清理规则见 [FILES.md](FILES.md)。
+
+## 缓存与空间
+
+Workspace 选择器默认列表视图，按最近提交倒序排列，主工作区参与相同排序。
+可切换来源层级视图，按组内最新提交排序，累计缩进最多 24px。视图选择沿用宿主设置保存。
+打开选择器先使用已有提交快照，再异步核对 HEAD；新增提交不必等待 30 分钟缓存到期。
+扫描结束后统一更新，保留选择和可见行位置。空间快照的更新独立于提交排序。
+
+“缓存与空间”沿用工作台的紧凑分组行，展示统计摘要、全局缓存、项目缓存和 Workspace 目录。
+当前仅注册 Go 提供者，区分编译缓存、模块缓存，以及全局、项目共享和 Workspace 独占目录。
+发现路径来自生效的 `go env`、现有运行时缓存规则、环境快照和保留的托管目录；不会安装工具链或迁移缓存。
+项目编译缓存的 Go 版本／平台子目录会形成固定目标集合，预览逐一列出。
+
+统计快照默认有效 10 分钟；打开缓存页显示已有值并后台更新过期数据，手动刷新跳过有效期。
+选择器只读取快照。占用按磁盘已分配字节估算，不跟随符号链接，硬链接、重叠路径及共享缓存去重。
+缓存合计与 Workspace 目录合计分别显示；主工作区目录排除工作台的状态、缓存与隔离 Workspace 根目录。
+权限不足、超时和部分完成会保留可用数据并显示状态。APFS 克隆、压缩和写入中的文件会使估算与实际释放量存在差异。
+
+手动清理先预览类型、路径、共享影响范围和估算占用，再使用持久化请求身份启动后台任务。
+编译缓存仅设置选中目录的 `GOCACHE` 并运行 `go clean -cache`；模块缓存仅设置 `GOMODCACHE` 并运行 `go clean -modcache`。
+两个操作独立，不提供按天清理、自动清理或自定义删除回退。已知准备、执行或审核任务正在使用缓存时禁止清理。
+重启后的未完成清理记为中断，响应丢失后查询原任务，不自动重放。
+
+通用协议为 `cache.list`（快照）、`cache.scan`（启动／取消扫描）、`cache.task`（进度和操作凭据）及
+`cache.cleanup`（预览／启动）。操作只接受服务端目标 ID，不接受任意目录或命令。
+快照、预览和任务存放在 `stateRoot/cache-management/`，不修改 schema-v1 Workspace 记录。
+同一宿主的扫描和清理通过 `PASEO_HOME/workspace-workbench/cache-management/operations.sqlite` 互斥；
+目录遍历采用异步文件读取，并为交互 Git 请求让出执行机会。
+
+新增工具时实现 [`CacheProvider`](server/backend/cache-provider.ts)，在 `CacheManagement` 注册：
+声明提供者／类型标签、范围、实际根目录、Workspace 引用及可用操作，并用工具原生命令执行清理。
+聚合目标的每次命令执行前调用 `context.validateCleanup`，成功后调用 `context.cleanupProgress`。
+公共层复用计量、任务、快照、预览、身份校验和去重；页面根据标签和操作能力渲染，不限定 Go 类型。
+Node、Gradle／Android、Java 等尚未实现，接入时必须补充提供者契约测试。
+
+验证：`npm --prefix paseo-plugin run typecheck`、`npm --prefix paseo-plugin test`，以及
+`node paseo-plugin/scripts/verify-cache-ui.mjs`。UI 脚本加载真实插件至隔离 Paseo 宿主，使用临时 Go 缓存，
+检查列表／层级、最近提交、清理预览及浅色／深色／390px 面板，不操作日常宿主或注册表。

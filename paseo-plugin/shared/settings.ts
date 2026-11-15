@@ -18,11 +18,12 @@ const reviewMode = z.enum(["split", "unified"]);
 export const observerSettings = defineSettings({
   id: "workspace-workbench",
   scope: "host",
-  version: 2,
+  version: 3,
   schema: z.object({
     selectedWorkspaceByPaseoWorkspace: z.record(z.string(), z.string()).default({}),
     sectionLayoutByPaseoWorkspace: z.record(z.string(), sectionLayout).default({}),
     lastProjectByHost: z.record(z.string(), z.string()).default({}),
+    workspaceViewByScope: z.record(z.string(), z.enum(['list', 'tree'])).default({}),
     diffDisplay: z.object({fontSize: z.number().refine(value => [12,14,16,18].includes(value)).default(14), wrap: z.boolean().default(false)}).default({fontSize:14,wrap:false}),
     productionBranches: z.record(z.string(), z.string()).default({}),
     reviewModeByPaseoWorkspace: z.record(z.string(), reviewMode).default({}),

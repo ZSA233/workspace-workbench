@@ -90,6 +90,8 @@ import { AnchoredMenu,LayoutMenu,WorkspaceSelector } from "./components/navigati
 import { ProjectRuntimeMenu } from "./components/project-runtime";
 import { ProjectSetup } from "./components/project-setup";
 import { ProjectStorageMenu } from "./components/project-storage";
+import { useCacheManagement } from './use-cache-management';
+import { CacheManagementPanel } from './components/cache-management';
 import { SectionAllocationContext,stableScrollbarStyle } from "./components/ui";
 import { WorkspaceBatchPanel } from "./components/workspace-batch";
 import { WorkspaceDeletionPanel } from "./components/workspace-deletion";
@@ -135,8 +137,9 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }
   const directory = props.paseoWorkspace?.directory || "";
   const snapshotStatus = useWorkbenchWorkspaceSnapshotStatus();
-  const hostContextPending = Boolean(props.hostWorkspaceId) && snapshotStatus === "pending";
-  const hostContextRequired = Boolean(props.hostWorkspaceId) && snapshotStatus === "available";
+  const hostContextRequired = Boolean(props.hostWorkspaceId);
+  const hostContextPending = hostContextRequired && !directory && snapshotStatus === "pending";
+  const hostContextUnavailable = hostContextRequired && !directory && snapshotStatus !== "pending";
   let projects;
   try {
     projects = useQuery({ queryKey: ["workbench-projects", props.host.id, directory], queryFn: () => getProjects({ directory: directory || undefined }), refetchOnWindowFocus: false, retry: false });
@@ -147,10 +150,8 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }
   let memory;
   try {
-    // The global sidebar has no host Workspace ID. Its host instance ID can
-    // change between surfaces, so using it here made the project picker forget
-    // the last choice on every new conversation. Workspace panels still scope
-    // memory to their concrete Paseo Workspace.
+    // Preserve separately scoped preferences without guessing a global
+    // surface's current project from those preferences.
     memory = useProjectMemory(props.hostWorkspaceId || "global");
     reportNativeDiagnostic("observer-memory-hook-ready", { ready: String(memory.ready) });
   } catch (error) {
@@ -158,41 +159,49 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     throw error;
   }
   const [pickingProject, setPickingProject] = useState(false);
-  const [chosen, setChosen] = useState("");
-  const [setupProject, setSetupProject] = useState<ProjectInfo | null>(null);
+  const [chosenProject, setChosenProject] = useState<{ context: string; configPath: string } | null>(null);
+  const [setupProject, setSetupProject] = useState<{ context: string; project: ProjectInfo } | null>(null);
+  const contextKey = JSON.stringify([props.hostWorkspaceId, directory]);
+  const chosen = chosenProject?.context === contextKey ? chosenProject.configPath : "";
   const detected = directory ? projects.data?.filter((p) => [p.sourceRoot, p.workspaceRoot].some((root) => pathContains(root, directory))).sort((a, b) => b.sourceRoot.length - a.sourceRoot.length)[0] : undefined;
-  const active = setupProject || (hostContextPending ? undefined : chooseProject(projects.data || [], detected, chosen, memory.saved, Boolean(directory), hostContextRequired));
+  const active = (setupProject?.context === contextKey ? setupProject.project : undefined)
+    || chooseProject(projects.data || [], detected, chosen, memory.saved, Boolean(directory), hostContextRequired);
   useEffect(() => {
     setSetupProject(null);
-    setChosen("");
-  }, [directory]);
-  if (hostContextPending || (!directory && !memory.ready) || projects.isPending) {
+    setChosenProject(null);
+    setPickingProject(false);
+  }, [props.hostWorkspaceId, directory]);
+  if (hostContextPending) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.hostWorkspaceLoading}</Text>;
+  if (hostContextUnavailable) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.hostWorkspaceUnavailable}</Text>;
+  if (projects.isPending) {
     reportNativeDiagnostic("observer-first-branch", { branch: "memory-loading" });
     return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoading}</Text>;
   }
+  if (projects.isError) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoadFailed}</Text>;
   if (directory && !active) {
     reportNativeDiagnostic("observer-first-branch", { branch: "project-setup" });
     return <ProjectSetup
+    key={contextKey}
     directory={directory}
     theme={props.theme}
     onSaved={(project) => {
-      setSetupProject(project);
-      setChosen(project.configPath);
+      setSetupProject({ context: contextKey, project });
+      setChosenProject({ context: contextKey, configPath: project.configPath });
       void projects.refetch();
     }}
     />;
   }
-  if (!active || pickingProject) {
+  if (!active || (pickingProject && !hostContextRequired && !directory)) {
     reportNativeDiagnostic("observer-first-branch", { branch: "project-picker" });
     return <View style={{ padding: 12, gap: 8 }}>
+    {!props.hostWorkspaceId ? <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.globalProjectSelectionHint}</Text> : null}
     <Text style={{ color: props.theme.colors.foreground }}>{projects.isPending ? localizedCopy.projectLoading : projects.isError ? localizedCopy.projectLoadFailed : !projects.data?.length ? localizedCopy.noRegisteredProjects : localizedCopy.selectProject}</Text>
     {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => {
-      setChosen(p.configPath);
+      setChosenProject({ context: contextKey, configPath: p.configPath });
       setSetupProject(null);
       setPickingProject(false);
-      // Persist an explicit choice immediately. Waiting for the selected
-      // project's first full observation meant closing the panel during a
-      // cold start lost the choice and reopened the picker next time.
+      // Retain the preference for compatibility, without using it to infer
+      // the current workspace on the next global opening.
       memory.remember(p.configPath);
     }}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
     </View>;
@@ -339,7 +348,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     q.key[2] === kind && (kind === "workspace-list" || kind === "review" ||
       q.key[3] === selectedWorkspaceId && (kind === "workspace-detail" || q.key[4] === selectedRepoPath))),
     [queryClient, projectConfig, selectedWorkspaceId, selectedRepoPath]);
-  const [tab, setTab] = useState<"workspace" | "review" | "files">("workspace");
+  const [tab, setTab] = useState<"workspace" | "review" | "files" | 'cache'>("workspace");
   const [reviewTab, setReviewTab] = useState<"set" | "agent">("set");
   const [reviewSessionId, setReviewSessionId] = useState("");
   const [mainReviewInstructions, setMainReviewInstructions] = useState("");
@@ -369,9 +378,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [preferenceScopeKey, selectedWorkspaceId]);
 
   const workspaceDirectory = paseoWorkspace?.directory || "";
-  const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab(current => current === "files" ? "files" : "workspace");},[]);
+  const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab(current => current === "files" || current === 'cache' ? current : "workspace");},[]);
   const onWorkspaceSelectionLost=useCallback(()=>{setSelectedRepoPath("");setSelectedCommit("");setSelectedFile("");scopeRepositoryIdentity.current="";},[]);
-  const {selectionResolved, selectorOpen, activityScanProgress, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, stopWorkspaceActivityScan, closeWorkspaceSelector, openWorkspaceSelector, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
+  const {selectionResolved, selectorOpen, activityScanProgress, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, stopWorkspaceActivityScan, closeWorkspaceSelector, openWorkspaceSelector, refreshWorkspaceActivity, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
+  const cacheCapable = backendQuery.data?.readCapabilities?.cacheManagementProtocol === 1;
+  const cacheManagement = useCacheManagement({ project: projectConfig, enabled: cacheCapable && backendReady && listReady, foreground, visible: tab === 'cache', watching: selectorOpen, rpc });
   const {mainRepositoriesOpen, setMainRepositoriesOpen, mainRepositoryFilter, setMainRepositoryFilter, mainRepositoryDraft, setMainRepositoryDraft, savingMainRepositories, linkedWorkspacesOpen, setLinkedWorkspacesOpen, linkedWorkspaceFilter, setLinkedWorkspaceFilter, linkedWorkspaceDraft, setLinkedWorkspaceDraft, savingLinkedWorkspaces, orphanId, setOrphanId, orphanBranches, setOrphanBranches, adoptingOrphan, orphanError, orphanPreviewQuery, orphanPreview, mainRepositoriesQuery, mainRepositories, linkedWorkspacesQuery, linkedWorkspaces, saveMainRepositories, saveLinkedWorkspaces, adoptSelectedOrphan}=useWorkspaceCatalog({projectConfig,backendReady,rpc,localizedCopy,refreshArea,onAdopted:selectCreatedWorkspace});
   const observationVersionsEnabled = backendReady && foreground;
   const observationIssue = useObservationVersions(projectConfig, tab === "review" ? [selectedWorkspaceId, ...reviewIds] : [selectedWorkspaceId], observationVersionsEnabled);
@@ -549,13 +560,15 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         : []),
     ], observationTiming.clientRefreshTimeoutMs, setManualRefreshing);
   const refreshAll = useCallback(() => {
+    if (tab === 'cache') { void cacheManagement.scan(); return; }
+    refreshWorkspaceActivity(true);
     if (comparisonOpen) void refreshArea('repository-compare');
     if (!refreshCapable) return refreshLegacy();
     void backendQuery.refetch();
     selectedRefresh.refresh();
     basicSummaries.refresh();
     void refreshArea('workspace-list');
-  }, [comparisonOpen, refreshCapable, refreshLegacy, selectedRefresh.refresh, refreshArea, basicSummaries.refresh, backendQuery.refetch]);
+  }, [tab, cacheManagement.scan, refreshWorkspaceActivity, comparisonOpen, refreshCapable, refreshLegacy, selectedRefresh.refresh, refreshArea, basicSummaries.refresh, backendQuery.refetch]);
 
 
   // The version poll resumes observation queries; only bootstrap needs a direct retry.
@@ -777,6 +790,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         </Modal.Content>
       </Modal> : null}
       <WorkspaceSelector
+        viewMode={preferences.workspaceView}
+        onViewMode={preferences.setWorkspaceView}
+        cacheInventory={cacheManagement.data}
         executionControl={!selectedWorkspaceIsMain&&execution.hasAgent?<IconButton label={`${openExecutionAgent?localizedCopy.executionOpen:localizedCopy.executionDetails} · ${boundAgent?.id||binding?.agentId} · ${executionStatusLabel(execution.status,localizedCopy)}${execution.stale?` · ${localizedCopy.executionStale}`:''}`} icon="MessageSquare" color={executionStatusColor(execution.status,theme)} onPress={openExecutionAgent||openExecutionDetails}/>:undefined}
         onOpenLayoutMenu={() => { if (selectorOpen) closeWorkspaceSelector(); openLayoutMenu(); }}
         statusControl={<IconButton label={observationLabel} icon={observationIcon}
@@ -837,6 +853,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <TabButton active={tab === "workspace"} label={localizedCopy.tabWorkspace} onPress={() => setTab("workspace")} theme={theme} styles={styles} />
         <TabButton active={tab === "files"} label={locale === "zh-CN" ? "文件" : "Files"} onPress={() => setTab("files")} theme={theme} styles={styles} />
         <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
+        {cacheCapable ? <TabButton active={tab === 'cache'} label={locale === 'zh-CN' ? '缓存与空间' : 'Caches & space'} onPress={() => { closeWorkspaceSelector(); setTab('cache'); }} theme={theme} styles={styles} /> : null}
         {selectedWorkspaceId && selectedWorkspace?.kind !== "linked-live" && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
       </ScrollView>
       <View
@@ -912,7 +929,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               styles={styles}
             />
             </View></View>
-          ) : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} onOpenDocument={backendQuery.data?.readCapabilities?.documentPreviewProtocol===1?(path,instance)=>openDocument({hostWorkspaceId,agentId,projectConfig,scope:filesScopeKey,workspaceId:selectedWorkspace.id,workspaceName:selectedWorkspace.displayName||selectedWorkspace.id,instance,directory:selectedWorkspace.treePath||selectedWorkspace.sourceRoot||'',path}):undefined} foreground={foreground} sortedListing={backendQuery.data?.readCapabilities?.directoryListingProtocol === 2} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
+          ) : tab === 'cache' ? <CacheManagementPanel cache={cacheManagement} theme={theme} /> : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} onOpenDocument={backendQuery.data?.readCapabilities?.documentPreviewProtocol===1?(path,instance)=>openDocument({hostWorkspaceId,agentId,projectConfig,scope:filesScopeKey,workspaceId:selectedWorkspace.id,workspaceName:selectedWorkspace.displayName||selectedWorkspace.id,instance,directory:selectedWorkspace.treePath||selectedWorkspace.sourceRoot||'',path}):undefined} foreground={foreground} sortedListing={backendQuery.data?.readCapabilities?.directoryListingProtocol === 2} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
             {selectedWorkspaceIsMain ? <View style={styles.targetRow}>
               <Text style={styles.layoutMenuHint}>{localizedCopy.mainReviewHint}</Text>
               <TextInput value={mainReviewInstructions} onChangeText={setMainReviewInstructions} placeholder={localizedCopy.mainReviewInstructions} multiline style={styles.targetInput} />

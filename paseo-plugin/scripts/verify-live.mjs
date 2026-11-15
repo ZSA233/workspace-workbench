@@ -93,6 +93,7 @@ for (const project of ["a", "b"]) {
       management: { enabled: true },
       limits: { cacheTtlSeconds: 0.5 },
       ...(process.env.WORKBENCH_LIVE_ENVIRONMENT === "1" ? {cache:{scope:"project"},toolchain:{mode:"system",runtimePaths:[process.execPath],repositories:{one:{node:process.version.slice(1)}}}} : {}),
+      ...(process.env.WORKBENCH_LIVE_CACHE === "1" ? { cache: { scope: 'project' } } : {}),
       ...(preparationFixture && project === "a" ? {toolchain:{mode:"mise",managerPath:preparationFixture.manager,repositories:{one:{go:"1.99"}}}} : {}),
     }),
   );
@@ -149,6 +150,13 @@ exec '${actualGit}' "$@"
   env.PATH=`${bin}:${env.PATH || ''}`;
 }
 delete env.WORKSPACE_WORKBENCH_CONFIG;
+if (process.env.WORKBENCH_LIVE_CACHE === '1') {
+  env.GOCACHE = join(root, 'global-go-build');
+  env.GOMODCACHE = join(root, 'global-go-mod');
+  env.GOTOOLCHAIN = 'local';
+  mkdirSync(env.GOCACHE, { recursive: true });
+  mkdirSync(env.GOMODCACHE, { recursive: true });
+}
 if (process.env.WORKBENCH_LIVE_RECOVERY_NO_NATIVE === "1") {
   if (process.env.WORKBENCH_LIVE_RECOVERY !== "1") throw new Error("unpatched_host_requires_recovery_fixture");
   env.NODE_OPTIONS += ` --import=${join(plugin, "scripts/fixtures/unpatched-paseo.mjs")}`;

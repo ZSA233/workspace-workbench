@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { chromium } from 'playwright';
 import { backendRequest } from '../server/backend-supervisor.ts';
+import { openGlobalWorkbench } from './ui-project-selection.mjs';
 const exec = promisify(execFile);
 const plugin = resolve(import.meta.dirname, '..'), root = resolve(plugin, '..');
 const output = resolve(process.env.WORKBENCH_VERIFY_OUTPUT || join(root, '.local/verification/ui'));
@@ -67,7 +68,7 @@ try {
   const screenshot = async name => { await page.screenshot({ path: join(output,name), fullPage: true }); report.screenshots.push(name); };
   const health = async () => { const response = await backendRequest(join(ui.project,'s.sock'), 'observer.health'); assert.ok(response?.ok); return response.result; };
   const panel = async () => {
-    await page.getByText('Workspace Workbench',{exact:true}).first().click();
+    await openGlobalWorkbench(page, 'a');
     await page.getByText('Repositories',{exact:true}).filter({ visible: true }).first().waitFor({timeout:15_000});
   };
   await page.goto(ui.url);
@@ -75,9 +76,9 @@ try {
   await page.getByText('Search for directory',{exact:true}).click();
   await page.getByPlaceholder('Search directories or enter a path...').fill(ui.project);
   await page.getByText('Open this path',{exact:true}).click();
-  await page.getByText('Workspace Workbench',{exact:true}).first().click();
+  await openGlobalWorkbench(page, 'a');
   await page.getByText('Repositories',{exact:true}).filter({ visible: true }).first().waitFor();
-  report.checks.push('the active host workspace selected its registered project automatically without a startup project picker');
+  report.checks.push('the global entry explicitly selected the registered fixture project');
   await page.getByText('No file changes in this scope.',{exact:true}).waitFor();
   assert.equal(await page.getByText('Not loaded',{exact:true}).count(),0);
   if (!process.env.WORKBENCH_UI_PERFORMANCE_ONLY) {

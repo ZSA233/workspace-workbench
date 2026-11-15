@@ -9,9 +9,12 @@ import assert from 'node:assert/strict';
 import { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import WebSocket from 'ws';
 import { freezePlugin, distribution } from './refresh-real-fixture.mjs';
+import { openGlobalWorkbench } from './ui-project-selection.mjs';
 const exec=promisify(execFile), source=resolve(import.meta.dirname,'..');
 const output=resolve(process.env.WORKBENCH_REFRESH_OUTPUT || join(source,'../.local/verification/panel-refresh'));
 const fixture=JSON.parse(await readFile(join(output,'fixture.json'),'utf8'));
+const projectConfig=JSON.parse(await readFile(fixture.config,'utf8'));
+const projectName=projectConfig.project?.displayName || projectConfig.project?.id || 'Workspace';
 const runRoot=await mkdtemp(join(output,'ui-run-')), plugin=join(runRoot,'plugin'), home=await mkdtemp('/tmp/wb-refresh-ui-'), registry=join(runRoot,'projects.json');
 const build=await freezePlugin(source,plugin); await writeFile(registry,JSON.stringify({configs:[fixture.config]}));
 const listener=createServer(); await new Promise(r=>listener.listen(0,'127.0.0.1',r)); const port=listener.address().port; await new Promise(r=>listener.close(r));
@@ -46,7 +49,7 @@ try {
 
   await page.goto(`http://127.0.0.1:${port}`);
   await page.getByText('Add project',{exact:true}).first().click();await page.getByText('Search for directory',{exact:true}).click();await page.getByPlaceholder('Search directories or enter a path...').fill(workspaces.treePath);await page.getByText('Open this path',{exact:true}).click();
-  await page.getByText('Workspace Workbench',{exact:true}).first().click();await page.getByText('Repositories',{exact:true}).filter({visible:true}).first().waitFor({timeout:30000});
+  await openGlobalWorkbench(page,projectName);await page.getByText('Repositories',{exact:true}).filter({visible:true}).first().waitFor({timeout:30000});
   if(await page.getByText('Main workspace',{exact:true}).count()){await page.getByText('Main workspace',{exact:true}).first().click();await page.getByText(workspaceId,{exact:true}).filter({visible:true}).last().click();}
   await page.getByText(repository.repoPath,{exact:true}).filter({visible:true}).first().click();
   await page.getByText(/current ref:/).filter({visible:true}).first().waitFor({timeout:30000});

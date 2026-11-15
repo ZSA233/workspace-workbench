@@ -4,6 +4,7 @@ import { Git, withBackgroundGit } from "./git.ts";
 import type { Config } from "./config.ts";
 import { canonicalAsync, hash, now, optionalJson, stable, type Json } from "./storage.ts";
 import { DerivedJsonWriter } from './derived-json.ts';
+import { activityHeadToken } from './activity-head.ts';
 
 const CACHE_TTL_MS = 30 * 60_000;
 const FAILURE_RETRY_MS = 5 * 60_000;
@@ -16,6 +17,7 @@ type RepositoryActivity = {
   checkedAt: string | null;
   attemptedAt?: string;
   error?: string;
+  headToken?: string;
 };
 
 type ActivityFile = { version: 1; repositories: Record<string, RepositoryActivity> };
@@ -32,6 +34,7 @@ type Scan = {
   errors: number;
   controller: AbortController;
   promise?: Promise<void>;
+  force?: boolean;
 };
 
 export type WorkspaceActivitySummary = {
@@ -84,6 +87,7 @@ export class WorkspaceActivityIndex {
               head: typeof value.head === "string" ? value.head : null,
               latestCommitAt,
               checkedAt,
+              ...(typeof value.headToken === 'string' ? { headToken: value.headToken } : {}),
               ...(typeof value.attemptedAt === "string" ? { attemptedAt: value.attemptedAt } : {}),
               ...(typeof value.error === "string" ? { error: value.error } : {}),
             });
@@ -137,7 +141,7 @@ export class WorkspaceActivityIndex {
     };
   }
 
-  start(scanId: string, workspaces: Json[]): Json {
+  start(scanId: string, workspaces: Json[], force = false): Json {
     if (!scanId || scanId.length > 128) return { state: "error", error: "scan_id_invalid" };
     if (this.cancelledScanIds.has(scanId)) return { scanId, state: "cancelled", total: 0, completed: 0, errors: 0 };
     const existing = this.scans.get(scanId);
@@ -147,13 +151,8 @@ export class WorkspaceActivityIndex {
 
     const workspaceIds = [...new Set(workspaces.map((workspace) => String(workspace.id || "")).filter(Boolean))];
     const targets = this.targets(workspaces);
-    const at = Date.now();
-    const stale = targets.filter((target) => {
-      const entry = this.repositories.get(target.key);
-      if (entry?.checkedAt && at - Date.parse(entry.checkedAt) < CACHE_TTL_MS) return false;
-      if (entry?.attemptedAt && entry.error && at - Date.parse(entry.attemptedAt) < FAILURE_RETRY_MS) return false;
-      return true;
-    });
+    // Even a fresh entry must validate HEAD. Validation runs off the RPC path.
+    const stale = targets;
     const scan: Scan = {
       id: scanId,
       epoch: this.epoch,
@@ -163,6 +162,7 @@ export class WorkspaceActivityIndex {
       completed: 0,
       errors: 0,
       controller: new AbortController(),
+      force,
     };
     this.scans.set(scanId, scan);
     this.trimScans();
@@ -214,6 +214,7 @@ export class WorkspaceActivityIndex {
   }
 
   private async run(scan: Scan, targets: RepositoryTarget[]): Promise<void> {
+    const staged = new Map<string, RepositoryActivity>();
     try {
       for (const target of targets) {
         if (scan.epoch !== this.epoch) break;
@@ -223,38 +224,49 @@ export class WorkspaceActivityIndex {
         try {
           const timeout = Math.min(this.config.gitTimeout, this.config.foregroundGitTimeout || this.config.gitTimeout);
           const path = await canonicalAsync(target.path);
+          const headToken = await activityHeadToken(path);
+          const previous = this.repositories.get(target.key);
+          const age = Date.now() - Date.parse(previous?.checkedAt || '');
+          if (!scan.force && previous?.headToken === headToken &&
+            (age < CACHE_TTL_MS || previous.error && Date.now() - Date.parse(previous.attemptedAt || '') < FAILURE_RETRY_MS)) {
+            scan.completed++;
+            continue;
+          }
           const result = await withBackgroundGit(() => new Git(path, timeout, undefined, scan.controller.signal, true)
             .run(["show", "-s", "--format=%H%x00%cI", "HEAD"], false));
           if (scan.controller.signal.aborted) break;
           if (epoch !== this.epoch || this.liveKeys && !this.liveKeys.has(target.key)) { scan.completed++; continue; }
           const [head, latestCommitAt] = result.stdout.trim().split("\0");
           if (result.code === 0 && head && Number.isFinite(Date.parse(latestCommitAt || ""))) {
-            this.repositories.set(target.key, { owners: this.owners.get(target.key), head, latestCommitAt, checkedAt: now(), attemptedAt });
+            staged.set(target.key, { owners: this.owners.get(target.key), head, latestCommitAt, checkedAt: now(), attemptedAt, headToken });
           } else if (result.code === 0 && !head) {
-            this.repositories.set(target.key, { owners: this.owners.get(target.key), head: null, latestCommitAt: null, checkedAt: now(), attemptedAt });
+            staged.set(target.key, { owners: this.owners.get(target.key), head: null, latestCommitAt: null, checkedAt: now(), attemptedAt, headToken });
           } else {
-            this.recordError(target.key, attemptedAt, result.stderr.trim() || "commit_unavailable");
+            this.recordError(staged, target.key, attemptedAt, result.stderr.trim() || "commit_unavailable");
             scan.errors++;
           }
         } catch (error) {
           if (scan.controller.signal.aborted) break;
           if (epoch !== this.epoch || this.liveKeys && !this.liveKeys.has(target.key)) { scan.completed++; continue; }
-          this.recordError(target.key, attemptedAt, error instanceof Error ? error.message : String(error));
+          this.recordError(staged, target.key, attemptedAt, error instanceof Error ? error.message : String(error));
           scan.errors++;
         }
         scan.completed++;
       }
     } finally {
+      // Publish one complete batch. Cancelled or superseded scans publish nothing.
+      if (!scan.controller.signal.aborted && scan.epoch === this.epoch)
+        for (const [key, entry] of staged) if (!this.liveKeys || this.liveKeys.has(key)) this.repositories.set(key, entry);
       if (scan.state === "running") scan.state = scan.controller.signal.aborted ? "cancelled" : "complete";
       if (this.activeScanId === scan.id) this.activeScanId = null;
       this.persist();
     }
   }
 
-  private recordError(key: string, attemptedAt: string, error: string): void {
+  private recordError(staged: Map<string, RepositoryActivity>, key: string, attemptedAt: string, error: string): void {
     if (this.liveKeys && !this.liveKeys.has(key)) return;
     const previous = this.repositories.get(key);
-    this.repositories.set(key, {
+    staged.set(key, {
       owners: this.owners.get(key),
       head: previous?.head || null,
       latestCommitAt: previous?.latestCommitAt || null,

@@ -9,10 +9,13 @@ import { formatCopyFrom } from "../../shared/copy";
 import { FlatList,Icon,ScrollView,TextInput } from "../native-components";
 
 import { readWorkspaceLineage } from '../../shared/workspace-lineage';
-import { workspaceForest, workspaceTreeRows, type WorkspaceTreeRow } from '../workspace-tree';
+import { workspaceForest, workspaceTreeRows, workspaceListRows, workspaceIndent, type WorkspaceTreeRow } from '../workspace-tree';
+import type { CacheListResult } from '../../shared/cache-management';
+import { workspaceInstanceKey } from '../../shared/workspace-lineage';
+import { cacheRelationship, cacheUsageText } from '../cache-presentation';
 import { anchoredOffset } from '../graph/continuity';
 import { batchEligible, type BatchAction } from '../workspace-batch';
-import { useWorkbenchCopy } from "../i18n";
+import { useWorkbenchCopy, useWorkbenchLocale } from "../i18n";
 import {
 countWorkspaceFilter,
 formatCompactRelativeAge,
@@ -196,6 +199,7 @@ export function WorkspaceSelector({
   latestCommitProgress,
   statusControl,
   executionControl,
+  viewMode = 'list', onViewMode, cacheInventory,
   theme,
   styles,
 }: {
@@ -228,11 +232,13 @@ export function WorkspaceSelector({
   latestCommitProgress?: { completed: number; total: number } | null;
   statusControl?: ReactNode;
   executionControl?: ReactNode;
+  viewMode?: 'list' | 'tree'; onViewMode?: (view: 'list' | 'tree') => void; cacheInventory?: CacheListResult;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
   const localizedCopy = useWorkbenchCopy();
   const [search, setSearch] = useState("");
+  const zh = useWorkbenchLocale() === 'zh-CN';
   const [creatorFilter, setCreatorFilter] = useState<string | null>(null);
   const [creatorPickerOpen, setCreatorPickerOpen] = useState(false);
   const creators = useMemo(() => workspaceCreators([...workspaces,...historyWorkspaces]),[workspaces,historyWorkspaces]);
@@ -256,12 +262,13 @@ export function WorkspaceSelector({
   useEffect(() => { if (!open) setSearch(""); }, [open]);
   const searchedWorkspaces = useMemo(() => visibleWorkspaces.filter((workspace) => matchesWorkspaceSearch(workspace, search) && (!selectedCreator || createdInSession(workspace, selectedCreator))), [visibleWorkspaces, search, selectedCreator]);
   const forest = useMemo(() => workspaceForest([...workspaces, ...historyWorkspaces], searchedWorkspaces), [workspaces, historyWorkspaces, searchedWorkspaces]);
-  const treeRows = useMemo(() => workspaceTreeRows(forest, collapsedSources, Boolean(search.trim())), [forest, collapsedSources, search]);
+  const treeRows = useMemo(() => viewMode === 'list' ? workspaceListRows(searchedWorkspaces) : workspaceTreeRows(forest, collapsedSources, Boolean(search.trim())), [viewMode, searchedWorkspaces, forest, collapsedSources, search]);
+  const spaceByInstance = useMemo(() => new Map(cacheInventory?.workspaces.map(workspace => [workspace.instance, workspace]) || []), [cacheInventory?.workspaces]);
   const selectable = searchedWorkspaces.filter(workspace => batchEligible(workspace, filter === 'history' ? 'delete' : 'remove') && !lifecycleBusyWorkspaceIds?.includes(workspace.id));
   const selectedTargets = selectable.filter(workspace => checked.has(workspace.id));
   const selectedCount = searchedWorkspaces.filter(workspace => checked.has(workspace.id)).length;
   const toggleChecked = (id: string) => setChecked(prior => { const next = new Set(prior); next.has(id) ? next.delete(id) : next.add(id); return next; });
-  const scope = `${filter}:${search}:${selectedCreator || ""}`;
+  const scope = `${viewMode}:${filter}:${search}:${selectedCreator || ""}`;
   const rowIdentity = JSON.stringify(treeRows.map(row => row.node.key));
   useLayoutEffect(() => {
     const ids: string[] = JSON.parse(rowIdentity), old = previousRows.current;
@@ -357,6 +364,10 @@ export function WorkspaceSelector({
           </View> : null}
           <View style={styles.selectorListHeader}>
             <Text style={styles.selectorListLabel}>{localizedCopy.text_205b4561ed}</Text>
+            {onViewMode ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flex: 1, paddingHorizontal: 8 }}>
+              {(['list','tree'] as const).map(mode => <Pressable key={mode} testID={`workspace-view-${mode}`} accessibilityRole="button" accessibilityState={{selected: viewMode === mode}} onPress={() => onViewMode(mode)} style={[styles.filterButton, viewMode === mode && styles.filterButtonActive]}><Text style={[styles.filterButtonText, viewMode === mode && styles.filterButtonTextActive]}>{mode === 'list' ? zh ? '列表' : 'List' : zh ? '层级' : 'Tree'}</Text></Pressable>)}
+              <Text numberOfLines={1} style={[styles.selectorListLabel, { flexShrink: 1 }]}>{viewMode === 'list' ? zh ? '最近提交 ↓' : 'Latest commit ↓' : zh ? '按组最近提交 ↓' : 'Latest in group ↓'}</Text>
+            </View> : null}
             {ready ? <Text style={styles.selectorListCount}>{search ? `${searchedWorkspaces.length}${localizedCopy.text_42099b4af0}${scopedVisible.length}` : `${scopedVisible.length}${localizedCopy.text_42099b4af0}${workspaceTotal}`}</Text> : null}
           </View>
           <FlatList
@@ -373,7 +384,7 @@ export function WorkspaceSelector({
             maxToRenderPerBatch={20}
             nestedScrollEnabled
             removeClippedSubviews
-            renderItem={({ item: { node, depth } }) => <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: WORKSPACE_OPTION_HEIGHT, paddingLeft: Math.min(depth, 6) * 12 }}>
+            renderItem={({ item: { node, depth } }) => <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: WORKSPACE_OPTION_HEIGHT, paddingLeft: workspaceIndent(depth) }}>
               {node.children.length ? <Pressable accessibilityRole="button" accessibilityLabel={`${localizedCopy.sourceExpand} ${node.source.displayName}`} accessibilityState={{ expanded: Boolean(search.trim()) || !collapsedSources.has(node.key) }} disabled={Boolean(search.trim())} onPress={() => setCollapsedSources(prior => { const next = new Set(prior); next.has(node.key) ? next.delete(node.key) : next.add(node.key); return next; })} style={{ width: 21, paddingHorizontal: 4, paddingVertical: 10 }}><Icon name={search.trim() || !collapsedSources.has(node.key) ? 'ChevronDown' : 'ChevronRight'} size={13} color={theme.colors.foregroundMuted} /></Pressable> : depth > 0 ? <View style={{ width: 21 }} /> : null}
               {node.match && node.workspace ? <View style={{ flex: 1, minWidth: 0 }}><WorkspaceOption
                 onSelect={batchMode ? toggleChecked : onSelect}
@@ -385,6 +396,7 @@ export function WorkspaceSelector({
                 onRemove={onRemoveWorkspace} onRestore={onRestoreWorkspace}
                 onPermanentDelete={onPermanentDeleteWorkspace} onInspect={onInspectWorkspace}
                 groupCount={node.children.length ? node.members.length : undefined}
+                space={cacheInventory ? <View style={{ maxWidth: 104, alignItems: 'flex-end' }}><Text numberOfLines={1} style={styles.workspaceOptionMeta}>{zh ? '目录 ' : 'Dir '}{cacheUsageText(spaceByInstance.get(workspaceInstanceKey(node.workspace))?.usage, zh)}</Text><Text numberOfLines={1} style={styles.workspaceOptionMeta}>{cacheRelationship((cacheInventory.resources || []).filter(resource => spaceByInstance.get(workspaceInstanceKey(node.workspace!))?.resourceIds.includes(resource.id)), zh)}</Text></View> : null}
                 busy={Boolean(lifecycleBusyWorkspaceIds?.includes(node.workspace.id))}
               /></View> : <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 5 }}><Text numberOfLines={1} style={[styles.workspaceOptionMeta, { flexShrink: 1 }]}>{node.source.displayName}</Text><Text style={styles.selectorListCount}>{node.members.length}</Text></View>}
               {batchMode && node.children.length ? <Pressable accessibilityRole="button" accessibilityLabel={`${localizedCopy.sourceSelectGroup} ${node.source.displayName}`} disabled={batchBusy} onPress={() => setChecked(prior => new Set([...prior, ...node.members.filter(member => selectable.some(item => item.id === member.id)).map(member => member.id)]))} style={styles.workspaceOptionAction}><Text style={styles.workspaceOptionActionText}>{localizedCopy.sourceSelectGroup}</Text></Pressable> : null}
@@ -410,7 +422,7 @@ export function WorkspaceSelector({
   );
 }
 
-function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, onPermanentDelete, onInspect, busy, groupCount, checkbox = false, checked = false, selectionDisabled = false, theme, styles }: {
+function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, onPermanentDelete, onInspect, busy, groupCount, space, checkbox = false, checked = false, selectionDisabled = false, theme, styles }: {
   workspace: WorkspaceSummary;
   selected: boolean;
   onSelect: (id: string) => void;
@@ -420,12 +432,14 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
   onInspect?: (workspace: WorkspaceSummary) => void;
   busy: boolean;
   groupCount?: number;
+  space?: ReactNode;
   checkbox?: boolean; checked?: boolean; selectionDisabled?: boolean;
   theme: PanelProps["theme"];
   styles: ReturnType<typeof makeStyles>;
 }) {
   const localizedCopy = useWorkbenchCopy();
   const removed = workspace.state === "removed";
+  const zh = useWorkbenchLocale() === 'zh-CN';
   const pending = workspace.state === "deletion_pending";
   const status = isMainWorkspace(workspace)
     ? ""
@@ -461,7 +475,8 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
     workspace.createdAt ? formatCopyFrom(localizedCopy, "workspaceCreatedShort", [formatCompactRelativeAge(workspace.createdAt, localizedCopy)]) : null,
     workspace.latestCommitAt ? formatCopyFrom(localizedCopy, "workspaceCommitShort", [formatCompactRelativeAge(workspace.latestCommitAt, localizedCopy)]) : null,
   ].filter(Boolean);
-  const meta = [repositoryCountLabel(workspace.repositoryCount, localizedCopy), ...workspaceDates].join(" · ");
+  const source = readWorkspaceLineage(workspace.lineage)?.parent;
+  const meta = [repositoryCountLabel(workspace.repositoryCount, localizedCopy), ...workspaceDates, source ? `${zh ? '来源' : 'Source'}: ${source.displayName || source.id}` : null].filter(Boolean).join(" · ");
   return (
     <View testID={`workspace-option-${workspace.id}`} style={[styles.workspaceOption, selected && styles.workspaceOptionActive]}>
       <Pressable
@@ -478,6 +493,7 @@ function WorkspaceOption({ workspace, selected, onSelect, onRemove, onRestore, o
           <Text numberOfLines={1} style={styles.workspaceOptionMeta}>{meta}</Text>
         </View>
         {status && status !== "active" ? <Text numberOfLines={1} style={[styles.workspaceOptionState, { color: statusTone }]}>{status}</Text> : null}
+        {space}
       </Pressable>
       {!checkbox && !isMainWorkspace(workspace) ? <View accessibilityState={{ busy }} style={styles.workspaceOptionActions}>
         {busy ? <ActivityIndicator size="small" color={theme.colors.foregroundMuted} /> : null}

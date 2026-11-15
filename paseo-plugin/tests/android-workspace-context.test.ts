@@ -5,11 +5,14 @@ import vm from "node:vm";
 import { transformSync } from "esbuild";
 
 const code = transformSync(readFileSync(new URL("../client/android-workspace-context.ts", import.meta.url), "utf8"), { loader: "ts", format: "cjs" }).code;
+const directoryCode = transformSync(readFileSync(new URL("../client/workspace-directory.ts", import.meta.url), "utf8"), { loader: "ts", format: "cjs" }).code;
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 function fixture(api?: unknown) {
   const snapshots = new Map<string, any>(); let state: boolean | null = null;
   const module = { exports: {} as any };
-  vm.runInNewContext(code, { module, exports: module.exports, require: () => ({
+  const directoryModule = { exports: {} as any };
+  vm.runInNewContext(directoryCode, { module: directoryModule, exports: directoryModule.exports });
+  vm.runInNewContext(code, { module, exports: module.exports, require: (id: string) => id === "./workspace-directory" ? directoryModule.exports : ({
     clearWorkbenchWorkspaceSnapshots() { snapshots.clear(); state = null; },
     markWorkbenchWorkspaceSnapshotsReady(available: boolean) { state = available; },
     setWorkbenchWorkspaceSnapshot(workspace: any) { snapshots.set(workspace.id, workspace); },

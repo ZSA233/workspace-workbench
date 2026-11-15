@@ -2,6 +2,7 @@ import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
 export const observerMethods = [
+  'cache.list', 'cache.scan', 'cache.task', 'cache.cleanup',
   "files.request",
   "notes.read", "notes.write", "notes.feedback", "notes.manage",
   "observer.health",

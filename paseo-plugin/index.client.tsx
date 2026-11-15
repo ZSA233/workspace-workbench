@@ -14,6 +14,8 @@ import { clearWorkbenchWorkspaceSnapshots, markWorkbenchWorkspaceSnapshotsReady,
 import { createRegistrationQueue } from "./client/registration-queue";
 import { createDiagnosticSender } from "./client/diagnostic-sender";
 import { createAndroidWorkspaceContext } from "./client/android-workspace-context";
+import { observeDesktopWorkspaceContext, type DesktopWorkspaceDirectoryApi } from "./client/desktop-workspace-context";
+import { workspaceDirectorySnapshot } from "./client/workspace-directory";
 
 const observerSurfaceId = "workbench";
 
@@ -21,14 +23,8 @@ const observerSurfaceId = "workbench";
 // shells can still evaluate a plugin bundle before they enforce the manifest
 // requirement, so keep the optional integration isolated and let Explorer
 // panels continue to work when that API is absent.
-type WorkspaceApiCompatibility = {
+type WorkspaceApiCompatibility = DesktopWorkspaceDirectoryApi & {
   open?: (directory: string) => Promise<{ id: string }>;
-  subscribe?: (handler: (update: { kind: string; id: string; workspace?: { id: string; directory?: string | null; name?: string | null } }) => void) => () => void;
-  list?: (options?: { subscribe?: Record<string, never>; page?: { limit: number; cursor?: string } }) => Promise<{
-    entries: Array<{ id: string; directory?: string | null; workspaceDirectory?: string | null; name?: string | null }>;
-    pageInfo?: { hasMore: boolean; nextCursor?: string | null };
-    subscription?: { release(): Promise<void> };
-  }>;
 };
 
 export default function contribute(client: PluginClientContext) {
@@ -250,38 +246,20 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
     );
   };
 
-  if (platform !== "android" && workspaceApi?.subscribe) {
-    scope.register("workspace-subscription", () => workspaceApi.subscribe!((update) => {
-      if (disposed) return;
-      if (update.kind === "upsert" && update.workspace) {
-        addHeaderButton(update.workspace.id);
-        if (update.workspace.directory) setWorkbenchWorkspaceSnapshot({ id: update.workspace.id, directory: update.workspace.directory, name: update.workspace.name || update.workspace.id });
-      } else {
-        removeHeaderButton(update.id);
-        removeWorkbenchWorkspaceSnapshot(update.id);
-        clearFileReviews(update.id); clearDocuments(update.id);
-      }
-    }));
-  }
-
-  if (platform !== "android" && workspaceApi?.list) {
-    void workspaceApi
-      .list({ subscribe: {} })
-      .then(({ entries, subscription }) => {
-        if (subscription) scope.own("workspace-directory-stream", () => { void subscription.release().catch(() => {}); });
-        if (disposed) return;
-        for (const workspace of entries) {
-          addHeaderButton(workspace.id);
-          if (workspace.directory) setWorkbenchWorkspaceSnapshot({ id: workspace.id, directory: workspace.directory, name: workspace.name || workspace.id });
-        }
-        markWorkbenchWorkspaceSnapshotsReady(true);
-      })
-      .catch(() => {
-        // The Command Center and Explorer tab menu remain available if the
-        // workspace directory is temporarily unavailable during app startup.
-        if (!disposed) markWorkbenchWorkspaceSnapshotsReady(false);
-      });
-  } else if (platform !== "android") markWorkbenchWorkspaceSnapshotsReady(false);
+  if (platform !== "android") scope.register("workspace-context", () => observeDesktopWorkspaceContext(workspaceApi, {
+    upsert(workspace) {
+      addHeaderButton(workspace.id);
+      const snapshot = workspaceDirectorySnapshot(workspace);
+      if (snapshot) setWorkbenchWorkspaceSnapshot(snapshot);
+      else removeWorkbenchWorkspaceSnapshot(workspace.id);
+    },
+    remove(id) {
+      removeHeaderButton(id);
+      removeWorkbenchWorkspaceSnapshot(id);
+      clearFileReviews(id); clearDocuments(id);
+    },
+    ready: markWorkbenchWorkspaceSnapshotsReady,
+  }));
 
   registerCommand({
     id: "open-workspace-workbench",

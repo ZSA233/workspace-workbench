@@ -5,6 +5,11 @@ export type WorkspaceTreeNode = {
   children: WorkspaceTreeNode[]; members: WorkspaceSummary[]; rank: number;
 };
 export type WorkspaceTreeRow = { node: WorkspaceTreeNode; depth: number };
+export function workspaceListRows(workspaces: readonly WorkspaceSummary[]): WorkspaceTreeRow[] {
+  return workspaces.map((workspace, rank) => ({ depth: 0, node: { key: workspaceInstanceKey(workspace), source: workspaceSource(workspace), workspace,
+    match: true, children: [], members: [workspace], rank } }));
+}
+export const workspaceIndent = (depth: number) => Math.max(0, Math.min(depth, 2)) * 12;
 /** Build solely from recorded identities. Branch names and shared SHAs are not ancestry. */
 export function workspaceForest(all: readonly WorkspaceSummary[], matches: readonly WorkspaceSummary[]): WorkspaceTreeNode[] {
   const actual = new Map(all.map(workspace => [workspaceInstanceKey(workspace), workspace]));
@@ -33,6 +38,8 @@ export function workspaceForest(all: readonly WorkspaceSummary[], matches: reado
     while (trail.length) {
       const source = trail.shift()!;
       if (!source || typeof source.instanceKey !== 'string' || !source.id || source.id === 'main' || seen.has(source.instanceKey)) break;
+      // Deleted sources remain in provenance, but no longer create selector rows.
+      if (!actual.has(source.instanceKey)) { seen.add(source.instanceKey); continue; }
       const parent = get(source);
       let check: string | undefined = parent.key;
       const inspected = new Set<string>();

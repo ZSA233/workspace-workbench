@@ -43,8 +43,10 @@ type SocketRequest = {
 
 const allowedMethods = new Set<string>(observerMethods);
 const versionedMethods = new Set<string>(["notes.read", "notes.write", "notes.feedback", "notes.manage", "workspace.environment", "workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
+for (const method of ['cache.list', 'cache.scan', 'cache.task', 'cache.cleanup']) versionedMethods.add(method);
 versionedMethods.add('files.request');
 const mutationMethods = new Set<string>([
+  'cache.cleanup',
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
   "workspace.prepare", "workspace.cleanup", "workspace.remove", "workspace.restore", "workspace.delete",
   "main.repositories.save", "linked.workspaces.save",
@@ -53,6 +55,7 @@ const BRIDGE_CACHE_ENTRIES = 128;
 const BRIDGE_CACHE_BYTES = 8 * 1024 * 1024;
 const BRIDGE_IN_FLIGHT = 16;
 const READ_METHODS = new Set<string>([
+  'cache.list', 'cache.task',
   "notes.read",
   "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify",
   "workspace.operation.status",
@@ -69,8 +72,10 @@ const READ_METHODS = new Set<string>([
 const SERVER_BUILD_ID = "observer-bridge-v2";
 // Environment preparation uses a durable, declaration-scoped request identity.
 const replayableMethods = new Set<string>(["workspace.environment", "observer.health", "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary", "review-set.compare", "review-set.brief"]);
+replayableMethods.add('cache.list'); replayableMethods.add('cache.task');
 
 function configuredBridgeTimeoutMs(method?: string): number {
+  if (method?.startsWith('cache.')) return 2_000;
   if (method === "workspace.environment") return 2_000;
   if (method === "workspace.prepare.task" || method === "workspace.prepare" || method === "repository.diff.read" || method === "observer.refresh") return 2_000;
   const project = currentProject();
@@ -276,7 +281,7 @@ export class ObserverBridge {
     this.cache.delete(key);
     const active = this.inFlight.get(key);
     if (active) return active;
-    const control = ["observer.health", "observer.versions"].includes(input.method) || ["observer.refresh", "repository.diff.read", "workspace.prepare.task"].includes(input.method) && ["status", "release"].includes(String(input.params.action));
+    const control = ["observer.health", "observer.versions", 'cache.task'].includes(input.method) || ["observer.refresh", "repository.diff.read", "workspace.prepare.task"].includes(input.method) && ["status", "release"].includes(String(input.params.action));
     if (this.inFlight.size >= (control ? 64 : BRIDGE_IN_FLIGHT))
       return { ok: false, error: { code: "observer_busy", message: "observer request limit reached; retry" } };
     const request: SocketRequest = { id: `${process.pid}:${++this.sequence}`, method: input.method, params };

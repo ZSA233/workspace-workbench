@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { chromium } from 'playwright';
 import { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import WebSocket from 'ws';
+import { openGlobalWorkbench } from './ui-project-selection.mjs';
 const plugin = resolve(import.meta.dirname, '..'), output = resolve(process.env.WORKBENCH_VERIFY_OUTPUT || await mkdtemp(join(tmpdir(), 'wb-files-git-ui-')));
 await mkdir(output, { recursive: true });
 let child, client, browser, ui, logs = '';
@@ -39,7 +40,7 @@ try {
   await page.goto(ui.url);
   await page.getByText('Workspace Workbench', { exact: true }).first().waitFor({ timeout: 20000 }); await pause(1000);
   if (await page.getByText('Add project', { exact: true }).first().isVisible().catch(() => false)) { await page.getByText('Add project', { exact: true }).first().click(); await page.getByText('Search for directory', { exact: true }).click(); await page.getByPlaceholder('Search directories or enter a path...').fill(ui.project); await page.getByText('Open this path', { exact: true }).click(); }
-  await page.getByText('Workspace Workbench', { exact: true }).first().click();
+  await openGlobalWorkbench(page, 'a');
   await page.getByText('Repositories', { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 20000 });
   await page.getByText('Files', { exact: true }).click(); await page.locator('[data-file-path=""]').waitFor({ timeout: 20000 }); await page.locator('[data-file-path="one"]').waitFor({timeout:20000});
   const drafts = page.locator('[data-file-path=".drafts"]'); await drafts.click();
@@ -99,7 +100,7 @@ try {
   check('switching Workspaces isolates clean and changed decorations and restores the previous tree');
   const mobileContext=await browser.newContext({viewport:{width:1100,height:900},hasTouch:true,isMobile:true,colorScheme:'dark'}), mobile=await mobileContext.newPage();
   mobile.on('pageerror',error=>report.errors.push('touch: '+error.message)); mobile.on('console', message => { if (['warning','error'].includes(message.type())) report.console.push({ type: message.type(), text: 'touch: '+message.text() }); });
-  await mobile.goto(ui.url);await mobile.getByText('Workspace Workbench',{exact:true}).first().waitFor({timeout:20000});await mobile.getByText('Workspace Workbench',{exact:true}).first().click();await mobile.getByText('Files',{exact:true}).filter({visible:true}).click();await mobile.locator('[data-file-path="one"]').waitFor({timeout:20000});await mobile.locator('[data-file-path="one"]').tap();
+  await mobile.goto(ui.url);await mobile.getByText('Workspace Workbench',{exact:true}).first().waitFor({timeout:20000});await openGlobalWorkbench(mobile,'a');await mobile.getByText('Files',{exact:true}).filter({visible:true}).click();await mobile.locator('[data-file-path="one"]').waitFor({timeout:20000});await mobile.locator('[data-file-path="one"]').tap();
   const ignoredTouch=mobile.locator('[data-file-path="one/dist"]');await ignoredTouch.waitFor({timeout:15000});await wait(async()=>await ignoredTouch.getAttribute('data-git-ignored')==='true');
   const touchBox=await ignoredTouch.boundingBox();assert.equal(touchBox.height,30);report.touchRowHeight=touchBox.height;
   const cdp=await mobileContext.newCDPSession(mobile);await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:touchBox.x+60,y:touchBox.y+15}]});await pause(850);await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});

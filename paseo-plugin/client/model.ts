@@ -597,7 +597,7 @@ export function sortWorkspacesByLatestCommit(workspaces: WorkspaceSummary[]): Wo
     if (leftTime === null && rightTime !== null) return 1;
     if (leftTime !== null && rightTime === null) return -1;
     if (leftTime !== null && rightTime !== null && leftTime !== rightTime) return rightTime - leftTime;
-    return 0;
+    return left.id.localeCompare(right.id);
   });
 }
 

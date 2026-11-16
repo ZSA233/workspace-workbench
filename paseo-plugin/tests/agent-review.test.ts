@@ -31,7 +31,7 @@ import { clearWorkspaceRuntimeState, executePermanentWorkspaceDelete } from "../
 import { resolveReviewPreferences } from "../shared/agent-review.ts";
 import { handoffSchema } from "../shared/handoff.ts";
 import type { AgentContext } from "../server/agent-provider.ts";
-import { writeState, writeReviewState, readReviewState } from "../server/orchestration-state.ts";
+import { digest, readState, writeState, writeReviewState, readReviewState } from "../server/orchestration-state.ts";
 import { handleSessionOperation } from "../server/session-tools.ts";
 import { sessionOperation } from "../shared/session-tools.ts";
 
@@ -227,6 +227,26 @@ test("session messages authorize the original coordinator and deduplicate supple
     await assert.rejects(handleSessionOperation({ ...input, text: "different" }, fixture.context), /conflict/);
     await assert.rejects(handleSessionOperation({ ...input, token: "other" }, fixture.context), /not_coordinator/);
     assert.equal(fixture.sent.length, 1);
+  });
+});
+
+test("receipt queries reconcile uncertain messages without sending or changing host mode", async () => {
+  const fixture = harness();
+  await withFixture(fixture, async () => {
+    putAgentBinding({ workspaceId: "managed-fixture", agentId: "execution-fixture", relationship: "independent", paseoWorkspaceId: "managed-fixture", cwd: fixture.root, provider: "codex/model-a", createdAt: "now", updatedAt: "now" });
+    const input = sessionOperation.input.parse({ projectConfig: fixture.config, workspaceId: "managed-fixture", action: "receipt", requestId: "communications:fixed-preview" });
+    assert.equal((await handleSessionOperation(input, fixture.context) as any).delivery, "unknown");
+    const key = `session-message:execution-fixture:${digest(input.requestId!)}`;
+    writeState(key, { delivery: "uncertain", messageId: "fixed-message-id" });
+    writeState("session-supplements:managed-fixture:execution-fixture", [{ messageId: "fixed-message-id", delivery: "uncertain" }]);
+    const handle = fixture.context.paseo.agents.ref("execution-fixture") as any;
+    handle.timeline = { refetch: async () => ({ entries: [], error: null }) };
+    assert.equal((await handleSessionOperation(input, fixture.context) as any).delivery, "uncertain");
+    handle.timeline.refetch = async () => ({ entries: [{ item: { type: "user_message", clientMessageId: "fixed-message-id" } }], error: null });
+    const receipt = await handleSessionOperation(input, fixture.context) as any;
+    assert.equal(receipt.delivery, "accepted"); assert.equal(receipt.readConfirmed, false);
+    assert.equal(readState<any[]>("session-supplements:managed-fixture:execution-fixture")![0].delivery, "accepted");
+    assert.equal(fixture.sent.length, 0);
   });
 });
 

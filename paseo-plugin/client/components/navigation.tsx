@@ -77,6 +77,7 @@ export function LayoutMenu({
   onCreate,
   onSwitchProject,
   onOpenStorage,
+  onOpenExtensions,
   onOpenRuntimeSettings,
   onOpenExecution,
   runtimeNotice,
@@ -98,6 +99,7 @@ export function LayoutMenu({
   onCreate?: () => void;
   onSwitchProject?: () => void;
   onOpenStorage?: () => void;
+  onOpenExtensions?: () => void;
   onOpenRuntimeSettings?: () => void;
   runtimeNotice?: ReactNode;
   onOpenExecution?: ()=>void;
@@ -134,6 +136,7 @@ export function LayoutMenu({
     {onSelectLinkedWorkspaces ? <LayoutMenuItem label={localizedCopy.linkedSelectWorkspaces} onPress={onSelectLinkedWorkspaces} styles={styles} /> : null}
     {onCreate ? <LayoutMenuItem label={localizedCopy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
     {onSwitchProject ? <LayoutMenuItem label={localizedCopy.switchProject} onPress={onSwitchProject} styles={styles} /> : null}
+    {onOpenExtensions ? <LayoutMenuItem label="扩展管理" onPress={onOpenExtensions} styles={styles} /> : null}
     {onOpenStorage ? <LayoutMenuItem label={localizedCopy.storageMenu} onPress={onOpenStorage} styles={styles} /> : null}
     {onOpenExecution?<LayoutMenuItem label={localizedCopy.executionMenu} onPress={onOpenExecution} styles={styles}/>:null}
     {runtimeNotice}

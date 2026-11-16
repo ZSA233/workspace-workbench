@@ -1,0 +1,66 @@
+name: Communications service
+on:
+  push:
+    paths: ['communications-service/**', 'paseo-plugin/shared/extensions/**', 'paseo-plugin/tests/extensions-host.test.ts', 'paseo-plugin/tests/helpers/communications-service.mjs', '.github/workflows/communications-service.yml']
+    tags: ['communications-service/v*']
+  pull_request:
+    paths: ['communications-service/**', 'paseo-plugin/shared/extensions/**', 'paseo-plugin/tests/extensions-host.test.ts', 'paseo-plugin/tests/helpers/communications-service.mjs', '.github/workflows/communications-service.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin/arm64
+          - runner: macos-15-intel
+            target: darwin/amd64
+          - runner: ubuntu-24.04
+            target: linux/amd64
+          - runner: ubuntu-24.04-arm
+            target: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: communications-service/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Unit, race and static checks
+        working-directory: communications-service
+        run: |
+          go test ./...
+          go test -race ./...
+          go vet ./...
+      - name: Build independent archive
+        env:
+          COMMUNICATIONS_BUILD_PLATFORMS: ${{ matrix.target }}
+        run: communications-service/scripts/package.sh
+      - name: Standalone lifecycle smoke
+        run: python3 communications-service/scripts/smoke.py communications-service/dist/*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: communications-${{ strategy.job-index }}
+          path: communications-service/dist/
+  connector:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: communications-service/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: paseo-plugin/package-lock.json
+      - run: npm --prefix paseo-plugin ci
+      - run: npm --prefix paseo-plugin run typecheck
+      - run: node --experimental-strip-types --test paseo-plugin/tests/extensions-host.test.ts paseo-plugin/tests/release-archive.test.ts

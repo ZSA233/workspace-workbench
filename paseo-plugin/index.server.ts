@@ -72,8 +72,13 @@ import { projectsQuery } from "./shared/projects";
 import { observerSettings } from "./shared/settings";
 import { projectBackendStart,projectBackendStatus,projectRuntimeSettingsGet,projectRuntimeSettingsUpdate,projectSetupSave,projectSetupScan,projectStorageQuery } from "./shared/setup";
 import { workspaceLifecycle } from "./shared/workspace-lifecycle";
+import { extensionsRpc, communicationsConnectionRpc } from './shared/extensions';
+import { communicationsRpc, communicationsDeliveryRpc } from './shared/extensions/project-communications/shared';
+import { WorkbenchExtensions } from './server/extensions';
 
 export default function contribute(server: PluginServerContext) {
+  const extensions = new WorkbenchExtensions();
+  extensions.restore();
   const host = new HostConnection();
   const metrics = new RpcMetrics();
   const gateway = new McpGatewayManager(defaultMcpGatewayEntry());
@@ -113,7 +118,8 @@ export default function contribute(server: PluginServerContext) {
       } })),
       readOnlyHostMethods.has(contract.name)
         || contract.name === "workspace.workbench.orchestrate" && (input as { action?: string }).action === "status"
-        || contract.name === "workspace.workbench.session" && ["status", "history", "wait"].includes(String((input as { action?: string }).action))
+        || contract.name === "workspace.workbench.session" && ["status", "receipt", "history", "wait"].includes(String((input as { action?: string }).action))
+        || contract.name === 'workspace.workbench.communications-delivery' && ['delivery.status','delivery.targets'].includes((input as {request?:{action?:string}}).request?.action||'')
         || contract.name === "workspace.workbench.coordinator-review" && (input as { action?: string }).action === "read"
         || contract.name === "workspace.workbench.lifecycle" && (input as { action?: string }).action === "inspect",
     )),
@@ -139,6 +145,11 @@ export default function contribute(server: PluginServerContext) {
     } catch (error) { return { ok: false, error: { code: 'file_download_host_unavailable', message: error instanceof Error ? error.message : String(error) } }; }
   }));
   measured.registerSettings(observerSettings);
+  measured.handle(communicationsConnectionRpc,input=>extensions.connection(input.projectConfig,input.extensionId,input.action,input));
+  measured.handle(extensionsRpc, input => input.action === 'status' ? extensions.state(input.projectConfig,input.extensionId) : extensions.setEnabled(input.projectConfig,input.extensionId,input.action==='enable'));
+  measured.handle(communicationsRpc, input => extensions.request(input.projectConfig,input.extensionId,input.request));
+  // Delivery alone needs the host connection. Other extension operations remain usable while it reconnects.
+  withHost.handle(communicationsDeliveryRpc,(input,context)=>extensions.request(input.projectConfig,input.extensionId,input.request,context));
   withHost.handle(workspaceHandoffPreview, (input, context) => withProject(input, () => orchestrate("preview", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)));
   withHost.handle(handoffMaterials, (input, context) => withProject(input, () => handleHandoffMaterials(input, context)));
   withHost.handle(sessionOperation, (input, context) => withProject(input, () => handleSessionOperation(input, context)));
@@ -237,5 +248,5 @@ export default function contribute(server: PluginServerContext) {
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
   withHost.handle(workspaceLifecycle, (input, context) => withProject(input, () => handleWorkspaceLifecycle(input, context)));
-  return async () => { await cleanupRecovery(); cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); await Promise.all([gateway.close(), closeBackends(), host.close()]); setMcpGateway(null); };
+  return async () => { await extensions.close(); await cleanupRecovery(); cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); await Promise.all([gateway.close(), closeBackends(), host.close()]); setMcpGateway(null); };
 }

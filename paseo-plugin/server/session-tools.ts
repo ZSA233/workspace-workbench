@@ -79,7 +79,32 @@ async function perform(input: SessionOperation, context: AgentContext, signal?: 
       status: current.status, activeTurn: current.activeTurn || null, pendingPermissionCount: current.pendingPermissions?.length || 0,
       review: review ? { sessionId: review.id, status: review.status, round: review.round } : null };
   };
+  const supplementKey = `session-supplements:${input.workspaceId}:${binding.agentId}`;
+  const acknowledgeSupplement = (messageId: string) => {
+    const items = readState<Array<Record<string, unknown>>>(supplementKey) || [];
+    writeState(supplementKey, items.map(item => item.messageId === messageId ? { ...item, delivery: "accepted" } : item));
+    const receipt = readState<{ bundle?: BundleRef }>(`session-message:${binding.agentId}:${digest(input.requestId!)}`);
+    if (receipt?.bundle) {
+      const current = getAgentBinding(input.workspaceId);
+      if (!current || current.agentId !== binding.agentId) throw new Error("session_worker_changed");
+      if (current.pendingHandoffBundle?.id === receipt.bundle.id && current.pendingHandoffBundle.version === receipt.bundle.version) putAgentBinding({ ...current, handoffBundle: receipt.bundle, pendingHandoffBundle: undefined });
+    }
+  };
   if (input.action === "status") return status();
+  if (input.action === "receipt") {
+    if (!input.requestId) throw new Error("message_request_id_required");
+    const key = `session-message:${binding.agentId}:${digest(input.requestId)}`;
+    const prior = readState<{ delivery: string; messageId: string }>(key);
+    if (!prior) return { ok: false, delivery: "unknown", readConfirmed: false };
+    if (prior.delivery === "uncertain") {
+      const page = await handle.timeline.refetch({ limit: sessionLimits.maxHistoryItems });
+      if (!page.error && page.entries.some(entry => entry.item.type === "user_message" && (entry.item.messageId === prior.messageId || entry.item.clientMessageId === prior.messageId))) {
+        prior.delivery = "accepted"; writeState(key, prior);
+      }
+    }
+    if (prior.delivery === "accepted") acknowledgeSupplement(prior.messageId);
+    return { ok: prior.delivery === "accepted", delivery: prior.delivery, messageId: prior.messageId, readConfirmed: false };
+  }
   if (input.action === "history") {
     const page = await handle.timeline.refetch({ limit: input.limit, direction: input.cursor ? "before" : "tail", ...(input.cursor ? { cursor: input.cursor } : {}) });
     if (page.error || page.staleCursor) throw new Error(page.error || "history_cursor_stale");
@@ -107,17 +132,6 @@ async function perform(input: SessionOperation, context: AgentContext, signal?: 
   }
   if (!input.requestId || !input.text) throw new Error("message_request_id_and_text_required");
   const key = `session-message:${binding.agentId}:${digest(input.requestId)}`;
-  const supplementKey = `session-supplements:${input.workspaceId}:${binding.agentId}`;
-  const acknowledgeSupplement = (messageId: string) => {
-    const items = readState<Array<Record<string, unknown>>>(supplementKey) || [];
-    writeState(supplementKey, items.map(item => item.messageId === messageId ? { ...item, delivery: "accepted" } : item));
-    const receipt = readState<{ bundle?: BundleRef }>(key);
-    if (receipt?.bundle) {
-      const current = getAgentBinding(input.workspaceId);
-      if (!current || current.agentId !== binding.agentId) throw new Error("session_worker_changed");
-      if (current.pendingHandoffBundle?.id === receipt.bundle.id && current.pendingHandoffBundle.version === receipt.bundle.version) putAgentBinding({ ...current, handoffBundle: receipt.bundle, pendingHandoffBundle: undefined });
-    }
-  };
   const identity = digest({ text: input.text, attachments: input.attachments, behavior: input.behavior });
   const prior = readState<{ identity: string; delivery: string; messageId: string }>(key);
   if (prior) {

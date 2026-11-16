@@ -1,0 +1,5 @@
+/bin/
+/dist/
+*.test
+
+!testdata/node-v1/home/projects/legacy-project/communications.sqlite

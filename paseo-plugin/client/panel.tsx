@@ -1,3 +1,7 @@
+import { useCommunications } from './use-communications';
+import { CommunicationsPanel } from './extensions/project-communications/client';
+import { CommunicationsSettings } from './extensions/project-communications/settings';
+import { CommunicationsTheme } from './extensions/project-communications/ui';
 import {openDocument,reconcileDocuments,useDocumentReturn,consumeDocumentReturn} from "./document-store";
 import { FileTransfers, useFileConnection } from './files-transfer-panel';
 import { reconcileFilesTrees } from './files-tree-store';
@@ -249,6 +253,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const [storageMenuOpen, setStorageMenuOpen] = useState(false);
   const [runtimeSettingsOpen, setRuntimeSettingsOpen] = useState(false);
+  const [communicationsSettingsOpen,setCommunicationsSettingsOpen]=useState(false);
+  const [communicationsSettingsPage,setCommunicationsSettingsPage]=useState<'扩展管理'|'连接与来源'>('扩展管理');
   const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setStorageMenuOpen(false); setRuntimeSettingsOpen(false); setLayoutMenuOpen(true); }, []);
   const openStorageMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setRuntimeSettingsOpen(false); setStorageMenuOpen(true); }, []);
   const openRuntimeSettings = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setStorageMenuOpen(false); setReviewSettingsOpen(false); setRuntimeSettingsOpen(true); }, []);
@@ -349,7 +355,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     q.key[2] === kind && (kind === "workspace-list" || kind === "review" ||
       q.key[3] === selectedWorkspaceId && (kind === "workspace-detail" || q.key[4] === selectedRepoPath))),
     [queryClient, projectConfig, selectedWorkspaceId, selectedRepoPath]);
-  const [tab, setTab] = useState<"workspace" | "review" | "files" | 'cache'>("workspace");
+  const [tab, setTab] = useState<"workspace" | "review" | "files" | 'cache' | 'communications'>("workspace");
   const [reviewTab, setReviewTab] = useState<"set" | "agent">("set");
   const [reviewSessionId, setReviewSessionId] = useState("");
   const [mainReviewInstructions, setMainReviewInstructions] = useState("");
@@ -379,9 +385,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [preferenceScopeKey, selectedWorkspaceId]);
 
   const workspaceDirectory = paseoWorkspace?.directory || "";
-  const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab(current => current === "files" || current === 'cache' ? current : "workspace");},[]);
+  const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab(current => current === "files" || current === 'cache' || current === 'communications' ? current : "workspace");},[]);
   const onWorkspaceSelectionLost=useCallback(()=>{setSelectedRepoPath("");setSelectedCommit("");setSelectedFile("");scopeRepositoryIdentity.current="";},[]);
   const {selectionResolved, selectorOpen, activityScanProgress, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, stopWorkspaceActivityScan, closeWorkspaceSelector, openWorkspaceSelector, refreshWorkspaceActivity, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
+  const communications=useCommunications(projectConfig,foreground,tab==='communications'||communicationsSettingsOpen);
+  useEffect(()=>{if(communications.state&&!communications.enabled&&tab==='communications')setTab('workspace');},[communications.state,communications.enabled,tab]);
   const cacheCapable = backendQuery.data?.readCapabilities?.cacheManagementProtocol === 1;
   const cacheManagement = useCacheManagement({ project: projectConfig, workspaceId: selectedWorkspaceId, enabled: cacheCapable && backendReady && listReady, foreground, visible: tab === 'cache', watching: selectorOpen, rpc });
   const {mainRepositoriesOpen, setMainRepositoriesOpen, mainRepositoryFilter, setMainRepositoryFilter, mainRepositoryDraft, setMainRepositoryDraft, savingMainRepositories, linkedWorkspacesOpen, setLinkedWorkspacesOpen, linkedWorkspaceFilter, setLinkedWorkspaceFilter, linkedWorkspaceDraft, setLinkedWorkspaceDraft, savingLinkedWorkspaces, orphanId, setOrphanId, orphanBranches, setOrphanBranches, adoptingOrphan, orphanError, orphanPreviewQuery, orphanPreview, mainRepositoriesQuery, mainRepositories, linkedWorkspacesQuery, linkedWorkspaces, saveMainRepositories, saveLinkedWorkspaces, adoptSelectedOrphan}=useWorkspaceCatalog({projectConfig,backendReady,rpc,localizedCopy,refreshArea,onAdopted:selectCreatedWorkspace});
@@ -561,6 +569,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         : []),
     ], observationTiming.clientRefreshTimeoutMs, setManualRefreshing);
   const refreshAll = useCallback(() => {
+    if (tab === 'communications') { void communications.refresh(); return; }
     if (tab === 'cache') { void cacheManagement.scan(); return; }
     refreshWorkspaceActivity(true);
     if (comparisonOpen) void refreshArea('repository-compare');
@@ -569,7 +578,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     selectedRefresh.refresh();
     basicSummaries.refresh();
     void refreshArea('workspace-list');
-  }, [tab, cacheManagement.scan, refreshWorkspaceActivity, comparisonOpen, refreshCapable, refreshLegacy, selectedRefresh.refresh, refreshArea, basicSummaries.refresh, backendQuery.refetch]);
+  }, [tab, communications.refresh, cacheManagement.scan, refreshWorkspaceActivity, comparisonOpen, refreshCapable, refreshLegacy, selectedRefresh.refresh, refreshArea, basicSummaries.refresh, backendQuery.refetch]);
 
 
   // The version poll resumes observation queries; only bootstrap needs a direct retry.
@@ -858,6 +867,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <TabButton active={tab === "files"} label={locale === "zh-CN" ? "文件" : "Files"} onPress={() => setTab("files")} theme={theme} styles={styles} />
         <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
         {cacheCapable ? <TabButton active={tab === 'cache'} label={locale === 'zh-CN' ? '缓存与空间' : 'Caches & space'} onPress={() => { closeWorkspaceSelector(); setTab('cache'); }} theme={theme} styles={styles} /> : null}
+        {communications.enabled ? <TabButton active={tab==='communications'} label="需求与反馈" badge={communications.unread} onPress={()=>{closeWorkspaceSelector();setTab('communications');}} theme={theme} styles={styles}/> : null}
         {selectedWorkspaceId && selectedWorkspace?.kind !== "linked-live" && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
       </ScrollView>
       <View
@@ -933,7 +943,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               styles={styles}
             />
             </View></View>
-          ) : tab === 'cache' ? <CacheManagementPanel cache={cacheManagement} theme={theme} /> : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} onOpenDocument={backendQuery.data?.readCapabilities?.documentPreviewProtocol===1?(path,instance)=>openDocument({hostWorkspaceId,agentId,projectConfig,scope:filesScopeKey,workspaceId:selectedWorkspace.id,workspaceName:selectedWorkspace.displayName||selectedWorkspace.id,instance,directory:selectedWorkspace.treePath||selectedWorkspace.sourceRoot||'',path}):undefined} foreground={foreground} sortedListing={backendQuery.data?.readCapabilities?.directoryListingProtocol === 2} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
+          ) : tab === 'communications' ? <CommunicationsTheme theme={theme}><CommunicationsPanel key={`${projectConfig}:${communications.connection?.revision}`} client={communications} width={panelWidth} workspaceNames={Object.fromEntries(observedWorkspaces.map(workspace=>[workspace.id,workspace.displayName||workspace.id]))} onSettings={()=>{setCommunicationsSettingsPage('连接与来源');setCommunicationsSettingsOpen(true);}}/></CommunicationsTheme> : tab === 'cache' ? <CacheManagementPanel cache={cacheManagement} theme={theme} /> : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} onOpenDocument={backendQuery.data?.readCapabilities?.documentPreviewProtocol===1?(path,instance)=>openDocument({hostWorkspaceId,agentId,projectConfig,scope:filesScopeKey,workspaceId:selectedWorkspace.id,workspaceName:selectedWorkspace.displayName||selectedWorkspace.id,instance,directory:selectedWorkspace.treePath||selectedWorkspace.sourceRoot||'',path}):undefined} foreground={foreground} sortedListing={backendQuery.data?.readCapabilities?.directoryListingProtocol === 2} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
             {selectedWorkspaceIsMain ? <View style={styles.targetRow}>
               <Text style={styles.layoutMenuHint}>{localizedCopy.mainReviewHint}</Text>
               <TextInput value={mainReviewInstructions} onChangeText={setMainReviewInstructions} placeholder={localizedCopy.mainReviewInstructions} multiline style={styles.targetInput} />
@@ -1018,7 +1028,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         theme={theme}
         styles={styles}
       />
+      <CommunicationsTheme theme={theme}><CommunicationsSettings key={`${projectConfig}:${communications.connection?.revision}`} client={communications} open={communicationsSettingsOpen} initialPage={communicationsSettingsPage} onClose={()=>setCommunicationsSettingsOpen(false)}/></CommunicationsTheme>
       <LayoutMenu
+        onOpenExtensions={()=>{setLayoutMenuOpen(false);setCommunicationsSettingsPage('扩展管理');setCommunicationsSettingsOpen(true);}}
         onOpenExecution={!selectedWorkspaceIsMain&&listResult?.capabilities?.agent?openExecutionDetails:undefined}
         onOpenCreator={props.navigation ? id => { setLayoutMenuOpen(false); props.navigation?.openAgent({ agentId: id }); } : undefined}
         onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}

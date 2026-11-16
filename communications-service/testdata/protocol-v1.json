@@ -1,0 +1,387 @@
+[
+  {
+    "input": {
+      "action": "snapshot"
+    },
+    "valid": true,
+    "output": {
+      "action": "snapshot"
+    }
+  },
+  {
+    "input": {
+      "action": "configure",
+      "revision": 1,
+      "config": {}
+    },
+    "valid": true,
+    "output": {
+      "action": "configure",
+      "revision": 1,
+      "config": {
+        "source": {
+          "executable": "dws",
+          "mode": "custom",
+          "clientId": "",
+          "profile": "",
+          "botId": ""
+        },
+        "model": {
+          "protocol": "chat-completions",
+          "baseUrl": "http://127.0.0.1:12345/v1",
+          "model": "",
+          "timeoutMs": 180000,
+          "contextTokens": 131072,
+          "outputTokens": 8192,
+          "modelLimit": 524288,
+          "vision": true
+        },
+        "analysis": {
+          "enabled": true,
+          "coalesceSeconds": 30,
+          "reconcileSeconds": 60,
+          "focusPeople": [],
+          "keywords": [],
+          "categories": [
+            "requirement",
+            "change",
+            "feedback",
+            "bug",
+            "decision"
+          ],
+          "instructions": "保留讨论上下文，识别明确的需求、变更、反馈、缺陷和决策；不确定内容标为待核实。"
+        }
+      }
+    }
+  },
+  {
+    "input": {
+      "action": "messages.list"
+    },
+    "valid": true,
+    "output": {
+      "action": "messages.list",
+      "query": "",
+      "limit": 50
+    }
+  },
+  {
+    "input": {
+      "action": "candidate.list"
+    },
+    "valid": true,
+    "output": {
+      "action": "candidate.list",
+      "query": "",
+      "includeSnoozed": false,
+      "limit": 50
+    }
+  },
+  {
+    "input": {
+      "action": "requirement.list"
+    },
+    "valid": true,
+    "output": {
+      "action": "requirement.list",
+      "query": "",
+      "limit": 50
+    }
+  },
+  {
+    "input": {
+      "action": "groups.bind",
+      "groupId": "g",
+      "name": "群"
+    },
+    "valid": true,
+    "output": {
+      "action": "groups.bind",
+      "groupId": "g",
+      "name": "群"
+    }
+  },
+  {
+    "input": {
+      "action": "candidate.accept",
+      "id": "c",
+      "revision": 1,
+      "title": "a",
+      "body": "b"
+    },
+    "valid": true,
+    "output": {
+      "action": "candidate.accept",
+      "id": "c",
+      "revision": 1,
+      "title": "a",
+      "body": "b"
+    }
+  },
+  {
+    "input": {
+      "action": "messages.list",
+      "limit": 101
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "configure",
+      "revision": 1,
+      "config": {
+        "model": {
+          "contextTokens": 524289
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "configure",
+      "revision": 1,
+      "config": {
+        "model": {
+          "baseUrl": "file:///tmp/m"
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "groups.bind",
+      "groupId": "",
+      "name": "群"
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "not-supported"
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "messages.list",
+      "limit": null
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "configure",
+      "revision": 1,
+      "config": {
+        "model": {
+          "contextTokens": 4096,
+          "outputTokens": 4096
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "configure",
+      "revision": 1,
+      "config": {
+        "unknown": null,
+        "model": {
+          "unknown": null
+        }
+      }
+    },
+    "valid": true,
+    "output": {
+      "action": "configure",
+      "revision": 1,
+      "config": {
+        "source": {
+          "executable": "dws",
+          "mode": "custom",
+          "clientId": "",
+          "profile": "",
+          "botId": ""
+        },
+        "model": {
+          "protocol": "chat-completions",
+          "baseUrl": "http://127.0.0.1:12345/v1",
+          "model": "",
+          "timeoutMs": 180000,
+          "contextTokens": 131072,
+          "outputTokens": 8192,
+          "modelLimit": 524288,
+          "vision": true
+        },
+        "analysis": {
+          "enabled": true,
+          "coalesceSeconds": 30,
+          "reconcileSeconds": 60,
+          "focusPeople": [],
+          "keywords": [],
+          "categories": [
+            "requirement",
+            "change",
+            "feedback",
+            "bug",
+            "decision"
+          ],
+          "instructions": "保留讨论上下文，识别明确的需求、变更、反馈、缺陷和决策；不确定内容标为待核实。"
+        }
+      }
+    }
+  },
+  {
+    "input": {
+      "action": "messages.list",
+      "limit": 1
+    },
+    "valid": true,
+    "output": {
+      "action": "messages.list",
+      "query": "",
+      "limit": 1
+    }
+  },
+  {
+    "input": {
+      "action": "configure",
+      "revision": 1,
+      "config": {
+        "analysis": {
+          "enabled": false,
+          "coalesceSeconds": 1,
+          "reconcileSeconds": 15,
+          "categories": [
+            "bug"
+          ],
+          "focusPeople": [
+            "同事😀"
+          ]
+        }
+      }
+    },
+    "valid": true,
+    "output": {
+      "action": "configure",
+      "revision": 1,
+      "config": {
+        "source": {
+          "executable": "dws",
+          "mode": "custom",
+          "clientId": "",
+          "profile": "",
+          "botId": ""
+        },
+        "model": {
+          "protocol": "chat-completions",
+          "baseUrl": "http://127.0.0.1:12345/v1",
+          "model": "",
+          "timeoutMs": 180000,
+          "contextTokens": 131072,
+          "outputTokens": 8192,
+          "modelLimit": 524288,
+          "vision": true
+        },
+        "analysis": {
+          "enabled": false,
+          "coalesceSeconds": 1,
+          "reconcileSeconds": 15,
+          "focusPeople": [
+            "同事😀"
+          ],
+          "keywords": [],
+          "categories": [
+            "bug"
+          ],
+          "instructions": "保留讨论上下文，识别明确的需求、变更、反馈、缺陷和决策；不确定内容标为待核实。"
+        }
+      }
+    }
+  },
+  {
+    "input": {
+      "action": "candidate.accept",
+      "id": "c",
+      "revision": 1,
+      "title": "新增😀",
+      "body": "正文",
+      "expectedVersion": 0
+    },
+    "valid": true,
+    "output": {
+      "action": "candidate.accept",
+      "id": "c",
+      "revision": 1,
+      "title": "新增😀",
+      "body": "正文",
+      "expectedVersion": 0
+    }
+  },
+  {
+    "input": {
+      "action": "messages.list",
+      "query": "%_\\中文😀",
+      "groupId": "g",
+      "before": 1700000000000
+    },
+    "valid": true,
+    "output": {
+      "action": "messages.list",
+      "groupId": "g",
+      "query": "%_\\中文😀",
+      "before": 1700000000000,
+      "limit": 50
+    }
+  },
+  {
+    "input": {
+      "action": "configure",
+      "revision": 1,
+      "config": {
+        "analysis": {
+          "keywords": [
+            null
+          ]
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "messages.list",
+      "before": 1700000000000.5
+    },
+    "valid": true,
+    "output": {
+      "action": "messages.list",
+      "query": "",
+      "before": 1700000000000.5,
+      "limit": 50
+    }
+  },
+  {
+    "input": {
+      "action": "candidate.list",
+      "before": {
+        "time": 1700000000000.5,
+        "id": "c"
+      }
+    },
+    "valid": true,
+    "output": {
+      "action": "candidate.list",
+      "query": "",
+      "includeSnoozed": false,
+      "before": {
+        "time": 1700000000000.5,
+        "id": "c"
+      },
+      "limit": 50
+    }
+  }
+]

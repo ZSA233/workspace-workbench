@@ -1,0 +1,17 @@
+[Unit]
+Description=Project Communications Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Install as a user unit under ~/.config/systemd/user/.
+ExecStart=%h/.local/bin/project-communications serve
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

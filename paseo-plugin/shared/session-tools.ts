@@ -7,7 +7,7 @@ export const sessionOperation = defineRpc({
   name: "workspace.workbench.session",
   input: z.object({
     projectConfig: z.string().min(1), token: z.string().min(1).optional(),
-    workspaceId: z.string().min(1), action: z.enum(["status", "message", "history", "wait", "stop"]),
+    workspaceId: z.string().min(1), action: z.enum(["status", "message", "receipt", "history", "wait", "stop"]),
     requestId: z.string().min(1).optional(), text: z.string().min(1).max(32_768).optional(),
     behavior: z.enum(["steer", "interrupt"]).default("steer"),
     attachments: z.array(reviewArtifactReferenceSchema).max(20).default([]),

@@ -2,6 +2,12 @@ import {createScrollSignal} from './diff-scroll-store';
 import {syntaxStatus} from './syntax-status';
 import {useDiffMeasurements} from './use-diff-measurements';
 import {useDiffRailWidth} from './use-diff-rail-width';
+import {useChangeFileFilter} from './use-change-file-filter';
+import {ChangeFileFilterControls} from './components/change-file-filter';
+import {nextVisibleFile} from '../shared/change-file-filter';
+import type {NoteScope} from './use-change-notes';
+import {useWorkbenchLocale} from './i18n';
+import {FileFilterBoundsContext} from './file-filter-bounds';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, Text, View, useWindowDimensions } from 'react-native';
 import { useRpc, type PluginWorkspacePanelProps, type PluginAgentPanelProps } from '@getpaseo/plugin/client';
@@ -36,8 +42,10 @@ const EMPTY_VISIBLE:number[]=[];
 const EMPTY_ROWS:DiffDisplayRow[]=[];
 function result<T>(value: ObserverResponse | undefined): T | undefined { return displayedObservation(value)?.result as T | undefined; }
 export function ComparisonReviewPanel(props: Props) {
+    const zh=useWorkbenchLocale()==='zh-CN';
     const { selection, theme } = props, host = props.workspaceId, key = selectionKey(selection), view = useRef(getComparisonView(host, key)).current;
     const activity = usePanelForeground(), foreground = activity.foreground, rpc = useRpc(observerQuery), backend = useRpc(projectBackendStatus);
+    const filterPanelBounds=useRef<any>(null),attachFilterBounds=useCallback((node:any)=>{filterPanelBounds.current=node;activity.ref(node);},[activity.ref]);
     const railSize=useDiffRailWidth();
     const savedDisplay = useDisplaySettings();
     const display = { ...savedDisplay, ...view.display, update: (patch: {
@@ -77,9 +85,12 @@ export function ComparisonReviewPanel(props: Props) {
     const manifest = useQuery({ queryKey: ['workspace-workbench', selection.projectConfig, 'repository-compare', selection.workspaceId, selection.repoPath, 'files', frozen, selection.workspaceInstance], queryFn: () => rpc({ projectConfig: selection.projectConfig, method: 'repository.compare', params: { workspaceId: selection.workspaceId, workspaceInstance: selection.workspaceInstance, repoPath: selection.repoPath, action: 'files', comparison: frozen } }), enabled: foreground, ...observationQueryOptions });
     const statistics = useQuery({ queryKey: ['workspace-workbench', selection.projectConfig, 'repository-compare', selection.workspaceId, selection.repoPath, 'statistics', frozen, selection.workspaceInstance], queryFn: () => rpc({ projectConfig: selection.projectConfig, method: 'repository.compare', params: { workspaceId: selection.workspaceId, workspaceInstance: selection.workspaceInstance, repoPath: selection.repoPath, action: 'statistics', comparison: frozen } }), enabled: foreground && !!result<ChangesResult>(manifest.data), ...observationQueryOptions });
     const manifestData = result<ChangesResult>(manifest.data), stats = result<ChangesResult>(statistics.data);
-    const files = useMemo(() => (manifestData?.files || []).slice().sort((a, b) => a.path.localeCompare(b.path)), [manifestData]);
+    const allFiles = useMemo(() => (manifestData?.files || []).slice().sort((a, b) => a.path.localeCompare(b.path)), [manifestData]);
+    const filterScope=useMemo<NoteScope>(()=>({...selection,path:undefined}),[selection.projectConfig,selection.workspaceId,selection.workspaceInstance,selection.repoPath,selection.scope,selection.comparison]);
+    const fileFilter=useChangeFileFilter(filterScope,allFiles,foreground&&!!manifestData);
+    const files=fileFilter.files;
     const statsByPath = useMemo(() => new Map(stats?.files.map(f => [f.path, f]) || []), [stats]);
-    const fileSelections=useMemo(()=>new Map(files.map(f=>[f.path,{...selection,kind:'file' as const,path:f.path,oldPath:f.oldPath,status:f.status,statusLabel:f.statusLabel,changeNoteId:f.path===selection.path?selection.changeNoteId:undefined}])),[files,selection]);
+    const fileSelections=useMemo(()=>new Map(allFiles.map(f=>[f.path,{...selection,kind:'file' as const,path:f.path,oldPath:f.oldPath,status:f.status,statusLabel:f.statusLabel,changeNoteId:f.path===selection.path?selection.changeNoteId:undefined}])),[allFiles,selection]);
     const fileSelection = (path:string):FileReviewSelection=>fileSelections.get(path)||{...selection,kind:'file',path};
     const fileJob = (path: string): BodyJob => { const s = fileSelection(path); return { id: JSON.stringify(fileReviewQueryKey(s, host)), path, selection: s, intent: path === currentPath || visiblePaths.includes(path) ? 'interactive' : 'background' }; };
     const contextJob = (path: string, context: ContextRequest): BodyJob => { const s = fileSelection(path); return { id: JSON.stringify([...fileReviewQueryKey(s, host), 'context', context]), path, selection: s, context }; };
@@ -160,13 +171,21 @@ export function ComparisonReviewPanel(props: Props) {
     rowsRef.current = rows;
     metricsRef.current = metrics;
     const go = useCallback((path: string, codeKey?: string) => { view.collapsed.delete(path); view.currentPath = path; setCurrentPath(path); pending.current = { path, codeKey }; update(n => n + 1); }, [view]);
+    useLayoutEffect(()=>{
+        if(!manifestData)return;
+        const next=nextVisibleFile(allFiles.map(f=>f.path),files.map(f=>f.path),currentPath);
+        if(next!==currentPath){pending.current=next?{path:next}:null;view.currentPath=next;setCurrentPath(next);}
+        else if(pending.current&&!files.some(f=>f.path===pending.current!.path))pending.current=null;
+    },[files,allFiles,currentPath,manifestData]);
     useLayoutEffect(() => { if (view.lastTarget !== targetIdentity) {
+        if(!manifestData)return;
         view.lastTarget = targetIdentity;
-        go(selection.path);
+        if(allFiles.some(f=>f.path===selection.path)&&!files.some(f=>f.path===selection.path)){pending.current=null;solo(selection.path);}
+        else go(selection.path);
     }
     else if (!restored.current && view.anchor) {
         pending.current = null;
-    } }, [targetIdentity, go]);
+    } }, [targetIdentity, go,manifestData]);
     const previousLayout = useRef<{
         rows: DocumentRow[];
         metrics: typeof metrics;
@@ -274,7 +293,7 @@ export function ComparisonReviewPanel(props: Props) {
     } }
     function openOther(anchor: ChangeNote['content']['anchors'][number], note: ChangeNote, data: NotesResult) { const snapshot = data.snapshots[note.snapshotId]; if (!snapshot)
         return; if (snapshot.scope === 'compare' && comparisonKey(snapshot.comparison as any) === comparisonKey(selection.comparison)) {
-        openFileReview({ ...selection, path: anchor.path, changeNoteId: note.id }, openRequest());
+        openFileReview({ ...selection, kind:files.some(f=>f.path===anchor.path)?'comparison':'file', path: anchor.path, changeNoteId: note.id }, openRequest());
         return;
     } openFileReview({ ...selection, kind: snapshot.scope === 'compare' ? 'comparison' : 'file', scope: snapshot.scope as FileReviewSelection['scope'], comparison: snapshot.comparison as any, commitSha: snapshot.scope === 'commit' ? snapshot.right || undefined : undefined, path: anchor.path, changeNoteId: note.id }, openRequest()); }
     function openRequest() { return { hostWorkspaceId: host, panelId: 'agentId' in props ? 'workspace-workbench-file-agent' : 'workspace-workbench-file', ...('agentId' in props ? { agentId: props.agentId } : {}) }; }
@@ -308,7 +327,7 @@ export function ComparisonReviewPanel(props: Props) {
     else
         markers.push({ kind, hunkIndex: index, startRow: index, endRow: index, startLine: changed[0]?.newLine || changed[0]?.oldLine || 0, endLine: changed.at(-1)?.newLine || changed.at(-1)?.oldLine || 0, position: metrics.offsets[index] / Math.max(1, metrics.contentHeight), extent: metrics.lengths[index] / Math.max(1, metrics.contentHeight) }); });
     return markers;},[rows,metrics]);
-    function header(path: string, sticky = false) { const busy = foreground && expandAll?.path === path; const f = statsByPath.get(path) || files.find(f => f.path === path); return <View testID={sticky ? 'comparison-sticky-file' : `comparison-file-${path}`} accessibilityState={{ busy }} style={{ height: headerHeight, flexDirection: 'row', alignItems: 'center', backgroundColor: c.surface1, paddingHorizontal: 4, gap: 5 }}><IconButton label={`${view.collapsed.has(path) ? '展开' : '折叠'} ${path}`} icon={view.collapsed.has(path) ? 'ChevronRight' : 'ChevronDown'} color={c.foregroundMuted} onPress={() => toggle(path)}/><Pressable accessibilityRole="button" accessibilityLabel={`文件设置 ${path}`} onPress={() => openMenu(path)} style={{ flex: 1, minWidth: 0 }}><Text numberOfLines={1} style={{ color: c.foreground, fontSize: 12, fontWeight: '600' }}>{path}</Text></Pressable>{busy ? <ActivityIndicator testID="comparison-context-loading" accessibilityLabel="正在展开上下文" size="small" color={c.foregroundMuted}/> : null}<Text style={{ color: c.statusSuccess, fontSize: 11 }}>+{f?.additions ?? '—'}</Text><Text style={{ color: c.statusDanger, fontSize: 11 }}>−{f?.deletions ?? '—'}</Text><IconButton label={`单独打开 ${path}`} icon="ExternalLink" color={c.foregroundMuted} onPress={() => solo(path)}/></View>; }
+    function header(path: string, sticky = false) { const test=fileFilter.classifications.get(path),dimTest=fileFilter.preference.display==='dim'&&test?.test; const busy = foreground && expandAll?.path === path; const f = statsByPath.get(path) || files.find(f => f.path === path); return <View testID={sticky ? 'comparison-sticky-file' : `comparison-file-${path}`} accessibilityState={{ busy }} style={{ height: headerHeight, flexDirection: 'row', alignItems: 'center', backgroundColor: c.surface1, paddingHorizontal: 4, gap: 5 }}><IconButton label={`${view.collapsed.has(path) ? '展开' : '折叠'} ${path}`} icon={view.collapsed.has(path) ? 'ChevronRight' : 'ChevronDown'} color={c.foregroundMuted} onPress={() => toggle(path)}/><Pressable accessibilityRole="button" accessibilityLabel={`文件设置 ${path}`} onPress={() => openMenu(path)} style={{ flex: 1, minWidth: 0 }}><Text numberOfLines={1} style={{ color: dimTest?c.foregroundMuted:c.foreground, fontSize: 12, fontWeight: '600' }}>{path}</Text></Pressable>{test?.test?<Text style={{color:c.foregroundMuted,fontSize:10}}>{zh?'测试':'Test'}</Text>:null}{busy ? <ActivityIndicator testID="comparison-context-loading" accessibilityLabel="正在展开上下文" size="small" color={c.foregroundMuted}/> : null}<Text style={{ color: c.statusSuccess, fontSize: 11 }}>+{f?.additions ?? '—'}</Text><Text style={{ color: c.statusDanger, fontSize: 11 }}>−{f?.deletions ?? '—'}</Text><IconButton label={`单独打开 ${path}`} icon="ExternalLink" color={c.foregroundMuted} onPress={() => solo(path)}/></View>; }
     const renderRow = ({ item }: {
         item: DocumentRow;
         index: number;
@@ -322,12 +341,12 @@ export function ComparisonReviewPanel(props: Props) {
       const visible=Platform.OS==='web'?EMPTY_VISIBLE:visibleKeys.flatMap(key=>{const index=modelIndexes.get(path)?.display.get(key);return index===undefined?[]:[index];});
       return <ComparisonFileNotes key={path} registry={registry} selection={fileSelection(path)} diff={diffs.get(path)!} rows={localRows} visible={visible} foreground={foreground} theme={theme} jump={rowKey=>noteActions.current.go(path,rowKey)} reveal={a=>noteActions.current.reveal(path,a)} openOther={(a,n,d)=>noteActions.current.openOther(a,n,d)}/>;
     }),[demanded,document,fileSelections,foreground,theme,Platform.OS==='web'?null:visibleKeys]);
-    return <View ref={activity.ref} testID="workbench-diff-panel" style={styles.screen} onLayout={e => setWidth(e.nativeEvent.layout.width)}>
-  <DiffToolbar selections={selections} activeKey={activeKey} selection={fileSelection(currentPath)} diff={diffs.get(currentPath) || null} reading={navigation} navigationLabel={files.length ? `${currentFile + 1}/${files.length}${hunks.length ? ` · ${currentHunk + 1}/${hunks.length}` : ''}` : undefined} extra={<ComparisonNoteToolbar registry={registry} path={currentPath}/>} onSelect={k => setActiveFileReview(host, k)} onClose={(s,mode='current') => closeFileReviews(host, selectionKey(s),mode)} width={width} theme={theme} mode={mode} narrow={narrow} onMode={() => setMode(mode === 'split' ? 'unified' : 'split')} fontSize={display.fontSize} wrap={display.wrap} onDisplay={display.update} stale={false}/>
+    return <View ref={attachFilterBounds} testID="workbench-diff-panel" style={styles.screen} onLayout={e => setWidth(e.nativeEvent.layout.width)}><FileFilterBoundsContext.Provider value={filterPanelBounds}>
+  <DiffToolbar selections={selections} activeKey={activeKey} selection={fileSelection(currentPath)} diff={diffs.get(currentPath) || null} reading={navigation} navigationLabel={files.length ? `${currentFile + 1}/${files.length}${hunks.length ? ` · ${currentHunk + 1}/${hunks.length}` : ''}` : undefined} extra={<><ComparisonNoteToolbar registry={registry} path={currentPath}/><ChangeFileFilterControls filter={fileFilter} theme={theme} boundsRef={root} showCount={false}/></>} onSelect={k => setActiveFileReview(host, k)} onClose={(s,mode='current') => closeFileReviews(host, selectionKey(s),mode)} width={width} theme={theme} mode={mode} narrow={narrow} onMode={() => setMode(mode === 'split' ? 'unified' : 'split')} fontSize={display.fontSize} wrap={display.wrap} onDisplay={display.update} stale={false}/>
   <View ref={root} style={{ flex: 1, minHeight: 0 }}>
    {manifest.error || manifest.data?.ok === false ? <Pressable accessibilityRole="button" onPress={() => void manifest.refetch()}><Text style={styles.errorText}>{manifest.data?.error?.message || String(manifest.error)} · 重试</Text></Pressable> : null}
    {!manifestData ? <Text style={styles.emptyText}>正在读取固定比较的文件列表…</Text> : null}
-   {manifestData && !files.length ? <Text style={styles.emptyText}>此比较没有文件变化。</Text> : null}
+   {manifestData && !files.length ? <View><Text style={styles.emptyText}>{allFiles.length?(zh?'没有符合筛选条件的文件':'No files match the filters'):(zh?'此比较没有文件变化。':'No file changes in this comparison.')}</Text>{allFiles.length?<Pressable accessibilityRole="button" onPress={()=>{fileFilter.reset('all');}}><Text style={styles.emptyText}>{zh?'清除筛选并显示全部':'Clear filters and show all'}</Text></Pressable>:null}</View> : null}
    <View ref={copyRoot} style={styles.diffViewport} {...(Platform.OS === 'web' ? { onWheelCapture: manualScroll, onPointerDownCapture: manualScroll, onKeyDownCapture: (event: any) => { if (['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'Home', 'End', ' '].includes(event.key))
             manualScroll(); } } : {})} onLayout={e => setHeight(e.nativeEvent.layout.height)}>
     <ScrollView ref={horizontal} horizontal testID="diff-horizontal-scroll" scrollEnabled={!display.wrap} contentContainerStyle={styles.diffScrollContent} style={styles.diffHorizontal} onScroll={e => { const x = e.nativeEvent.contentOffset.x; if (x !== horizontalOffset.current) {
@@ -356,7 +375,7 @@ export function ComparisonReviewPanel(props: Props) {
    {menu ? <ComparisonPopover title={menu} theme={theme} anchor={menuAnchor} onClose={() => setMenu(null)}><Pressable accessibilityRole="button" onPress={() => { solo(menu); setMenu(null); }}><Text style={{ color: c.foreground, padding: 10 }}>单独打开</Text></Pressable><Pressable accessibilityRole="button" onPress={() => { const gap = models.get(menu)?.rows.find(r => r.kind === 'gap'); if (gap?.kind === 'gap')
         expand(menu, gap.gap, true, false, true); setMenu(null); }}><Text style={{ color: c.foreground, padding: 10 }}>展开全部上下文</Text></Pressable><Pressable accessibilityRole="button" onPress={() => { view.expanded[menu] = []; view.contexts[menu] = []; setExpandAll(null); bump(); setMenu(null); }}><Text style={{ color: c.foreground, padding: 10 }}>收起上下文</Text></Pressable>{!contextCapable ? <Text style={{ color: c.statusWarning, padding: 10 }}>当前服务不支持上下文展开，请更新插件。</Text> : null}{expandAll?.path === menu ? <Pressable accessibilityRole="button" onPress={() => setExpandAll(null)}><Text style={{ color: c.foreground, padding: 10 }}>停止后续展开</Text></Pressable> : null}</ComparisonPopover> : null}
   </View>
- </View>;
+ </FileFilterBoundsContext.Provider></View>;
 }
 const ComparisonCodeRow=memo(function ComparisonCodeRow({ registry, path, row, theme, styles }: {
     registry: ReturnType<typeof createComparisonNotesRegistry>;

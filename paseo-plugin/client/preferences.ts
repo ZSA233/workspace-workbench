@@ -34,6 +34,7 @@ function emptySettingsValues(): ObserverSettingsValues {
     workspaceViewByScope: {},
     reviewModeByPaseoWorkspace: {},
     diffDisplay: {fontSize:14,wrap:false}, productionBranches: {},
+    changeFileDisplayByProject: {}, testFileRulesByProject: {},
   };
 }
 

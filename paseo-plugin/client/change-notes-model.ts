@@ -1,6 +1,7 @@
 import type {FileReviewSelection} from './file-review-store';
 import type {DiffResult} from './model';
 import type {ChangeNote,NotesResult} from '../shared/change-notes';
+import type {NoteFilter} from '../shared/change-file-filter';
 export type NoteScope=Pick<FileReviewSelection,'projectConfig'|'workspaceInstance'|'workspaceId'|'repoPath'|'scope'|'comparison'|'commitSha'|'baseSha'|'head'> & {path?:string;changeNoteId?:string;changeNoteRequest?:number;noteComparisonId?:string;noteId?:string};
 export function noteCurrent(note:ChangeNote,data:NotesResult,scope:NoteScope,diff?:DiffResult|null){
  const s=data.snapshots[note.snapshotId];if(!s||s.scope!==scope.scope)return false;
@@ -19,4 +20,11 @@ export function noteNeedsConfirmation(note:ChangeNote,data:NotesResult){
  const latest=data.feedback.filter(e=>e.id===note.id&&e.revision===note.revision&&!e.deleted&&e.action!=='read').at(-1);
  if(latest)return latest.action==='question';
  return note.content.basis!=='requirement'||Boolean(note.content.question);
+}
+
+export function noteFilterMatches(filter:NoteFilter,notes:ChangeNote[],data:NotesResult|undefined,scope:NoteScope|undefined):boolean{
+ if(filter==='all')return true;
+ if(!data||!scope)return false;
+ const valid=(note:ChangeNote)=>noteCurrent(note,data,scope),current=notes.filter(valid);
+ return filter==='has'&&current.length>0||filter==='none'&&!current.length||filter==='stale'&&notes.some(note=>!valid(note))||filter==='pending'&&current.some(note=>noteNeedsConfirmation(note,data));
 }

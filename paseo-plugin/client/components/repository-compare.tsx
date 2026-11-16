@@ -2,9 +2,11 @@ import {ComparisonNoteDirectory} from './comparison-note-directory';
 import {useComparisonNotes} from '../use-comparison-notes';
 import {comparisonRecordState,comparisonExplanationRequest} from '../comparison-notes-model';
 import type {ComparisonNoteRecord} from '../../shared/change-notes';
-import {NoteFilterButton,type NoteFilter} from './note-filter';
+import {ChangeFileFilterControls} from './change-file-filter';
+import {useChangeFileFilter} from '../use-change-file-filter';
+import type {NoteScope} from '../use-change-notes';
 import {ComparisonCommitRow} from "./comparison-commit-row";
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useMemo,useRef,useState} from 'react';
 import {useQuery} from '@tanstack/react-query';
 import {ActivityIndicator,Platform,Pressable,Text,View,useWindowDimensions} from 'react-native';
 import {TextInput,ScrollView,Icon,copyText} from '../native-components';
@@ -39,9 +41,8 @@ export function RepositoryCompare(props:Props){
  const [noteSearch,setNoteSearch]=useState(''),[requestCopy,setRequestCopy]=useState('');
  const catalog=useComparisonNotes(project,workspaceId,repo.repoPath,'',foreground);
  const searchedCatalog=useComparisonNotes(project,workspaceId,repo.repoPath,noteSearch,foreground&&overlay==='notes');
- const [noteFilter,setNoteFilter]=useState<NoteFilter>('all');
  const [side,setSide]=useState<'files'|'from'|'to'>('files'),[offset,setOffset]=useState(0),[selected,setSelected]=useState(''),[selectedCommit,setSelectedCommit]=useState('');
- const [searchOpen,setSearchOpen]=useState(false),[filter,setFilter]=useState(''),[treeMode,setTreeMode]=useState<'tree'|'files'>('files');
+ const [treeMode,setTreeMode]=useState<'tree'|'files'>('files');
  useObservationVersions(project,[workspaceId],foreground);
  const query=(action:string,comparison:unknown,enabled:boolean,extra:Record<string,unknown>={})=>({
    queryKey:['workspace-workbench',project,'repository-compare',workspaceId,repo.repoPath,action,comparison,extra],
@@ -63,6 +64,8 @@ export function RepositoryCompare(props:Props){
  const numbers=result(counts.data),history=result(commits.data),fetchState=refData?.fetch;
  const detailCommit=history?.commits?.find(commit=>commit.sha===detailSha);
  const files=result(stats.data)||data,commitData=result(commitFiles.data);
+ const fileScope=useMemo<NoteScope>(()=>({projectConfig:project,workspaceId,repoPath:repo.repoPath,scope:selectedCommit?'commit':'compare',commitSha:selectedCommit||undefined,comparison:selectedCommit?undefined:data?.comparison,noteComparisonId:selectedCommit?undefined:shownRecord?.id}),[project,workspaceId,repo.repoPath,selectedCommit,data?.comparison,shownRecord?.id]);
+ const fileFilter=useChangeFileFilter(fileScope,(selectedCommit?commitData:files)?.files,foreground&&!!(selectedCommit?commitData:files));
  const error=fileQuery.data?.error?.message||fileQuery.error?.message||commitFiles.data?.error?.message||commits.data?.error?.message||counts.data?.error?.message||stats.data?.error?.message||refs.data?.error?.message||fetchError||fetchState?.error;
  const pending=foreground&&fileQuery.isFetching;
  const label={color:theme.colors.foreground,fontSize:12},muted={color:theme.colors.foregroundMuted,fontSize:11};
@@ -88,7 +91,6 @@ export function RepositoryCompare(props:Props){
    if(!data)return;setSelected(file.path);
    openFileReview({kind:commit?'file':'comparison',workspaceInstance:data.workspaceInstance,projectConfig:project,workspaceId,repoPath:repo.repoPath,path:file.path,changeNoteId:file.changeNoteId,oldPath:file.oldPath,scope:commit?'commit':'compare',commitSha:commit,comparison:commit?undefined:data.comparison,branch:repo.branch,baseSha:data.comparison.leftSha,head:data.comparison.toSha,status:file.status,statusLabel:file.statusLabel},{hostWorkspaceId:props.hostWorkspaceId,agentId:props.agentId,directory:props.directory,panelId:props.agentId?'workspace-workbench-file-agent':'workspace-workbench-file'});
  }
- const filtered=files&&{...files,files:files.files.filter(file=>`${file.path} ${file.oldPath||''}`.toLowerCase().includes(filter.toLowerCase()))};
  return <View ref={root} testID="comparison-sidebar" style={{flex:1,minHeight:0}} onLayout={event=>setWidth(event.nativeEvent.layout.width)}>
    <View testID="comparison-controls">
      <View style={inlineRow}>
@@ -107,19 +109,16 @@ export function RepositoryCompare(props:Props){
      </View>
      <View style={[inlineRow,{borderBottomColor:theme.colors.border,borderBottomWidth:1}]}>
        {selectedCommit?<><IconButton label="返回比较结果" icon="ArrowLeft" color={accent} onPress={()=>setSelectedCommit('')}/><Text style={[label,{flex:1}]}>{selectedCommit.slice(0,8)}</Text></>:<View style={{flex:1,minWidth:0,flexDirection:'row',height:rowHeight}}>{(['files','to','from'] as const).map(value=>{
-         const text=value==='files'?`文件 ${data?.files.length??'—'}`:`${value==='to'?'当前':'起点'}${width>=380?'独有':''} ${value==='to'?numbers?.toOnly??'—':numbers?.fromOnly??'—'}`;
+         const text=value==='files'?'文件':`${value==='to'?'当前':'起点'}${width>=380?'独有':''} ${value==='to'?numbers?.toOnly??'—':numbers?.fromOnly??'—'}`;
          return <Pressable key={value} accessibilityRole="tab" accessibilityLabel={value==='files'?'比较文件':value==='to'?'当前独有提交':'起点独有提交'} accessibilityState={{selected:side===value}} onPress={()=>{setSide(value);setOffset(0);}} style={{flex:1,minWidth:0,justifyContent:'center',borderBottomWidth:2,borderBottomColor:side===value?accent:'transparent',paddingHorizontal:2}}><Text numberOfLines={fontScale>1.3?2:1} style={{...label,fontSize:11,color:side===value?theme.colors.foreground:theme.colors.foregroundMuted}}>{text}</Text></Pressable>;
        })}</View>}
-       {side==='files'?<NoteFilterButton value={noteFilter} onChange={setNoteFilter} theme={theme}/>:null}
-       {side==='files'&&!selectedCommit?<IconButton label={searchOpen?'关闭文件搜索':'搜索变化文件'} icon={searchOpen?'X':'Search'} active={searchOpen} color={theme.colors.foregroundMuted} onPress={()=>{setSearchOpen(value=>!value);setFilter('');}}/>:null}
-       {width>=360&&side==='files'&&!selectedCommit?<IconButton label={treeMode==='tree'?'切换平铺列表':'切换目录树'} icon={treeMode==='tree'?'List':'FolderTree'} color={theme.colors.foregroundMuted} onPress={()=>setTreeMode(value=>value==='tree'?'files':'tree')}/>:null}
+       {side==='files'||selectedCommit?<ChangeFileFilterControls filter={fileFilter} theme={theme} boundsRef={root} mode={treeMode} onMode={setTreeMode}/>:null}
      </View>
-     {searchOpen&&side==='files'&&!selectedCommit?<TextInput accessibilityLabel="搜索变化文件" placeholder="搜索变化文件…" value={filter} onChangeText={setFilter} style={[styles.targetInput,{flex:0,height:rowHeight,minHeight:rowHeight,maxHeight:rowHeight}]}/>:null}
    </View>
    <View testID="comparison-results" style={{flex:1,minHeight:72}} onLayout={event=>setHeight(event.nativeEvent.layout.height)}>
-     <View style={side==='files'&&!selectedCommit?{flex:1,minHeight:0}:{display:'none'}}><ChangedTree noteFilter={noteFilter} noteScope={{projectConfig:project,workspaceId,repoPath:repo.repoPath,scope:"compare",comparison:data?.comparison,noteComparisonId:shownRecord?.id}} fill hideHeader changes={filtered||null} loading={!data&&pending} refreshing={false} error={null} stale={false} mode={treeMode} onMode={setTreeMode} scope="branch" selectedCommit="" selectedFile={selected} onSelectFile={file=>openFile(file)} onLayout={()=>{}} sectionLayout={{collapsed:false,height:null}} availableHeight={height} onSectionToggle={()=>{}} onOpenLayoutMenu={()=>open('menu')} theme={theme} styles={styles}/></View>
+     <View style={side==='files'&&!selectedCommit?{flex:1,minHeight:0}:{display:'none'}}><ChangedTree filter={fileFilter} noteScope={{projectConfig:project,workspaceId,repoPath:repo.repoPath,scope:"compare",comparison:data?.comparison,noteComparisonId:shownRecord?.id}} fill hideHeader changes={files||null} loading={!data&&pending} refreshing={false} error={null} stale={false} mode={treeMode} onMode={setTreeMode} scope="branch" selectedCommit="" selectedFile={selected} onSelectFile={file=>openFile(file)} onLayout={()=>{}} sectionLayout={{collapsed:false,height:null}} availableHeight={height} onSectionToggle={()=>{}} onOpenLayoutMenu={()=>open('menu')} theme={theme} styles={styles}/></View>
      <View style={side!=='files'&&!selectedCommit?{flex:1,minHeight:0}:{display:'none'}}><ScrollView style={{flex:1}}>{commits.isFetching&&!history?<ActivityIndicator color={accent}/>:null}{history?.commits?.map(commit=><ComparisonCommitRow key={commit.sha} commit={commit} selected={lastOpenedCommit===commit.sha} onSelect={()=>{setLastOpenedCommit(commit.sha);setSelectedCommit(commit.sha);}} onDetails={()=>{setDetailSha(commit.sha);open('commit-detail');}} theme={theme}/>)}{history&&!history.commits?.length?<Text style={muted}>没有独有提交</Text>:null}<View style={inlineRow}>{(history?.offset||0)>0?menuRow('上一页',()=>setOffset(value=>Math.max(0,value-50)),'ChevronLeft',commits.isFetching):null}{history?.hasMore?menuRow('下一页',()=>setOffset(value=>value+50),'ChevronRight',commits.isFetching):null}</View></ScrollView></View>
-     {selectedCommit?<ChangedTree noteFilter={noteFilter} noteScope={{projectConfig:project,workspaceId,repoPath:repo.repoPath,scope:"commit",commitSha:selectedCommit}} key={selectedCommit} fill hideHeader changes={commitData||null} loading={!commitData&&commitFiles.isFetching} refreshing={false} error={null} stale={false} mode={treeMode} onMode={setTreeMode} scope="branch" selectedCommit={selectedCommit} selectedFile={selected} onSelectFile={file=>openFile(file,selectedCommit)} onLayout={()=>{}} sectionLayout={{collapsed:false,height:null}} availableHeight={height} onSectionToggle={()=>{}} onOpenLayoutMenu={()=>open('menu')} theme={theme} styles={styles}/>:null}
+     {selectedCommit?<ChangedTree filter={fileFilter} noteScope={{projectConfig:project,workspaceId,repoPath:repo.repoPath,scope:"commit",commitSha:selectedCommit}} key={selectedCommit} fill hideHeader changes={commitData||null} loading={!commitData&&commitFiles.isFetching} refreshing={false} error={null} stale={false} mode={treeMode} onMode={setTreeMode} scope="branch" selectedCommit={selectedCommit} selectedFile={selected} onSelectFile={file=>openFile(file,selectedCommit)} onLayout={()=>{}} sectionLayout={{collapsed:false,height:null}} availableHeight={height} onSectionToggle={()=>{}} onOpenLayoutMenu={()=>open('menu')} theme={theme} styles={styles}/>:null}
    </View>
    {overlay?<ComparisonPopover title={overlay==='notes'?'比较说明':overlay==='commit-detail'?'提交详情':overlay==='menu'?'比较设置':overlay==='repositories'?'选择仓库':overlay==='from'?'选择起点':'选择终点'} theme={theme} anchor={anchor} onClose={()=>setOverlay(null)}>
      {overlay==='notes'?<ComparisonNoteDirectory project={project} workspaceId={workspaceId} repoPath={repo.repoPath} theme={theme} catalog={searchedCatalog} search={noteSearch} onSearch={setNoteSearch} onSelect={selectRecord} requestText={requestText} refs={items} head={repo.head}/>:overlay==='commit-detail'?<><Text selectable style={{color:theme.colors.foreground,fontSize:14,lineHeight:21,marginVertical:8}}>{detailCommit?.subject}</Text><Text selectable style={{...muted,fontFamily:'monospace'}}>{detailSha}</Text>{menuRow('查看此次修改',()=>{setOverlay(null);setLastOpenedCommit(detailSha);setSelectedCommit(detailSha);},'List',!detailCommit)}</>:overlay==='from'||overlay==='to'?<>

@@ -1,4 +1,15 @@
 import type { TreeRow } from './model.ts';
+export function anchoredRowOffset(before: readonly string[], beforeOffsets: readonly number[], after: readonly string[], afterOffsets: readonly number[], offset: number): number {
+  let index=0;
+  while(index+1<before.length&&beforeOffsets[index+1]<=offset)index++;
+  const positions=new Map(after.map((key,i)=>[key,i]));
+  for(let i=index;i<before.length;i++){
+    const at=positions.get(before[i]);
+    if(at!==undefined)return Math.max(0,afterOffsets[at]+(i===index?offset-beforeOffsets[i]:0));
+  }
+  for(let i=index-1;i>=0;i--){const at=positions.get(before[i]);if(at!==undefined)return afterOffsets[at];}
+  return 0;
+}
 /** Existing web row heights, with ten rows of overscan and no style changes. */
 export function changeRowOffsets(rows: readonly TreeRow[]): number[] {
   const offsets = [0];

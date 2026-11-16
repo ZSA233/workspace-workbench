@@ -101,7 +101,7 @@ export function FlatList<Item>(props: FlatListProps<Item> & { ref?: Ref<NativeFl
     : renderComponent(null, NativeFlatList, props);
 }
 
-export function TextInput(props: TextInputProps) {
+export function TextInput(props: TextInputProps & { ref?: Ref<NativeTextInput> }) {
   const colors=useWorkbenchThemeColors();
   const themedProps={...props,style:[{color:colors.foreground},props.style],placeholderTextColor:props.placeholderTextColor??colors.foregroundMuted};
   if (Platform.OS !== "web") reportNativeSelection("TextInput", "react-native");

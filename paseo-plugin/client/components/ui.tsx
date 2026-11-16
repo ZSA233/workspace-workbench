@@ -11,6 +11,7 @@ export { compactRefLabel,repositoryBranchLabel,repositoryCurrentRefDetail,reposi
 
 import { type ObserverResponse } from "../../shared/observer";
 import { anchoredOffset } from '../graph/continuity';
+import { anchoredRowOffset } from '../change-list-window';
 import { GRAPH_ROW_HEIGHT } from "../graph/constants";
 import { useWorkbenchCopy } from "../i18n";
 import {
@@ -288,7 +289,7 @@ export function SectionViewport({
   children,
 }: {
   fill?: boolean;
-  scrollAnchor?: { identity: string; keys: string[]; rowHeight: number };
+  scrollAnchor?: { identity: string; keys: string[]; rowHeight: number; offsets?: number[] };
   windowed?: boolean;
   onScroll?: ScrollViewProps["onScroll"];
   id: ObserverSectionId;
@@ -310,8 +311,9 @@ export function SectionViewport({
     const before = previousAnchor.current;
     previousAnchor.current = scrollAnchor;
     if (!scrollAnchor || !before) return;
-    const offset = before.identity === scrollAnchor.identity
-      ? anchoredOffset(before.keys, scrollAnchor.keys, scrollOffset.current, scrollAnchor.rowHeight) : 0;
+    const offset = before.identity !== scrollAnchor.identity ? 0 : before.offsets && scrollAnchor.offsets
+      ? anchoredRowOffset(before.keys,before.offsets,scrollAnchor.keys,scrollAnchor.offsets,scrollOffset.current)
+      : anchoredOffset(before.keys, scrollAnchor.keys, scrollOffset.current, scrollAnchor.rowHeight);
     scrollOffset.current = offset;
     scrollRef.current?.scrollTo({ y: offset, animated: false });
   }, [scrollAnchor]);

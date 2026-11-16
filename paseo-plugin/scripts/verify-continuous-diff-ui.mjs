@@ -10,6 +10,7 @@ import {chromium} from 'playwright';
 import {DaemonClient} from '@getpaseo/client/internal/daemon-client';
 import WebSocket from 'ws';
 import {backendRequest} from '../server/backend-supervisor.ts';
+import {openIsolatedWorkbench,openGlobalWorkbench} from './ui-project-selection.mjs';
 const output=process.env.WORKBENCH_VERIFY_OUTPUT || '/tmp/workbench-continuous-ui';mkdirSync(output,{recursive:true});
 const host=spawn(process.execPath,[join(import.meta.dirname,'verify-live.mjs')],{env:{...process.env,WORKBENCH_LIVE_UI:'1'},detached:process.platform!=='win32',stdio:['ignore','pipe','pipe']});
 let logs='',ui,client,browser,page;const exited=new Promise(r=>host.once('exit',r));host.stderr.on('data',x=>logs+=x);
@@ -29,7 +30,7 @@ try{
  const scope={workspaceId:'main',repoPath:'one',scope:'compare',comparison:{fromRef:base,toRef:head},paths:['alpha.go','beta.ts']};
  const snapshot=(await call('workbench_change_notes_read',scope)).snapshot;
  await call('workbench_change_notes_write',{workspaceId:'main',repoPath:'one',batch:{requestId:'continuous-notes',snapshotId:snapshot.id,operations:[{id:'context-note',expectedRevision:0,action:'upsert',content:{title:'Hidden context explanation',reason:'Retain the surrounding behavior while changing the default',behavior:'Default becomes two',basis:'requirement',requirement:'Sample requirement',perspective:'implementer',anchors:[{path:'alpha.go',side:'new',start:190,end:190},{path:'beta.ts',side:'new',start:1,end:1}]}}]}});
- browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1600,height:1050},permissions:['clipboard-read','clipboard-write']});page=await context.newPage();await page.addInitScript(()=>{window.__commits=0;window.__REACT_DEVTOOLS_GLOBAL_HOOK__={supportsFiber:true,inject:()=>1,onCommitFiberRoot:()=>window.__commits++,onCommitFiberUnmount:()=>{}};});page.on('pageerror',e=>report.pageErrors.push(e.message));page.on('console',e=>{if(e.type()==='error'&&!e.text().startsWith('workbench_client_diagnostic '))report.consoleErrors.push(e.text());});await page.emulateMedia({colorScheme:'dark'});
+ browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});const context=await browser.newContext({viewport:{width:1600,height:1050},permissions:['clipboard-read','clipboard-write']});page=await context.newPage();await page.addInitScript(()=>{window.__commits=0;window.__REACT_DEVTOOLS_GLOBAL_HOOK__={supportsFiber:true,inject:()=>1,onCommitFiberRoot:()=>window.__commits++,onCommitFiberUnmount:()=>{}};});page.on('pageerror',e=>report.pageErrors.push(e.message));page.on('console',e=>{if(e.type()==='error'&&!e.text().startsWith('workbench_client_diagnostic '))report.consoleErrors.push(e.text());});await page.emulateMedia({colorScheme:'dark'});
  const requests=report.requests=[],statuses=report.readStatuses=[],activeReads=new Set();let holdPath='',held=[],heldReady,failPath='later-22.txt';report.maxConcurrentReads=0;
  await page.routeWebSocket('**/*',socket=>{const server=socket.connectToServer();socket.onMessage(message=>{
   try{const walk=o=>{if(!o||typeof o!=='object')return;if(o.method==='repository.diff.read'){
@@ -45,8 +46,15 @@ try{
    }for(const child of Object.values(o))walk(child);};walk(parsed);
   }catch{}const send=()=>{for(const id of completed)activeReads.delete(id);socket.send(changed?JSON.stringify(parsed):message);};if(hold){held.push(send);heldReady?.();}else send();
  });});
- await page.goto(ui.url);await page.getByRole('button',{name:'a',exact:true}).click();await page.getByRole('button',{name:'Open Workspace Workbench',exact:true}).click();await page.getByTestId('workbench-graph-content').waitFor({timeout:30000});await page.getByRole('button',{name:'比较仓库',exact:true}).click();await page.getByLabel('搜索引用或输入提交 SHA',{exact:true}).fill(base);await page.getByRole('button',{name:'使用此引用',exact:true}).click();const sidebar=page.getByTestId('comparison-sidebar');await sidebar.getByText('alpha.go',{exact:true}).waitFor();
- const started=Date.now();await sidebar.getByText('alpha.go',{exact:true}).click();const panel=page.getByTestId('workbench-diff-panel');await panel.getByRole('tab',{name:'整组差异',exact:true}).waitFor({timeout:30000});await panel.getByTestId('diff-code-unified').filter({hasText:'requested'}).waitFor({timeout:30000});report.firstScreenMs=Date.now()-started;
+ await openIsolatedWorkbench(page,ui.url,'a');await page.getByTestId('workbench-graph-content').waitFor({timeout:30000});await page.getByRole('button',{name:'比较仓库',exact:true}).click();await page.getByLabel('搜索引用或输入提交 SHA',{exact:true}).fill(base);await page.getByRole('button',{name:'使用此引用',exact:true}).click();const sidebar=page.getByTestId('comparison-sidebar');const ensureSidebar=async()=>{
+  if(await sidebar.isVisible())return;await openGlobalWorkbench(page,'a');if(await sidebar.isVisible())return;
+  await page.getByTestId('workbench-graph-content').waitFor();await page.getByRole('button',{name:'比较仓库',exact:true}).click();
+  const reference=page.getByLabel('搜索引用或输入提交 SHA',{exact:true});
+  if(!await reference.isVisible())await page.getByTestId('comparison-from').click();
+  await reference.fill(base);await page.getByRole('button',{name:'使用此引用',exact:true}).click();
+  await sidebar.getByText('alpha.go',{exact:true}).waitFor();
+ };const selectFile=async path=>{await ensureSidebar();await sidebar.getByText(path,{exact:true}).click();};await sidebar.getByText('alpha.go',{exact:true}).waitFor();
+ const started=Date.now();await selectFile('alpha.go');const panel=page.getByTestId('workbench-diff-panel');await panel.getByRole('tab',{name:'整组差异',exact:true}).waitFor({timeout:30000});await panel.getByTestId('diff-code-unified').filter({hasText:'requested'}).waitFor({timeout:30000});report.firstScreenMs=Date.now()-started;
  assert.equal(await panel.getByTestId('workbench-diff-lines').count(),1);assert.ok(!requests.some(r=>r.path==='later-24.txt'),'offscreen tail must not be prefetched');await page.screenshot({path:join(output,'initial.png')});
  const frames=()=>page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
  // A directory jump expands only the hidden note location from the canonical patch.
@@ -56,24 +64,24 @@ try{
  const expandStarted=Date.now();await panel.getByRole('button',{name:'向前展开 20 行',exact:true}).first().click();await panel.getByTestId('diff-code-unified').filter({hasText:'source context 230'}).waitFor();await frames();const after=(await code.boundingBox()).y;report.expandMs=Date.now()-expandStarted;report.anchorDelta=after-before;assert.ok(Math.abs(after-before)<=2,`Expansion moved the code by ${after-before}px`);
 
  await panel.getByTestId('comparison-sticky-file').getByRole('button',{name:'文件设置 alpha.go',exact:true}).click();await page.getByRole('button',{name:'展开全部上下文',exact:true}).click();await panel.getByTestId('diff-code-unified').filter({hasText:'source context 249'}).waitFor();await panel.getByTestId('comparison-sticky-file').getByTestId('comparison-context-loading').waitFor();await panel.getByTestId('comparison-sticky-file').getByTestId('comparison-context-loading').waitFor({state:'hidden'});await frames();report.contextRequests=requests.filter(r=>r.readKind==='context').length;report.expandedDocumentHeight=await panel.getByTestId('workbench-diff-lines').evaluate(n=>n.scrollHeight);assert.ok(report.expandedDocumentHeight>11000,`Whole-file expansion incomplete: ${report.expandedDocumentHeight}`);
- await sidebar.getByText('beta.ts',{exact:true}).click();await panel.getByTestId('comparison-sticky-file').filter({hasText:'beta.ts'}).waitFor();await panel.getByTestId('diff-code-unified').filter({hasText:'export const count'}).first().waitFor();assert.equal(await panel.getByRole('tab',{name:'整组差异',exact:true}).count(),1);
+ await selectFile('beta.ts');await panel.getByTestId('comparison-sticky-file').filter({hasText:'beta.ts'}).waitFor();await panel.getByTestId('diff-code-unified').filter({hasText:'export const count'}).first().waitFor();assert.equal(await panel.getByRole('tab',{name:'整组差异',exact:true}).count(),1);
  await panel.getByTestId('comparison-sticky-file').getByRole('button',{name:'单独打开 beta.ts',exact:true}).click();await panel.getByRole('tab',{name:'beta.ts',exact:true}).waitFor();await panel.getByRole('tab',{name:'整组差异',exact:true}).click();await panel.getByTestId('comparison-sticky-file').filter({hasText:'beta.ts'}).waitFor();
  report.cacheSwitchMs=[];
  for(let i=0;i<10;i++){await panel.getByRole('tab',{name:'beta.ts',exact:true}).click();const start=Date.now();await panel.getByRole('tab',{name:'整组差异',exact:true}).click();await panel.getByTestId('comparison-sticky-file').filter({hasText:'beta.ts'}).waitFor();report.cacheSwitchMs.push(Date.now()-start);}
  report.cacheSwitchP95Ms=report.cacheSwitchMs.slice().sort((a,b)=>a-b)[Math.ceil(report.cacheSwitchMs.length*.95)-1];
  report.checks.push('Compare opens one continuous tab; file selection jumps within it; a separate file tab reuses the existing viewer');
- await sidebar.getByText('alpha.go',{exact:true}).click();await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
+ await selectFile('alpha.go');await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
  await panel.getByRole('button',{name:/Change explanations 1|改动说明 1/}).first().click();await page.getByTestId('change-notes-popover').getByRole('button',{name:'Hidden context explanation',exact:true}).click();await page.getByTestId('change-note-card').waitFor();await page.getByRole('button',{name:/Close explanation|关闭说明/}).last().click();
  await panel.getByRole('button',{name:/Change explanations 1|改动说明 1/}).first().click();await page.getByTestId('change-notes-popover').getByRole('button',{name:'Hidden context explanation',exact:true}).click();await page.getByTestId('change-note-card').getByRole('button',{name:'Details',exact:true}).click();await page.getByTestId('change-note-card').getByRole('button',{name:'beta.ts · new 1–1',exact:true}).click();await panel.getByTestId('comparison-sticky-file').filter({hasText:'beta.ts'}).waitFor();await page.getByTestId('change-note-card').waitFor();await page.getByRole('button',{name:/Close explanation|关闭说明/}).last().click();
- await sidebar.getByText('alpha.go',{exact:true}).click();await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
+ await selectFile('alpha.go');await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
  await page.screenshot({path:join(output,'context-and-notes.png')});await panel.getByTestId('comparison-sticky-file').getByRole('button',{name:'文件设置 alpha.go',exact:true}).click();await page.getByRole('button',{name:'收起上下文',exact:true}).click();
- for(const theme of ['dark','light']){await page.emulateMedia({colorScheme:theme});if(theme==='light'){await page.getByTestId('workbench-graph-content').waitFor();await page.getByRole('button',{name:'比较仓库',exact:true}).click();await page.getByLabel('搜索引用或输入提交 SHA',{exact:true}).fill(base);await page.getByRole('button',{name:'使用此引用',exact:true}).click();await sidebar.getByText('alpha.go',{exact:true}).click();}
+ for(const theme of ['dark','light']){await page.emulateMedia({colorScheme:theme});if(theme==='light'){await openGlobalWorkbench(page,'a');await page.getByTestId('workbench-graph-content').waitFor();await page.getByRole('button',{name:'比较仓库',exact:true}).click();await page.getByLabel('搜索引用或输入提交 SHA',{exact:true}).fill(base);await page.getByRole('button',{name:'使用此引用',exact:true}).click();await selectFile('alpha.go');}
   await panel.getByTestId('diff-code-unified').filter({hasText:'requested'}).waitFor();await frames();await page.screenshot({path:join(output,`${theme}-wide.png`)});
  }
 
  // A held, offscreen file cannot take over a later selection; a failed file is local.
  holdPath='later-24.txt';const blocked=new Promise(resolve=>heldReady=resolve);
- await sidebar.getByText(holdPath,{exact:true}).click();await blocked;
+ await selectFile(holdPath);await blocked;
  if(process.env.WORKBENCH_VERIFY_RAIL==='1'){
   const rail=panel.getByTestId('diff-overview-rail'),r=await rail.boundingBox(),t=await panel.getByTestId('diff-overview-thumb').boundingBox();await page.mouse.move(r.x+r.width-4,t.y+t.height/2);await page.mouse.down();await page.mouse.move(r.x+r.width-4,t.y+t.height/2-20,{steps:3});
   const frozenHeight=await panel.getByTestId('workbench-diff-lines').evaluate(n=>n.scrollHeight),commits=await page.evaluate(()=>window.__commits);
@@ -81,14 +89,25 @@ try{
   await page.waitForFunction(before=>document.querySelector('[data-testid="workbench-diff-lines"]').scrollHeight>before+1000,frozenHeight);report.checks.push('A delayed body arriving during rail drag is published after release; drag mapping stays fixed');
  }
 
- await sidebar.getByText('alpha.go',{exact:true}).click();await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
+ await selectFile('alpha.go');await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
  holdPath='';for(const send of held)send();held=[];await frames();await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
- await sidebar.getByText('later-22.txt',{exact:true}).click();await panel.getByText('Sample file unavailable · 重试',{exact:true}).waitFor();
- await sidebar.getByText('beta.ts',{exact:true}).click();await panel.getByTestId('diff-code-unified').filter({hasText:'export const count'}).first().waitFor();
- failPath='';await sidebar.getByText('later-22.txt',{exact:true}).click();await panel.getByRole('button',{name:'Sample file unavailable · 重试',exact:true}).click();await page.waitForFunction(()=>{const file=document.querySelector('[data-testid="comparison-file-later-22.txt"]'),list=document.querySelector('[data-testid="workbench-diff-lines"]');if(!file||!list)return false;const a=file.getBoundingClientRect(),b=list.getBoundingClientRect();return a.top>=b.top&&a.bottom<=b.bottom;});await panel.getByTestId('diff-code-unified').filter({hasText:'later sample'}).first().waitFor();
- await sidebar.getByText('alpha.go',{exact:true}).click();await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
+ await selectFile('later-22.txt');await panel.getByText('Sample file unavailable · 重试',{exact:true}).waitFor();
+ await selectFile('beta.ts');await panel.getByTestId('diff-code-unified').filter({hasText:'export const count'}).first().waitFor();
+ failPath='';await selectFile('later-22.txt');await panel.getByRole('button',{name:'Sample file unavailable · 重试',exact:true}).click();await page.waitForFunction(()=>{const file=document.querySelector('[data-testid="comparison-file-later-22.txt"]'),list=document.querySelector('[data-testid="workbench-diff-lines"]');if(!file||!list)return false;const a=file.getBoundingClientRect(),b=list.getBoundingClientRect();return a.top>=b.top&&a.bottom<=b.bottom;});await panel.getByTestId('diff-code-unified').filter({hasText:'later sample'}).first().waitFor();
+ await selectFile('alpha.go');await panel.getByTestId('comparison-sticky-file').filter({hasText:'alpha.go'}).waitFor();
 
- await sidebar.getByRole('button',{name:'搜索变化文件',exact:true}).click();await sidebar.getByRole('textbox',{name:'搜索变化文件',exact:true}).fill('alpha');assert.equal(await sidebar.getByText('beta.ts',{exact:true}).count(),0);assert.match(await panel.getByTestId('diff-hunk-count').innerText(),/\/28/);await sidebar.getByRole('button',{name:'关闭文件搜索',exact:true}).click();
+ await ensureSidebar();await sidebar.getByRole('button',{name:/^(File filters|文件筛选)$/}).click();
+ const fileFilters=page.getByTestId('change-file-filter-popover');
+ await fileFilters.getByRole('textbox',{name:/^(Include paths|包含路径)$/}).fill('alpha');
+ await page.keyboard.press('Escape');assert.equal(await sidebar.getByText('beta.ts',{exact:true}).count(),0);
+ await page.waitForFunction(()=>document.querySelector('[data-testid="diff-hunk-count"]')?.textContent.startsWith('1/1'));
+ await sidebar.getByRole('button',{name:/^(File filters|文件筛选)$/}).click();await fileFilters.getByRole('textbox',{name:/^(Include paths|包含路径)$/}).fill('');
+ await fileFilters.getByRole('button',{name:/^(Choose explanation status|选择说明状态)$/}).click();await fileFilters.getByRole('radio',{name:/^(With explanations|有说明)$/}).click();
+ await page.keyboard.press('Escape');await page.waitForFunction(()=>/^[12]\/2/.test(document.querySelector('[data-testid="diff-hunk-count"]')?.textContent||''));
+ assert.equal(await sidebar.getByText('gamma.json',{exact:true}).count(),0);
+ await sidebar.getByRole('button',{name:/^(File filters|文件筛选)$/}).click();await fileFilters.getByRole('button',{name:/^(Reset|重置)$/}).click();await page.keyboard.press('Escape');
+ await page.waitForFunction(()=>/\/28(?:\s|$)/.test(document.querySelector('[data-testid="diff-hunk-count"]')?.textContent||''));
+ report.checks.push('Path and explanation filters apply to both sidebar and continuous reading without changing the fixed comparison');await selectFile('alpha.go');
  await panel.getByTestId('comparison-sticky-file').getByRole('button',{name:'折叠 alpha.go',exact:true}).click();assert.equal(await panel.getByTestId('diff-code-unified').filter({hasText:'requested'}).count(),0);await panel.getByTestId('comparison-file-alpha.go').getByRole('button',{name:'展开 alpha.go',exact:true}).press('Enter');await panel.getByTestId('diff-code-unified').filter({hasText:'requested'}).waitFor();
  report.checks.push('Offscreen reads are bounded; delayed results do not steal selection; one file failure and retry preserve the rest');
  report.layouts=[];

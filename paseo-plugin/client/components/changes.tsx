@@ -1,19 +1,19 @@
 import {ComparisonPopover,type PopoverAnchor} from './comparison-popover';
 import {noteNeedsConfirmation} from '../change-notes-model';
-import {useChangeNotes,noteCurrent,type NoteScope} from '../use-change-notes';
-import {NoteFilterButton,type NoteFilter} from './note-filter';
+import type {NoteScope} from '../use-change-notes';
+import {useChangeFileFilter,type ChangeFileFilter} from '../use-change-file-filter';
+import type {FileClassification} from '../../shared/change-file-filter';
+import {ChangeFileFilterControls} from './change-file-filter';
 import {
 type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { useEffect,useMemo,useState,useRef } from "react";
 import { Platform,Pressable,Text,View,type ViewStyle } from "react-native";
-import { formatCopyFrom } from "../../shared/copy";
 import { changeListWindow,changeRowOffsets } from "../change-list-window.ts";
 import { useWorkbenchCopy,useWorkbenchLocale } from "../i18n";
 import { Icon } from "../native-components";
 import { observerAccent } from "../theme";
-import { IconButton } from "./icon-button";
 import { ObservationIndicator } from './observation-indicator';
 
 import {
@@ -35,8 +35,26 @@ type ChangeTreeMode = "tree" | "files";
 
 
 
-export function ChangedTree({
-  noteScope,noteFilter,
+export function ChangedTree(props: ChangedTreeProps) {
+  return props.filter ? <FilteredChangedTree {...props} filter={props.filter}/> : <LocalChangedTree {...props}/>;
+}
+function LocalChangedTree(props: ChangedTreeProps) {
+  const filter = useChangeFileFilter(props.noteScope, props.changes?.files, !!props.changes);
+  return <FilteredChangedTree {...props} filter={filter}/>;
+}
+type ChangedTreeProps = {
+  noteScope?: NoteScope; filter?: ChangeFileFilter;
+  fill?: boolean; title?: string; hideHeader?: boolean;
+  changes: ChangesResult | null; loading: boolean; refreshing: boolean; error: string | null;
+  lastSuccessfulAt?: string | null; stale: boolean; mode: ChangeTreeMode;
+  onMode: (mode: ChangeTreeMode) => void; scope: Exclude<ChangeScope, 'commit'>;
+  selectedCommit: string; selectedFile: string; onSelectFile: (file: FileChange) => void;
+  onLayout: (offset: number) => void; sectionLayout: SectionLayoutPreference; availableHeight: number;
+  onSectionToggle: (collapsed: boolean) => void; onOpenLayoutMenu: () => void;
+  theme: PanelProps['theme']; styles: ReturnType<typeof makeStyles>;
+};
+function FilteredChangedTree({
+  noteScope,filter,
   fill, title, hideHeader=false,
   changes,
   loading,
@@ -58,40 +76,15 @@ export function ChangedTree({
   onOpenLayoutMenu,
   theme,
   styles,
-}: {
-  noteScope?:NoteScope;noteFilter?:NoteFilter;
-  fill?: boolean; title?: string; hideHeader?: boolean;
-  changes: ChangesResult | null;
-  loading: boolean;
-  refreshing: boolean;
-  error: string | null;
-  lastSuccessfulAt?: string | null;
-  stale: boolean;
-  mode: ChangeTreeMode;
-  onMode: (mode: ChangeTreeMode) => void;
-  scope: Exclude<ChangeScope, "commit">;
-  selectedCommit: string;
-  selectedFile: string;
-  onSelectFile: (file: FileChange) => void;
-  onLayout: (offset: number) => void;
-  sectionLayout: SectionLayoutPreference;
-  availableHeight: number;
-  onSectionToggle: (collapsed: boolean) => void;
-
-  onOpenLayoutMenu: () => void;
-  theme: PanelProps["theme"];
-  styles: ReturnType<typeof makeStyles>;
-}) {
+}: ChangedTreeProps & {filter: ChangeFileFilter}) {
   const copy = useWorkbenchCopy(),zh=useWorkbenchLocale()==='zh-CN';
-  const explanations=useChangeNotes(noteScope,!!changes);
+  const root=useRef<any>(null);
+  const {explanations,byPath,valid}=filter;
   const [noteDirectory,setNoteDirectory]=useState<{path:string;anchor:PopoverAnchor}|null>(null);
   useEffect(()=>setNoteDirectory(null),[noteScope?.workspaceId,noteScope?.repoPath,noteScope?.scope,noteScope?.commitSha,noteScope?.comparison]);
-  const [localFilter,setLocalFilter]=useState<NoteFilter>('all');
-  const effectiveFilter=noteFilter||localFilter;
-  const byPath=useMemo(()=>{const index=new Map<string,import('../../shared/change-notes').ChangeNote[]>();for(const note of explanations.data?.notes||[])for(const path of new Set(note.content.anchors.map(a=>a.path))){const entries=index.get(path)||[];entries.push(note);index.set(path,entries);}return index;},[explanations.data]);
+  const effectiveFilter=filter.session.noteFilter;
   const annotations=(path:string)=>byPath.get(path)||[];
-  const valid=(n:import('../../shared/change-notes').ChangeNote)=>!!noteScope&&!!explanations.data&&noteCurrent(n,explanations.data,noteScope);
-  const files = (changes?.files || []).filter(file=>{if(effectiveFilter==='all')return true;if(!explanations.data)return false;const notes=annotations(file.path),current=notes.filter(valid);return effectiveFilter==='has'&&current.length>0||effectiveFilter==='none'&&!current.length||effectiveFilter==='stale'&&notes.some(n=>!valid(n))||effectiveFilter==='pending'&&current.some(n=>!!explanations.data&&noteNeedsConfirmation(n,explanations.data));});
+  const files = filter.files;
   const [scrollTop, setScrollTop] = useState(0);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(defaultExpandedPaths(files, selectedFile));
   useEffect(() => {
@@ -101,6 +94,7 @@ export function ChangedTree({
     ? buildTreeRows(files, expandedPaths, selectedFile)
     : files.slice().sort((a, b) => a.path.localeCompare(b.path)).map((file) => ({ kind: "file" as const, file, depth: 0 })), [files, expandedPaths, selectedFile, mode]);
   const offsets = useMemo(() => changeRowOffsets(rows), [rows]);
+  const scrollAnchor=useMemo(()=>({identity:filter.contextKey,keys:rows.map(row=>row.kind==='directory'?`directory:${row.path}`:`file:${row.file.path}`),rowHeight:30,offsets}),[filter.contextKey,rows,offsets]);
   const windowed = Platform.OS === 'web' && rows.length > 200;
   const window = changeListWindow(offsets, scrollTop, availableHeight, windowed);
 
@@ -115,6 +109,7 @@ export function ChangedTree({
 
   return (
     <View
+      ref={root}
       onLayout={(event) => onLayout(event.nativeEvent.layout.y)}
       style={styles.treeSection}
     >
@@ -132,16 +127,14 @@ export function ChangedTree({
           <ObservationIndicator lastSuccessfulAt={lastSuccessfulAt} hasContent={Boolean(changes)} error={error} loading={loading} refreshing={refreshing} stale={stale} theme={theme} styles={styles} />
         </View>
         <View style={styles.treeHeaderRight}>
-          {noteScope?<NoteFilterButton value={localFilter} onChange={setLocalFilter} theme={theme}/>:null}
-          <Text style={styles.sectionCount}>{loading || !changes ? "…" : formatCopyFrom(copy, "fileCountLabel", [files.length])}</Text>
-          <IconButton label={copy.text_41e5243e2d} icon="FolderTree" active={mode === "tree"} color={mode === "tree" ? theme.colors.accentForeground : theme.colors.foregroundMuted} background={mode === "tree" ? observerAccent(theme) : undefined} onPress={() => onMode("tree")} />
-          <IconButton label={copy.text_49deaf7da2} icon="List" active={mode === "files"} color={mode === "files" ? theme.colors.accentForeground : theme.colors.foregroundMuted} background={mode === "files" ? observerAccent(theme) : undefined} onPress={() => onMode("files")} />
+          <ChangeFileFilterControls filter={filter} theme={theme} boundsRef={root} mode={mode} onMode={onMode} showNotes={!!noteScope}/>
         </View>
       </View>
       :null}
       {!sectionLayout.collapsed ? (
         <SectionViewport
           fill={fill}
+          scrollAnchor={scrollAnchor}
           id="changes"
           windowed={windowed}
           onScroll={event => setScrollTop(event.nativeEvent.contentOffset.y)}
@@ -171,6 +164,8 @@ export function ChangedTree({
               notePending={annotations(row.file.path).some(n=>valid(n)&&!!explanations.data&&noteNeedsConfirmation(n,explanations.data))}
               noteStaleCount={annotations(row.file.path).filter(n=>!valid(n)).length}
               file={row.file}
+              classification={filter.classifications.get(row.file.path)}
+              dimTests={filter.preference.display==='dim'}
               depth={row.depth}
               selected={selectedFile === row.file.path}
               onPress={() => onSelectFile(row.file)}
@@ -180,7 +175,7 @@ export function ChangedTree({
           ))}
 
           {window.after ? <View style={{ height: window.after }} /> : null}
-          {changes && !loading && !error && !files.length && !stale ? <Text style={styles.emptyText}>{effectiveFilter!=='all'?(explanations.error?String(explanations.error.message):!explanations.data?(zh?'说明正在读取':'Loading explanations'):(zh?'没有符合说明筛选的文件':'No files match the explanation filter')):copy.text_5ee36e41d4}</Text> : null}
+          {changes && !loading && !error && !files.length && !stale ? <View><Text style={styles.emptyText}>{effectiveFilter!=='all'&&(explanations.error||!explanations.data)?(explanations.error?String(explanations.error.message):(zh?'说明正在读取':'Loading explanations')):filter.total?(zh?'没有符合筛选条件的文件':'No files match the filters'):copy.text_5ee36e41d4}</Text>{filter.total?<Pressable accessibilityRole="button" onPress={()=>{filter.reset('all');}} style={{paddingVertical:6}}><Text style={{color:observerAccent(theme),fontSize:12}}>{zh?'清除筛选并显示全部':'Clear filters and show all'}</Text></Pressable>:null}</View> : null}
           {visibleIssues(changes?.issues || []).map((issue) => <Text key={`${issue.code}-${issue.path || ""}`} style={styles.warningText}>{issueLabel(issue, copy)}</Text>)}
           </View>
         </SectionViewport>
@@ -219,6 +214,7 @@ export function DirectoryRow({
 export function FileChangeRow({
   noteCount=0,noteStaleCount=0,notePending=false,onNotes,
   file,
+  classification,dimTests=false,
   depth,
   selected,
   onPress,
@@ -227,6 +223,7 @@ export function FileChangeRow({
 }: {
   noteCount?:number;noteStaleCount?:number;notePending?:boolean;onNotes?:(anchor:PopoverAnchor)=>void;
   file: FileChange;
+  classification?: FileClassification; dimTests?: boolean;
   depth: number;
   selected: boolean;
   onPress: () => void;
@@ -234,11 +231,13 @@ export function FileChangeRow({
   styles: ReturnType<typeof makeStyles>;
 }) {
   const noteButton=useRef<any>(null);
+  const zh=useWorkbenchLocale()==='zh-CN';
   const label = file.oldPath ? `${file.path} ← ${file.oldPath}` : file.path;
   return (
-    <Pressable accessibilityRole="button" onPress={onPress} style={[styles.fileRow, selected && styles.fileRowActive, { paddingLeft: 4 + depth * 14 }]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} {...(Platform.OS==='web'?{title:classification?.pattern?`${classification.presetId|| (zh?'项目规则':'Project rule')}: ${classification.pattern}`:label}:{})} onPress={onPress} style={[styles.fileRow, selected && styles.fileRowActive, { paddingLeft: 4 + depth * 14 }]}>
       <Text style={[styles.fileBadge, { color: fileColor(file.status, theme) }]}>{file.status || "M"}</Text>
-      <Text numberOfLines={1} style={styles.filePath}>{label}</Text>
+      <Text numberOfLines={1} style={[styles.filePath,dimTests&&classification?.test&&{color:theme.colors.foregroundMuted}]}>{label}</Text>
+      {classification?.test?<MiniTag label={zh?'测试':'Test'} color={theme.colors.foregroundMuted} styles={styles}/>:null}
       {file.binary ? <MiniTag label="BIN" color={theme.colors.foregroundMuted} styles={styles} /> : null}
       {noteCount+noteStaleCount>0?<Pressable ref={noteButton} accessibilityRole="button" accessibilityLabel={`${file.path}: ${noteCount} explanations, ${noteStaleCount} need update`} onPress={event=>{event.stopPropagation();noteButton.current?.measureInWindow?.((x:number,y:number,width:number,height:number)=>onNotes?.({x,y,width,height}));}} style={{flexDirection:'row',alignItems:'center',gap:3,paddingHorizontal:4,minHeight:Platform.OS==='web'?24:44}}><Icon name={noteStaleCount?'CircleAlert':'MessageSquare'} size={13} color={noteStaleCount?theme.colors.statusWarning:theme.colors.foregroundMuted}/><Text style={{color:theme.colors.foregroundMuted,fontSize:11}}>{noteCount||noteStaleCount}</Text>{notePending?<View style={{width:5,height:5,borderRadius:3,backgroundColor:theme.colors.statusWarning}}/>:null}</Pressable>:null}
       <ChangeCounts additions={file.additions} deletions={file.deletions} styles={styles} />

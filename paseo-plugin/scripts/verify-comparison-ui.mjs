@@ -8,6 +8,7 @@ import {chromium} from 'playwright';
 import {DaemonClient} from '@getpaseo/client/internal/daemon-client';
 import WebSocket from 'ws';
 import {backendRequest} from '../server/backend-supervisor.ts';
+import {openIsolatedWorkbench,openGlobalWorkbench} from './ui-project-selection.mjs';
 const output=process.env.WORKBENCH_VERIFY_OUTPUT || '/tmp/workbench-compact-comparison-ui';mkdirSync(output,{recursive:true});
 const host=spawn(process.execPath,[join(import.meta.dirname,'verify-live.mjs')],{env:{...process.env,WORKBENCH_LIVE_UI:'1'},stdio:['ignore','pipe','pipe']});
 let logs='',ui,client,browser,page;const exited=new Promise(r=>host.once('exit',r));host.stderr.on('data',x=>logs+=x);
@@ -22,15 +23,13 @@ try{
  writeFileSync(join(ui.project,'one','alternate.go'),'package sample\nfunc alternate() int { return 7 }\n');
  for(let i=0;i<30;i++)writeFileSync(join(ui.project,'one',`sample-${String(i).padStart(2,'0')}.txt`),`sample ${i}\n`);
  git('add','compare.go','alternate.go',...Array.from({length:30},(_,i)=>`sample-${String(i).padStart(2,'0')}.txt`));git('commit','-qm','feat: add focused comparison fixtures with readable source changes');for(let i=0;i<8;i++)git('commit','--allow-empty','-qm',i%2?`fix: retain the selected comparison when delayed observations finish after a newer request ${i}`:`修复：后台读取完成后保留当前文件选择，并确保不同提交之间的比较不会互相覆盖 ${i}`);const head=git('rev-parse','HEAD');const longRef='feature/a-long-comparison-reference-for-layout-validation';git('branch',longRef,base);
- browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1600,height:1050}});page.on('pageerror',e=>report.pageErrors.push(e.message));await page.emulateMedia({colorScheme:'dark'});
+ browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});page=await browser.newPage({viewport:{width:1600,height:1050}});page.on('pageerror',e=>report.pageErrors.push(e.message));await page.emulateMedia({colorScheme:'dark'});
  let holdRef='',held=[],notifyHeld;const business=[];
  await page.routeWebSocket('**/*',socket=>{const server=socket.connectToServer();socket.onMessage(message=>{if(String(message).includes('repository.compare'))business.push(String(message));server.send(message);});server.onMessage(message=>{
    let matched=false;try{const inspect=value=>{if(!value||typeof value!=='object')return;if(value.comparison?.fromRef===holdRef&&Array.isArray(value.files))matched=true;for(const child of Object.values(value))inspect(child);};if(holdRef)inspect(JSON.parse(String(message)));}catch{}
    if(matched){held.push(()=>socket.send(message));notifyHeld?.();}else socket.send(message);
  });});
- await page.goto(ui.url);
- await page.getByRole('button',{name:'a',exact:true}).click();
- await page.getByRole('button',{name:'Open Workspace Workbench',exact:true}).click();
+ await openIsolatedWorkbench(page,ui.url,'a');
  await page.getByTestId('workbench-graph-content').waitFor({timeout:30000});
  await page.getByRole('button',{name:'比较仓库',exact:true}).click();
  await page.getByLabel('搜索引用或输入提交 SHA',{exact:true}).fill(base);
@@ -40,7 +39,7 @@ try{
  await page.getByTestId('comparison-to').filter({hasText:head.slice(0,8)}).waitFor();
  const sidebar=page.getByTestId('comparison-sidebar');
  report.controlsHeight=(await page.getByTestId('comparison-controls').boundingBox()).height;assert.ok(report.controlsHeight<=150);
- assert.equal(await page.getByLabel('搜索变化文件',{exact:true}).filter({has:page.locator('input')}).count(),0);
+ assert.equal(await page.getByTestId('change-file-filter-popover').count(),0);
  await page.screenshot({path:join(output,'comparison-sidebar.png')});
  await page.getByRole('tab',{name:'当前独有提交',exact:true}).click();
  const commitRows=page.locator('[data-testid^="comparison-commit-"]').filter({has:page.getByTestId('comparison-commit-subject')});await commitRows.first().waitFor();
@@ -59,15 +58,19 @@ try{
  await page.getByRole('button',{name:'比较设置',exact:true}).click();await page.getByTestId('comparison-popover').waitFor();report.popoverBounds=await page.getByTestId('comparison-popover').boundingBox();report.popoverLayers=await page.getByTestId('comparison-popover').evaluate(node=>{const result=[];while(node){const css=getComputedStyle(node),box=node.getBoundingClientRect();result.push({tag:node.tagName,opacity:css.opacity,z:css.zIndex,position:css.position,x:box.x,y:box.y,width:box.width,height:box.height});node=node.parentElement;}return result;});await page.getByTestId('comparison-popover').screenshot({path:join(output,'popover-detail.png')});await page.screenshot({path:join(output,'comparison-menu.png')});
  await page.getByRole('button',{name:'使用目录树',exact:true}).click();await page.getByRole('button',{name:'使用平铺文件列表',exact:true}).click();
  await page.getByTestId('comparison-popover').getByRole('button',{name:'关闭比较设置',exact:true}).click();await nextFrames();assert.equal(business.length,beforeMenus,'opening menu and switching tree mode do not read Git');
- await page.getByRole('button',{name:'搜索变化文件',exact:true}).click();await page.getByRole('textbox',{name:'搜索变化文件',exact:true}).fill('alternate');assert.equal(await sidebar.getByText('compare.go',{exact:true}).count(),0);
- await page.getByRole('button',{name:'关闭文件搜索',exact:true}).click();await sidebar.getByText('compare.go',{exact:true}).waitFor();assert.equal(await page.getByRole('textbox',{name:'搜索变化文件',exact:true}).count(),0);
+ await sidebar.getByRole('button',{name:/^(File filters|文件筛选)$/}).click();const fileFilters=page.getByTestId('change-file-filter-popover');
+ await fileFilters.getByRole('textbox',{name:/^(Include paths|包含路径)$/}).fill('alternate');assert.equal(await sidebar.getByText('compare.go',{exact:true}).count(),0);
+ await page.keyboard.press('Escape');assert.equal(await sidebar.getByText('compare.go',{exact:true}).count(),0,'closing the floating panel keeps the active query');
+ await sidebar.getByRole('button',{name:/^(File filters|文件筛选)$/}).click();await fileFilters.getByRole('button',{name:/^(Reset|重置)$/}).click();await page.keyboard.press('Escape');
+ await sidebar.getByText('compare.go',{exact:true}).waitFor();assert.equal(await page.getByTestId('change-file-filter-popover').count(),0);
  const waiting=new Promise(resolve=>notifyHeld=resolve);holdRef=longRef;await chooseFrom(longRef);await waiting;
  assert.match(await page.getByTestId('comparison-from').getAttribute('aria-label'),new RegExp(base));await sidebar.getByText('compare.go',{exact:true}).waitFor();
  await chooseFrom('missing-comparison-reference');await page.getByRole('button',{name:'比较失败，查看原因与重试',exact:true}).waitFor();holdRef='';for(const release of held)release();held=[];await nextFrames();
  assert.match(await page.getByTestId('comparison-from').getAttribute('aria-label'),new RegExp(base),'late older response cannot replace displayed comparison');
  await chooseFrom(base);await page.getByRole('button',{name:'比较失败，查看原因与重试',exact:true}).waitFor({state:'hidden'});
- report.checks.push('Menus and layout toggles cause no business reads; search closes without hidden filter; delayed and failed comparisons retain matching old content and ignore late responses');
+ report.checks.push('Menus and layout toggles cause no business reads; floating filters retain their query until reset; delayed and failed comparisons retain matching old content and ignore late responses');
  const reopenComparison=async()=>{
+   await openGlobalWorkbench(page,'a');
    await page.getByTestId('workbench-graph-content').waitFor();await page.getByRole('button',{name:'比较仓库',exact:true}).click();await page.getByLabel('搜索引用或输入提交 SHA',{exact:true}).fill(base);await page.getByRole('button',{name:'使用此引用',exact:true}).click();await page.getByTestId('comparison-to').click();await page.getByLabel('搜索引用或输入提交 SHA',{exact:true}).fill(head);await page.getByRole('button',{name:'使用此引用',exact:true}).click();await sidebar.getByText('compare.go',{exact:true}).waitFor();
  };
  report.widthChecks=[];
@@ -102,6 +105,7 @@ try{
  await page.screenshot({path:join(output,'comparison-diff.png')});
  report.cachedClickMs=[];
  for(let i=0;i<22;i++){
+   if(!await sidebar.isVisible())await reopenComparison();
    const alternate=i%2===0;await page.evaluate(()=>{document.addEventListener('click',()=>window.__comparisonClick=performance.now(),{once:true,capture:true});});
    await sidebar.getByText(alternate?'alternate.go':'compare.go',{exact:true}).click();
    await page.getByTestId('comparison-sticky-file').filter({hasText:alternate?'alternate.go':'compare.go'}).waitFor();
@@ -112,7 +116,7 @@ try{
  await page.setViewportSize({width:1080,height:900});await page.getByTestId('diff-code-unified').first().waitFor();await page.screenshot({path:join(output,'comparison-narrow.png')});
 
  report.checks.push('Actual host sidebar selects fixed endpoints; changed file opens main Diff; font and wrap controls work');
- await page.getByRole('button',{name:'返回浏览',exact:true}).click();await page.getByTestId('workbench-graph-content').waitFor();
+ if(!await sidebar.isVisible())await reopenComparison();await page.getByRole('button',{name:'返回浏览',exact:true}).click();await page.getByTestId('workbench-graph-content').waitFor();
  report.checks.push('Returning from comparison restores existing graph');
  await page.getByRole('button',{name:'提交比较操作',exact:true}).first().click();await page.getByText('设为比较起点',{exact:true}).last().click();
  await page.getByRole('button',{name:'提交比较操作',exact:true}).nth(1).click();await page.getByText('与起点比较',{exact:true}).click();await page.getByTestId('comparison-from').waitFor();

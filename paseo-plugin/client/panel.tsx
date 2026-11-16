@@ -4,6 +4,7 @@ import { reconcileFilesTrees } from './files-tree-store';
 import { reconcileFileReviews } from './file-review-store';
 const FilesManager = lazy(() => import('./files-manager'));
 import { RepositoryCompare } from './components/repository-compare';
+import { FileFilterBoundsContext } from './file-filter-bounds';
 import { readWorkspaceLineage, workspaceInstanceKey } from '../shared/workspace-lineage';
 import {
 useRpc,
@@ -659,9 +660,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const expandAll = useCallback(() => { animateSectionLayout(); preferences.setAllSectionsCollapsed(false); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.setAllSectionsCollapsed]);
   const resetLayout = useCallback(() => { animateSectionLayout(); preferences.resetLayout(); setLayoutMenuOpen(false); }, [animateSectionLayout, preferences.resetLayout]);
   const BodyContainer = tab === "review" || tab === "workspace" && allocation.outerScroll ? ScrollView : View;
+  const filterPanelBounds=useRef<any>(null);
+  const attachFilterBounds=useCallback((node:any)=>{filterPanelBounds.current=node;activity.ref(node);},[activity.ref]);
   return (
     <View
-      ref={activity.ref}
+      ref={attachFilterBounds}
       style={styles.screen}
       accessibilityLabel={localizedCopy.productName}
       onLayout={(event) => {
@@ -669,6 +672,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         if (Math.abs(width - panelWidth) > 1) setPanelWidth(width);
       }}
     >
+      <FileFilterBoundsContext.Provider value={filterPanelBounds}>
       {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await refreshArea("workspace-list"); await refreshArea("workspace-detail"); await refreshArea("workspace-prepare"); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
       {mainRepositoriesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingMainRepositories) setMainRepositoriesOpen(false); }} title={localizedCopy.mainRepositoryTitle}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
@@ -1098,6 +1102,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <Pressable accessibilityRole="button" onPress={saveReviewSettings} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsSave}</Text></Pressable>
         </ScrollView>
       </AnchoredMenu>
+      </FileFilterBoundsContext.Provider>
     </View>
   );
 }

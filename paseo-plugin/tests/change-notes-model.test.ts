@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {noteCurrent,type NoteScope} from '../client/change-notes-model.ts';
+import {noteCurrent,noteFilterMatches,type NoteScope} from '../client/change-notes-model.ts';
 import type {ChangeNote,NotesResult} from '../shared/change-notes.ts';
 const note={id:'one',revision:1,snapshotId:'snapshot'} as ChangeNote;
 const scope:NoteScope={projectConfig:'project',workspaceId:'workspace',repoPath:'repo',scope:'compare',path:'a',comparison:{fromRef:'main',toRef:'HEAD',fromSha:'base',leftSha:'base',toSha:'head',mergeBase:null,mode:'endpoints'}};
@@ -32,4 +32,18 @@ test('read receipts do not approve an explanation; new questions and revisions n
  assert.equal(noteNeedsConfirmation(n,{...data,feedback:[event]}),false);
  assert.equal(noteNeedsConfirmation(n,{...data,feedback:[event,{...event,action:'question'}]}),true);
  assert.equal(noteNeedsConfirmation({...n,revision:2},{...data,feedback:[event]}),true);
+});
+
+test('explanation filters distinguish current, stale, absent and pending notes in the displayed comparison',()=>{
+ const current={...note,content:{basis:'requirement',question:''}} as ChangeNote;
+ const stale={...current,id:'old',snapshotId:'older'};
+ const observed={...data,snapshots:{...data.snapshots,older:{...data.snapshots.snapshot,comparison:{...scope.comparison!,toSha:'old-head'}}}};
+ assert.equal(noteFilterMatches('has',[current],observed,scope),true);
+ assert.equal(noteFilterMatches('has',[stale],observed,scope),false);
+ assert.equal(noteFilterMatches('none',[stale],observed,scope),true);
+ assert.equal(noteFilterMatches('stale',[current,stale],observed,scope),true);
+ assert.equal(noteFilterMatches('pending',[current],observed,scope),false);
+ assert.equal(noteFilterMatches('pending',[{...current,content:{...current.content,basis:'autonomous'}}],observed,scope),true);
+ assert.equal(noteFilterMatches('all',[],undefined,scope),true);
+ assert.equal(noteFilterMatches('none',[],undefined,scope),false,'unavailable notes must not be counted as verified absent');
 });

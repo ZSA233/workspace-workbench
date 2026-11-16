@@ -16,3 +16,18 @@ export async function openGlobalWorkbench(page, projectName) {
   await page.getByRole("button", { name: "Workspace Workbench", exact: true }).first().click();
   await selectGlobalWorkbenchProject(page, projectName);
 }
+
+/** Fresh isolated homes can require direct connection and onboarding before the plugin entry. */
+export async function openIsolatedWorkbench(page, url, projectName) {
+  await page.goto(url);
+  const direct=page.getByText(/^(Direct connection|直接连接)$/).first();
+  if(await direct.isVisible().catch(()=>false)){
+    await direct.click();await page.getByPlaceholder('localhost',{exact:true}).fill('127.0.0.1');
+    await page.getByPlaceholder('6767',{exact:true}).fill(new URL(url).port);
+    await page.getByRole('button',{name:/^(Connect|连接)$/,exact:true}).click();
+  }
+  const skip=page.getByRole('button',{name:/^(Skip setup|跳过设置)$/,exact:true});
+  await Promise.race([skip.waitFor().catch(()=>{}),page.getByRole('button',{name:'Workspace Workbench',exact:true}).first().waitFor()]);
+  if(await skip.isVisible().catch(()=>false))await skip.click();
+  await openGlobalWorkbench(page,projectName);
+}

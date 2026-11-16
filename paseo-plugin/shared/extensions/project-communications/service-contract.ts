@@ -1,5 +1,6 @@
 // TypeScript client SDK for Project Communications API v1.
-// Go DTOs and this SDK share compatibility fixtures in communications-service/testdata/.
+// API-v1 compatibility fixtures are frozen in tests/fixtures/communications-protocol-v1.json.
+// The independent service repository validates the same versioned protocol.
 import { z } from 'zod';
 
 export const categorySchema = z.enum(['requirement', 'change', 'feedback', 'bug', 'decision']);
@@ -54,6 +55,8 @@ export const communicationsActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('groups.search'), query: z.string().min(1).max(200) }),
   z.object({ action: z.literal('groups.bind'), groupId: target, name: z.string().min(1).max(512) }),
   z.object({ action: z.enum(['groups.pause', 'groups.resume', 'groups.remove', 'sync.start']), groupId: target }),
+  z.object({ action: z.literal('history.start'), groupId: target, start:z.number().int().nonnegative(),end:z.number().int().positive() }).refine(value=>value.start<value.end),
+  z.object({ action:z.enum(['history.pause','history.resume','history.status']),id:target }),
   z.object({ action: z.literal('messages.list'), groupId: target.optional(), query: z.string().max(500).default(''), before: z.number().optional(), beforeId: target.optional(), limit: z.number().int().min(1).max(100).default(50) }),
   z.object({ action: z.literal('messages.read'), ids: z.array(target).max(100) }),
   z.object({ action: z.literal('attachment.read'), id: target }),

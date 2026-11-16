@@ -1,17 +1,21 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 
 let built;
+const sourceRoot = process.env.COMMUNICATIONS_SERVICE_DIR || resolve(import.meta.dirname, '../../../../communications-service');
+export function serviceAvailable() {
+  return process.env.COMMUNICATIONS_TEST_BINARY ? existsSync(process.env.COMMUNICATIONS_TEST_BINARY) : existsSync(join(sourceRoot, 'go.mod'));
+}
 export function serviceBinary() {
   if (process.env.COMMUNICATIONS_TEST_BINARY) return process.env.COMMUNICATIONS_TEST_BINARY;
   if (built) return built.path;
   const directory = mkdtempSync(join(tmpdir(), 'communications-go-binary-'));
   const path = join(directory, 'project-communications');
   const result = spawnSync('go', ['build', '-o', path, './cmd/project-communications'], {
-    cwd: resolve(import.meta.dirname, '../../../communications-service'), encoding: 'utf8', timeout: 180000,
+    cwd: sourceRoot, encoding: 'utf8', timeout: 180000,
   });
   if (result.status !== 0) { rmSync(directory, { recursive: true, force: true }); throw Error(result.stderr || result.error?.message || 'Go service build failed'); }
   built = { path, directory };

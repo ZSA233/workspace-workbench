@@ -8,7 +8,7 @@ import { ExtensionRegistry } from '../server/backend/extensions/registry.ts';
 import { communicationsManifest } from '../shared/extensions/project-communications/manifest.ts';
 import { serviceConnectionSchema } from '../shared/extensions.ts';
 import { communicationsActionSchema } from '../shared/extensions/project-communications/service-contract.ts';
-import { startService, until } from './helpers/communications-service.mjs';
+import { serviceAvailable, startService, until } from './helpers/communications-service.mjs';
 
 test('registry accepts independent test contributions and rejects incompatible versions', () => {
   const registry = new ExtensionRegistry(); registry.register(communicationsManifest); registry.register({ ...communicationsManifest, id: 'fixture', contributions: { settings: true, unread: false } });
@@ -16,11 +16,13 @@ test('registry accepts independent test contributions and rejects incompatible v
 });
 
 test('TypeScript SDK validates the shared Go API-v1 compatibility fixtures', () => {
-  const cases = JSON.parse(readFileSync(new URL('../../communications-service/testdata/protocol-v1.json', import.meta.url), 'utf8'));
+  const cases = JSON.parse(readFileSync(new URL('./fixtures/communications-protocol-v1.json', import.meta.url), 'utf8'));
   for (const item of cases) { const parsed = communicationsActionSchema.safeParse(item.input); assert.equal(parsed.success, item.valid, JSON.stringify(item.input)); if (parsed.success) assert.deepEqual(parsed.data, item.output); }
 });
 
-test('connector uses a real Go process; collection outlives disable, unload and reconnect', async () => {
+test('connector uses a real Go process; collection outlives disable, unload and reconnect', {
+  skip: !serviceAvailable() && 'Set COMMUNICATIONS_TEST_BINARY or COMMUNICATIONS_SERVICE_DIR to test the independent service',
+}, async () => {
   const root = mkdtempSync(join(tmpdir(), 'communications-go-host-'));
   const previous = { home: process.env.PASEO_HOME, registry: process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY, service: process.env.COMMUNICATIONS_HOME };
   process.env.PASEO_HOME = join(root, 'paseo'); process.env.COMMUNICATIONS_HOME = join(root, 'service');
@@ -52,7 +54,7 @@ else process.exit(2);
     await host.setEnabled(config, 'project-communications', false); await host.close();
     writeFileSync(messages, JSON.stringify([{ message_id: 'ordinary-after-unload', conversation_id: 'group-one', create_time: Date.now(), content: '没有艾特的需求，界面关闭后仍继续采集', sender: '开发者' }]));
     await until(async () => (await direct({ action: 'snapshot' })).messageCount === 1);
-    assert.equal((await service.request('/health')).version, '0.2.0');
+    assert.equal((await service.request('/health')).apiVersion, 1);
     host = new WorkbenchExtensions(); assert.equal((await host.setEnabled(config, 'project-communications', true)).state, 'ready');
     assert.equal((await host.request(config, 'project-communications', { action: 'snapshot' })).messageCount, 1);
     assert.equal(JSON.parse(readFileSync(join(state, 'extensions', 'enabled.json'), 'utf8')).unknown, 'retain');

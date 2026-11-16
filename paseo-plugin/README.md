@@ -425,17 +425,20 @@ Node、Gradle／Android、Java 等尚未实现，接入时必须补充提供者�
 插件关闭、重载或停用时只断开客户端连接，服务继续运行；暂停采集请暂停监控群，或调用服务的项目运行开关。
 暂停后台任务后仍可读取已有资料。
 
-在本仓库根目录单独安装和启动服务：
+服务在兄弟目录的独立 Git 仓库 `communications-service` 中维护。进入服务仓库后构建和启动：
 
 ```sh
-go -C communications-service build -o ./bin/project-communications ./cmd/project-communications
-./communications-service/bin/project-communications serve
+go build -o ./bin/project-communications ./cmd/project-communications
+./bin/project-communications serve
 ```
 
 “连接与来源”可配置服务 API 地址、项目 ID 和 Token。默认地址 `http://127.0.0.1:47191` 会通过后端读取
 本机默认服务目录中的 Token；自定义服务和网关填写自己的 HTTPS 地址与 Token。
 Token 不写入项目配置。Workbench 的项目连接与服务项目分别管理，可让多个客户端连接同一服务项目。
-独立服务使用 Go，运行时不依赖插件的 Node。构建包、API v1、数据目录、授权和部署说明见仓库的 `communications-service/README.md`。
+独立服务使用 Go，运行时不依赖插件的 Node。构建包、API v1、数据目录、授权和部署说明见独立服务仓库的 README。
+客户端测试不导入服务实现；通过 `COMMUNICATIONS_TEST_BINARY` 指定可执行文件，或通过
+`COMMUNICATIONS_SERVICE_DIR` 指定独立源码目录。开发时也会发现兄弟目录 `../communications-service`；
+未提供服务时，真实 Go 进程集成用例明确跳过，客户端契约与插件测试仍独立运行。
 
 需求页沿用方案 A 的状态栏、页内搜索与列表／详情布局；候选先展示整理结果和原始讨论，点击“编辑整理结果”再修改，底部固定“预览修订”操作。设置采用侧栏导航，宽屏模型连接与预算分栏，窄屏切换为单栏；浮层支持关闭按钮、外部点击与 Escape，触屏操作至少 44px。预算输入及滑块以 K tokens 显示（1K = 1024 tokens）。
 
@@ -447,4 +450,4 @@ Token 不写入项目配置。Workbench 的项目连接与服务项目分别管�
 默认总上下文 128K、输出预留 8K，可选 256K、512K 或自定义。凭证由服务后端管理。
 DWS 首期适配 1.0.68；只采集明确绑定、且已核实机器人入群的项目群，普通消息无需 @。
 未授权或未验证能力会明确标注，真实全量接收及停机补齐需取得钉钉授权后另行验收。
-独立 Web 后台尚未实现，未来可直接复用服务 API。
+独立档案 Web 后台在服务仓库的 `web/` 中维护，由 Go 服务提供网页；它不随 Paseo 插件打包。

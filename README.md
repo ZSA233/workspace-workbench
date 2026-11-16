@@ -10,9 +10,9 @@ Workspace Workbench 用于查看和管理包含多个 Git 仓库的项目。它�
 安卓安装包见 [Paseo Pocket Releases](https://github.com/ZSA233/workspace-workbench/releases?q=android-v&expanded=true)。
 维护者可通过 [Android 发版流程](docs/releasing-android.md) 创建版本 tag，由 Actions 自动构建、签名和发布。
 
-项目沟通、钉钉采集和需求分析由独立的 Go 服务 [Project Communications Service](communications-service/README.md)
-提供。它可以单独部署和持续运行，Workbench 的“需求与反馈”扩展仅通过 API 连接；
-插件关闭或重载不会停止服务。服务端和客户端已提供，独立 Web 后台留待后续实现，网关可复用版本化 HTTP API。
+项目沟通、聊天档案和需求分析由独立 Git 仓库 `communications-service` 中的 Go 服务提供。
+服务、独立 Web 后台和公共计算／索引组件在该仓库维护；本仓库保留 Paseo 界面扩展、客户端 SDK 和 HTTP 连接器。
+Workbench 的“需求与反馈”扩展仅通过 API 连接，插件关闭或重载不会停止服务。
 
 ## 快速开始
 

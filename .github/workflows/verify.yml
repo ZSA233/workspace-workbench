@@ -24,10 +24,6 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: paseo-plugin/package-lock.json
-      - uses: actions/setup-go@v7
-        with:
-          go-version: '1.27.x'
-          cache-dependency-path: communications-service/go.sum
       - name: Verify version
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}

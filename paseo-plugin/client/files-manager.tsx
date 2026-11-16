@@ -8,6 +8,7 @@ import type { FileTransferStore } from './files-store';
 import type { FileEntry } from '../shared/files';
 import { getFileClipboard, setFileClipboard, subscribeFileClipboard } from './files-clipboard';
 import { fileBytes } from './files-transfer-panel';
+import { FilesStatusBar } from './files-status-bar';
 import { GeometricIcon } from './geometric-icon';
 import { fileGitColor, fileGitDescription, fileGitPalette, fileTreeIcon } from './files-decoration-display';
 import { destinationInsideSource, unchangedFileMove, type FileLocation } from '../shared/file-operations';
@@ -44,6 +45,8 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   const readOnly = workspace.kind === 'linked-live';
   const call = (input: Record<string, any>) => store.call(input);
   const run = (work: () => Promise<unknown>) => { setError(''); void work().catch(e => setError(String(e.message || e))); };
+  const refresh = () => run(async () => { for (const path of tree.expanded) await tree.load(path, call, false, true); if (decorationsEnabled) await tree.decorations.refresh(decorationPathsRef.current, call, true); });
+  useEffect(() => { setError(''); }, [tree]);
   useEffect(() => {
     tree.foreground=foreground;tree.sortedListing=sortedListing;
     if(!foreground)return;
@@ -121,7 +124,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     await tree.load(directory, call, false, true);
     if (skipped.size) setError(zh ? `已跳过 ${skipped.size} 个内部元数据入口` : `Skipped ${skipped.size} internal metadata entries`);
   };
-  const showDialog = (kind: 'mkdir' | 'rename' | 'delete') => { setDialogEntries(selected.map(e => ({ ...e }))); setDialogPath(targetPath); setName(kind === 'rename' ? selected[0]?.name || '' : ''); setDialog(kind); };
+  const showDialog = (kind: 'mkdir' | 'rename' | 'delete') => { setError(''); setDialogEntries(selected.map(e => ({ ...e }))); setDialogPath(targetPath); setName(kind === 'rename' ? selected[0]?.name || '' : ''); setDialog(kind); };
   const apply = () => {
     if (dialog !== 'delete' && !name.trim()) return;
     const kind = dialog, path = dialogPath, captured = topLevel(dialogEntries).map(e => ({ workspaceId: workspace.id, instance: tree.instance, path: e.path, version: e.version }));
@@ -164,6 +167,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     {button(zh ? '永久删除…' : 'Delete permanently…', () => showDialog('delete'), readOnly || !selected.length || selected.some(e => e.protected))}
   </>;
   const keyDown = (event: any) => {
+    if (event.target?.closest?.('[data-testid="files-status-bar"], [data-testid="files-notice-dialog"]')) return;
     if (/input|textarea/i.test(event.target?.tagName || '')) return;
     if ((event.ctrlKey || event.metaKey) && ['c','x','v','a'].includes(event.key.toLowerCase())) {
       event.preventDefault(); const key = event.key.toLowerCase();
@@ -221,7 +225,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
       {button(zh ? '↑ 上传' : '↑ Upload', () => pickFiles(false, files => run(() => upload(files, targetPath))), readOnly || !tree.instance, true)}
       {Platform.OS === 'web' ? button(zh ? '上传目录' : 'Upload folder', () => pickFiles(true, files => run(() => upload(files, targetPath))), readOnly || !tree.instance, true) : null}
       {button(zh ? '+ 文件夹' : '+ Folder', () => showDialog('mkdir'), readOnly || !tree.instance, true)}
-      {button(zh ? '↻ 刷新' : '↻ Refresh', () => run(async () => { for (const path of tree.expanded) await tree.load(path, call, false, true); if (decorationsEnabled) await tree.decorations.refresh(decorationPathsRef.current, call, true); }), false, true)}
+      {button(zh ? '↻ 刷新' : '↻ Refresh', refresh, false, true)}
       {button('⋯', () => setMenu(targetPath), false, true, zh ? '更多文件操作' : 'More file actions')}
       <TextInput value={filter} onChangeText={value => tree.setFilter(value)} placeholder={zh ? '筛选文件或目录' : 'Filter files or folders'} accessibilityLabel={zh ? '筛选已加载的文件或目录' : 'Filter loaded files or folders'} style={{ flex: 1, minWidth: 130, height: Math.max(dense ? 23 : 29, Math.ceil(16 * fontScale) + 6), marginHorizontal: 4, marginVertical: 3, paddingHorizontal: 6, paddingVertical: 2, fontSize: 12, color: c.foreground, borderWidth: 1, borderColor: c.border || '#ffffff22', borderRadius: 3 }} />
     </View>
@@ -231,10 +235,10 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
       <Pressable accessibilityRole="button" accessibilityLabel={zh ? '工作区根目录' : 'Workspace root'} disabled={!tree.root} onPress={() => navigate('')} style={{ maxWidth: 140, paddingVertical: dense ? 4 : 7, paddingHorizontal: 5 }}><Text numberOfLines={1} style={{ color: c.foregroundMuted, fontSize: 11 }}>{workspace.displayName || workspace.id}</Text></Pressable>
       <Text numberOfLines={1} ellipsizeMode="middle" accessibilityLabel={tree.root || '/'} style={{ flex: 1, minWidth: 0, color: c.foreground, fontSize: 11 }}>/{tree.root}</Text>
     </View> : null}
-    {error || tree.error ? <Text style={{ color: c.statusWarning || '#eabf6c', padding: 8, fontSize: 11 }}>{error || tree.error}</Text> : null}
     <FlatList ref={listRef} style={{ flex: 1, minHeight: 160 }} data={rows} renderItem={renderRow} keyExtractor={row => row.key} getItemLayout={(_, i) => ({ length: rowHeight, offset: rowHeight*i, index: i })} initialNumToRender={45} maxToRenderPerBatch={30} windowSize={7} onLayout={event => setListHeight(event.nativeEvent.layout.height)} onScroll={event => { tree.scroll = event.nativeEvent.contentOffset.y; setVisibleStart(Math.floor(tree.scroll / rowHeight)); }} scrollEventThrottle={100} ListEmptyComponent={<Text style={{ color: c.foregroundMuted, padding: 10 }}>{zh ? '目录为空' : 'Empty directory'}</Text>} ListFooterComponent={!rows.some(row => row.entry) && (filter || tree.expanded.has(tree.root) && tree.pages.has(tree.root) && !tree.pages.get(tree.root)?.entries.length) ? <Text style={{ color: c.foregroundMuted, padding: 10, fontSize: 12 }}>{filter ? zh ? '未找到匹配的文件或目录（仅筛选已加载内容）' : 'No matching files or folders (loaded entries only)' : zh ? '目录为空' : 'Empty directory'}</Text> : null} />
-    {/* Reuse the existing single-line status area so drag feedback cannot move the drop targets. */}
-    <Text numberOfLines={1} style={{ paddingHorizontal: 7, paddingVertical: 3, lineHeight: 14, color: c.foregroundMuted, fontSize: 10 }}>{drop !== null ? `${zh ? '放到' : 'Drop into'} ${workspace.displayName || workspace.id}:/${drop}` : <>{readOnly ? zh ? '聚合工作区只读' : 'Aggregate workspace · read only' : zh ? `${entries.size} 项 · 拖入上传 · 右键操作` : `${entries.size} loaded · Drop to upload · Right click for actions`}{gitPending ? zh ? ' · Git 状态待更新' : ' · Git status pending update' : ''}{selected.length ? ` · ${selected.length} ${zh ? '项已选' : 'selected'}` : ''}{clipboard?.scope === scope ? ` · ${clipboard.entries.length} ${clipboard.operation === 'copy' ? zh ? '项已复制' : 'copied' : zh ? '项已剪切' : 'cut'}` : ''}</>}</Text>
+    <FilesStatusBar key={tree.key} messages={[dialog ? '' : error, tree.error]} onRefresh={refresh} zh={zh} theme={theme} dense={dense}>
+      {drop !== null ? `${zh ? '放到' : 'Drop into'} ${workspace.displayName || workspace.id}:/${drop}` : <>{readOnly ? zh ? '聚合工作区只读' : 'Aggregate workspace · read only' : zh ? `${entries.size} 项 · 拖入上传 · 右键操作` : `${entries.size} loaded · Drop to upload · Right click for actions`}{gitPending ? zh ? ' · Git 状态待更新' : ' · Git status pending update' : ''}{selected.length ? ` · ${selected.length} ${zh ? '项已选' : 'selected'}` : ''}{clipboard?.scope === scope ? ` · ${clipboard.entries.length} ${clipboard.operation === 'copy' ? zh ? '项已复制' : 'copied' : zh ? '项已剪切' : 'cut'}` : ''}</>}
+    </FilesStatusBar>
     <Modal open={menu !== null && dialog === null} title={zh ? '文件操作' : 'File actions'} onOpenChange={open => { if (!open) setMenu(null); }}><Modal.Content contentContainerStyle={{ padding: 10 }}>
       <View testID="files-menu-selection" style={{ padding: 9, gap: 5 }}>
         <Text style={{ color: c.foreground, fontSize: 12, fontWeight: '600' }}>{workspace.displayName || workspace.id} · {selected.length ? zh ? `已选 ${selected.length} 项` : `${selected.length} selected` : zh ? '未选择文件' : 'No files selected'}</Text>

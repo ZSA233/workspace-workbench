@@ -213,7 +213,8 @@ test('activity refresh detects commits within the TTL, publishes one batch and d
     activity.cancel('closed-popup'); release!(); await finish('closed-popup');
     Git.prototype.run = original;
     activity.start('reopened-popup', rows); await finish('reopened-popup');
-    assert.deepEqual(rows.map(row => activity.summary(row).latestCommitAt), ['2030-01-01T00:00:00Z','2030-01-01T00:00:00Z']);
+    const refreshed = rows.map(row => activity.summary(row).latestCommitAt);
+    assert.deepEqual(refreshed.map(value => Date.parse(value!)), rows.map(() => Date.parse('2030-01-01T00:00:00Z')));
     const before = gitDiagnostics().commands;
     activity.start('manual-refresh', rows, true); await finish('manual-refresh');
     assert.equal(gitDiagnostics().commands - before, 2, 'manual refresh must bypass unchanged HEAD snapshots');
@@ -221,7 +222,7 @@ test('activity refresh detects commits within the TTL, publishes one batch and d
     renameSync(join(f.root, 'one', '.git'), join(f.root, 'one', '.git-away'));
     activity.start('failed-read', rows); await finish('failed-read');
     assert.equal(activity.summary(rows[0]).latestCommitState, 'partial');
-    assert.equal(activity.summary(rows[0]).latestCommitAt, '2030-01-01T00:00:00Z');
+    assert.equal(activity.summary(rows[0]).latestCommitAt, refreshed[0]);
   } finally { release?.(); Git.prototype.run = original; await activity.close(); rmSync(f.root, { recursive: true, force: true }); }
 });
 

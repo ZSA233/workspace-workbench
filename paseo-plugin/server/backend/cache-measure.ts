@@ -1,17 +1,18 @@
 import { lstat, opendir } from 'node:fs/promises';
 import { setImmediate as yieldTurn } from 'node:timers/promises';
 import { join, relative, isAbsolute } from 'node:path';
-import type { CacheUsage } from '../../shared/cache-management.ts';
 import { WorkbenchError } from './storage.ts';
+import type { AccountedUsage } from './cache-accounting.ts';
 
 /** Allocated-byte estimates, bounded async I/O, hardlink de-duplication, no symlink walks. */
 export async function measureCachePaths(paths: string[], options: {
   signal: AbortSignal; union?: Set<string>; deadline?: number; yieldToForeground?: () => Promise<void>;
   exclude?: string[];
-}): Promise<CacheUsage> {
+}): Promise<AccountedUsage> {
   const seen = new Set<string>(), union = options.union || new Set<string>();
   const deadline = options.deadline ?? Date.now() + 120_000;
-  let bytes = 0, uniqueBytes = 0, count = 0, missing = 0;
+  let bytes = 0, uniqueBytes = 0, unlinkedBytes = 0, count = 0, missing = 0;
+  const links: Record<string, number> = Object.create(null);
   const errors: string[] = [];
   const check = () => {
     if (options.signal.aborted) throw new WorkbenchError('cache_scan_cancelled', 'Cache scan cancelled');
@@ -29,7 +30,9 @@ export async function measureCachePaths(paths: string[], options: {
     seen.add(key);
     const allocated = Number.isFinite(info.blocks) ? info.blocks * 512 : info.size;
     bytes += allocated;
-    if (!union.has(key)) { union.add(key); uniqueBytes += allocated; }
+    const linked = info.isFile() && info.nlink > 1;
+    if (linked) links[key] = allocated;
+    if (!union.has(key)) { union.add(key); uniqueBytes += allocated; if (!linked) unlinkedBytes += allocated; }
     if (!info.isDirectory() || info.isSymbolicLink()) return;
     try {
       const directory = await opendir(path);
@@ -44,5 +47,5 @@ export async function measureCachePaths(paths: string[], options: {
     if (options.signal.aborted) throw error;
     errors.push(String(error));
   }
-  return { bytes: errors.length && !bytes ? null : bytes, uniqueBytes, state: errors.length ? (bytes ? 'partial' : 'failed') : missing === paths.length ? 'missing' : 'ready', observedAt: Date.now(), ...(errors.length ? { error: errors.slice(0, 3).join('; ').slice(0, 600) } : {}) };
+  return { bytes: errors.length && !bytes ? null : bytes, uniqueBytes, accounting: { unlinkedBytes, links }, state: errors.length ? (bytes ? 'partial' : 'failed') : missing === paths.length ? 'missing' : 'ready', observedAt: Date.now(), ...(errors.length ? { error: errors.slice(0, 3).join('; ').slice(0, 600) } : {}) };
 }

@@ -8,6 +8,7 @@ import { homedir } from 'node:os';
 import { chromium } from 'playwright';
 import { backendRequest } from '../server/backend-supervisor.ts';
 import { loadConfig } from '../server/backend/config.ts';
+import { withCacheLease } from '../server/backend/cache-lease.ts';
 import { openGlobalWorkbench } from './ui-project-selection.mjs';
 
 const plugin = resolve(import.meta.dirname, '..');
@@ -17,7 +18,7 @@ const child = spawn(process.execPath, [join(plugin, 'scripts/verify-live.mjs')],
   env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_LIVE_CACHE: '1', WORKBENCH_VERIFY_OUTPUT: output },
   stdio: ['ignore','pipe','pipe'],
 });
-let ui, browser, page, logs = '';
+let ui, browser, page, logs = '', releaseScanLease, scanLease;
 const exit = new Promise(resolve => child.once('exit', resolve));
 child.stderr.on('data', value => { logs += value; });
 const ready = new Promise((resolve, reject) => {
@@ -28,7 +29,7 @@ const ready = new Promise((resolve, reject) => {
   });
   void exit.then(code => { clearTimeout(timer); reject(Error(`host exited: ${code}`)); });
 });
-const report = { kind: 'actual-isolated-paseo-cache-ui', checks: [], pageErrors: [], screenshots: [] };
+const report = { kind: 'actual-isolated-paseo-cache-ui', browser: 'Playwright (Browser plugin not available)', checks: [], pageErrors: [], console: [], screenshots: [] };
 async function waitFor(read, predicate, timeout = 20000) {
   const end = Date.now() + timeout;
   while (Date.now() < end) { const value = await read(); if (predicate(value)) return value; await new Promise(resolve => setTimeout(resolve, 100)); }
@@ -70,6 +71,7 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: browserExecutable() });
   page = await browser.newPage({ viewport: { width: 1000, height: 950 }, locale: 'en-US', colorScheme: 'light' });
   page.on('pageerror', error => report.pageErrors.push(error.message));
+  page.on('console', message => { if (['error','warning'].includes(message.type())) report.console.push({ level: message.type(), text: message.text() }); });
   page.setDefaultTimeout(15000);
   await page.goto(ui.url);
   // Current host versions can show direct-connect and onboarding on a fresh home.
@@ -84,6 +86,9 @@ try {
   if (await skip.isVisible().catch(() => false)) await skip.click();
   await openGlobalWorkbench(page, 'a');
   await page.getByTestId('workbench-workspace-selector-toggle').waitFor({ timeout: 30000 });
+  report.url = page.url(); report.title = await page.title();
+  assert.equal(new URL(report.url).origin, new URL(ui.url).origin);
+  assert.ok(report.title, 'the actual host has a page title');
   const selector = page.getByTestId('workbench-workspace-selector-toggle');
   const list = page.getByTestId('workbench-workspace-list');
   const ids = () => list.locator('[data-testid^="workspace-option-"]').evaluateAll(elements => elements.map(element => element.dataset.testid.slice(17)));
@@ -138,15 +143,40 @@ try {
   assert.ok(inventory.resources.some(resource => resource.kind === 'build' && resource.paths.includes(projectBuild)));
   await waitFor(() => page.getByTestId('workbench-cache-panel').innerText(), value => /[KM]iB/.test(value));
   await screenshot('cache-light.png');
+  const beforeReopen = (await call('cache.list')).task.taskId;
+  for (let index = 0; index < 3; index++) {
+    await page.getByText('Files', { exact: true }).first().click();
+    await page.getByTestId('workbench-cache-panel').waitFor({ state: 'hidden' });
+    await cacheTab.click(); await page.getByTestId('workbench-cache-panel').waitFor();
+  }
+  await page.waitForTimeout(500);
+  assert.equal((await call('cache.list')).task.taskId, beforeReopen, 'reopening fresh cache results does not start another scan');
+  report.checks.push('three cache-page reopenings reuse the existing per-target snapshots without a new scan');
   const target = inventory.resources.find(resource => resource.scope === 'project' && resource.kind === 'build');
+  // Hold only this isolated home's host lease to make a real background task
+  // visible long enough for deterministic UI interaction (no production hooks).
+  scanLease = withCacheLease(join(root, 'paseo/workspace-workbench/cache-management'), new AbortController().signal,
+    () => new Promise(resolve => { releaseScanLease = resolve; }));
+  await waitFor(async () => !!releaseScanLease, Boolean);
+  await page.getByTestId('cache-refresh-all').click();
+  const refreshing = await waitFor(() => call('cache.list'), value => value.task?.kind === 'scan' && value.task.state === 'running');
+  await waitFor(() => page.getByTestId('workbench-cache-panel').innerText(), value => value.includes('Updating in background'));
+  assert.ok((await page.getByTestId('workbench-cache-panel').innerText()).includes('KiB'));
+  assert.equal(await page.getByTestId(`cache-clean-${target.id}`).isEnabled(), true);
+  assert.equal(await page.getByTestId('cache-refresh').isEnabled(), true);
+  await page.getByTestId('cache-refresh').click();
+  assert.equal((await call('cache.list')).task.taskId, refreshing.task.taskId, 'repeated refresh coalesces into the current scan');
+  await screenshot('cache-background-update.png');
   await page.getByTestId(`cache-clean-${target.id}`).click();
   await page.getByTestId('cache-confirm-cleanup').waitFor(); assert.ok((await page.locator('body').innerText()).includes(projectBuild));
   await screenshot('cache-cleanup-preview.png'); await page.getByTestId('cache-confirm-cleanup').click();
+  await waitFor(() => call('cache.task'), value => value.kind === 'cleanup');
+  releaseScanLease(); await scanLease; releaseScanLease = undefined;
   await waitFor(() => call('cache.task'), value => value.kind === 'cleanup' && value.state === 'complete');
   assert.equal(readFileSync(join(projectModule, 'module-proof'), 'utf8'), 'keep until module cleanup');
   assert.ok(!existsSync(join(projectBuild, '00', 'fixture-d')));
   await waitFor(() => call('cache.list'), value => value.observedAt && !['running','queued'].includes(value.task?.state) && value.resources.find(resource => resource.id === target.id)?.usage.bytes < target.usage.bytes);
-  report.checks.push('generic grouped cache page, shared references, async statistics, fixed-path native build cleanup keeps modules intact');
+  report.checks.push('existing sizes remain visible during update; refresh coalesces; cleanup preview and native build cleanup work during scanning and keep modules intact');
   await page.emulateMedia({ colorScheme: 'dark' });
   // The host recreates plugin surfaces when its theme changes; global routing
   // intentionally requires an explicit project choice in the new surface.
@@ -167,11 +197,14 @@ try {
   await waitFor(() => page.getByTestId('workbench-cache-panel').innerText(), value => value.includes('/b/'));
   assert.ok(!(await page.getByTestId('workbench-cache-panel').innerText()).includes('cache-family'));
   report.checks.push('switching projects cannot display the previous project’s cache or Workspace rows');
-  assert.equal(report.pageErrors.length, 0, report.pageErrors.join('\n')); report.ok = true;
+  assert.equal(report.pageErrors.length, 0, report.pageErrors.join('\n'));
+  assert.equal(await page.locator('vite-error-overlay, nextjs-portal').count(), 0, 'no framework error overlay');
+  report.ok = true;
 } catch (error) {
   report.ok = false; report.error = error.stack; process.exitCode = 1;
   if (page) { report.visible = await page.locator('body').innerText().catch(() => ''); await page.screenshot({ path: join(output, 'failure.png') }).catch(() => {}); }
 } finally {
+  releaseScanLease?.(); await scanLease?.catch(() => {});
   await browser?.close();
   if (ui) writeFileSync(ui.continueFile, 'continue\n'); else child.kill('SIGTERM');
   report.hostExitCode = await exit;

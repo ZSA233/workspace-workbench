@@ -40,15 +40,16 @@ export function CacheManagementPanel({ cache, theme }: { cache: ReturnType<typeo
     totals.set(key, { label: `${cacheLabel(resource.providerLabel, locale)} ${cacheLabel(resource.kindLabel, locale)}`, bytes: (old?.bytes || 0) + (resource.usage.uniqueBytes ?? resource.usage.bytes) });
   }
   const active = cacheTaskActive(cache.data?.task);
-  const taskLabels: Record<string, string> = zh ? { queued: '等待中', running: '更新中', complete: '已完成', partial: '部分完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' } : {};
+  const taskLabels: Record<string, string> = zh ? { queued: '等待中', running: '更新中', paused: '已暂停', complete: '已完成', partial: '部分完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' } : {};
   return <ScrollView testID="workbench-cache-panel" style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 15, paddingBottom: 20 }}>
     <View style={[row, { backgroundColor: c.surface2, marginTop: 10, paddingHorizontal: 7, flexWrap: 'wrap' }]}>
       <Text style={{ ...text, flex: 1 }}>{totals.size ? [...totals.values()].map(value => `${value.label} ${cacheBytes(value.bytes)}`).join(' · ') : zh ? '缓存占用待统计' : 'Cache usage pending'}</Text>
-      {action(zh ? '刷新' : 'Refresh', () => { void cache.scan(); }, !!active, 'cache-refresh')}
+      {action(zh ? '刷新' : 'Refresh', () => { void cache.scan(); }, false, 'cache-refresh')}
+      {action(zh ? '全量重新统计' : 'Rescan all', () => { void cache.scan(true); }, false, 'cache-refresh-all')}
       {active && cache.data?.task?.kind === 'scan' ? action(zh ? '取消扫描' : 'Cancel scan', () => { void cache.cancelScan(); }) : null}
     </View>
     {cache.data?.workspaceTotalBytes !== null && cache.data?.workspaceTotalBytes !== undefined ? <Text style={{ ...muted, marginTop: 5 }}>Workspace {zh ? '目录合计' : 'directories'} {cacheBytes(cache.data.workspaceTotalBytes)} · {workspaces.length} Workspace</Text> : null}
-    <Text style={{ ...muted, marginTop: 5 }}>{cache.data?.observedAt ? `${zh ? '上次统计' : 'Last measured'} ${new Date(cache.data.observedAt).toLocaleTimeString(locale)}` : zh ? '尚未完成统计' : 'Not measured yet'}{active ? ` · ${zh ? '后台更新中' : 'Updating in background'} ${cache.data?.task?.completed}/${cache.data?.task?.total}` : ''}{cache.data?.state === 'partial' ? ` · ${zh ? '部分结果，已有数据仍可查看' : 'Partial results; previous data retained'}` : ''}</Text>
+    <Text style={{ ...muted, marginTop: 5 }}>{cache.data?.observedAt ? `${zh ? '最近更新' : 'Last updated'} ${new Date(cache.data.observedAt).toLocaleTimeString(locale)}` : zh ? '尚未完成统计' : 'Not measured yet'}{active ? ` · ${zh ? '后台更新中' : 'Updating in background'} ${cache.data?.task?.total ? `${cache.data.task.completed}/${cache.data.task.total}` : ''}` : ''}{cache.data?.state === 'partial' ? ` · ${zh ? '部分结果，已有数据仍可查看' : 'Partial results; previous data retained'}` : ''}</Text>
     {cache.loading ? <Text style={[muted, { marginTop: 8 }]}>{zh ? '正在读取统计快照…' : 'Loading usage snapshot…'}</Text> : null}
     {cache.error ? <Text selectable style={{ ...muted, color: c.statusWarning, marginTop: 7 }}>{cache.error}</Text> : null}
     {cache.task?.kind === 'cleanup' ? <View style={{ marginTop: 8, gap: 4 }}><Text style={text}>{zh ? '清理任务' : 'Cleanup'} · {taskLabels[cache.task.state] || cache.task.state} · {cache.task.completed}/{cache.task.total}</Text>{cache.task.error ? <Text selectable style={{ ...muted, color: c.statusWarning }}>{cache.task.error}</Text> : null}</View> : null}
@@ -58,11 +59,12 @@ export function CacheManagementPanel({ cache, theme }: { cache: ReturnType<typeo
         <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 9 }}><Text style={text}>{cacheLabel(resource.kindLabel, locale)}</Text><Text style={{ ...text, fontFamily: 'monospace' }}>{cacheUsageText(resource.usage, zh)}</Text></View>
           <Text selectable style={{ ...muted, fontFamily: 'monospace' }}>{resource.displayPath}</Text>
+          {resource.usage.observedAt ? <Text style={muted}>{zh ? '统计于' : 'Measured'} {new Date(resource.usage.observedAt).toLocaleString(locale)}{resource.usage.invalidatedAt ? ` · ${zh ? '待更新' : 'Update pending'}` : ''}</Text> : null}
           {resource.scope !== 'global' ? <Text numberOfLines={1} style={muted}>{resource.scope === 'project' ? zh ? '项目共享 · 共享缓存只计一次' : 'Project shared · counted once' : resource.references.map(ref => ref.displayName).join(', ') || (zh ? '未关联 Workspace 的保留缓存' : 'Retained cache without a Workspace')}</Text> : <Text style={muted}>{zh ? '全局共享，无法准确分摊到单个 Workspace' : 'Globally shared; cannot attribute bytes to individual Workspaces'}</Text>}
           {resource.usage.error ? <Text numberOfLines={2} style={{ ...muted, color: c.statusWarning }}>{resource.usage.error}</Text> : null}
           {!resource.cleanup.available && resource.cleanup.reason ? <Text numberOfLines={2} style={muted}>{resource.cleanup.reason}</Text> : null}
         </View>
-        {action(cacheLabel(resource.cleanup.label, locale), () => { void cache.inspectCleanup(resource.id); }, !resource.cleanup.available || cache.busy || !!active, `cache-clean-${resource.id}`)}
+        {action(cacheLabel(resource.cleanup.label, locale), () => { void cache.inspectCleanup(resource.id); }, !resource.cleanup.available || cache.busy, `cache-clean-${resource.id}`)}
       </View>)}
     </View>))}
     {section('workspaces', zh ? 'Workspace 空间' : 'Workspace space', <View>
@@ -73,12 +75,12 @@ export function CacheManagementPanel({ cache, theme }: { cache: ReturnType<typeo
           <Pressable accessibilityRole="button" accessibilityState={{ expanded: expanded === workspace.instance }} onPress={() => setExpanded(expanded === workspace.instance ? null : workspace.instance)} style={row}>
             <Text numberOfLines={1} style={{ ...text, flex: 1 }}>{workspace.displayName}</Text><Text style={{ ...text, width: 85 }}>{cacheUsageText(workspace.usage, zh)}</Text><Text style={{ ...muted, width: 85 }}>{cacheRelationship(linked, zh)}</Text><Icon name={expanded === workspace.instance ? 'ChevronDown' : 'ChevronRight'} size={12} color={c.foregroundMuted} />
           </Pressable>
-          {expanded === workspace.instance ? <View style={{ gap: 5, paddingVertical: 8, paddingLeft: 10 }}><Text selectable style={muted}>{workspace.path}</Text>{linked.map(resource => <Text selectable key={resource.id} style={muted}>{cacheLabel(resource.providerLabel, locale)} · {cacheLabel(resource.kindLabel, locale)} · {resource.scope === 'workspace' ? cacheUsageText(resource.usage, zh) : zh ? '共享引用' : 'Shared reference'}{`\n${resource.displayPath}`}</Text>)}{workspace.usage.error ? <Text style={{ ...muted, color: c.statusWarning }}>{workspace.usage.error}</Text> : null}</View> : null}
+          {expanded === workspace.instance ? <View style={{ gap: 5, paddingVertical: 8, paddingLeft: 10 }}><Text selectable style={muted}>{workspace.path}</Text>{workspace.usage.observedAt ? <Text style={muted}>{zh ? '统计于' : 'Measured'} {new Date(workspace.usage.observedAt).toLocaleString(locale)}</Text> : null}{linked.map(resource => <Text selectable key={resource.id} style={muted}>{cacheLabel(resource.providerLabel, locale)} · {cacheLabel(resource.kindLabel, locale)} · {resource.scope === 'workspace' ? cacheUsageText(resource.usage, zh) : zh ? '共享引用' : 'Shared reference'}{`\n${resource.displayPath}`}</Text>)}{workspace.usage.error ? <Text style={{ ...muted, color: c.statusWarning }}>{workspace.usage.error}</Text> : null}</View> : null}
         </View>;
       })}
       {!workspaces.length ? <Text style={{ ...muted, paddingVertical: 12 }}>{zh ? '打开本页后将在后台统计 Workspace 空间。' : 'Workspace space will be measured in the background.'}</Text> : null}
     </View>)}
-    <Text style={{ ...muted, marginTop: 12 }}>{zh ? '空间为磁盘分配占用估算；共享缓存仅计一次。' : 'Allocated disk usage is an estimate; shared caches are counted once.'}</Text>
+    <Text style={{ ...muted, marginTop: 12 }}>{zh ? '空间为磁盘分配占用估算；共享缓存仅计一次。' : 'Allocated disk usage is an estimate; shared caches are counted once.'}{cache.data?.totalsEstimated ? zh ? ' 合计来自不同时间的统计，供估算参考。' : ' Totals combine measurements from different times.' : ''}</Text>
     {cache.data?.errors.map((error, index) => <Text selectable key={index} style={{ ...muted, color: c.statusWarning }}>{error}</Text>)}
     {cache.preview ? <Modal open title={zh ? '确认清理缓存' : 'Confirm cache cleanup'} onOpenChange={open => { if (!open && !cache.busy) cache.closePreview(); }}>
       <Modal.Content scrollable style={{ maxHeight: 540 }} contentContainerStyle={{ padding: 14, gap: 12 }}>

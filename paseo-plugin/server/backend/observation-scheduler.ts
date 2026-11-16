@@ -13,7 +13,7 @@ type Repo = {
   path: string; successfulAt?: string; working: number; sourceWorking: number; refs: number; lease: number; verified: number;
   issue: string | null; retryAt: number; failures: number; ready?: Promise<void>;
   watches: Set<string>; firstEvent: number; timer?: ReturnType<typeof setTimeout>;
-  pendingWorking: boolean; pendingSource: boolean; pendingRefs: boolean; refresh?: () => Promise<unknown>; refreshing?: Promise<unknown>;
+  pendingWorking: boolean; pendingSource: boolean; pendingRefs: boolean; pendingActivity: boolean; refresh?: () => Promise<unknown>; refreshing?: Promise<unknown>;
 };
 export type SchedulerOptions = {
   subscribe?: typeof watcher.subscribe; leaseMs?: number; reconcileMs?: number;
@@ -22,6 +22,7 @@ export type SchedulerOptions = {
 };
 /** Events invalidate derived data, never claim that a Git observation succeeded. */
 export class ObservationScheduler {
+  onActivity?: (workspaceIds: string[]) => void;
   readonly instanceId = randomUUID();
   revision = 0;
   rosterRevision = 0;
@@ -50,7 +51,7 @@ export class ObservationScheduler {
     let repo = this.repos.get(path);
     if (!repo) {
       repo = { path, working: 0, sourceWorking: 0, refs: 0, lease: 0, verified: Date.now(), issue: null,
-        retryAt: 0, failures: 0, watches: new Set(), firstEvent: 0, pendingWorking: false, pendingSource: false, pendingRefs: false };
+        retryAt: 0, failures: 0, watches: new Set(), firstEvent: 0, pendingWorking: false, pendingSource: false, pendingRefs: false, pendingActivity: false };
       this.repos.set(path, repo);
     }
     if (refresh) repo.refresh = refresh;
@@ -133,7 +134,7 @@ export class ObservationScheduler {
   force(workspace?: string) {
     for (const r of this.repos.values()) if (!workspace || this.workspaces.get(workspace)?.has(r.path)) {
       if (workspace) this.touch(r);
-      this.event(r, true, true, true);
+      this.event(r, true, true, true, true, false);
     }
     this.revision++;
   }
@@ -211,17 +212,19 @@ export class ObservationScheduler {
         && !isAbsolute(child) && child !== '..' && !child.startsWith('../') && !child.startsWith('..\\');
     });
   }
-  private event(repo: Repo, working: boolean, refs: boolean, immediate = false, source = true) {
+  private event(repo: Repo, working: boolean, refs: boolean, immediate = false, source = true, activity = true) {
     repo.pendingWorking ||= working; repo.pendingRefs ||= refs;
     repo.pendingSource ||= (working || refs) && source;
+    repo.pendingActivity ||= (working || refs) && source && activity;
     repo.firstEvent ||= Date.now();
     clearTimeout(repo.timer);
     const flush = () => {
       repo.timer = undefined; repo.firstEvent = 0;
+      if (repo.pendingActivity) this.onActivity?.([...this.workspaces].filter(([, paths]) => paths.has(repo.path)).map(([id]) => id));
       if (repo.pendingWorking) repo.working++;
       if (repo.pendingSource) repo.sourceWorking++;
       if (repo.pendingRefs) repo.refs++;
-      repo.pendingWorking = repo.pendingSource = repo.pendingRefs = false; this.revision++;
+      repo.pendingWorking = repo.pendingSource = repo.pendingRefs = repo.pendingActivity = false; this.revision++;
       if (repo.lease > Date.now()) this.refresh(repo);
     };
     if (immediate) flush();

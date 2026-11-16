@@ -19,8 +19,10 @@ import { cacheTaskActive } from '../shared/cache-management.ts';
 import { workspaceInstanceKey } from '../shared/workspace-lineage.ts';
 import { cacheRelationship } from '../client/cache-presentation.ts';
 import { runtimeCacheRoot } from '../server/backend/runtime-layout.ts';
+import { workspaceScanInterval, resourceScanInterval } from '../server/backend/cache-schedule.ts';
+import { ObservationScheduler } from '../server/backend/observation-scheduler.ts';
 
-async function fixture(options: { providers?: CacheProvider[]; measure?: typeof measureCachePaths; hostRoot?: string; cacheScope?: string } = {}) {
+async function fixture(options: { providers?: CacheProvider[]; measure?: typeof measureCachePaths; hostRoot?: string; cacheScope?: string; clock?: () => number; latestCommitAt?: (workspace: any) => string | null } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'wb-cache-management-'))), source = join(root, 'project');
   await mkdir(source);
   const configPath = join(source, 'project.json');
@@ -40,7 +42,7 @@ async function fixture(options: { providers?: CacheProvider[]; measure?: typeof 
     async cleanup(resource) { cleanups++; assert.deepEqual(resource.paths, [data]); await rm(join(data, 'blob')); },
   };
   const manager = new CacheManagement(service.workspaces, { providers: options.providers || [provider], hostRoot: options.hostRoot || join(root, 'host'), measure: options.measure,
-    assertIdle: async () => [configPath] });
+    clock: options.clock, latestCommitAt: options.latestCommitAt, assertIdle: async () => [configPath] });
   service.cacheManagement = manager;
   return { root, source, config, configPath, service, manager, data, provider, cleanups: () => cleanups,
     close: async () => { await service.close(); await rm(root, { recursive: true, force: true }); } };
@@ -302,4 +304,306 @@ test('real Go clean commands operate only on temporary caches and keep the other
     await writeFile(join(build, 'build-keep'), 'build'); await provider.cleanup(resource('module'), context);
     await assert.rejects(access(join(module, 'module-keep'))); assert.equal(await readFile(join(build, 'build-keep'), 'utf8'), 'build');
   } finally { await f.close(); }
+});
+
+const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
+async function addWorkspace(f: Awaited<ReturnType<typeof fixture>>, id: string) {
+  const path = join(f.config.treesRoot, id);
+  await mkdir(path, { recursive: true }); await writeFile(join(path, 'content'), id);
+  await writeFile(join(f.config.recordsRoot, `${id}.json`), JSON.stringify({ schemaVersion: 1, id, displayName: id, treePath: path,
+    sourceRoot: f.source, state: 'active', repositories: [], createdAt: '2020-01-01T00:00:00Z' }));
+  return path;
+}
+
+test('activity tiers and provider-neutral shared/global scheduling have bounded intervals', () => {
+  const now = Date.now();
+  assert.equal(workspaceScanInterval(now, now), 10 * MINUTE);
+  assert.equal(workspaceScanInterval(now - DAY, now), 60 * MINUTE);
+  assert.equal(workspaceScanInterval(now - 7 * DAY, now), DAY);
+  assert.equal(workspaceScanInterval(now - 30 * DAY, now), 7 * DAY);
+  assert.equal(workspaceScanInterval(undefined, now), DAY);
+  assert.equal(workspaceScanInterval(now + DAY, now), 10 * MINUTE);
+  const resource = { scope: 'project', references: [{ instance: 'cold' }, { instance: 'hot' }] } as CacheResource;
+  assert.equal(resourceScanInterval(resource, new Map([['cold', 7 * DAY], ['hot', 10 * MINUTE]])), 10 * MINUTE);
+  assert.equal(resourceScanInterval(resource, new Map([['cold', 7 * DAY]])), 60 * MINUTE);
+  assert.equal(resourceScanInterval({ ...resource, scope: 'global' }, new Map()), 30 * MINUTE);
+});
+
+test('repeated opens reuse per-target snapshots; only due or newly used Workspaces are measured', async () => {
+  const origin = Date.now(); let now = origin;
+  const counts = new Map<string, number>();
+  const dates: Record<string, string> = { hot: new Date(origin).toISOString(), warm: new Date(origin - 3 * DAY).toISOString(), cold: new Date(origin - 45 * DAY).toISOString() };
+  const f = await fixture({ clock: () => now, latestCommitAt: workspace => dates[workspace.id] || null,
+    measure: async (paths, options) => { counts.set(paths[0], (counts.get(paths[0]) || 0) + 1); return measureCachePaths(paths, options); } });
+  try {
+    const hot = await addWorkspace(f, 'hot'), warm = await addWorkspace(f, 'warm'), cold = await addWorkspace(f, 'cold');
+    const first = await scan(f.manager);
+    for (let n = 0; n < 3; n++) assert.equal((await f.manager.scan({ action: 'start', viewId: `open-${n}`, automatic: true })).phase, 'fresh');
+    assert.equal(counts.get(cold), 1); assert.equal((await f.manager.list()).stale, false);
+    const prior = JSON.stringify([...counts]);
+    for (let n = 0; n < 5; n++) await f.manager.list();
+    assert.equal(JSON.stringify([...counts]), prior);
+    now += 11 * MINUTE;
+    await settle(f.manager, await f.manager.scan({}) as CacheTask);
+    assert.equal(counts.get(hot), 2); assert.equal(counts.get(warm), 1); assert.equal(counts.get(cold), 1);
+    const coldBefore = first.workspaces.find(row => row.id === 'cold')!.usage.observedAt;
+    await settle(f.manager, await f.manager.scan({ viewId: 'selected', automatic: true, workspaceId: 'cold' }) as CacheTask);
+    assert.equal(counts.get(cold), 2, 'a currently selected cold Workspace gets the hot interval');
+    assert.ok((await f.manager.list()).workspaces.find(row => row.id === 'cold')!.usage.observedAt! > coldBefore!);
+    await f.manager.scan({ action: 'pause', viewId: 'selected' });
+    await f.manager.scan({ action: 'activity', workspaceId: 'cold' });
+    now += 11 * MINUTE;
+    await settle(f.manager, await f.manager.scan({}) as CacheTask);
+    assert.equal(counts.get(cold), 3, 'actual use remains hot after the view closes');
+    assert.equal(counts.get(warm), 1);
+    assert.equal((await f.manager.list()).totalsEstimated, true);
+  } finally { await f.close(); }
+});
+
+test('closing a view checkpoints the current directory and resumes remaining targets after restart', async () => {
+  let release!: () => void;
+  const counts = new Map<string, number>();
+  const f = await fixture({ measure: async (paths, options) => {
+    counts.set(paths[0], (counts.get(paths[0]) || 0) + 1);
+    if (paths[0] === f.source) await new Promise<void>(resolve => { release = resolve; });
+    return measureCachePaths(paths, options);
+  } });
+  try {
+    const cold = await addWorkspace(f, 'cold');
+    const task = await f.manager.scan({ viewId: 'closing', automatic: true }) as CacheTask;
+    while (!release) await pause(5);
+    const snapshotPath = join(f.config.stateRoot, 'cache-management', 'snapshot.json');
+    const checkpoint = JSON.parse(await readFile(snapshotPath, 'utf8'));
+    assert.ok(checkpoint.resources[0].usage.bytes! >= 8192, 'completed cache target is persisted before the whole scan ends');
+    await f.manager.scan({ action: 'pause', viewId: 'closing' }); release();
+    assert.equal((await settle(f.manager, task)).state, 'paused'); assert.equal(counts.get(cold), undefined);
+    assert.equal((await f.manager.scan({ viewId: 'closing', automatic: true })).state, 'paused', 'late requests cannot reopen a retired view');
+    await f.manager.close();
+    const reopened = new CacheManagement(f.service.workspaces, { providers: [f.provider], hostRoot: join(f.root, 'host'), measure: async (paths, options) => {
+      counts.set(paths[0], (counts.get(paths[0]) || 0) + 1); return measureCachePaths(paths, options);
+    } }); f.service.cacheManagement = reopened;
+    await settle(reopened, await reopened.scan({ viewId: 'reopened', automatic: true }) as CacheTask);
+    assert.equal(counts.get(f.data), 1); assert.equal(counts.get(f.source), 1); assert.equal(counts.get(cold), 1);
+    assert.equal((await reopened.scan({ viewId: 'reopened', automatic: true })).phase, 'fresh', 'completed resumed tasks do not replay an older paused task');
+  } finally { release?.(); await f.close(); }
+});
+
+test('cleanup preempts another project scan and invalidates only overlapping measured paths', async () => {
+  let blocked = false, entered = false;
+  const a = await fixture({ measure: async (paths, options) => {
+    if (blocked && paths[0] === a.source) {
+      entered = true;
+      await new Promise<void>(resolve => { if (options.signal.aborted) resolve(); else options.signal.addEventListener('abort', () => resolve(), { once: true }); });
+    }
+    return measureCachePaths(paths, options);
+  } });
+  const b = await fixture({ hostRoot: join(a.root, 'host') });
+  try {
+    const ownDiscover = b.provider.discover.bind(b.provider);
+    b.provider.discover = async context => (await ownDiscover(context)).map(resource => ({ ...resource, displayPath: a.data, paths: [a.data] }));
+    let cleanups = 0;
+    b.provider.cleanup = async () => { cleanups++; await rm(join(a.data, 'blob')); };
+    const firstA = await scan(a.manager), firstB = await scan(b.manager);
+    const preview = await b.manager.cleanup({ action: 'preview', resourceId: firstB.resources[0].id });
+    blocked = true;
+    const scanning = await a.manager.scan({ force: true }) as CacheTask;
+    while (!entered) await pause(5);
+    const start = Date.now();
+    const cleaning = await b.manager.cleanup({ action: 'start', requestId: 'cross-project', previewId: preview.previewId }) as CacheTask;
+    assert.equal((await settle(b.manager, cleaning)).state, 'complete');
+    assert.ok(Date.now() - start < 3000, 'cleanup does not wait for the whole foreign scan');
+    assert.equal((await settle(a.manager, scanning)).state, 'paused');
+    assert.equal(cleanups, 1);
+    const invalidated = await a.manager.list();
+    assert.ok(invalidated.resources[0].usage.invalidatedAt);
+    assert.equal(invalidated.resources[0].usage.bytes, firstA.resources[0].usage.bytes, 'previous result remains viewable');
+    assert.equal(invalidated.workspaces[0].usage.invalidatedAt, undefined, 'unrelated workspace directory is not invalidated');
+    blocked = false;
+    await settle(a.manager, await a.manager.scan({}) as CacheTask);
+    const updated = await a.manager.list();
+    assert.ok(updated.resources[0].usage.bytes! < firstA.resources[0].usage.bytes!);
+    assert.equal(updated.resources[0].usage.invalidatedAt, undefined);
+    assert.equal((await b.manager.cleanup({ action: 'start', requestId: 'cross-project', previewId: preview.previewId })).taskId, cleaning.taskId);
+    assert.equal(cleanups, 1);
+  } finally { blocked = false; await b.close(); await a.close(); }
+});
+
+test('same-project cleanup remains available during a scan and no stale partial measurement is published', async () => {
+  let blocked = false, entered = false;
+  const f = await fixture({ measure: async (paths, options) => {
+    if (blocked && paths[0] === f.data) {
+      entered = true;
+      await new Promise<void>(resolve => { if (options.signal.aborted) resolve(); else options.signal.addEventListener('abort', () => resolve(), { once: true }); });
+      return { bytes: 999999999, state: 'ready' };
+    }
+    return measureCachePaths(paths, options);
+  } });
+  try {
+    const cold = await addWorkspace(f, 'restart-pending');
+    const first = await scan(f.manager); blocked = true;
+    const scanning = await f.manager.scan({ force: true }) as CacheTask;
+    while (!entered) await pause(5);
+    const preview = await f.manager.cleanup({ action: 'preview', resourceId: first.resources[0].id });
+    const cleaning = await f.manager.cleanup({ action: 'start', requestId: 'during-scan', previewId: preview.previewId }) as CacheTask;
+    assert.equal((await settle(f.manager, scanning)).state, 'paused');
+    assert.equal((await settle(f.manager, cleaning)).state, 'complete');
+    const value = (await f.manager.list()).resources[0].usage;
+    assert.equal(value.bytes, first.resources[0].usage.bytes); assert.ok(value.invalidatedAt);
+    blocked = false;
+    await f.manager.close();
+    const walked = new Set<string>();
+    const reopened = new CacheManagement(f.service.workspaces, { providers: [f.provider], hostRoot: join(f.root, 'host'), measure: async (paths, options) => {
+      walked.add(paths[0]); return measureCachePaths(paths, options);
+    } }); f.service.cacheManagement = reopened;
+    await settle(reopened, await reopened.scan({}) as CacheTask);
+    assert.ok((await reopened.list()).resources[0].usage.bytes! < first.resources[0].usage.bytes!);
+    assert.ok(walked.has(cold), 'paused full-scan targets survive a restart after a newer cleanup receipt');
+  } finally { await f.close(); }
+});
+
+test('selective rescans preserve cross-target hardlink deduplication and refresh overlapping roots as a cohort', async () => {
+  let now = Date.now(); const counts = new Map<string, number>();
+  const f = await fixture({ clock: () => now, measure: async (paths, options) => {
+    counts.set(paths[0], (counts.get(paths[0]) || 0) + 1); return measureCachePaths(paths, options);
+  } });
+  try {
+    const other = join(f.root, 'other-cache'); await mkdir(other);
+    await link(join(f.data, 'blob'), join(other, 'linked'));
+    const original = f.provider.discover.bind(f.provider);
+    f.provider.discover = async context => {
+      const [resource] = await original(context);
+      return [{ ...resource, scope: 'global' }, { ...resource, scope: 'workspace', kind: 'cold-index', paths: [other], displayPath: other }];
+    };
+    const first = await scan(f.manager), cold = first.resources.find(row => row.kind === 'cold-index')!;
+    await rm(join(f.data, 'blob')); now += 31 * MINUTE;
+    await settle(f.manager, await f.manager.scan({}) as CacheTask);
+    const next = await f.manager.list();
+    assert.equal(next.resources.find(row => row.id === cold.id)!.usage.observedAt, cold.usage.observedAt);
+    assert.equal(counts.get(other), 1);
+    const actual = await measureCachePaths([f.data, other], { signal: new AbortController().signal });
+    assert.equal(next.totalBytes, actual.bytes, 'the cold hardlink remains counted when its former owner is remeasured');
+    assert.equal('accounting' in next.resources[0].usage, false, 'inode ledgers are not sent to the frontend');
+    const nested = join(f.data, 'nested'); await mkdir(nested); await writeFile(join(nested, 'value'), Buffer.alloc(8192));
+    f.provider.discover = async context => { const [resource] = await original(context); return [{ ...resource, scope: 'global' }, { ...resource, scope: 'workspace', kind: 'nested', paths: [nested], displayPath: nested }]; };
+    await scan(f.manager); const count = counts.get(nested)!; now += 31 * MINUTE;
+    await settle(f.manager, await f.manager.scan({}) as CacheTask);
+    assert.equal(counts.get(nested), count + 1, 'overlapping targets share a deduplication checkpoint');
+    const final = await f.manager.list();
+    assert.equal(final.totalBytes, (await measureCachePaths([f.data], { signal: new AbortController().signal })).bytes);
+  } finally { await f.close(); }
+});
+
+test('failures keep last successful size/time and back off instead of repeating on every open', async () => {
+  let now = Date.now(), fail = false, attempts = 0;
+  const f = await fixture({ clock: () => now, measure: async (paths, options) => {
+    if (fail && paths[0] === f.data) { attempts++; return { bytes: 1, state: 'partial', error: 'permission denied' }; }
+    return measureCachePaths(paths, options);
+  } });
+  try {
+    const first = await scan(f.manager); now += 61 * MINUTE; fail = true;
+    await settle(f.manager, await f.manager.scan({}) as CacheTask);
+    const failed = await f.manager.list(); assert.equal(failed.resources[0].usage.bytes, first.resources[0].usage.bytes);
+    assert.equal(failed.resources[0].usage.observedAt, first.resources[0].usage.observedAt);
+    for (let n = 0; n < 4; n++) await f.manager.scan({});
+    assert.equal(attempts, 1); now += 5 * MINUTE;
+    await settle(f.manager, await f.manager.scan({}) as CacheTask); assert.equal(attempts, 2);
+  } finally { await f.close(); }
+});
+
+test('refresh requests merge and a full refresh upgrades the existing selective task without a second walk', async () => {
+  let now = Date.now(), blocked = false, release!: () => void;
+  const counts = new Map<string, number>();
+  const f = await fixture({ clock: () => now, latestCommitAt: workspace => workspace.id === 'hot' ? new Date(now).toISOString() : null,
+    measure: async (paths, options) => {
+      counts.set(paths[0], (counts.get(paths[0]) || 0) + 1);
+      if (blocked && paths[0].endsWith('/hot')) await new Promise<void>(resolve => { release = resolve; });
+      return measureCachePaths(paths, options);
+    } });
+  try {
+    const hot = await addWorkspace(f, 'hot'), cold = await addWorkspace(f, 'cold');
+    await scan(f.manager); now += 11 * MINUTE; blocked = true;
+    const selective = await f.manager.scan({}) as CacheTask;
+    while (!release) await pause(5);
+    for (let n = 0; n < 3; n++) assert.equal((await f.manager.scan({ force: n === 2 })).taskId, selective.taskId);
+    release(); await settle(f.manager, selective);
+    assert.equal(counts.get(hot), 2); assert.equal(counts.get(cold), 2); assert.equal(counts.get(f.data), 2);
+  } finally { release?.(); await f.close(); }
+});
+
+test('expired view demand pauses a queued scan without acquiring a lease or walking a directory', async () => {
+  let now = Date.now(), release!: () => void, walks = 0;
+  const f = await fixture({ clock: () => now, measure: async (paths, options) => { walks++; return measureCachePaths(paths, options); } });
+  const lease = withCacheLease(join(f.root, 'host'), new AbortController().signal, () => new Promise<void>(resolve => { release = resolve; }));
+  try {
+    while (!release) await pause(5);
+    const task = await f.manager.scan({ automatic: true, viewId: 'expired' }) as CacheTask;
+    while ((await f.manager.task({ taskId: task.taskId })).phase !== 'measure') await pause(5);
+    now += 46_000;
+    assert.equal((await settle(f.manager, task)).state, 'paused'); assert.equal(walks, 0);
+  } finally { release?.(); await lease; await f.close(); }
+});
+
+test('worker restarts and unchanged roster notifications do not rediscover fresh inventory', async () => {
+  const f = await fixture();
+  try {
+    await scan(f.manager); await f.manager.close();
+    let version = 'new-worker', discoveries = 0;
+    const original = f.provider.discover.bind(f.provider);
+    f.provider.discover = async context => { discoveries++; return original(context); };
+    const reopened = new CacheManagement(f.service.workspaces, { providers: [f.provider], hostRoot: join(f.root, 'host'), rosterVersion: () => version });
+    f.service.cacheManagement = reopened;
+    assert.equal((await reopened.list()).stale, false);
+    assert.equal((await reopened.scan({})).phase, 'fresh'); assert.equal(discoveries, 0);
+    version = 'notification-without-roster-change';
+    assert.equal((await reopened.scan({})).phase, 'fresh'); assert.equal(discoveries, 0);
+    await addWorkspace(f, 'new-workspace'); version = 'actual-roster-change';
+    const task = await reopened.scan({}) as CacheTask;
+    await settle(reopened, task); assert.equal(discoveries, 1);
+    assert.ok((await reopened.list()).workspaces.some(row => row.id === 'new-workspace'));
+  } finally { await f.close(); }
+});
+
+test('coordination failure keeps previous results readable and records cleanup failure without executing it', async () => {
+  const f = await fixture();
+  try {
+    const first = await scan(f.manager); await f.manager.close();
+    const host = join(f.root, 'unavailable-host'); await mkdir(join(host, 'coordination.sqlite'), { recursive: true });
+    const reopened = new CacheManagement(f.service.workspaces, { providers: [f.provider], hostRoot: host, assertIdle: async () => [f.configPath] });
+    f.service.cacheManagement = reopened;
+    const retained = await reopened.list(); assert.equal(retained.resources[0].usage.bytes, first.resources[0].usage.bytes);
+    assert.ok(retained.errors.some(error => error.includes('coordination unavailable')));
+    const preview = await reopened.cleanup({ action: 'preview', resourceId: first.resources[0].id });
+    const task = await reopened.cleanup({ action: 'start', previewId: preview.previewId, requestId: 'coordination-failed' });
+    assert.equal(task.state, 'failed'); assert.equal(f.cleanups(), 0);
+    assert.equal((await reopened.task({ requestId: 'coordination-failed' })).state, 'failed');
+  } finally { await f.close(); }
+});
+
+test('known build activity is recorded even before the cache page has ever been opened', async () => {
+  const now = Date.now();
+  const f = await fixture({ clock: () => now, latestCommitAt: () => new Date(now - 45 * DAY).toISOString() });
+  try {
+    f.manager.noteWorkspaceActivity('main');
+    const activityPath = join(f.config.stateRoot, 'cache-management/activity.json');
+    let saved: any;
+    for (let n = 0; n < 200 && !saved; n++) { await pause(5); saved = await readFile(activityPath, 'utf8').then(JSON.parse).catch(() => undefined); }
+    assert.ok(saved); assert.ok(Object.values(saved.workspaces).some((value: any) => value.changedAt === now));
+    const result = await scan(f.manager);
+    assert.equal(result.workspaces[0].usage.nextScanAt, now + 10 * MINUTE);
+  } finally { await f.close(); }
+});
+
+test('read refreshes and statistics publications do not manufacture Workspace activity', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'wb-cache-activity-')));
+  execFileSync('git', ['-C', root, 'init', '-q']);
+  const callbacks = new Map<string, (...args: any[]) => void>(), changes: string[][] = [];
+  const scheduler = new ObservationScheduler({ debounceMs: 1, subscribe: async (path, callback) => { callbacks.set(path, callback); return { unsubscribe: async () => {} }; } });
+  scheduler.onActivity = ids => changes.push(ids);
+  try {
+    await scheduler.register('workspace', root);
+    scheduler.force('workspace'); scheduler.statisticsChanged(root); await pause(20);
+    assert.deepEqual(changes, [], 'cache invalidation and read refreshes are not new source activity');
+    callbacks.get(root)!(null, [{ type: 'update', path: join(root, 'source.go') }]); await pause(20);
+    assert.deepEqual(changes, [['workspace']], 'an observed source change is actual activity');
+  } finally { await scheduler.close(); await rm(root, { recursive: true, force: true }); }
 });

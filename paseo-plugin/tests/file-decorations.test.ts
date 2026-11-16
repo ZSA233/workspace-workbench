@@ -265,19 +265,24 @@ test('a raw status flight from the same ID in an older instance is never reused 
 
 test('durable upload progress in a repository-local state directory does not invalidate Git decorations', async () => {
   const f = await fixture(['repo'], true);
+  // This assertion concerns journal invalidation, not the separate 30-second
+  // ignore-rules expiry. Crossing a wall-clock bucket must not change it.
+  const clock = Date.now(), status = new RepositoryStatus(f.service.cache, f.service.observation.scheduler, 3000, () => clock);
+  const decorations = new FileDecorationsService(f.service.files.roots, status);
+  const query = async () => decorations.query(await f.service.files.roots.context(f.id), ['repo'], false);
   try {
     const bytes = Buffer.alloc(512 * 1024, 7), sha256 = createHash('sha256').update(bytes).digest('hex');
     await f.service.handle('files.request', { action: 'upload', workspaceId: f.id, path: 'repo', id: 'progress-only', name: 'upload.bin', size: bytes.length * 2, modifiedAt: 1, policy: 'ask' });
-    const first = await f.query(['repo'], false); assert.equal(first.entries[0].directory?.total, 0, 'internal journals are not user-file changes');
+    const first = await query(); assert.equal(first.entries[0].directory?.total, 0, 'internal journals are not user-file changes');
     const before = f.service.health().git.commands, token = f.service.observation.scheduler.statusToken(f.repo);
     for (const offset of [0, bytes.length]) {
       await f.service.handle('files.request', { action: 'chunk', id: 'progress-only', offset, data: bytes.toString('base64'), sha256 });
       f.callbacks.get(f.repo)?.(null, [{ type: 'update', path: join(f.stateRoot, 'file-transfers/tasks.sqlite3-wal') }]);
     }
     await sleep(350); assert.equal(f.service.observation.scheduler.statusToken(f.repo), token);
-    await f.query(['repo'], false); assert.equal(f.service.health().git.commands, before);
+    await query(); assert.equal(f.service.health().git.commands, before);
     await f.service.handle('files.request', { action: 'control', id: 'progress-only', command: 'cancel' });
-  } finally { await f.close(); }
+  } finally { status.close(); await f.close(); }
 });
 
 test('decoration updates retain tree UI state, bound requests, and fence late instance replies', async () => {

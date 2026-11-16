@@ -45,6 +45,7 @@ export type WorkspaceActivitySummary = {
 
 /** Persisted, on-demand HEAD metadata. It never polls and never walks commit history. */
 export class WorkspaceActivityIndex {
+  onHeadChange?: (workspaceId: string) => void;
   private readonly path: string;
   private readonly config: Config;
   private repositories = new Map<string, RepositoryActivity>();
@@ -255,8 +256,15 @@ export class WorkspaceActivityIndex {
       }
     } finally {
       // Publish one complete batch. Cancelled or superseded scans publish nothing.
-      if (!scan.controller.signal.aborted && scan.epoch === this.epoch)
-        for (const [key, entry] of staged) if (!this.liveKeys || this.liveKeys.has(key)) this.repositories.set(key, entry);
+      if (!scan.controller.signal.aborted && scan.epoch === this.epoch) {
+        const changed = new Set<string>();
+        for (const [key, entry] of staged) if (!this.liveKeys || this.liveKeys.has(key)) {
+          const previous = this.repositories.get(key);
+          if (previous && !entry.error && previous.head !== entry.head) for (const id of Object.keys(entry.owners || {})) changed.add(id);
+          this.repositories.set(key, entry);
+        }
+        for (const id of changed) this.onHeadChange?.(id);
+      }
       if (scan.state === "running") scan.state = scan.controller.signal.aborted ? "cancelled" : "complete";
       if (this.activeScanId === scan.id) this.activeScanId = null;
       this.persist();

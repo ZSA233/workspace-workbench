@@ -7,8 +7,8 @@ import { uncertainControlFailure } from '../shared/task-state';
 
 type Rpc = (input: { method: ObserverMethod; params: Record<string, unknown> }) => Promise<ObserverResponse>;
 type Operation = { project: string; requestId: string; at: number };
-export function useCacheManagement({ project, enabled, foreground, visible, watching, rpc }: {
-  project: string; enabled: boolean; foreground: boolean; visible: boolean; watching: boolean; rpc: Rpc;
+export function useCacheManagement({ project, workspaceId, enabled, foreground, visible, watching, rpc }: {
+  project: string; workspaceId: string; enabled: boolean; foreground: boolean; visible: boolean; watching: boolean; rpc: Rpc;
 }) {
   const scope = useRef(project); scope.current = project;
   const call = useRef(rpc); call.current = rpc;
@@ -16,7 +16,9 @@ export function useCacheManagement({ project, enabled, foreground, visible, watc
   const [preview, setPreview] = useState<CacheCleanupPreview | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
   const [busy, setBusy] = useState(false);
-  const auto = useRef('');
+  const view = useRef<{ project: string; id: string } | null>(null);
+  const selected = useRef(workspaceId); selected.current = workspaceId;
+  const tick = useRef<(() => void) | null>(null);
   const request = useCallback(async <T,>(method: ObserverMethod, params: Record<string, unknown>): Promise<T> => {
     const response = await call.current({ method, params });
     if (!response.ok) throw Object.assign(new Error(response.error?.message || 'Cache request failed'), { code: response.error?.code });
@@ -34,19 +36,47 @@ export function useCacheManagement({ project, enabled, foreground, visible, watc
     refetchInterval: current => !foreground ? false : current.state.data?.state === 'idle' ? operation && Date.now() - operation.at < 30_000 ? 1000 : false : cacheTaskActive(current.state.data as CacheTask | undefined) ? 1000 : false,
   });
   const refetch = query.refetch;
-  const scan = useCallback(async (force = true) => {
+  const scan = useCallback(async (force = false) => {
     const captured = project;
-    try { setError(''); await request('cache.scan', { action: 'start', force }); if (scope.current === captured) await refetch({ cancelRefetch: false }); }
+    const current = view.current?.project === project ? view.current : null;
+    try { setError(''); await request('cache.scan', { action: 'start', force, workspaceId: selected.current, ...(current ? { viewId: current.id } : {}) }); if (scope.current === captured) await refetch({ cancelRefetch: false }); }
     catch (error) { if (scope.current === captured) setError(String((error as Error).message)); }
   }, [project, request, refetch]);
-  useEffect(() => { setError(''); setPreview(null); setOperation(null); setBusy(false); auto.current = ''; }, [project]);
+  useEffect(() => { setError(''); setPreview(null); setOperation(null); setBusy(false); }, [project]);
   useEffect(() => {
-    const data = query.data;
-    if (!enabled || !foreground || !visible || !data?.stale || cacheTaskActive(data.task)) return;
-    const key = `${project}:${data.observedAt || 'empty'}:${data.task?.kind === 'cleanup' ? data.task.taskId : ''}`;
-    if (auto.current === key) return;
-    auto.current = key; void scan(false);
-  }, [enabled, foreground, visible, query.data, project, scan]);
+    if (!enabled || !foreground || !workspaceId) return;
+    // Selection/foreground transitions are real use; polling never records use.
+    void call.current({ method: 'cache.scan', params: { action: 'activity', workspaceId } }).catch(() => {});
+  }, [enabled, foreground, project, workspaceId]);
+  useEffect(() => {
+    if (!enabled || !foreground || !visible) return;
+    const captured = project, rpc = call.current;
+    const id = `view-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    let stopped = false, inFlight = false;
+    view.current = { project, id };
+    const update = () => {
+      if (stopped || inFlight) return;
+      inFlight = true;
+      void rpc({ method: 'cache.scan', params: { action: 'start', automatic: true, force: false, viewId: id, workspaceId: selected.current } })
+        .then(response => {
+          if (stopped || scope.current !== captured) return;
+          if (!response.ok) setError(response.error?.message || 'Cache request failed');
+          void refetch({ cancelRefetch: false });
+        }).catch(error => { if (!stopped && scope.current === captured) setError(String(error)); })
+        .finally(() => { inFlight = false; });
+    };
+    tick.current = update; update();
+    const timer = setInterval(update, 15_000);
+    return () => {
+      stopped = true; clearInterval(timer);
+      if (tick.current === update) tick.current = null;
+      if (view.current?.id === id) view.current = null;
+      void rpc({ method: 'cache.scan', params: { action: 'pause', viewId: id } }).catch(() => {});
+    };
+  }, [enabled, foreground, visible, project, refetch]);
+  useEffect(() => {
+    if (visible && foreground && query.data?.stale && !cacheTaskActive(query.data.task)) tick.current?.();
+  }, [visible, foreground, query.data?.stale, query.data?.nextScanAt, query.data?.task?.state, query.data?.task?.taskId, workspaceId]);
   useEffect(() => {
     if (receipt.data && receipt.data.state !== 'idle' && !cacheTaskActive(receipt.data as CacheTask)) void refetch({ cancelRefetch: false });
   }, [receipt.data, refetch]);

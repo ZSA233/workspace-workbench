@@ -33,6 +33,7 @@ export type Group = { id: string; name: string; boundAt: number; checkpoint: num
   identity?: string;
   membership: Capability; stream: Capability; history: Capability; status: 'pending' | 'syncing' | 'ready' | 'partial' | 'paused' | 'failed';
   lastEventAt?: number; lastCheckedAt?: number; error?: string; cursor?: string; window?: { start: number; end: number }; };
+export type GroupDirectoryPage = { items: Array<{ id: string; name: string }>; hasMore: boolean; nextCursor: string; complete: boolean; partial: boolean };
 export type Attachment = { id: string; name: string; mimeType: string; size?: number; state: 'pending' | 'ready' | 'unsupported' | 'failed';
   sourceId: string; resourceType?: 'mediaId' | 'fileId'; error?: string; analysisState?: 'ready' | 'unsupported'; analysisNote?: string; };
 export type Message = { id: string; sourceId: string; groupId: string; senderId: string; sender: string; text: string; createdAt: number; updatedAt: number;
@@ -57,6 +58,7 @@ export const communicationsActionSchema = z.discriminatedUnion('action', [
   z.object({ action:z.literal('model.binding'),scope:z.enum(['service','project']) }),
   z.object({ action: z.enum(['connection.check', 'auth.start', 'models.check', 'generation.check', 'analysis.retry']) }),
   z.object({ action: z.literal('groups.search'), query: z.string().min(1).max(200) }),
+  z.object({ action: z.literal('groups.list'), query: z.string().max(200).default(''), cursor: z.string().max(512).default(''), limit: z.number().int().min(1).max(100).default(50) }),
   z.object({ action: z.literal('groups.bind'), groupId: target, name: z.string().min(1).max(512) }),
   z.object({ action: z.enum(['groups.pause', 'groups.resume', 'groups.remove', 'sync.start']), groupId: target }),
   z.object({ action: z.literal('history.start'), groupId: target, start:z.number().int().nonnegative(),end:z.number().int().positive() }).refine(value=>value.start<value.end),

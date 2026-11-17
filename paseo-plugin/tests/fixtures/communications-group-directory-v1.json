@@ -1,0 +1,100 @@
+[
+  {
+    "input": {
+      "action": "groups.list"
+    },
+    "valid": true,
+    "output": {
+      "action": "groups.list",
+      "query": "",
+      "cursor": "",
+      "limit": 50
+    }
+  },
+  {
+    "input": {
+      "action": "groups.list",
+      "query": "研发",
+      "cursor": "9007199254740993",
+      "limit": 25
+    },
+    "valid": true,
+    "output": {
+      "action": "groups.list",
+      "query": "研发",
+      "cursor": "9007199254740993",
+      "limit": 25
+    }
+  },
+  {
+    "input": {
+      "action": "groups.list",
+      "query": "",
+      "cursor": "",
+      "limit": 100
+    },
+    "valid": true,
+    "output": {
+      "action": "groups.list",
+      "query": "",
+      "cursor": "",
+      "limit": 100
+    }
+  },
+  {
+    "input": {
+      "action": "groups.list",
+      "limit": 0
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "groups.list",
+      "limit": 101
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "groups.list",
+      "limit": 1.5
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "groups.list",
+      "query": null
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "groups.list",
+      "query": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "groups.list",
+      "cursor": null
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "groups.list",
+      "cursor": 50
+    },
+    "valid": false
+  },
+  {
+    "input": {
+      "action": "groups.list",
+      "cursor": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  }
+]

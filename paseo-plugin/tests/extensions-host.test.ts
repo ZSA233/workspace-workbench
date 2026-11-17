@@ -20,6 +20,11 @@ test('TypeScript SDK validates the shared Go API-v1 compatibility fixtures', () 
   for (const item of cases) { const parsed = communicationsActionSchema.safeParse(item.input); assert.equal(parsed.success, item.valid, JSON.stringify(item.input)); if (parsed.success) assert.deepEqual(parsed.data, item.output); }
 });
 
+test('group directory SDK agrees with Go on defaults, cursors and bounded requests', () => {
+  const cases = JSON.parse(readFileSync(new URL('./fixtures/communications-group-directory-v1.json', import.meta.url), 'utf8'));
+  for (const item of cases) { const parsed = communicationsActionSchema.safeParse(item.input); assert.equal(parsed.success, item.valid, JSON.stringify(item.input)); if (parsed.success) assert.deepEqual(parsed.data, item.output); }
+});
+
 test('connector uses a real Go process; collection outlives disable, unload and reconnect', {
   skip: !serviceAvailable() && 'Set COMMUNICATIONS_TEST_BINARY or COMMUNICATIONS_SERVICE_DIR to test the independent service',
 }, async () => {

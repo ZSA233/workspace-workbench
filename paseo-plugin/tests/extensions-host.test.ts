@@ -38,7 +38,7 @@ test('connector uses a real Go process; collection outlives disable, unload and 
 const fs = require('node:fs'); const args = process.argv.slice(2); const emit = value => console.log(JSON.stringify(value));
 if(args[0] === 'version') console.log('dws v1.0.68');
 else if(args[0] === 'auth') emit({ success: true, authenticated: true, corp_id: 'corp', user_id: 'user' });
-else if(args.includes('+chat-bots')) emit({ bots: [{ openBotId: 'bot' }], complete: true, hasMore: false });
+else if(args.includes('+chat-members-list')) emit({ bots: [{ openBotId: 'bot' }], complete: true, hasMore: false, buckets: { bots: { complete: true } } });
 else if(args.includes('+chat-messages')) emit({ messages: JSON.parse(fs.readFileSync(${JSON.stringify(messages)},'utf8')), complete: true, hasMore: false });
 else if(args.includes('+listen-im')) { console.error('[event] ready'); setInterval(() => { for(const message of JSON.parse(fs.readFileSync(${JSON.stringify(messages)},'utf8'))) emit(message); }, 50); }
 else process.exit(2);

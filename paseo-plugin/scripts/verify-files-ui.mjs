@@ -9,10 +9,11 @@ import { chromium } from 'playwright';
 import { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import WebSocket from 'ws';
 import { openGlobalWorkbench } from './ui-project-selection.mjs';
+import { verifyFileNoticesUi } from './verify-files-notices-ui.mjs';
 const plugin = resolve(import.meta.dirname, '..'), output = resolve(process.env.WORKBENCH_VERIFY_OUTPUT || join(plugin, '../.local/verification/files'));
 await mkdir(output, { recursive: true });
 let child, client, browser, ui, logs = '';
-const report = { kind: 'actual-paseo-files-chromium', checks: [], errors: [], console: [], screenshots: [], limitations: ['Chromium on macOS; Windows native drag and native Save picker require Windows acceptance. Save export uses a real OPFS-backed file handle in this harness.'] };
+const report = { kind: 'actual-paseo-files-chromium', scope: process.env.WORKBENCH_FILES_NOTICES_ONLY === '1' ? 'file-notices' : 'all-files', checks: [], errors: [], console: [], screenshots: [], limitations: ['Chromium on macOS; Windows native drag and native Save picker require Windows acceptance. Save export uses a real OPFS-backed file handle in this harness.'] };
 const check = message => { report.checks.push(message); console.log(JSON.stringify({ check: message })); };
 const pause = ms => new Promise(r => setTimeout(r, ms));
 const wait = async (fn, timeout = 20000) => { const until = Date.now()+timeout; while (Date.now()<until) { const value = await fn(); if (value) return value; await pause(100); } throw Error('Timed out waiting for file proof'); };
@@ -47,15 +48,22 @@ try {
   });
   await page.goto(ui.url);
   await page.getByText('Workspace Workbench', { exact: true }).first().waitFor({ timeout: 20000 }); await pause(1000);
+  if (await page.getByText('Skip setup', { exact: true }).isVisible()) await page.getByText('Skip setup', { exact: true }).click();
   if (await page.getByText('Add project', { exact: true }).first().isVisible().catch(() => false)) { await page.getByText('Add project', { exact: true }).first().click(); await page.getByText('Search for directory', { exact: true }).click(); await page.getByPlaceholder('Search directories or enter a path...').fill(ui.project); await page.getByText('Open this path', { exact: true }).click(); }
   await openGlobalWorkbench(page, 'a');
   await page.getByText('Repositories', { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 20000 });
+  // Latest activity can select the newly created fixture; file paths below are in main.
+  await page.getByTestId('workbench-workspace-selector-toggle').click();
+  await page.getByText('Main workspace', { exact: true }).filter({ visible: true }).last().click();
+  await page.getByTestId('workbench-workspace-selector-toggle').getByText('Main workspace', { exact: true }).waitFor();
   const gitTab = page.getByRole('tab', { name: 'Git', exact: true }), filesTab = page.getByRole('tab', { name: 'Files', exact: true });
   const gitBox = await gitTab.boundingBox(), filesBox = await filesTab.boundingBox();
   assert.ok(filesBox.x > gitBox.x && filesBox.x < gitBox.x + gitBox.width + 24, 'Files is immediately right of Git');
   check('Git is the default tab and Files follows it immediately');
   await page.getByText('Files', { exact: true }).click(); await page.locator('[data-file-path=""]').waitFor({ timeout: 20000 }); await page.locator('[data-file-path="one"]').waitFor({timeout:20000});
   const rootEntry = page.locator('[data-file-path=""]');
+  await verifyFileNoticesUi({ page, ui, output, report, check });
+  if (process.env.WORKBENCH_FILES_NOTICES_ONLY !== '1') {
   await rootEntry.dispatchEvent('drop', { dataTransfer: await page.evaluateHandle(() => { const data = new DataTransfer(); data.items.add(new File(['drag upload proof\n'], 'drag-proof.txt', { type: 'text/plain', lastModified: 123 })); return data; }) });
   await wait(async () => { try { return await readFile(join(ui.project, 'drag-proof.txt'), 'utf8') === 'drag upload proof\n'; } catch { return false; } });
   const uploadCommitted = Date.now();
@@ -239,6 +247,7 @@ try {
   const downloadPath = join(output,'browser-download-proof.txt');await downloaded.saveAs(downloadPath);assert.equal(await readFile(downloadPath,'utf8'),'drag upload proof\n');
   await page.getByText('Handed to browser',{exact:false}).first().waitFor({timeout:15000});check('verified same-origin host token delegates a download and reports browser ownership without a false completion');
   await page.evaluate(()=>{window.showSaveFilePicker=window.__proofPicker;});
+  }
 
   await page.screenshot({ path: join(output, 'files-tree-and-transfers.png') }); report.screenshots.push('files-tree-and-transfers.png');
   report.page = { url: page.url(), title: await page.title(), nonBlank: (await page.locator('body').innerText()).includes('Workspace Workbench'), frameworkOverlay: await page.locator('vite-error-overlay,nextjs-portal').count() };

@@ -3,9 +3,12 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {createInterface} from 'node:readline';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
+import {verifyRuntime} from './release.mjs';
 const root=resolve(import.meta.dirname,'../..');
+const lock=JSON.parse(await readFile(resolve(root,'.local/web-release/lock.json'),'utf8'));
+const descriptor=JSON.parse(await readFile(resolve(root,'.local/web-release/output/frontend-release.json'),'utf8'));
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE_PATH);
 if(!process.env.WORKBENCH_LIVE_WEB_DIST)throw new Error('Fresh web dist required');
 const child=spawn(process.execPath,['paseo-plugin/scripts/verify-live.mjs'],{cwd:root,env:{...process.env,WORKBENCH_LIVE_UI:'1'},stdio:['ignore','pipe','pipe']});
@@ -21,7 +24,7 @@ const ready=new Promise((accept,reject)=>{
 const evidence=resolve(root,'.local/web-release/evidence');await mkdir(evidence,{recursive:true});
 try {
  ui=await ready;
- const status=await (await fetch(ui.url+'/api/status')).json();assert.equal(status.version,'0.15.4');
+ const status=await (await fetch(ui.url+'/api/status')).json();verifyRuntime(lock,descriptor,{name:'@getpaseo/server',version:status.version});
  browser=await chromium.launch({headless:true,...(process.env.CHROME_EXECUTABLE?{executablePath:process.env.CHROME_EXECUTABLE}:{})});
  const page=await browser.newPage({viewport:{width:1280,height:900}});currentPage=page;page.on('pageerror',e=>errors.push(e.message));
   await page.goto(ui.url);await page.getByText(/^Add (?:a )?project$/).filter({visible:true}).first().waitFor();
@@ -38,7 +41,7 @@ try {
   assert.equal(await page.locator('vite-error-overlay').count(),0);
   await page.screenshot({path:resolve(evidence,`web-${width}.png`)});
  }
- assert.deepEqual(errors,[]);hostResult={ok:true,backend:'0.15.4',viewports:[1280,390],fresh_dist:true,plugin_rpc:true,isolated_home:true};
+ assert.deepEqual(errors,[]);hostResult={ok:true,backend:status.version,viewports:[1280,390],fresh_dist:true,plugin_rpc:true,isolated_home:true};
 } catch(error) {
  if(currentPage&&!currentPage.isClosed()){await currentPage.screenshot({path:resolve(evidence,'failure.png')});await writeFile(resolve(evidence,'failure.txt'),(await currentPage.locator('body').innerText()).slice(0,30000));}
  throw error;

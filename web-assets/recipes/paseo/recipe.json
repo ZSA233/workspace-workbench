@@ -2,9 +2,8 @@
   "schema": 1,
   "id": "paseo",
   "repository": "getpaseo/paseo",
-  "version_pattern": "^0\\.15\\.[0-9]+$",
-  "recipe_version": "wb.2",
-  "compatible_runtimes": {"@getpaseo/server": ["0.15.4"]},
+  "recipe_version": "wb.3",
+  "compatible_runtimes": {"@getpaseo/server": ["${upstream_version}"]},
   "capabilities": ["access.download-handoff.v1"],
   "patches": ["web/download-handoff.patch", "runtime/routed-reconnect.patch"],
   "copies": {

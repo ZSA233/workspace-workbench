@@ -6,6 +6,7 @@ import {createInterface} from 'node:readline';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {verifyRuntime} from './release.mjs';
+import {selectGlobalWorkbenchProject} from '../../paseo-plugin/scripts/ui-project-selection.mjs';
 const root=resolve(import.meta.dirname,'../..');
 const lock=JSON.parse(await readFile(resolve(root,'.local/web-release/lock.json'),'utf8'));
 const descriptor=JSON.parse(await readFile(resolve(root,'.local/web-release/output/frontend-release.json'),'utf8'));
@@ -33,6 +34,7 @@ try {
   await page.getByText(/^Add (?:a )?project$/).filter({visible:true}).first().click();
   await page.getByText('Search for directory',{exact:true}).click();await page.getByPlaceholder('Search directories or enter a path...').fill(ui.project);
   await page.getByText('Open this path',{exact:true}).click();await page.getByText('Workspace Workbench',{exact:true}).first().click();
+  await selectGlobalWorkbenchProject(page,'a');
   await page.getByText('Repositories',{exact:true}).filter({visible:true}).first().waitFor({timeout:30_000});
   await page.getByText('one',{exact:true}).filter({visible:true}).first().waitFor({timeout:30_000});
  for(const width of [1280,390]) {

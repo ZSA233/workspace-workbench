@@ -35,6 +35,8 @@ export function CommunicationsSettings({ client, open, onClose, initialPage = '�
   const c = useColors(), window = useWindowDimensions(), touch = useTouch(), wide = window.width >= 960, sidebar = window.width >= 720;
   const [page, setPage] = useState<typeof pages[number]>(initialPage);
   const [draft, setDraft] = useState<CommunicationsConfig | null>(null), [revision, setRevision] = useState(0);
+  const [modelRevision,setModelRevision]=useState(0);
+  const modelDirty=useRef(false),projectDirty=useRef(false);
   const dirty = useRef(false), [changed, setChanged] = useState(false), [saving, setSaving] = useState(false), [validation, setValidation] = useState('');
   const [modelKey, setModelKey] = useState<string | undefined>(), [appSecret, setAppSecret] = useState<string | undefined>();
   const [groupQuery, setGroupQuery] = useState(''), [groups, setGroups] = useState<Array<{ id: string; name: string }>>([]);
@@ -45,22 +47,28 @@ export function CommunicationsSettings({ client, open, onClose, initialPage = '�
   const saveConnection = async () => { setSaving(true); try { await client.updateConnection({ endpoint, projectId: serviceProject }, connectionRevision, serviceToken); setConnectionDirty(false); setServiceToken(undefined); setConnectionDetail('连接配置已保存'); } catch (error) { setConnectionDetail(String(error)); } finally { setSaving(false); } };
   const snapshot = client.snapshot;
   useEffect(() => { if (open) setPage(initialPage); }, [open, initialPage]);
-  useEffect(() => { if (snapshot && !dirty.current) { setDraft(snapshot.config); setRevision(snapshot.revision); } }, [snapshot?.revision, snapshot?.config]);
-  const mark = () => { dirty.current = true; setChanged(true); setValidation(''); };
-  const edit = <K extends keyof CommunicationsConfig,>(section: K, patch: Partial<CommunicationsConfig[K]>) => { mark(); setDraft(old => old ? { ...old, [section]: { ...old[section], ...patch } } : old); };
+  useEffect(() => { if (snapshot && !dirty.current) { setDraft(snapshot.config); setRevision(snapshot.revision); setModelRevision(snapshot.modelRevision || 0); } }, [snapshot?.revision, snapshot?.modelRevision,snapshot?.config]);
+  const mark = (kind: 'model'|'project'='project') => { dirty.current = true; if(kind==='model')modelDirty.current=true;else projectDirty.current=true;setChanged(true); setValidation(''); };
+  const edit = <K extends keyof CommunicationsConfig,>(section: K, patch: Partial<CommunicationsConfig[K]>) => { mark(section==='model'?'model':'project'); setDraft(old => old ? { ...old, [section]: { ...old[section], ...patch } } : old); };
   const save = async () => {
     if (!draft || saving) return false;
     const valid = configSchema.safeParse(draft);
     if (!valid.success) { setValidation(valid.error.issues.map(item => item.message).join('；')); return false; }
     setSaving(true);
     try {
-      const result = await client.call<{ revision: number; config: CommunicationsConfig }>({ action: 'configure', revision, config: valid.data, ...(modelKey !== undefined ? { modelKey } : {}), ...(appSecret !== undefined ? { appSecret } : {}) });
+      const shared=snapshot?.modelScope==='service';
+      if(shared && modelDirty.current){
+        const saved=await client.call<{revision:number}>({action:'model.settings.configure',revision:modelRevision,model:valid.data.model,...(modelKey!==undefined?{modelKey}:{})});
+        setModelRevision(saved.revision);modelDirty.current=false;setModelKey(undefined);
+      }
+      const result = projectDirty.current || !shared ? await client.call<{ revision: number; config: CommunicationsConfig }>({ action: 'configure', revision, config: valid.data, modelScope:shared?'service':'project', ...(!shared && modelKey !== undefined ? { modelKey } : {}), ...(appSecret !== undefined ? { appSecret } : {}) }) : {revision,config:valid.data};
+      modelDirty.current=false;projectDirty.current=false;
       dirty.current = false; setChanged(false); setDraft(result.config); setRevision(result.revision); setModelKey(undefined); setAppSecret(undefined); setValidation(''); return true;
     } catch (error) {
       setValidation(String(error).includes('settings_revision_conflict') ? '配置已在另一页面更新。保留了你的草稿，请重新载入后再修改。' : String(error)); return false;
     } finally { setSaving(false); }
   };
-  const reload = () => { if (snapshot) { dirty.current = false; setChanged(false); setDraft(snapshot.config); setRevision(snapshot.revision); setModelKey(undefined); setAppSecret(undefined); setValidation(''); } };
+  const reload = () => { if (snapshot) { dirty.current = false;modelDirty.current=false;projectDirty.current=false;setModelRevision(snapshot.modelRevision || 0); setChanged(false); setDraft(snapshot.config); setRevision(snapshot.revision); setModelKey(undefined); setAppSecret(undefined); setValidation(''); } };
   const action = async (name: 'connection.check' | 'auth.start' | 'models.check' | 'generation.check') => { if (!dirty.current || await save()) await client.call({ action: name }); };
   const latest = (kind: string) => snapshot?.tasks.find(item => item.kind === kind);
   const models = latest('models')?.result as Array<{ id: string; contextTokens?: number; loaded?: boolean; vision?: boolean }> | undefined;
@@ -74,7 +82,7 @@ export function CommunicationsSettings({ client, open, onClose, initialPage = '�
     <View style={{ flexDirection: wide ? 'row' : 'column', gap: 12 }}><View style={{ flex: 1 }}><Field label="服务项目 ID" id="communications-service-project" value={serviceProject} onChange={value => { setServiceProject(value); setConnectionDirty(true); }} /></View>
       <View style={{ flex: 1 }}><Field label="服务 API Token" id="communications-service-token" secret value={serviceToken ?? ''} placeholder={client.connection?.hasToken ? '已配置；留空不变' : '本机默认地址读取本地 Token'} onChange={value => { setServiceToken(value); setConnectionDirty(true); }} /></View></View>
     <Row><Button variant="primary" id="communications-service-save" disabled={saving || !connectionDirty} onPress={() => ignoreFailure(saveConnection())}>保存服务连接</Button><Button disabled={connectionDirty} onPress={() => ignoreFailure(client.checkConnection().then(value => setConnectionDetail(value.detail || '')))}>检测服务 API</Button>{connectionDetail ? <Label muted>{connectionDetail}</Label> : null}</Row>
-    <Section title="独立服务部署" collapsible initiallyOpen={false}><Label muted>在服务包目录执行 npm install --omit=dev，然后 npm start。默认监听 127.0.0.1:47191；网关使用 HTTPS 地址和服务 Token。服务提供版本化 /v1 API，未来 Web 后台复用同一接口。</Label></Section>
+    <Section title="独立服务部署" collapsible initiallyOpen={false}><Label muted>执行 project-communications serve 启动独立 Go 服务。默认监听 127.0.0.1:47191；远程连接使用服务 API 地址和 Token。</Label></Section>
     </>}
   </Section>;
   return <Dialog open={open} title={'项目沟通与需求 / 设置 / ' + page} id="communications-settings-dialog" onClose={onClose} width={1560} height={window.width >= 1400 ? 860 : 760}
@@ -100,6 +108,8 @@ export function CommunicationsSettings({ client, open, onClose, initialPage = '�
         </> : !client.enabled ? <Card><Label>请先在“扩展管理”中启用此项目的扩展。</Label></Card> : !draft ? <Label>正在读取配置…</Label> : page === '模型与预算' ? <View testID="communications-model-columns" style={{ flexDirection: wide ? 'row' : 'column', gap: 24 }}>
           <View style={{ flex: wide ? 1 : undefined, minWidth: 0, gap: 4, paddingRight: wide ? 24 : 0, borderRightWidth: wide ? 1 : 0, borderRightColor: c.border }}>
             <Section title="模型连接">
+              <Row><Badge tone={snapshot?.modelScope==='service'?'success':'neutral'}>{snapshot?.modelScope==='service'?'服务统一模型':'项目单独配置'}</Badge>
+              <Button disabled={changed || saving} onPress={()=>ignoreFailure(client.call({action:'model.binding',scope:snapshot?.modelScope==='service'?'project':'service'}))}>{snapshot?.modelScope==='service'?'使用项目配置':'继承服务配置'}</Button></Row>
               <View style={{ flexDirection: wide ? 'row' : 'column', gap: 8, alignItems: wide ? 'center' : undefined }}><View style={wide ? { width: 100 } : undefined}><Label muted={!wide}>接口类型</Label></View><Card style={{ backgroundColor: c.surface1, padding: 8, flex: wide ? 1 : undefined }}><Label>Chat Completions 兼容</Label></Card></View>
               <Field inline={wide} label="服务地址" id="communications-model-url" value={draft.model.baseUrl} onChange={baseUrl => edit('model', { baseUrl })} />
               <Field inline={wide} label="模型" value={draft.model.model} placeholder="先检测列表，或输入模型 ID" onChange={model => edit('model', { model })} />
@@ -107,13 +117,13 @@ export function CommunicationsSettings({ client, open, onClose, initialPage = '�
                 <Button icon="ChevronDown" onPress={() => setModelPicker(value => !value)}>选择可用模型</Button>
                 {modelPicker ? models.map(model => <Button key={model.id} active={draft.model.model === model.id} onPress={() => { edit('model', { model: model.id, ...(model.contextTokens ? { modelLimit: model.contextTokens } : {}) }); setModelPicker(false); }}>{model.id + (model.loaded === false ? ' · 未加载' : '') + (model.contextTokens ? ' · ' + Math.round(model.contextTokens / 1024) + 'K' : '')}</Button>) : null}
               </> : null}
-              <Field inline={wide} label="API Key（可选）" value={modelKey ?? ''} secret placeholder={snapshot?.credentials.modelKey ? '已配置；留空不变' : '本地服务可留空'} onChange={value => { mark(); setModelKey(value); }} />
-              {snapshot?.credentials.modelKey || modelKey !== undefined ? <Button variant="link" onPress={() => { mark(); setModelKey(''); }}>清除已保存的 API Key</Button> : null}
+              <Field inline={wide} label="API Key（可选）" value={modelKey ?? ''} secret placeholder={snapshot?.credentials.modelKey ? '已配置；留空不变' : '本地服务可留空'} onChange={value => { mark('model'); setModelKey(value); }} />
+              {snapshot?.credentials.modelKey || modelKey !== undefined ? <Button variant="link" onPress={() => { mark('model'); setModelKey(''); }}>清除已保存的 API Key</Button> : null}
             </Section>
             <View style={{ borderTopWidth: 1, borderTopColor: c.border, paddingTop: 14, gap: 10 }}><Row><Button onPress={() => ignoreFailure(action('models.check'))}>检测模型列表</Button><Button disabled={!draft.model.model} onPress={() => ignoreFailure(action('generation.check'))}>测试实际生成</Button></Row>
               {modelStatus('models', '模型列表')}{modelStatus('generation', '生成测试')}
               <Field inline={wide} label="生成超时" value={String(draft.model.timeoutMs / 1000)} unit="秒" onChange={value => edit('model', { timeoutMs: Number(value) * 1000 })} />
-              <Label muted>默认连接本机 Sushi，不安装或切换模型。</Label>
+              <Label muted>请求由独立服务发出，浏览器无需连接模型的局域网地址。</Label>
             </View>
           </View>
           <View style={{ flex: wide ? 1 : undefined, minWidth: 0, gap: 10 }}>

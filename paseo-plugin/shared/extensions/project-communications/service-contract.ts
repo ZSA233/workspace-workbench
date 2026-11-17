@@ -6,13 +6,14 @@ import { z } from 'zod';
 export const categorySchema = z.enum(['requirement', 'change', 'feedback', 'bug', 'decision']);
 export type Category = z.infer<typeof categorySchema>;
 export const categoryLabels: Record<Category, string> = { requirement: '新增需求', change: '需求变更', feedback: '反馈', bug: '缺陷', decision: '决策' };
+export const modelConfigSchema = z.object({ protocol: z.literal('chat-completions').default('chat-completions'), baseUrl: z.string().url().default('http://127.0.0.1:12345/v1'),
+  model: z.string().max(512).default(''), timeoutMs: z.number().int().min(1000).max(600000).default(180000),
+  contextTokens: z.number().int().min(4096).max(4194304).default(131072), outputTokens: z.number().int().min(256).max(131072).default(8192),
+  modelLimit: z.number().int().min(4096).max(4194304).default(524288), vision: z.boolean().default(true) }).default({ protocol: 'chat-completions', baseUrl: 'http://127.0.0.1:12345/v1', model: '', timeoutMs: 180000, contextTokens: 131072, outputTokens: 8192, modelLimit: 524288, vision: true });
 export const configSchema = z.object({
   source: z.object({ executable: z.string().min(1).max(2048).default('dws'), mode: z.enum(['default', 'custom']).default('custom'),
     clientId: z.string().max(512).default(''), profile: z.string().max(512).default(''), botId: z.string().max(512).default('') }).default({ executable: 'dws', mode: 'custom', clientId: '', profile: '', botId: '' }),
-  model: z.object({ protocol: z.literal('chat-completions').default('chat-completions'), baseUrl: z.string().url().default('http://127.0.0.1:12345/v1'),
-    model: z.string().max(512).default(''), timeoutMs: z.number().int().min(1000).max(600000).default(180000),
-    contextTokens: z.number().int().min(4096).max(4194304).default(131072), outputTokens: z.number().int().min(256).max(131072).default(8192),
-    modelLimit: z.number().int().min(4096).max(4194304).default(524288), vision: z.boolean().default(true) }).default({ protocol: 'chat-completions', baseUrl: 'http://127.0.0.1:12345/v1', model: '', timeoutMs: 180000, contextTokens: 131072, outputTokens: 8192, modelLimit: 524288, vision: true }),
+  model: modelConfigSchema,
   analysis: z.object({ enabled: z.boolean().default(true), coalesceSeconds: z.number().int().min(1).max(3600).default(30),
     reconcileSeconds: z.number().int().min(15).max(3600).default(60), focusPeople: z.array(z.string().max(200)).max(100).default([]),
     keywords: z.array(z.string().max(200)).max(100).default([]), categories: z.array(categorySchema).min(1).default(['requirement', 'change', 'feedback', 'bug', 'decision']),
@@ -45,12 +46,15 @@ export type Task = { id: string; kind: 'auth' | 'connection' | 'models' | 'gener
 export type Delivery = { id: string; identity: string; requirementId: string; requirementVersion: number; workspaceId: string; messageIds: string[]; attachmentIds: string[];
   materials?: Array<{id:string;title:string;mimeType:string;size:number;digest:string}>;
   text: string; state: 'preview' | 'sending' | 'accepted' | 'uncertain'; createdAt: number; messageId?: string; readConfirmed: false; };
-export type Snapshot = { revision: number; background: 'running' | 'paused'; config: CommunicationsConfig; credentials: { modelKey: boolean; appSecret: boolean }; source: SourceStatus;
+export type Snapshot = { revision: number; modelScope?: 'service' | 'project'; modelRevision?: number; background: 'running' | 'paused'; config: CommunicationsConfig; credentials: { modelKey: boolean; appSecret: boolean }; source: SourceStatus;
   groups: Group[]; candidates: Candidate[]; requirements: Requirement[]; requirementCount:number; tasks: Task[]; unread: number; pending: number; messageCount: number; analysisPending: number; };
 const target = z.string().min(1).max(512);
 export const communicationsActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('snapshot') }),
-  z.object({ action: z.literal('configure'), revision: z.number().int(), config: configSchema, modelKey: z.string().max(16384).optional(), appSecret: z.string().max(16384).optional() }),
+  z.object({ action: z.literal('configure'), revision: z.number().int(), config: configSchema, modelScope:z.enum(['service','project']).optional(), modelKey: z.string().max(16384).optional(), appSecret: z.string().max(16384).optional() }),
+  z.object({ action:z.literal('model.settings.read') }),
+  z.object({ action:z.literal('model.settings.configure'),revision:z.number().int(),model:modelConfigSchema,modelKey:z.string().max(16384).optional() }),
+  z.object({ action:z.literal('model.binding'),scope:z.enum(['service','project']) }),
   z.object({ action: z.enum(['connection.check', 'auth.start', 'models.check', 'generation.check', 'analysis.retry']) }),
   z.object({ action: z.literal('groups.search'), query: z.string().min(1).max(200) }),
   z.object({ action: z.literal('groups.bind'), groupId: target, name: z.string().min(1).max(512) }),

@@ -12,10 +12,18 @@ import tarfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
+STABLE_VERSION = r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)'
 def sha(raw): return hashlib.sha256(raw).hexdigest()
 def safe(value):
     path = Path(value)
     return value and not path.is_absolute() and '..' not in path.parts and str(path) == value
+
+def source_url(lock, recipe):
+    if not re.fullmatch(STABLE_VERSION, lock['upstream_version']): raise ValueError('Invalid stable upstream version')
+    if not re.fullmatch(r'[0-9a-f]{40}',lock['source_commit']) or lock['version']!=lock['upstream_version']+'-'+recipe['recipe_version']: raise ValueError('Invalid build lock')
+    expected=f"https://codeload.github.com/{recipe['repository']}/tar.gz/{lock['source_commit']}"
+    if lock['source_url']!=expected: raise ValueError('Untrusted source')
+    return expected
 
 def extract_source(archive, work):
     with tarfile.open(archive) as tar:
@@ -45,7 +53,7 @@ def package(dist, output, lock, recipe, recipe_dir, source_sha):
             tar.add(p, arcname=str(p.relative_to(web)), recursive=False)
     descriptor = dict(schema=1, version=lock['version'], archive=dict(name=archive.name, sha256=sha(archive.read_bytes()), format='tar.gz', root=''),
         source_commit=lock['source_commit'], source_sha256=source_sha, builder_commit=lock.get('builder_commit'),
-        recipe_version=recipe['recipe_version'], compatible_runtimes=recipe['compatible_runtimes'], capabilities=recipe.get('capabilities', []), files=files,
+        recipe_version=recipe['recipe_version'], compatible_runtimes={name: [lock['upstream_version'] if version=='${upstream_version}' else version for version in versions] for name,versions in recipe['compatible_runtimes'].items()}, capabilities=recipe.get('capabilities', []), files=files,
         recipe_files={str(p.relative_to(recipe_dir)): sha(p.read_bytes()) for p in sorted(recipe_dir.rglob('*')) if p.is_file()})
     (output / 'frontend-release.json').write_text(json.dumps(descriptor, sort_keys=True, indent=2)+'\n')
     (output / 'SHA256SUMS').write_text(''.join(f'{sha(p.read_bytes())}  {p.name}\n' for p in [archive, output / 'frontend-release.json']))
@@ -58,9 +66,7 @@ def build(lock_path, work, output):
     recipe_dir=ROOT/'web-assets/recipes'/lock['recipe'];recipe=json.loads((recipe_dir/'recipe.json').read_text())
     inventory={str(p.relative_to(recipe_dir)):sha(p.read_bytes()) for p in sorted(recipe_dir.rglob('*')) if p.is_file()}
     if inventory!=lock['recipe_files']: raise ValueError('Resolved recipe changed')
-    if not re.fullmatch(r'[0-9a-f]{40}',lock['source_commit']) or lock['version']!=lock['upstream_version']+'-'+recipe['recipe_version']: raise ValueError('Invalid build lock')
-    expected=f"https://codeload.github.com/{recipe['repository']}/tar.gz/{lock['source_commit']}"
-    if lock['source_url']!=expected or not re.fullmatch(recipe['version_pattern'],lock['upstream_version']): raise ValueError('Untrusted source')
+    expected=source_url(lock,recipe)
     work.mkdir(parents=True,exist_ok=False); archive=work/'source.tar.gz'
     with urllib.request.urlopen(expected,timeout=180) as response, archive.open('xb') as out: shutil.copyfileobj(response,out)
     source_sha=sha(archive.read_bytes())

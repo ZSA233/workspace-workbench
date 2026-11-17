@@ -1,5 +1,10 @@
 name: Managed web release
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/web-release.yml
+      - web-assets/**
   schedule:
     - cron: '23 */6 * * *'
   workflow_dispatch:
@@ -20,6 +25,7 @@ jobs:
       needed: ${{ steps.resolve.outputs.needed }}
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
+      upstream_version: ${{ steps.resolve.outputs.upstream_version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -65,8 +71,10 @@ jobs:
       - run: npm --prefix paseo-plugin run typecheck
       - run: npm --prefix paseo-plugin test
       - name: Verify actual plugin in an isolated compatible daemon
+        env:
+          PASEO_UPSTREAM_VERSION: ${{ needs.resolve.outputs.upstream_version }}
         run: |
-          npm install --prefix .local/web-release/host --ignore-scripts @getpaseo/cli@0.15.4
+          npm install --prefix .local/web-release/host --ignore-scripts "@getpaseo/cli@$PASEO_UPSTREAM_VERSION"
           npm install --prefix .local/web-release/browser --ignore-scripts playwright@1.64.1
           .local/web-release/browser/node_modules/.bin/playwright install --with-deps chromium
           export PASEO_CLI="$PWD/.local/web-release/host/node_modules/.bin/paseo"

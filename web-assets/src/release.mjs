@@ -6,8 +6,9 @@ import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
+const stableVersion=/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/;
 export function recipeIdentity(recipe, version) {
-  if (recipe.schema!==1 || !/^[a-z0-9-]+$/.test(recipe.id) || version.trim()!==version || !new RegExp(recipe.version_pattern).test(version) || !/^\d+\.\d+\.\d+$/.test(version) || !/^wb\.\d+$/.test(recipe.recipe_version)) throw new Error('Unsupported source or recipe version');
+  if (recipe.schema!==1 || !/^[a-z0-9-]+$/.test(recipe.id) || typeof version!=='string' || version.trim()!==version || !stableVersion.test(version) || !/^wb\.\d+$/.test(recipe.recipe_version)) throw new Error('Invalid stable source or recipe version');
   return {version:`${version}-${recipe.recipe_version}`,tag:`${recipe.id}-web-v${version}-${recipe.recipe_version}`};
 }
 async function github(path, options={}) {
@@ -66,7 +67,7 @@ export async function resolveRelease(recipe, version, repository,inventory) {
     const descriptor=JSON.parse(raw);verifyExisting(descriptor,identity,recipe,object.sha,inventory);
     const archive=existing.assets.find(a=>a.name===descriptor.archive?.name);
     if(!archive||archive.digest&&archive.digest!==`sha256:${descriptor.archive.sha256}`)throw new Error('Published archive identity drift');
-    return {...identity,exists:true};
+    return {...identity,upstream_version:upstream,exists:true};
   }
   return {...identity,exists:false,schema:1,recipe:recipe.id,recipe_files:inventory,upstream_version:upstream,source_commit:object.sha,source_url:`https://codeload.github.com/${recipe.repository}/tar.gz/${object.sha}`,builder_commit:process.env.GITHUB_SHA||null};
 }
@@ -75,6 +76,11 @@ export function verifyPublication(lock,descriptor, files) {
   if(lock.builder_commit&&descriptor.builder_commit!==lock.builder_commit)throw new Error('Builder commit mismatch');
   if(descriptor.schema!==1||descriptor.version!==lock.version||descriptor.source_commit!==lock.source_commit||descriptor.recipe_version!==lock.version.split('-').slice(1).join('-'))throw new Error('Release identity mismatch');
   if(!files.has(descriptor.archive.name)||createHash('sha256').update(files.get(descriptor.archive.name)).digest('hex')!==descriptor.archive.sha256)throw new Error('Release archive checksum mismatch');
+}
+export function verifyRuntime(lock,descriptor,runtime) {
+  if (typeof lock.upstream_version!=='string' || lock.upstream_version.trim()!==lock.upstream_version || !stableVersion.test(lock.upstream_version) || runtime.version!==lock.upstream_version ||
+      !Array.isArray(descriptor.compatible_runtimes?.[runtime.name]) ||
+      !descriptor.compatible_runtimes[runtime.name].includes(runtime.version)) throw new Error('Verified runtime must match the locked upstream and release compatibility');
 }
 export function verifyUploadedAssets(files,assets) {
   if(assets.length!==files.size)throw new Error('Incomplete release assets');
@@ -97,7 +103,7 @@ async function main(){
  const recipe=JSON.parse(await readFile(resolve(root,`web-assets/recipes/${id}/recipe.json`),'utf8'));
  const lock=await resolveRelease(recipe,opts.get('--version'),process.env.GITHUB_REPOSITORY||'ZSA233/workspace-workbench',await recipeInventory(id));
  const output=resolve(opts.get('--output')||resolve(root,'.local/web-release/lock.json'));await mkdir(resolve(output,'..'),{recursive:true});await writeFile(output,JSON.stringify(lock,null,2)+'\n');
- if(process.env.GITHUB_OUTPUT)await writeFile(process.env.GITHUB_OUTPUT,`tag=${lock.tag}\nversion=${lock.version}\nneeded=${!lock.exists}\n`,{flag:'a'});
+ if(process.env.GITHUB_OUTPUT)await writeFile(process.env.GITHUB_OUTPUT,`tag=${lock.tag}\nversion=${lock.version}\nupstream_version=${lock.upstream_version}\nneeded=${!lock.exists}\n`,{flag:'a'});
  console.log(`${lock.tag}: ${lock.exists?'already published':'ready to build'}`);
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))await main();

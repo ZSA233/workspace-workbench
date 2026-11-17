@@ -2,17 +2,17 @@
   "schema": 1,
   "id": "paseo",
   "repository": "getpaseo/paseo",
-  "recipe_version": "wb.3",
+  "recipe_version": "wb.4",
   "compatible_runtimes": {"@getpaseo/server": ["${upstream_version}"]},
   "capabilities": ["access.download-handoff.v1"],
-  "patches": ["web/download-handoff.patch", "runtime/routed-reconnect.patch"],
+  "patches": ["web/download-handoff.patch"],
   "copies": {
     "web/access-download.ts": "packages/app/src/utils/access-download.ts",
     "web/access-download.web.ts": "packages/app/src/utils/access-download.web.ts"
   },
   "dist": "packages/server/dist/server/web-ui",
   "licenses": {"LICENSE": "LICENSE-Paseo"},
-  "notice": "Official Paseo web UI with reviewed Access HTTP download and routed reconnect patches. Apache-2.0; original notices apply.",
+  "notice": "Official Paseo web UI with the reviewed Access HTTP download adapter. Routed host recovery uses the upstream implementation. Apache-2.0; original notices apply.",
   "commands": [
     ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
     ["npm", "run", "postinstall"],

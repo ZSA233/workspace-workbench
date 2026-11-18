@@ -10,7 +10,16 @@ vi.mock("@/constants/platform", () => ({
     return !platform.web;
   },
 }));
-vi.mock("@/utils/access-download", () => import("@/utils/access-download.web"));
+vi.mock("@/utils/access-download", async () => {
+  const [native, web] = await Promise.all([
+    vi.importActual<typeof import("@/utils/access-download")>("@/utils/access-download.ts"),
+    import("@/utils/access-download.web"),
+  ]);
+  return {
+    tryAccessDownload: (input: Parameters<typeof native.tryAccessDownload>[0]) =>
+      (platform.web ? web : native).tryAccessDownload(input),
+  };
+});
 
 const origin = "https://paseo.example";
 const prefix = "/__access/paseo";

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyWorkspaceActivity,
   buildDiffDisplayRows,
   buildDiffOverviewMarkers,
   collapseReviewTimelineEvents,
@@ -23,6 +24,7 @@ import {
   type CommitNode as GraphNode,
   type WorkspaceSummary as Workspace,
 } from "../client/model.ts";
+import type { WorkspaceActivityUpdate } from "../shared/workspace-activity.ts";
 
 function workspace(id: string, fields: Partial<Workspace> = {}): Workspace {
   return { id, displayName: id, description: "", dirty: false, unpushed: false, dirtyRepositoryCount: 0, blockerCount: 0, claim: null, kind: "managed", managed: true, state: "active", repositoryCount: 1, ...fields };
@@ -71,6 +73,21 @@ test("workspace commit sorting is newest first, uses stable IDs for ties, and pu
     workspace("unknown"),
   ];
   assert.deepEqual(sortWorkspacesByLatestCommit(rows).map((item) => item.id), ["tie-a", "tie-b", "older", "main", "unknown"]);
+});
+
+test("commit deltas only update a newer revision of the same project, worker and Workspace scope", () => {
+  const retained = workspace("item", { instanceKey: "item:one", activityScope: "scope-one", latestCommitAt: "2026-09-01T00:00:00Z" });
+  const update: WorkspaceActivityUpdate = { workspaceId: "item", instanceKey: "item:one", activityScope: "scope-one", revision: 4,
+    latestCommitAt: "2026-09-02T00:00:00Z", latestCommitObservedAt: "2026-09-03T00:00:00Z", latestCommitState: "ready" };
+  const publication = { project: "/first/project.json", generation: "worker-one", rows: new Map([["item", update]]) };
+  const cursor = { generation: publication.generation, revision: 3 };
+  const apply = (row: Workspace, snapshot = cursor, project = publication.project) => applyWorkspaceActivity([row], snapshot, publication, project)[0];
+  assert.equal(apply(retained).latestCommitAt, update.latestCommitAt);
+  assert.equal(apply(retained, cursor, "/second/project.json"), retained);
+  assert.equal(apply(retained, { ...cursor, generation: "worker-two" }), retained);
+  assert.equal(apply(retained, { ...cursor, revision: 6 }), retained);
+  for (const row of [{ ...retained, instanceKey: "item:two" }, { ...retained, activityScope: "scope-two" }, { ...retained, state: "removed" }])
+    assert.equal(apply(row), row);
 });
 
 test("workspace search matches name, description, and id without changing category filters", () => {

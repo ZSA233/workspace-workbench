@@ -76,7 +76,7 @@ replayableMethods.add('cache.list'); replayableMethods.add('cache.task');
 
 function configuredBridgeTimeoutMs(method?: string): number {
   if (method?.startsWith('cache.')) return 2_000;
-  if (method === "workspace.environment") return 2_000;
+  if (method === "workspace.activity" || method === "workspace.environment") return 2_000;
   if (method === "workspace.prepare.task" || method === "workspace.prepare" || method === "repository.diff.read" || method === "observer.refresh") return 2_000;
   const project = currentProject();
   let timing = DEFAULT_OBSERVATION_TIMING;
@@ -267,7 +267,7 @@ export class ObserverBridge {
     }
     const params = requestParams(input);
     this.totalRequests++;
-    const statsKey = input.method === 'observer.refresh' ? `${input.method}:${String(input.params.action || 'start')}` : input.method;
+    const statsKey = ['observer.refresh', 'workspace.activity'].includes(input.method) ? `${input.method}:${String(input.params.action || 'start')}` : input.method;
     const stats = this.methodStats.get(statsKey) || { requests: 0, completed: 0, failures: 0, maxMs: 0 };
     stats.requests++;
     this.methodStats.set(statsKey, stats);
@@ -281,7 +281,8 @@ export class ObserverBridge {
     this.cache.delete(key);
     const active = this.inFlight.get(key);
     if (active) return active;
-    const control = ["observer.health", "observer.versions", 'cache.task'].includes(input.method) || ["observer.refresh", "repository.diff.read", "workspace.prepare.task"].includes(input.method) && ["status", "release"].includes(String(input.params.action));
+    const control = ["observer.health", "observer.versions", 'cache.task'].includes(input.method) || ["observer.refresh", "repository.diff.read", "workspace.prepare.task"].includes(input.method) && ["status", "release"].includes(String(input.params.action))
+      || input.method === "workspace.activity" && ["view", "status", "cancel"].includes(String(input.params.action));
     if (this.inFlight.size >= (control ? 64 : BRIDGE_IN_FLIGHT))
       return { ok: false, error: { code: "observer_busy", message: "observer request limit reached; retry" } };
     const request: SocketRequest = { id: `${process.pid}:${++this.sequence}`, method: input.method, params };

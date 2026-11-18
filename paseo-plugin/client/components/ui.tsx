@@ -206,14 +206,16 @@ export function queryFailureForDisplay(
 export function LayoutMenuItem({
   label,
   onPress,
+  disabled = false,
   styles,
 }: {
   label: string;
   onPress: () => void;
+  disabled?: boolean;
   styles: ReturnType<typeof makeStyles>;
 }) {
   return (
-    <Pressable accessibilityRole="button" onPress={onPress} style={styles.layoutMenuItem}>
+    <Pressable accessibilityRole="button" disabled={disabled} accessibilityState={{ disabled }} onPress={onPress} style={styles.layoutMenuItem}>
       <Text style={styles.layoutMenuItemText}>{label}</Text>
     </Pressable>
   );

@@ -1,5 +1,6 @@
+import type { WorkspaceActivityCursor, WorkspaceActivityUpdate } from '../shared/workspace-activity';
 import type { WorkspaceCreator } from '../shared/workspace-creator';
-import type { WorkspaceLineage } from '../shared/workspace-lineage';
+import { workspaceInstanceKey, type WorkspaceLineage } from '../shared/workspace-lineage.ts';
 import type { ReviewEvent } from "../shared/agent-review.ts";
 
 export type WorkspaceFilter = "all" | "attention" | "dirty" | "unpushed" | "history";
@@ -217,6 +218,7 @@ export type WorkspaceSummary = {
   workspaceBranchLabel?: string | null;
   currentRef?: string | null;
   currentRefState?: "uniform" | "mixed" | "unknown" | string;
+  activityScope?: string;
   latestCommitAt?: string | null;
   latestCommitObservedAt?: string | null;
   latestCommitState?: "ready" | "pending" | "partial" | "unknown";
@@ -430,6 +432,7 @@ export type DetailResult = {
 };
 
 export type ListResult = {
+  activitySnapshot?: WorkspaceActivityCursor;
   capabilities?: { lineage?: boolean; create?: boolean; prepare?: boolean; cleanup?: boolean; remove?: boolean; restore?: boolean; permanentDelete?: boolean; agent?: boolean };
   workspaces: WorkspaceSummary[];
   orphanCandidates?: Array<{ id: string; name: string; treePath: string; repositoryCount: number; recordInvalid?: boolean; resume?: boolean }>;
@@ -590,7 +593,24 @@ export function sortWorkspaces(workspaces: WorkspaceSummary[]): WorkspaceSummary
   });
 }
 
-export function sortWorkspacesByLatestCommit(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
+export type WorkspaceActivityPublication = {
+  project: string;
+  generation: string;
+  rows: ReadonlyMap<string, WorkspaceActivityUpdate>;
+};
+
+export function applyWorkspaceActivity(rows: readonly WorkspaceSummary[], cursor: WorkspaceActivityCursor | undefined, publication: WorkspaceActivityPublication | null, project: string) {
+  if (!cursor || publication?.project !== project || publication.generation !== cursor.generation) return rows;
+  return rows.map(row => {
+    const updated = publication.rows.get(row.id);
+    if (!updated || updated.revision <= cursor.revision || row.state === 'removed' || updated.instanceKey !== workspaceInstanceKey(row)
+      || updated.activityScope !== row.activityScope) return row;
+    const { latestCommitAt, latestCommitObservedAt, latestCommitState } = updated;
+    return { ...row, latestCommitAt, latestCommitObservedAt, latestCommitState };
+  });
+}
+
+export function sortWorkspacesByLatestCommit(workspaces: readonly WorkspaceSummary[]): WorkspaceSummary[] {
   return [...workspaces].sort((left, right) => {
     const leftTime = timestampValue(left.latestCommitAt);
     const rightTime = timestampValue(right.latestCommitAt);

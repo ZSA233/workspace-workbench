@@ -1,3 +1,4 @@
+import { WORKSPACE_ACTIVITY_PROTOCOL } from "../../shared/workspace-activity.ts";
 import {ChangeNotes} from './change-notes.ts';
 import { CacheManagement } from './cache-management.ts';
 import { WorkspaceFiles } from './files.ts';
@@ -45,7 +46,7 @@ export class Service {
   startedAt = Date.now();
   eventLoop = new EventLoopMetrics();
   version: string;
-  build = buildId(["../server/backend/cache-schedule.ts", "../server/backend/cache-accounting.ts", "../server/backend/cache-coordination.ts", "../server/backend/cache-management.ts", "../server/backend/cache-provider.ts", "../server/backend/cache-go.ts", "../server/backend/cache-measure.ts", "../server/backend/cache-lease.ts", "../server/backend/cache-guards.ts", "../server/backend/activity-head.ts", "./cache-management.ts", "../server/backend/syntax-service.ts", "../server/backend/syntax-worker.ts", "../server/backend/documents.ts", "../server/backend/diff-syntax.ts", "./code-syntax.ts", "./document.ts", "../server/backend/process.ts", "../server/backend/file-decorations.ts", "../server/backend/repository-status.ts", "./file-decorations.ts", "../server/backend/file-stage-ignore.ts", "../server/backend/file-io.ts", "../server/backend/file-cleanup.ts", "../server/backend/files.ts", "../server/backend/file-roots.ts", "../server/backend/file-journal.ts", "../server/backend/file-tasks.ts", "./files.ts","../server/backend/service.ts", "../server/backend/change-notes.ts", "../server/backend/change-note-catalog.ts", "./change-notes.ts", "../server/backend/repository-comparison.ts", "../server/backend/diff-content.ts", "../server/backend/diff-context.ts", "./diff-context.ts", "./comparison.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts", "../server/backend/runtime-tools.ts", "../server/backend/runtime-layout.ts", "../server/backend/runtime-summary.ts", "../server/backend/runtime-observation.ts", "../server/backend/runtime-read-queue.ts", "../server/backend/environment-snapshots.ts", "../server/backend/workspaces.ts", "../server/backend/workspace-records.ts", "../server/backend/workspace-catalog.ts", "../server/backend/workspace-directory.ts", "../server/backend/workspace-creation.ts", "../server/backend/workspace-removal.ts", "../server/backend/workspace-deletion.ts", "../server/backend/workspace-activity-guard.ts", "../server/backend/workspace-record-encoding.ts", "../server/backend/workspace-infrastructure.ts", "../server/backend/workspace-scope.ts", "../server/backend/workspace-lineage.ts", "./workspace-lineage.ts"]);
+  build = buildId(["../server/backend/cache-schedule.ts", "../server/backend/cache-accounting.ts", "../server/backend/cache-coordination.ts", "../server/backend/cache-management.ts", "../server/backend/cache-provider.ts", "../server/backend/cache-go.ts", "../server/backend/cache-measure.ts", "../server/backend/cache-lease.ts", "../server/backend/cache-guards.ts", "../server/backend/activity-head.ts", "./cache-management.ts", "../server/backend/syntax-service.ts", "../server/backend/syntax-worker.ts", "../server/backend/documents.ts", "../server/backend/diff-syntax.ts", "./code-syntax.ts", "./document.ts", "../server/backend/process.ts", "../server/backend/file-decorations.ts", "../server/backend/repository-status.ts", "./file-decorations.ts", "../server/backend/file-stage-ignore.ts", "../server/backend/file-io.ts", "../server/backend/file-cleanup.ts", "../server/backend/files.ts", "../server/backend/file-roots.ts", "../server/backend/file-journal.ts", "../server/backend/file-tasks.ts", "./files.ts","../server/backend/service.ts", "../server/backend/change-notes.ts", "../server/backend/change-note-catalog.ts", "./change-notes.ts", "../server/backend/repository-comparison.ts", "../server/backend/diff-content.ts", "../server/backend/diff-context.ts", "./diff-context.ts", "./comparison.ts", "../server/backend/observation.ts", "../server/backend/observation-scheduler.ts", "../server/backend/cache.ts", "../server/backend/git.ts", "../server/backend/workspace-activity.ts", "./workspace-activity.ts", "../server/backend/workspace-refs.ts", "../server/backend/review.ts", "./observation-policy.ts", "../server/backend/file-diff.ts", "../server/backend/diff-content.ts", "../server/backend/diff-read-tasks.ts", "../server/backend/repository-refresh.ts", "../server/backend/observation-records.ts", "../server/backend/observation-records-worker.ts", "../server/backend/derived-json.ts", "../server/backend/storage.ts", "../server/backend/file-statistics.ts", "../server/backend/git-scheduler.ts", "./diff-read.ts", "./task-state.ts", "../server/backend/basic-reads.ts", "../server/backend/prepare-tasks.ts", "../server/backend/prepare-worker.ts", "../server/backend/operation-storage.ts", "../server/backend/runtime-install-lock.ts", "../server/backend/runtime.ts", "../server/backend/session-environment.ts", "../server/backend/runtime-declarations.ts", "../server/backend/runtime-tools.ts", "../server/backend/runtime-layout.ts", "../server/backend/runtime-summary.ts", "../server/backend/runtime-observation.ts", "../server/backend/runtime-read-queue.ts", "../server/backend/environment-snapshots.ts", "../server/backend/workspaces.ts", "../server/backend/workspace-records.ts", "../server/backend/workspace-catalog.ts", "../server/backend/workspace-directory.ts", "../server/backend/workspace-creation.ts", "../server/backend/workspace-removal.ts", "../server/backend/workspace-deletion.ts", "../server/backend/workspace-activity-guard.ts", "../server/backend/workspace-record-encoding.ts", "../server/backend/workspace-infrastructure.ts", "../server/backend/workspace-scope.ts", "../server/backend/workspace-lineage.ts", "./workspace-lineage.ts"]);
   constructor(config: Config, version = "0.1.3", dependencies:{scheduler?:ObservationScheduler;cacheClock?:()=>number}={}) {
     this.config = config;
     this.version = version;
@@ -99,6 +100,8 @@ export class Service {
       environmentProtocol: 1,
       cacheManagementProtocol: 1,
       basicSummaryProtocol: 1,
+      workspaceActivityProtocol: WORKSPACE_ACTIVITY_PROTOCOL,
+      workspaceActivity: this.observation.activity.health(),
       fileStatistics: this.observation.statistics.health(),
       project: {
         id: this.config.projectId,
@@ -150,6 +153,7 @@ export class Service {
           if (params.workspaceId) this.cache.invalidateWorkspace(String(params.workspaceId));
           this.observation.scheduler.force(params.workspaceId ? String(params.workspaceId) : undefined);
           this.observation.scheduler.rosterChanged();
+          this.observation.activityRosterChanged();
         }
       }));
     switch (method) {
@@ -329,6 +333,7 @@ export class Service {
     }
   }
   async close() {
+    const activity = this.observation.activity.close();
     await this.cacheManagement.close();
     await this.files.close();
     this.observation.status.close();
@@ -341,6 +346,7 @@ export class Service {
     await this.observation.statistics.close();
     await this.workspaces.mutations.drain();
     await this.observation.close();
+    await activity;
     await this.observation.scheduler.close();
     await this.cache.close();
   }

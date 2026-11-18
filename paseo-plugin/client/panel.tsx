@@ -1,3 +1,4 @@
+import { WORKSPACE_ACTIVITY_PROTOCOL } from '../shared/workspace-activity';
 import { useCommunications } from './use-communications';
 import { CommunicationsPanel } from './extensions/project-communications/client';
 import { CommunicationsSettings } from './extensions/project-communications/settings';
@@ -387,7 +388,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const workspaceDirectory = paseoWorkspace?.directory || "";
   const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab(current => current === "files" || current === 'cache' || current === 'communications' ? current : "workspace");},[]);
   const onWorkspaceSelectionLost=useCallback(()=>{setSelectedRepoPath("");setSelectedCommit("");setSelectedFile("");scopeRepositoryIdentity.current="";},[]);
-  const {selectionResolved, selectorOpen, activityScanProgress, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, stopWorkspaceActivityScan, closeWorkspaceSelector, openWorkspaceSelector, refreshWorkspaceActivity, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
+  const activityCapable = backendQuery.data?.readCapabilities?.workspaceActivityProtocol === WORKSPACE_ACTIVITY_PROTOCOL;
+  const {selectionResolved, selectorOpen, fullActivityScan, activityCommandBusy, noteVisibleWorkspaces, noteWorkspaceScroll, cancelFullActivity, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, closeWorkspaceSelector, openWorkspaceSelector, refreshWorkspaceActivity, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,activityCapable,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
   const communications=useCommunications(projectConfig,foreground,tab==='communications'||communicationsSettingsOpen);
   useEffect(()=>{if(communications.state&&!communications.enabled&&tab==='communications')setTab('workspace');},[communications.state,communications.enabled,tab]);
   const cacheCapable = backendQuery.data?.readCapabilities?.cacheManagementProtocol === 1;
@@ -571,7 +573,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const refreshAll = useCallback(() => {
     if (tab === 'communications') { void communications.refresh(); return; }
     if (tab === 'cache') { void cacheManagement.scan(); return; }
-    refreshWorkspaceActivity(true);
+    refreshWorkspaceActivity();
     if (comparisonOpen) void refreshArea('repository-compare');
     if (!refreshCapable) return refreshLegacy();
     void backendQuery.refetch();
@@ -820,7 +822,9 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         selectedWorkspaceId={selectedWorkspaceId}
         filter={workspaceFilter}
         open={selectorOpen}
-        latestCommitProgress={activityScanProgress}
+        latestCommitProgress={fullActivityScan?.state === 'running' ? fullActivityScan : null}
+        onVisibleWorkspaces={noteVisibleWorkspaces}
+        onScrollActivity={noteWorkspaceScroll}
         ready={listReady}
         loading={listContentState === 'loading'}
         refreshing={manualRefreshing}
@@ -834,14 +838,14 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         onFilter={setWorkspaceFilter}
         onSelect={(id) => { closeWorkspaceSelector(); selectWorkspace(id); }}
         onOpenOrphan={(id) => { closeWorkspaceSelector(); setOrphanId(id); }}
-        onBatch={(targets, action) => { stopWorkspaceActivityScan(); void batch.preview(targets, action); }}
+        onBatch={(targets, action) => { void batch.preview(targets, action); }}
         batchBusy={batchState.phase === "running" || batchState.phase === "preview"}
         batchAvailable={batchState.phase !== "idle"}
         onBatchResults={batch.open}
-        onRemoveWorkspace={listResult?.capabilities?.remove ? (workspace) => { stopWorkspaceActivityScan(); void removeWorkspace(workspace); } : undefined}
-        onRestoreWorkspace={listResult?.capabilities?.restore ? (workspace) => { stopWorkspaceActivityScan(); void restoreWorkspace(workspace); } : undefined}
-        onPermanentDeleteWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { stopWorkspaceActivityScan(); inspectWorkspaceLifecycle(workspace, "permanent"); } : undefined}
-        onInspectWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { stopWorkspaceActivityScan(); inspectWorkspaceLifecycle(workspace); } : undefined}
+        onRemoveWorkspace={listResult?.capabilities?.remove ? (workspace) => { void removeWorkspace(workspace); } : undefined}
+        onRestoreWorkspace={listResult?.capabilities?.restore ? (workspace) => { void restoreWorkspace(workspace); } : undefined}
+        onPermanentDeleteWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { inspectWorkspaceLifecycle(workspace, "permanent"); } : undefined}
+        onInspectWorkspace={listResult?.capabilities?.permanentDelete ? (workspace) => { inspectWorkspaceLifecycle(workspace); } : undefined}
         lifecycleBusyWorkspaceIds={lifecycleBusyWorkspaceIds}
         theme={theme}
         styles={styles}
@@ -1041,6 +1045,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         onSelectMainRepositories={selectedWorkspaceId === "main" ? () => { setLayoutMenuOpen(false); setMainRepositoryFilter(""); setMainRepositoriesOpen(true); } : undefined}
         onSelectLinkedWorkspaces={() => { setLayoutMenuOpen(false); setLinkedWorkspaceFilter(""); setLinkedWorkspacesOpen(true); }}
         onOpenStorage={openStorageMenu}
+        fullActivity={activityCapable && listReady ? { scan: fullActivityScan, busy: activityCommandBusy,
+          start: () => refreshWorkspaceActivity(true), cancel: cancelFullActivity } : undefined}
         runtimeNotice={(menuToolchain || displayDetail?.workspace.toolchain) && (menuToolchain || displayDetail?.workspace.toolchain).status !== 'not_applicable' ? <ToolchainNotice toolchain={menuToolchain || displayDetail!.workspace.toolchain} repositoryCount={displayDetail?.repositories.length || 0} styles={styles} onPrepare={!selectedWorkspaceIsMain ? prepareSelectedToolchain : undefined} preparing={preparingToolchain} progress={preparation.task?.state !== 'idle' ? preparationPhase : undefined} /> : undefined}
         onOpenRuntimeSettings={openRuntimeSettings}
         onOpenReviewSettings={openReviewSettings}

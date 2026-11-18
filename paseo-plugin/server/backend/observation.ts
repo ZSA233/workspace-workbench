@@ -61,6 +61,9 @@ export class Observation {
   statistics = new FileStatistics();
   private linkedReads = new Map<string, AbortController>();
   private closing = false;
+  private activityRosterEpoch = 0;
+  private activityRosterRead = -1;
+  private activityRosterFlight?: Promise<void>;
   constructor(
     workspaces: Workspaces,
     runtime: Runtime | null,
@@ -72,6 +75,7 @@ export class Observation {
     this.cache = cache;
     this.scheduler = scheduler;
     this.activity = new WorkspaceActivityIndex(workspaces.config);
+    this.scheduler.onRefsChanged = (paths, repositories) => this.activity.refsChanged(paths, repositories);
     this.diffContent = new DiffContent(workspaces, cache, scheduler);
     this.status = new RepositoryStatus(cache, scheduler, workspaces.config.gitTimeout);
     this.refresh = new RepositoryRefresh(this);
@@ -297,6 +301,7 @@ export class Observation {
     return { ...result, observedAt: now(), durationMs: Date.now() - started };
   }
   async list(params: Json, signal?: AbortSignal) {
+    const activityEpoch = this.activityRosterEpoch;
     const metadata = await this.workspaces.observationRecords.request('roster', { force: params.force === true });
     const orphanScan = metadata.orphanScan,
       orphanCandidates = orphanScan.candidates,
@@ -305,13 +310,15 @@ export class Observation {
       workspaces = this.workspaces.lineages.summaries(metadata.workspaces)
         .filter((w: Json) => (params.includeRemoved || w.state !== "removed") &&
           !(orphanIds.has(w.id) && ["record_invalid", "adopting", "adopt_failed"].includes(w.state)));
-    if (!metadata.workspaces.some((w: Json) => w.state === "record_invalid")) { this.cache.reconcileWorkspaces(metadata.workspaces); this.activity.reconcileWorkspaces(metadata.workspaces); this.scheduler.reconcileWorkspaces(metadata.workspaces); }
+    if (!metadata.workspaces.some((w: Json) => w.state === "record_invalid")) { this.cache.reconcileWorkspaces(metadata.workspaces); this.scheduler.reconcileWorkspaces(metadata.workspaces); }
+    this.reconcileActivityRoster(metadata.workspaces, activityEpoch);
     const discovered = metadata.discovered;
     if (signal?.aborted) throw new WorkbenchError("observer_cancelled", "observation cancelled");
     return {
       schemaVersion: protocol,
       project: { id: c.projectId, displayName: c.displayName },
       workspaces: workspaces.map((w: Json) => this.summary(w, [], true)),
+      activitySnapshot: this.activity.cursor(),
       orphanCandidates,
       capabilities: this.workspaces.capabilities(),
       discoveredCandidates: discovered.repositories,
@@ -334,18 +341,41 @@ export class Observation {
       },
     };
   }
+  private reconcileActivityRoster(rows: Json[], epoch: number) {
+    if (this.closing || epoch !== this.activityRosterEpoch) return;
+    this.activity.reconcileWorkspaces(rows);
+    this.activityRosterRead = epoch;
+    this.activity.warm();
+  }
+  private readActivityRoster(): Promise<void> {
+    if (this.closing || this.activityRosterRead === this.activityRosterEpoch) return Promise.resolve();
+    if (this.activityRosterFlight) return this.activityRosterFlight;
+    const epoch = this.activityRosterEpoch;
+    const pending = this.workspaces.observationRecords.request('roster', { activityOnly: true }, true)
+      .then(value => this.reconcileActivityRoster(value.workspaces, epoch));
+    this.activityRosterFlight = pending.finally(() => {
+      this.activityRosterFlight = undefined;
+      if (!this.closing && epoch !== this.activityRosterEpoch && this.activityRosterRead !== this.activityRosterEpoch)
+        void this.readActivityRoster().catch(() => {});
+    });
+    return this.activityRosterFlight;
+  }
+  activityRosterChanged() {
+    this.activityRosterEpoch++;
+    if (this.activityRosterRead >= 0) void this.readActivityRoster().catch(() => {});
+  }
   async activityRequest(params: Json): Promise<Json> {
     const action = String(params.action || "status"),
       scanId = String(params.scanId || "");
     if (action === "status") return this.activity.status(scanId);
     if (action === "cancel") return this.activity.cancel(scanId);
-    if (action !== "start") throw new WorkbenchError("activity_action_invalid", "workspace activity action must be start, status, or cancel");
-    const requested = Array.isArray(params.workspaceIds)
+    if (action === 'view') return this.activity.view(params);
+    if (action !== "start") throw new WorkbenchError("activity_action_invalid", "Workspace activity action must be view, start, status, or cancel");
+    const requested = params.scope === 'project' ? undefined : Array.isArray(params.workspaceIds)
       ? [...new Set(params.workspaceIds.slice(0, 500).filter((value: unknown): value is string => typeof value === "string" && value.length <= 256))]
       : [];
-    const requestedIds = new Set(requested), roster = await this.workspaces.observationRecords.request('list');
-    this.activity.reconcileWorkspaces(roster);
-    return this.activity.start(scanId, roster.filter((workspace: Json) => requestedIds.has(workspace.id) && workspace.state !== 'removed'), params.force === true);
+    await this.readActivityRoster();
+    return this.activity.startForIds(scanId, requested, params.force === true);
   }
   async close(): Promise<void> {
     this.closing = true;

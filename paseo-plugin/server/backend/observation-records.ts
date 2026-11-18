@@ -75,7 +75,7 @@ export class ObservationRecords {
         this.recent.push({operation:item.operation,queueMs:(item.startedAt || item.acceptedAt)-item.acceptedAt,executionMs:Date.now()-(item.startedAt || item.acceptedAt),failed:!!message.error,...(message.recordReads ? {recordReads:message.recordReads} : {})});
         if (this.recent.length > 16) this.recent.shift();
         if (message.error) item.reject(new WorkbenchError(message.error.code, message.error.message, message.error.details));
-        else if (item.operation === 'roster') {
+        else if (item.operation === 'roster' && item.input.activityOnly !== true) {
           // Directory discovery has its own read-only worker. Even a blocking
           // filesystem call there cannot hold the authoritative roster hostage.
           this.updateSupplements(item.input);

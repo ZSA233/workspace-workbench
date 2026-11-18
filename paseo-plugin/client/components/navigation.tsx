@@ -4,7 +4,8 @@ type PluginAgentPanelProps,
 type PluginWorkspacePanelProps
 } from "@getpaseo/plugin/client";
 import { useEffect,useState,useRef,useLayoutEffect,useMemo,type ReactNode } from "react";
-import { ActivityIndicator,BackHandler,Platform,Pressable,Text,View } from "react-native";
+import { ActivityIndicator,BackHandler,Platform,Pressable,Text,View, type ViewToken } from "react-native";
+import type { WorkspaceActivityScan } from "../../shared/workspace-activity";
 import { formatCopyFrom } from "../../shared/copy";
 import { FlatList,Icon,ScrollView,TextInput } from "../native-components";
 
@@ -77,6 +78,7 @@ export function LayoutMenu({
   onCreate,
   onSwitchProject,
   onOpenStorage,
+  fullActivity,
   onOpenExtensions,
   onOpenRuntimeSettings,
   onOpenExecution,
@@ -99,6 +101,7 @@ export function LayoutMenu({
   onCreate?: () => void;
   onSwitchProject?: () => void;
   onOpenStorage?: () => void;
+  fullActivity?: { scan: WorkspaceActivityScan | null; busy: boolean; start(): void; cancel(): void };
   onOpenExtensions?: () => void;
   onOpenRuntimeSettings?: () => void;
   runtimeNotice?: ReactNode;
@@ -133,6 +136,14 @@ export function LayoutMenu({
     </View> : null}
     {onAddRepositories ? <LayoutMenuItem label={localizedCopy.addRepositoriesMenu} onPress={onAddRepositories} styles={styles} /> : null}
     {onSelectMainRepositories ? <LayoutMenuItem label={localizedCopy.mainSelectRepositories} onPress={onSelectMainRepositories} styles={styles} /> : null}
+    {fullActivity ? <View>
+      {fullActivity.scan?.state === 'running' ? <>
+        <Text style={[styles.layoutMenuHint, { paddingHorizontal: 8 }]}>{formatCopyFrom(localizedCopy, "workspaceActivityProgress", [fullActivity.scan.completed, fullActivity.scan.total])}</Text>
+        <LayoutMenuItem label={localizedCopy.workspaceActivityCancel} onPress={fullActivity.cancel} disabled={fullActivity.busy} styles={styles} />
+      </> : <LayoutMenuItem label={localizedCopy.workspaceActivityFull} onPress={fullActivity.start} disabled={fullActivity.busy} styles={styles} />}
+      {fullActivity.scan?.state === 'complete' && fullActivity.scan.errors > 0
+        ? <Text style={[styles.layoutMenuHint, { paddingHorizontal: 8 }]}>{formatCopyFrom(localizedCopy, "workspaceActivityFailures", [fullActivity.scan.errors])}</Text> : null}
+    </View> : null}
     {onSelectLinkedWorkspaces ? <LayoutMenuItem label={localizedCopy.linkedSelectWorkspaces} onPress={onSelectLinkedWorkspaces} styles={styles} /> : null}
     {onCreate ? <LayoutMenuItem label={localizedCopy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
     {onSwitchProject ? <LayoutMenuItem label={localizedCopy.switchProject} onPress={onSwitchProject} styles={styles} /> : null}
@@ -200,6 +211,8 @@ export function WorkspaceSelector({
   onBatch, batchBusy = false, batchAvailable = false, onBatchResults,
   onOpenLayoutMenu,
   latestCommitProgress,
+  onVisibleWorkspaces,
+  onScrollActivity,
   statusControl,
   executionControl,
   viewMode = 'list', onViewMode, cacheInventory,
@@ -233,6 +246,8 @@ export function WorkspaceSelector({
   batchBusy?: boolean; batchAvailable?: boolean; onBatchResults?: () => void;
   onOpenLayoutMenu?: () => void;
   latestCommitProgress?: { completed: number; total: number } | null;
+  onVisibleWorkspaces?: (ids: string[]) => void;
+  onScrollActivity?: () => void;
   statusControl?: ReactNode;
   executionControl?: ReactNode;
   viewMode?: 'list' | 'tree'; onViewMode?: (view: 'list' | 'tree') => void; cacheInventory?: CacheListResult;
@@ -260,11 +275,18 @@ export function WorkspaceSelector({
   useEffect(() => { if (!open) { setBatchMode(false); setChecked(new Set()); setCreatorPickerOpen(false); } }, [open]);
   const listRef = useRef<import('react-native').FlatList<WorkspaceTreeRow>>(null);
   const scrollY = useRef(0);
+  const visibleRows = useRef(onVisibleWorkspaces);
+  visibleRows.current = onVisibleWorkspaces;
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 10 }).current;
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<WorkspaceTreeRow>[] }) => {
+    visibleRows.current?.(viewableItems.flatMap(({ item }) => item.node.workspace && item.node.match && item.node.workspace.state !== 'removed'
+      ? [item.node.workspace.id] : []));
+  }).current;
   const previousRows = useRef<string[]>([]);
   const previousScope = useRef('');
   useEffect(() => { if (!open) setSearch(""); }, [open]);
   const searchedWorkspaces = useMemo(() => visibleWorkspaces.filter((workspace) => matchesWorkspaceSearch(workspace, search) && (!selectedCreator || createdInSession(workspace, selectedCreator))), [visibleWorkspaces, search, selectedCreator]);
-  const forest = useMemo(() => workspaceForest([...workspaces, ...historyWorkspaces], searchedWorkspaces), [workspaces, historyWorkspaces, searchedWorkspaces]);
+  const forest = useMemo(() => viewMode === 'tree' ? workspaceForest([...workspaces, ...historyWorkspaces], searchedWorkspaces) : [], [viewMode, workspaces, historyWorkspaces, searchedWorkspaces]);
   const treeRows = useMemo(() => viewMode === 'list' ? workspaceListRows(searchedWorkspaces) : workspaceTreeRows(forest, collapsedSources, Boolean(search.trim())), [viewMode, searchedWorkspaces, forest, collapsedSources, search]);
   const spaceByInstance = useMemo(() => new Map(cacheInventory?.workspaces.map(workspace => [workspace.instance, workspace]) || []), [cacheInventory?.workspaces]);
   const selectable = searchedWorkspaces.filter(workspace => batchEligible(workspace, filter === 'history' ? 'delete' : 'remove') && !lifecycleBusyWorkspaceIds?.includes(workspace.id));
@@ -376,7 +398,13 @@ export function WorkspaceSelector({
           <FlatList
             testID="workbench-workspace-list"
             ref={listRef}
-            onScroll={event => { scrollY.current = event.nativeEvent.contentOffset.y; }}
+            onScroll={event => {
+              const offset = event.nativeEvent.contentOffset.y;
+              if (offset !== scrollY.current) onScrollActivity?.();
+              scrollY.current = offset;
+            }}
+            onViewableItemsChanged={onViewableItemsChanged}
+            viewabilityConfig={viewabilityConfig}
             scrollEventThrottle={16}
             extraData={[batchMode, checked, batchBusy, lifecycleBusyWorkspaceIds]}
             data={treeRows}

@@ -23,6 +23,7 @@ export type SchedulerOptions = {
 /** Events invalidate derived data, never claim that a Git observation succeeded. */
 export class ObservationScheduler {
   onActivity?: (workspaceIds: string[]) => void;
+  onRefsChanged?: (paths: string[], repositories: string[]) => void;
   readonly instanceId = randomUUID();
   revision = 0;
   rosterRevision = 0;
@@ -176,6 +177,11 @@ export class ObservationScheduler {
       let timer: ReturnType<typeof setTimeout> | undefined, expired = false;
       const pending = this.options.subscribe(path, (error, events) => {
         if (this.closed || expired) return;
+        if (!error && metadata) {
+          const changed = events.filter(event => /^(HEAD|commondir|packed-refs|reftable\/tables\.list|refs\/.+)$/.test(relative(path, event.path).replaceAll('\\', '/'))
+            && !event.path.endsWith('.lock')).map(event => resolve(event.path));
+          if (changed.length) this.onRefsChanged?.(changed, [...users].map(user => user.path));
+        }
         for (const r of users) {
           if (error) { r.issue = 'watcher_unavailable'; r.retryAt = Date.now() + 5_000; this.revision++; continue; }
           const paths = events.filter(e => metadata || !this.internal(r, e.path)).map(e => relative(path, e.path).replaceAll('\\', '/')).filter(value => !value.split('/').some(part => part.startsWith('.workbench-transfer-')));

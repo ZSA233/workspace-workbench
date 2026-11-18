@@ -8,5 +8,6 @@
     "test": "node --test test/*.test.mjs",
     "bundle": "node src/bundle.mjs"
   },
-  "dependencies": { "tar-stream": "3.2.2" }
+  "dependencies": { "tar-stream": "3.2.2" },
+  "devDependencies": { "typescript": "5.9.3" }
 }

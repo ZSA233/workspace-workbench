@@ -4,9 +4,9 @@
 
 `Managed web release` Actions 每六小时检查官方稳定版本；发布流程或构建模板更新后
 也会自动检查，另支持手动指定版本。
-构建模板位于 `recipes/`，固定上游提交后应用源码补丁、运行回归并生成标准网页包。
+构建模板位于 `recipes/`，固定上游提交后接入下载适配、运行回归并生成标准网页包。
 Paseo 模板保留同源 Access HTTP 下载交接，不读取正常 Paseo home。
-稳定版不设大小版本白名单；新版本自动尝试构建，只有补丁、测试和实际宿主验收
+稳定版不设大小版本白名单。新版本自动尝试构建，只有源码适配、测试和实际宿主验收
 全部通过后才发布。预发布版本不自动跟随。
 
 `wb.4` 移除旧重连补丁，直接使用官方 SDK 和网页运行时。官方
@@ -14,6 +14,11 @@ Paseo 模板保留同源 Access HTTP 下载交接，不读取正常 Paseo home�
 修复初始化时丢失关闭事件、入口首次连接后子主机等待轮询，以及入口恢复后
 子主机等待重试的问题；同时覆盖有慢速备用连接的恢复场景。
 发布仍运行官方 SDK 和网页运行时回归，仅保留 Workbench/Access 下载交接适配。
+
+自 `wb.5` 起，构建按 TypeScript 代码结构找到已校验的下载凭证和后续的传输选择，
+在两者之间接入 Access。调整相邻导入、注释、行号或翻译顺序时，同一构建模板仍可用。
+关键结构缺失或不唯一时，构建报告对应文件和匹配失败的位置。发布前同时运行官方下载
+测试和 Access 交接测试，覆盖普通浏览器回退、原生 Paseo 下载以及交接失败。
 
 自 `wb.3` 起，验证后端随本次解析的官方版本安装，兼容性清单中的
 `${upstream_version}` 也展开为该确切版本，避免新版网页仍宣称或验证旧后端。
@@ -23,9 +28,10 @@ Paseo 模板保留同源 Access HTTP 下载交接，不读取正常 Paseo home�
 发布标签为 `paseo-web-v<上游版本>-wb.<配方版本>`；包含压缩包、
 `frontend-release.json` 和 `SHA256SUMS`。清单记录源码、配方、兼容后端及逐文件散列。
 发布不移动插件 `stable`、不改变默认 Latest，也不更新 Pocket APK 或其内置网页锁。
-已存在的完整版本直接跳过；构建、补丁或兼容性回归失败时不发布。
+已存在的完整版本直接跳过。构建或兼容性回归失败时不发布。
 
 ```sh
+npm --prefix web-assets ci --ignore-scripts
 node web-assets/src/release.mjs resolve --recipe paseo --output .local/web-release/lock.json
 python3 web-assets/src/build-release.py --lock .local/web-release/lock.json \
   --work .local/web-release/source --output .local/web-release/output

@@ -2,13 +2,14 @@
   "schema": 1,
   "id": "paseo",
   "repository": "getpaseo/paseo",
-  "recipe_version": "wb.4",
+  "recipe_version": "wb.5",
   "compatible_runtimes": {"@getpaseo/server": ["${upstream_version}"]},
   "capabilities": ["access.download-handoff.v1"],
-  "patches": ["web/download-handoff.patch"],
+  "source_transforms": ["web/integrate-download.mjs"],
   "copies": {
     "web/access-download.ts": "packages/app/src/utils/access-download.ts",
-    "web/access-download.web.ts": "packages/app/src/utils/access-download.web.ts"
+    "web/access-download.web.ts": "packages/app/src/utils/access-download.web.ts",
+    "web/access-download-handoff.test.ts": "packages/app/src/stores/access-download-handoff.test.ts"
   },
   "dist": "packages/server/dist/server/web-ui",
   "licenses": {"LICENSE": "LICENSE-Paseo"},
@@ -17,8 +18,8 @@
     ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
     ["npm", "run", "postinstall"],
     ["npm", "run", "build:app-deps"],
-    ["npm", "run", "lint", "--", "packages/app/src/utils/access-download.ts", "packages/app/src/utils/access-download.web.ts", "packages/app/src/stores/download-store.ts", "packages/app/src/components/download-toast.tsx", "packages/client/src/hosts/index.ts", "packages/client/src/daemon-client.test.ts", "packages/app/src/runtime/host-runtime.ts", "packages/app/src/runtime/host-runtime.test.ts"],
-    ["npm", "run", "test", "--workspace=@getpaseo/app", "--", "src/stores/download-store.test.ts", "--bail=1"],
+    ["npm", "run", "lint", "--", "packages/app/src/utils/access-download.ts", "packages/app/src/utils/access-download.web.ts", "packages/app/src/stores/download-store.ts", "packages/app/src/stores/access-download-handoff.test.ts", "packages/app/src/components/download-toast.tsx", "packages/client/src/hosts/index.ts", "packages/client/src/daemon-client.test.ts", "packages/app/src/runtime/host-runtime.ts", "packages/app/src/runtime/host-runtime.test.ts"],
+    ["npm", "run", "test", "--workspace=@getpaseo/app", "--", "src/stores/download-store.test.ts", "src/stores/access-download-handoff.test.ts", "--bail=1"],
     ["npm", "run", "test", "--workspace=@getpaseo/client", "--", "src/daemon-client.test.ts", "--bail=1"],
     ["npm", "run", "test", "--workspace=@getpaseo/app", "--", "src/runtime/host-runtime.test.ts", "--bail=1"],
     ["npm", "run", "typecheck", "--workspace=@getpaseo/client"],

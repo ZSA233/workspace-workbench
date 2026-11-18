@@ -8,14 +8,22 @@ interface DownloadInput {
   filename: string;
 }
 
-export async function tryAccessDownload(input: DownloadInput): Promise<boolean> {
+async function hasDownloadHandoff(): Promise<boolean> {
+  if (typeof document === "undefined" || typeof location === "undefined") return false;
+  if (location.protocol !== "https:" && location.protocol !== "http:") return false;
+
   const capability = await fetch(prefix + "/capabilities", {
     credentials: "same-origin",
     cache: "no-store",
     redirect: "error",
+    headers: { Accept: "application/json" },
   });
-  if (capability.status === 404 || capability.status === 405) return false;
+  if ([204, 404, 405].includes(capability.status)) return false;
   if (!capability.ok) throw new Error("Reopen the workbench to verify access before downloading.");
+  // A standalone Paseo host can serve its SPA for unknown GET routes.
+  const contentType = capability.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
+  if (contentType === "text/html" && !/\bAccessPocket\//.test(navigator.userAgent)) return false;
+  if (contentType !== "application/json") throw new Error("Invalid download capability.");
   const caps: unknown = await capability.json();
   if (
     !caps ||
@@ -24,6 +32,18 @@ export async function tryAccessDownload(input: DownloadInput): Promise<boolean> 
     caps.download_handoff_version !== 1
   )
     return false;
+  if (
+    !("entry_server_id" in caps) ||
+    typeof caps.entry_server_id !== "string" ||
+    !caps.entry_server_id.trim()
+  )
+    throw new Error("Invalid download host.");
+  return true;
+}
+
+export async function tryAccessDownload(input: DownloadInput): Promise<boolean> {
+  if (!(await hasDownloadHandoff())) return false;
+  if (!input.serverId.trim()) throw new Error("Invalid download host.");
   if (!tokenPattern.test(input.token)) throw new Error("Invalid source download credential.");
   const native = nativeDownload();
   const result = await fetch(prefix + "/downloads", {

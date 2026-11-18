@@ -71,7 +71,7 @@ def build(lock_path, work, output):
     with urllib.request.urlopen(expected,timeout=180) as response, archive.open('xb') as out: shutil.copyfileobj(response,out)
     source_sha=sha(archive.read_bytes())
     source=extract_source(archive,work)
-    for name in recipe['patches']:
+    for name in recipe.get('patches', []):
         if not safe(name): raise ValueError('Unsafe patch path')
         subprocess.run(['patch','-p1','--batch','--forward'],cwd=source,input=(recipe_dir/name).read_bytes(),check=True)
     for name,dest in recipe['copies'].items():
@@ -79,6 +79,11 @@ def build(lock_path, work, output):
         shutil.copy2(recipe_dir/name,source/dest)
     env={k:v for k,v in os.environ.items() if not k.startswith(('EXPO_PUBLIC_','GH_','GITHUB_','ANDROID_'))}
     env.update(ELECTRON_SKIP_BINARY_DOWNLOAD='1',EXPO_NO_TELEMETRY='1',CI='1',NODE_OPTIONS='--max-old-space-size=4096')
+    for name in recipe.get('source_transforms', []):
+        if not safe(name) or name not in inventory:
+            raise ValueError('Invalid source transform')
+        subprocess.run(['node', str(recipe_dir / name), str(source)], cwd=source,
+                       env=env, check=True, timeout=60)
     for command in recipe['commands']:
         if not isinstance(command,list) or not all(isinstance(s,str) for s in command): raise ValueError('Invalid recipe command')
         subprocess.run(command,cwd=source,env=env,check=True,timeout=1200)

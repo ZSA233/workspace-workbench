@@ -74,10 +74,14 @@ test('commit activity retains shared owners and fences a late result from a repl
 
     const replacement = { ...b, instanceId: 'two' };
     activity.reconcileWorkspaces([replacement]); assert.equal(activity.summary(replacement).latestCommitAt, null);
-    let entered!: () => void; const ready = new Promise<void>(resolve => { entered = resolve; });
+    let entered = false;
     const blocked = new Promise<void>(resolve => { release = resolve; });
-    Git.prototype.run = async function(...args: Parameters<Git['run']>) { entered(); await blocked; return originalRun.apply(this, args); };
-    activity.start('late', [replacement]); await ready;
+    Git.prototype.run = async function(...args: Parameters<Git['run']>) { entered = true; await blocked; return originalRun.apply(this, args); };
+    activity.start('late', [replacement]);
+    // The production timer deliberately does not keep an idle process alive.
+    const deadline = Date.now() + 5_000;
+    while (!entered && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(entered, 'the scan must reach Git before this test replaces its Workspace');
     const newest = { ...b, instanceId: 'three' }; activity.reconcileWorkspaces([newest]); release!(); await waitScan('late');
     assert.equal(activity.summary(newest).latestCommitAt, null, 'late HEAD cannot repopulate a new instance');
     await activity.close(); activity = new WorkspaceActivityIndex(config); activity.reconcileWorkspaces([newest]);

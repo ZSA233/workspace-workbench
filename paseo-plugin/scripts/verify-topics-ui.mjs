@@ -31,6 +31,8 @@ const videoTopic=fixture.state.topics[3],videoMessage=videoTopic.messages[0];
 videoTopic.title='视频播放与镜像反馈';
 videoMessage.text='fileName=mmexport123.mp4\nurl: @opaque-native-video';
 videoMessage.assets=[{id:'video-original',name:'attachment',mimeType:'video',state:'pending'}];
+for(let index=1;index<=8;index++)videoTopic.messages.push({...videoMessage,id:'video-followup-'+index,version:'video-followup-version-'+index,createdAt:videoMessage.createdAt+index*60000,text:'后续讨论 '+index,assets:[]});
+videoTopic.messageCount=videoTopic.messages.length;
 const host = spawn(process.execPath, [join(plugin, 'scripts/verify-live.mjs')], {
   env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_LIVE_TOPICS: '1', WORKBENCH_VERIFY_OUTPUT: output },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -128,6 +130,9 @@ try {
   check('actual plugin renders the topics entry with no collection/model/requirements UI');
   await page.getByTestId('topic-expand-topic-1').click();
   await page.getByTestId('topic-message-message-1').waitFor();
+  await page.getByTestId('topic-original-message-message-1').getByRole('img',{name:'image-1.png',exact:true}).waitFor();
+  await page.getByTestId('topic-original-message-message-2').getByRole('img',{name:'image-2.png',exact:true}).waitFor();
+  check('each original message renders its own media below the text, before the next speaker');
   assert.ok((await page.getByTestId('topic-row-topic-1').innerText()).includes('文件列表错误提示挤压布局'));
   assert.equal((await panel.innerText()).includes('mediaId='), false);
   assert.ok((await page.getByTestId('topic-row-topic-1').innerText()).includes('11-19 16:20'));
@@ -483,8 +488,19 @@ try {
   await panel.getByPlaceholder('搜索话题').fill('视频播放');
   await page.getByTestId('topic-row-topic-4').waitFor();
   await page.getByTestId('topic-expand-topic-4').click();
-  const videoTile=panel.getByRole('button',{name:'查看 视频.mp4',exact:true});
-  await videoTile.getByRole('img').waitFor();
+  const videoSource=page.getByTestId('topic-original-message-'+videoMessage.id);
+  const videoTile=videoSource.getByRole('button',{name:'查看 视频.mp4',exact:true});
+  await videoTile.getByRole('img',{name:'视频.mp4',exact:true}).waitFor();
+  const sourceBounds=await videoSource.boundingBox(),tileBounds=await videoTile.boundingBox(),nextBounds=await page.getByTestId('topic-original-message-video-followup-1').boundingBox();
+  assert.ok(tileBounds.y>=sourceBounds.y&&tileBounds.y+tileBounds.height<=sourceBounds.y+sourceBounds.height);
+  assert.ok(tileBounds.y+tileBounds.height<=nextBounds.y,'the video must precede later discussion messages');
+  await panel.screenshot({path:join(output,'topics-inline-video-desktop.png')});
+  await page.setViewportSize({width:390,height:844});
+  await page.waitForFunction(()=>document.querySelector('[data-testid="workbench-topics-panel"]')?.getBoundingClientRect().width<=390);
+  const directPreview=await videoTile.evaluate(element=>new Promise(resolve=>{const observer=new IntersectionObserver(entries=>{observer.disconnect();resolve(entries[0].intersectionRatio);});observer.observe(element);}));
+  assert.equal(directPreview,1,'the phone topic tab must show the video without scrolling to the end or opening context');
+  await panel.screenshot({path:join(output,'topics-inline-video-phone.png')});
+  check('a long discussion shows the video in its own message on a phone viewport before any context or end-of-discussion scrolling');
   assert.equal((await panel.innerText()).includes('fileName='),false);
   assert.equal((await panel.innerText()).includes('@opaque-native-video'),false);
   await videoTile.click();

@@ -108,11 +108,11 @@ export function TopicAsset({ client, topicId, message, asset, contextOf, checked
   </View>;
 }
 
-export function OriginalMessage({ client, topicId, message, contextOf, selected, selectedAssets, onMessage, onAsset, onContext, disabled, hideAssets = false }: {
-  client: TopicsClient; topicId: string; message: ArchiveMessage; contextOf?: string; selected: boolean; selectedAssets: string[]; onMessage: () => void; onAsset: (asset: ArchiveAsset) => void; onContext?: () => void; disabled?: boolean; hideAssets?: boolean;
+export function OriginalMessage({ client, topicId, message, contextOf, selected, selectedAssets, onMessage, onAsset, onContext, disabled, mediaWidth = 132 }: {
+  client: TopicsClient; topicId: string; message: ArchiveMessage; contextOf?: string; selected: boolean; selectedAssets: string[]; onMessage: () => void; onAsset: (asset: ArchiveAsset) => void; onContext?: () => void; disabled?: boolean; mediaWidth?: number;
 }) {
   const c = useColors(), text = messageText(message);
-  return <View style={{ paddingVertical: 9, gap: 8, borderBottomWidth: 1, borderBottomColor: c.border }}>
+  return <View testID={'topic-original-message-' + message.id} style={{ paddingVertical: 9, gap: 8, borderBottomWidth: 1, borderBottomColor: c.border }}>
     <View style={{ flexDirection: 'row', gap: 5, alignItems: 'flex-start' }}>
       <Check checked={selected} label={'选择消息：' + (text.slice(0,24) || '附件消息')} id={'topic-message-' + message.id} onPress={onMessage} disabled={disabled} />
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
@@ -121,8 +121,8 @@ export function OriginalMessage({ client, topicId, message, contextOf, selected,
       </View>
       {onContext ? <TopicIcon icon="MessagesSquare" label="查看上下文" onPress={onContext} /> : null}
     </View>
-    {!hideAssets && message.assets.length ? <View style={{ paddingLeft: 37, flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-      {message.assets.map(asset => <TopicAsset key={asset.id} {...{ client, topicId, message, asset, contextOf }} checked={selectedAssets.includes(asset.id)} disabled={disabled} onToggle={() => onAsset(asset)} />)}
+    {message.assets.length ? <View style={{ paddingLeft: 37, flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+      {message.assets.map(asset => <TopicAsset key={asset.id} {...{ client, topicId, message, asset, contextOf }} tileWidth={mediaWidth} checked={selectedAssets.includes(asset.id)} disabled={disabled} onToggle={() => onAsset(asset)} />)}
     </View> : null}
   </View>;
 }

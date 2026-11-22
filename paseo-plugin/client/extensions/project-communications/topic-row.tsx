@@ -6,7 +6,7 @@ import { uniqueMessages } from '../../topic-selection';
 import { topicTime, topicTitle } from '../../../shared/extensions/project-communications/topics';
 import type { ArchiveAsset, ArchiveMessage, ArchiveTopic, ArchiveTopicDetail, SelectedTopic } from '../../../shared/extensions/project-communications/topics';
 import { Button, Label, ignoreFailure, shortTime, tint, useColors } from './ui';
-import { Check, ContextDialog, MediaCount, OriginalMessage, TopicAsset, TopicIcon, topicError } from './topic-ui';
+import { Check, ContextDialog, MediaCount, OriginalMessage, TopicIcon, topicError } from './topic-ui';
 
 export type TopicRowProps = {
   topic: ArchiveTopic; client: TopicsClient; groupName: string; selected?: SelectedTopic;
@@ -63,18 +63,12 @@ export function TopicRow(p: TopicRowProps) {
       {detail.isLoading && !data ? <ActivityIndicator style={{ padding: 15 }} /> : null}
       {detail.error ? <Label warning>{topicError(detail.error.message)}</Label> : null}
       {data ? <>
-        {messages.map(message => <OriginalMessage key={message.id} client={p.client} topicId={data.id} message={message} hideAssets
+        {messages.map(message => <OriginalMessage key={message.id} client={p.client} topicId={data.id} message={message} mediaWidth={p.narrow ? 144 : 200}
           disabled={p.busy || changed} selected={p.selected?.messages.some(item => item.id === message.id) || false}
           selectedAssets={p.selected?.assetIds || []}
           onMessage={() => p.onMessage(data, message, p.selected?.contexts[message.id])}
           onAsset={asset => p.onAsset(data, message, asset, p.selected?.contexts[message.id])}
           onContext={() => setContext(p.selected?.contexts[message.id] || message.id)} />)}
-        <View style={{ paddingLeft: 37, paddingTop: 10, paddingBottom: 7, flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-          {messages.flatMap(message => message.assets.map(asset => <TopicAsset key={message.id + ':' + asset.id}
-            client={p.client} topicId={data.id} message={message} asset={asset} tileWidth={p.narrow ? 144 : 200}
-            contextOf={p.selected?.contexts[message.id]} checked={p.selected?.assetIds.includes(asset.id) || false}
-            disabled={p.busy || changed} onToggle={() => p.onAsset(data, message, asset, p.selected?.contexts[message.id])} />))}
-        </View>
         {detail.data?.hasMoreMessages ? <Button variant="link" disabled={changed} onPress={() => ignoreFailure(more())}>更多原文</Button> : null}
         {data.lastAnswer || data.summary ? <View style={{ paddingVertical: 8, gap: 6 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>

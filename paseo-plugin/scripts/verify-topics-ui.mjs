@@ -7,6 +7,8 @@ import { join, resolve, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { chromium } from 'playwright';
 import { DaemonClient } from '@getpaseo/client/internal/daemon-client';
+import { createPaseoApi } from '@getpaseo/client';
+import { createHash } from 'node:crypto';
 import WebSocket from 'ws';
 import { backendRequest } from '../server/backend-supervisor.ts';
 import { startArchiveFixture } from '../tests/helpers/archive-service.ts';
@@ -16,8 +18,17 @@ const plugin = resolve(import.meta.dirname, '..');
 const output = process.env.WORKBENCH_VERIFY_OUTPUT || mkdtempSync(join(tmpdir(), 'wb-topics-ui-'));
 mkdirSync(output, { recursive: true });
 const fixture = await startArchiveFixture();
+fixture.state.topics[0].question = fixture.state.topics[0].title;
+fixture.state.topics[0].title = '[图片消息](mediaId=$truncated';
+fixture.state.topics[0].updatedAt = new Date(2026, 10, 19, 16, 20).getTime();
+fixture.state.topics[0].messages[0].displayText = fixture.state.topics[0].messages[0].text;
+fixture.state.topics[0].messages[0].text = '[图片消息](mediaId=$image-1)' + fixture.state.topics[0].messages[0].text;
+fixture.state.topics[0].messages[0].createdAt = fixture.state.topics[0].updatedAt;
+fixture.state.context.displayText = fixture.state.context.text;
+fixture.state.context.text = '[图片消息](mediaId=$context-image)' + fixture.state.context.text;
+fixture.state.context.assets = [{ id: 'context-image', kind: 'image', mimeType: 'image/png', state: 'ready', name: 'context.png' }];
 const host = spawn(process.execPath, [join(plugin, 'scripts/verify-live.mjs')], {
-  env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_VERIFY_OUTPUT: output },
+  env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_LIVE_TOPICS: '1', WORKBENCH_VERIFY_OUTPUT: output },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let logs = '', ui, browser, page, client;
@@ -61,10 +72,10 @@ try {
   }, token: fixture.token });
   const created = await backendRequest(join(ui.project, 's.sock'), 'workspace.create', { name: 'topics-dev', repositories: ['one'] }, 30000);
   assert.ok(created.ok, JSON.stringify(created));
-  writeFileSync(join(ui.project, 'state', 'agent-bindings.json'), JSON.stringify({ schemaVersion: 'workspace.workbench.agent-bindings/v2', bindings: [{
+  const fixtureBindings = { schemaVersion: 'workspace.workbench.agent-bindings/v2', bindings: [{
     workspaceId: created.result.id, agentId: 'archive-fixture-worker', relationship: 'independent', paseoWorkspaceId: 'fixture-host',
     cwd: created.result.treePath, provider: 'fixture', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-  }] }));
+  }] };
   browser = await chromium.launch({ headless: true, executablePath: browserExecutable() });
   page = await browser.newPage({ viewport: { width: 1448, height: 1120 }, locale: 'zh-CN', colorScheme: 'dark' });
   page.setDefaultTimeout(20000);
@@ -88,6 +99,27 @@ try {
   check('actual plugin renders the topics entry with no collection/model/requirements UI');
   await page.getByTestId('topic-expand-topic-1').click();
   await page.getByTestId('topic-message-message-1').waitFor();
+  assert.ok((await page.getByTestId('topic-row-topic-1').innerText()).includes('文件列表错误提示挤压布局'));
+  assert.equal((await panel.innerText()).includes('mediaId='), false);
+  assert.ok((await page.getByTestId('topic-row-topic-1').innerText()).includes('11-19 16:20'));
+  await page.getByTestId('topic-message-message-1').click();
+  await page.getByTestId('topic-basket-topic-1').getByRole('img', { name: 'image-1.png', exact: true }).waitFor();
+  await page.getByTestId('topics-preview').click();
+  const initialPreview = page.getByRole('dialog', { name: '所选材料', exact: true });
+  await initialPreview.getByRole('img', { name: 'image-1.png', exact: true }).waitFor();
+  assert.equal((await initialPreview.innerText()).includes('mediaId='), false);
+  await initialPreview.getByRole('button', { name: '返回', exact: true }).click();
+  await page.getByTestId('topic-detail-topic-1').getByRole('button', { name: '查看上下文', exact: true }).first().click();
+  const context = page.getByRole('dialog', { name: '上下文', exact: true });
+  await context.getByText('这是原消息前的一条补充，只有主动选择后才交接。', { exact: true }).waitFor();
+  assert.equal((await context.innerText()).includes('mediaId='), false);
+  await context.getByRole('button', { name: '完成', exact: true }).click();
+  check('archive titles, caption-only originals and context display cleanly; older dates are explicit and a checked message previews its image before a target is chosen');
+  const nativeSession = await createPaseoApi(client).agents.create({ cwd: ui.project, config: { provider: 'codex/recovery-fixture' }, title: '档案材料验收会话' });
+  await page.getByTestId('topics-target').click();
+  const targetPicker = page.getByRole('dialog', { name: '目标会话', exact: true });
+  await targetPicker.getByRole('button', { name: '档案材料验收会话', exact: true }).click();
+  await page.getByRole('button', { name: '清空材料', exact: true }).click();
   await page.getByTestId('topic-select-topic-1').click();
   await page.getByTestId('topic-basket-topic-1').waitFor();
   await panel.getByRole('button', { name: '更多话题', exact: true }).click();
@@ -110,7 +142,7 @@ try {
   assert.ok((await preview.innerText()).includes('文件列表出现长错误提示后，目录被往下挤了。'));
   assert.equal((await preview.innerText()).includes('派生分析'), false);
   await preview.getByRole('button', { name: '返回', exact: true }).click();
-  check('preview freezes exactly the chosen originals and excludes the optional analysis');
+  check('preview shows exactly the chosen originals and image thumbnails, excluding optional analysis');
   await page.getByTestId('topics-settings').click();
   const settings = page.getByTestId('communications-settings-dialog');
   await settings.waitFor();
@@ -158,6 +190,9 @@ try {
   check('polling preserves selection; a stale snapshot is rejected in a fixed status row without adding a banner');
   await page.getByRole('button', { name: '重新读取并清除此话题选择', exact: true }).click();
   await page.getByTestId('topic-basket-topic-1').waitFor({ state: 'detached' });
+  writeFileSync(join(ui.project, 'state', 'agent-bindings.json'), JSON.stringify(fixtureBindings));
+  await page.getByTestId('topics-target').click();
+  await targetPicker.getByRole('button', { name: 'topics-dev', exact: true }).click();
   await page.getByTestId('topics-send').click();
   await page.getByRole('button', { name: '查回执', exact: true }).waitFor();
   const previewsBefore = readdirSync(join(ui.project, 'state', 'extensions', 'topic-materials')).filter(name => name.endsWith('.json')).length;
@@ -194,6 +229,56 @@ try {
   await page.getByTestId('topic-row-topic-1').waitFor();
   assert.equal(JSON.stringify(fixture.state.groups), discoveryBefore);
   check('an empty followed-group scope opens actual follow settings; saving a follow restores topics and leaves service discovery policy unchanged');
+  await page.getByTestId('topic-expand-topic-1').click();
+  await page.getByTestId('topic-message-message-1').click();
+  await page.getByTestId('topics-target').click();
+  await targetPicker.getByRole('button', { name: '档案材料验收会话', exact: true }).click();
+  await page.getByTestId('topics-send').click();
+  await page.getByTestId('topics-send').getByText('打开会话', { exact: true }).waitFor();
+  let deliveredImage = false;
+  for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
+    const records = existsSync(ui.topicsFixtureRoot) ? readdirSync(ui.topicsFixtureRoot).filter(name => name.endsWith('.json')) : [];
+    for (const name of records) {
+      const record = JSON.parse(readFileSync(join(ui.topicsFixtureRoot, name), 'utf8'));
+      for (const item of (record.inputs || []).flat()) {
+        const bytes = item.type === 'localImage' && item.path ? readFileSync(item.path)
+          : item.type === 'image' && typeof item.url === 'string' && item.url.startsWith('data:') ? Buffer.from(item.url.split(',')[1], 'base64') : undefined;
+        if (bytes && createHash('sha256').update(bytes).digest('hex') === fixture.imageHash) deliveredImage = true;
+      }
+    }
+    if (deliveredImage) break;
+    await page.waitForTimeout(100);
+  }
+  assert.equal(deliveredImage, true, 'the actual isolated Paseo host must deliver original image bytes to its local protocol fixture');
+  await shot('topics-native-send-accepted');
+  await page.getByTestId('topics-send').click();
+  await page.getByText('RECOVERY_FIXTURE_COMPLETED', { exact: true }).waitFor();
+  assert.equal(await page.getByTestId('workbench-topics-panel').count(), 0);
+  check('actual isolated Paseo sends original image bytes into an existing native session and opens that conversation; the local provider is a protocol fixture, not a model');
+  const pdfTopic = fixture.state.topics[3], pdfMessage = pdfTopic.messages[0];
+  pdfMessage.assets.push({ id: 'pdf-original', name: 'feedback.pdf', kind: 'file', mimeType: 'application/pdf', state: 'ready' });
+  const currentConnection = await rpc('workspace.workbench.communications-connection', { action: 'read' });
+  const deliver = request => rpc('workspace.workbench.archive-topics-delivery', { connectionRevision: currentConnection.revision, request });
+  const pdfPreview = await deliver({ action: 'preview', targetId: 'session:' + nativeSession.id, selections: [{
+    topicId: pdfTopic.id, revision: pdfTopic.revision, inputRevision: pdfTopic.inputRevision, messages: [], includeAnalysis: false,
+    assets: [{ id: 'pdf-original', messageId: pdfMessage.id, messageVersion: pdfMessage.version }],
+  }] });
+  assert.equal((await deliver({ action: 'send', id: pdfPreview.id })).state, 'accepted');
+  let deliveredPdf = false;
+  for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
+    for (const name of readdirSync(ui.topicsFixtureRoot).filter(name => name.endsWith('.json'))) {
+      const record = JSON.parse(readFileSync(join(ui.topicsFixtureRoot, name), 'utf8'));
+      for (const item of (record.inputs || []).flat()) {
+        if (item.type !== 'text' || !item.text.includes('Uploaded file: feedback.pdf')) continue;
+        const path = /Path: ([^\n]+)/.exec(item.text)?.[1];
+        if (path && readFileSync(path).equals(fixture.pdf)) deliveredPdf = true;
+      }
+    }
+    if (deliveredPdf) break;
+    await page.waitForTimeout(100);
+  }
+  assert.equal(deliveredPdf, true, 'the host must make the selected PDF original available to the target provider');
+  check('native non-image delivery retains original bytes through a typed host file attachment');
   assert.equal(fixture.state.requests.some(request => request.url.startsWith('/v1/projects')), false);
   assert.equal(report.pageErrors.length, 0, JSON.stringify(report.pageErrors));
   report.fidelity.push('same flat topic-list + bottom-basket architecture as refined C',

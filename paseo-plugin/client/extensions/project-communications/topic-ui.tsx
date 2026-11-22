@@ -4,8 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Icon, ScrollView, useToast } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
 import type { ArchiveAsset, ArchiveMessage } from '../../../shared/extensions/project-communications/topics';
-import { assetIsImage, senderName } from '../../../shared/extensions/project-communications/topics';
-import { Button, Dialog, Label, shortTime, tint, useColors, useTouch } from './ui';
+import { assetIsImage, messageText, senderName, topicTime } from '../../../shared/extensions/project-communications/topics';
+import { Button, Dialog, Label, tint, useColors, useTouch } from './ui';
 import { supportedArtifact } from '../../../shared/artifact-limits.ts';
 
 export function TopicIcon({ icon, label, onPress, disabled = false, active = false, busy = false, id, compact = false }: {
@@ -38,7 +38,7 @@ export function topicError(error: string) {
   const messages: Record<string, string> = {
     topic_material_version_changed: '话题有更新，请重新选材', topic_message_version_changed: '原文有更新，请重新选材',
     topic_asset_version_changed: '原件有更新，请重新选材', topic_asset_not_ready: '附件尚未就绪',
-    topic_target_unavailable: '请先打开开发会话', topic_target_changed: '目标会话已变化',
+    topic_target_unavailable: '请选择目标会话', topic_target_changed: '目标会话已变化', topic_targets_incomplete: '会话列表未完整加载，请重试',
     topic_material_scope_changed: '连接已变化，请重新预览', project_connection_changed: '连接已变化',
     agent_revision_conflict: '配置有更新，请刷新', settings_revision_conflict: '配置有更新，请刷新',
     topic_material_limit: '材料数量超限', topic_material_bytes_limit: '附件合计超过 24 MB',
@@ -65,7 +65,7 @@ export function TopicStatus({ error, state, onDetails }: { error?: string; state
 export function TopicAsset({ client, topicId, message, asset, contextOf, checked, onToggle, disabled, small = false, removable = false, tileWidth = 132 }: {
   client: TopicsClient; topicId: string; message: ArchiveMessage; asset: ArchiveAsset; contextOf?: string; checked: boolean; onToggle: () => void; disabled?: boolean; small?: boolean; removable?: boolean; tileWidth?: number;
 }) {
-  const c = useColors(), [open, setOpen] = useState(false), image = assetIsImage(asset);
+  const c = useColors(), [open, setOpen] = useState(false), image = assetIsImage(asset), video = asset.kind === 'video' || Boolean(asset.mimeType?.startsWith('video/'));
   const data = useQuery({ queryKey: ['archive-image', client.scopeKey, topicId, message.id, message.version, asset.id],
     queryFn: () => client.call<{ mimeType: string; base64: string }>({ action: 'asset', topicId, messageId: message.id, assetId: asset.id, contextOf }),
     enabled: client.active && asset.state === 'ready' && image, retry: false, staleTime: Infinity, gcTime: 60000, refetchOnWindowFocus: false });
@@ -77,8 +77,8 @@ export function TopicAsset({ client, topicId, message, asset, contextOf, checked
     <Pressable accessibilityRole="button" accessibilityLabel={'查看 ' + asset.name} {...(Platform.OS === 'web' ? { title: state } : {})} onPress={() => setOpen(true)}
       style={{ width, height, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: checked ? c.accent : c.border, borderRadius: 5, overflow: 'hidden', backgroundColor: c.surface2 }}>
       {uri ? <Image source={{ uri }} accessibilityLabel={asset.name} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
-        : data.isFetching ? <ActivityIndicator size="small" color={c.foregroundMuted} /> : <Icon name={data.error ? 'CircleAlert' : asset.state === 'pending' ? 'Clock' : image ? 'Image' : 'FileText'} size={small ? 17 : 24} color={asset.state === 'ready' && !data.error ? c.foregroundMuted : c.statusWarning} />}
-      {!small && !image ? <Text numberOfLines={1} style={{ fontSize: 10, color: c.foregroundMuted, paddingHorizontal: 4 }}>{asset.name}</Text> : null}
+        : data.isFetching ? <ActivityIndicator size="small" color={c.foregroundMuted} /> : <Icon name={data.error ? 'CircleAlert' : asset.state === 'pending' ? 'Clock' : image ? 'Image' : video ? 'Video' : 'FileText'} size={small ? 17 : 24} color={asset.state === 'ready' && !data.error ? c.foregroundMuted : c.statusWarning} />}
+      {!small && !image ? <Text numberOfLines={1} style={{ fontSize: 10, color: c.foregroundMuted, paddingHorizontal: 4 }}>{asset.state === 'ready' ? asset.name : state}</Text> : null}
     </Pressable>
     <View style={{ position: 'absolute', top: small ? -8 : 0, right: small ? -8 : undefined, left: small ? undefined : 0, backgroundColor: tint(c.surface1, 'cc'), borderRadius: 4 }}>
       {removable ? <TopicIcon compact icon="X" label={'移除 ' + asset.name} onPress={onToggle} disabled={disabled} /> : <Check checked={checked} label={'选择 ' + asset.name} onPress={onToggle} disabled={disabled || asset.state !== 'ready' || !canSelect} />}
@@ -94,13 +94,13 @@ export function TopicAsset({ client, topicId, message, asset, contextOf, checked
 export function OriginalMessage({ client, topicId, message, contextOf, selected, selectedAssets, onMessage, onAsset, onContext, disabled, hideAssets = false }: {
   client: TopicsClient; topicId: string; message: ArchiveMessage; contextOf?: string; selected: boolean; selectedAssets: string[]; onMessage: () => void; onAsset: (asset: ArchiveAsset) => void; onContext?: () => void; disabled?: boolean; hideAssets?: boolean;
 }) {
-  const c = useColors();
+  const c = useColors(), text = messageText(message);
   return <View style={{ paddingVertical: 9, gap: 8, borderBottomWidth: 1, borderBottomColor: c.border }}>
     <View style={{ flexDirection: 'row', gap: 5, alignItems: 'flex-start' }}>
-      <Check checked={selected} label={'选择原文：' + (message.text.slice(0,24) || '附件消息')} id={'topic-message-' + message.id} onPress={onMessage} disabled={disabled} />
+      <Check checked={selected} label={'选择消息：' + (text.slice(0,24) || '附件消息')} id={'topic-message-' + message.id} onPress={onMessage} disabled={disabled} />
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-        <View style={{ flexDirection: 'row', gap: 9, alignItems: 'center' }}><Text style={{ color: c.foreground, fontSize: 12, fontWeight: '600' }}>{senderName(message)}</Text><Text style={{ fontSize: 10, color: c.foregroundMuted }}>{shortTime(message.createdAt)}</Text></View>
-        <Text selectable style={{ color: c.foreground, fontSize: 13, lineHeight: 21 }}>{message.text || '附件消息'}</Text>
+        <View style={{ flexDirection: 'row', gap: 9, alignItems: 'center' }}><Text style={{ color: c.foreground, fontSize: 12, fontWeight: '600' }}>{senderName(message)}</Text><Text style={{ fontSize: 10, color: c.foregroundMuted }}>{topicTime(message.createdAt)}</Text></View>
+        {text ? <Text selectable style={{ color: c.foreground, fontSize: 13, lineHeight: 21 }}>{text}</Text> : null}
       </View>
       {onContext ? <TopicIcon icon="MessagesSquare" label="查看上下文" onPress={onContext} /> : null}
     </View>

@@ -4,7 +4,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { Icon, ScrollView } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
 import { basketCounts, basketSelections, changeAsset, changeMessage, compact, selectTopic, type TopicBasket } from '../../topic-selection';
-import { groupKey, type ArchiveTopic, type ArchiveTopicDetail, type TopicMaterialPreview, type TopicPage, type TopicTarget, type WatchedGroup } from '../../../shared/extensions/project-communications/topics';
+import { groupKey, messageText, senderName, topicTime, topicTitle, type ArchiveTopic, type ArchiveTopicDetail, type TopicMaterialPreview, type TopicPage, type TopicTarget, type WatchedGroup } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, Search, ignoreFailure, useColors } from './ui';
 import { Check, MediaCount, TopicAsset, TopicIcon, TopicStatus, topicError } from './topic-ui';
 import { selectedAssets } from '../../topic-selection';
@@ -13,7 +13,9 @@ import { TopicMaterialBasket } from './topic-basket';
 
 type TopicsPanelProps = {
   client: TopicsClient; width: number; onSettings(): void; workspaceNames: Record<string, string>; currentWorkspaceId?: string;
+  currentAgentId?: string; onOpenSession?(agentId: string): void | Promise<void>;
 };
+const targetKey = (target: TopicTarget) => target.id || 'workspace:' + target.workspaceId;
 
 export function TopicsPanel(props: TopicsPanelProps) {
   const c = useColors(), { client, onSettings } = props;
@@ -44,12 +46,13 @@ export function TopicsPanel(props: TopicsPanelProps) {
   </View>;
 }
 
-function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentWorkspaceId }: TopicsPanelProps) {
+function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentWorkspaceId, currentAgentId, onOpenSession }: TopicsPanelProps) {
   const c = useColors(), cache = useQueryClient(), narrow = width > 0 && width < 580;
   const [query, setQuery] = useState(''), [group, setGroup] = useState<WatchedGroup>();
   const [expanded, setExpanded] = useState<Set<string>>(new Set()), [basket, setBasket] = useState<TopicBasket>({});
   const [loading, setLoading] = useState<Set<string>>(new Set()), [target, setTarget] = useState('');
   const [picker, setPicker] = useState<'group' | 'target' | ''>('');
+  const [targetQuery, setTargetQuery] = useState('');
   const [preview, setPreview] = useState<TopicMaterialPreview>(), [previewOpen, setPreviewOpen] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [statusOpen, setStatusOpen] = useState(false);
   const list = useInfiniteQuery({
@@ -67,10 +70,17 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
   });
   useEffect(() => {
     if (target || !targets.data) return;
-    const current = targets.data.find(item => item.workspaceId === currentWorkspaceId);
-    if (current) setTarget(current.workspaceId);
-    else if (targets.data.length === 1) setTarget(targets.data[0].workspaceId);
-  }, [targets.data, currentWorkspaceId, target]);
+    const current = targets.data.find(item => item.agentId === currentAgentId)
+      || targets.data.find(item => item.kind !== 'session' && item.workspaceId === currentWorkspaceId);
+    if (current) setTarget(targetKey(current));
+    else if (targets.data.length === 1) setTarget(targetKey(targets.data[0]));
+  }, [targets.data, currentWorkspaceId, currentAgentId, target]);
+  const selectedTarget = targets.data?.find(item => targetKey(item) === target);
+  const targetName = selectedTarget?.title || workspaceNames[selectedTarget?.workspaceId || ''] || '';
+  const openSession = selectedTarget && onOpenSession ? () => {
+    const failed = () => setError('会话暂未打开，请重试');
+    try { void Promise.resolve(onOpenSession(selectedTarget.agentId)).catch(failed); } catch { failed(); }
+  } : undefined;
   const indexed = new Map<string, ArchiveTopic>();
   for (const item of list.data?.pages.flatMap(page => page.items) || []) if (!indexed.has(item.id)) indexed.set(item.id, item);
   const items = [...indexed.values()], counts = basketCounts(basket);
@@ -96,17 +106,19 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
     finally { setLoading(current => { const next = new Set(current); next.delete(topic.id); return next; }); }
   };
   const perform = async (send: boolean) => {
+    if (!send) { setPreviewOpen(true); return; }
+    if (!target) { setPreviewOpen(false); setTargetQuery(''); setPicker('target'); void targets.refetch(); return; }
     setBusy(true); setError('');
     try {
       if (preview?.state === 'sending' || preview?.state === 'uncertain') {
         setPreview(await client.call<TopicMaterialPreview>({ action: 'receipt', id: preview.id })); return;
       }
       const prepared = preview || await client.call<TopicMaterialPreview>({
-        action: 'preview', workspaceId: target, selections: basketSelections(basket),
+        action: 'preview', targetId: target, selections: basketSelections(basket),
       });
       setPreview(prepared);
-      if (send) setPreview(await client.call<TopicMaterialPreview>({ action: 'send', id: prepared.id }));
-      else setPreviewOpen(true);
+      setPreview(await client.call<TopicMaterialPreview>({ action: 'send', id: prepared.id }));
+      setPreviewOpen(false);
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { setBusy(false); }
   };
@@ -152,28 +164,41 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
       {list.hasNextPage ? <View style={{ padding: 10 }}><Button disabled={list.isFetchingNextPage} onPress={() => ignoreFailure(list.fetchNextPage())}>更多话题</Button></View> : null}
     </ScrollView>
     <TopicMaterialBasket {...{ client, basket, edit, busy, narrow, target, preview }}
-      targetName={workspaceNames[target] || target} onTarget={() => { setPicker('target'); void targets.refetch(); }}
+      targetName={targetName} onTarget={() => { setTargetQuery(''); setPicker('target'); void targets.refetch(); }} onOpenSession={openSession}
       onPreview={() => ignoreFailure(perform(false))} onSend={() => ignoreFailure(perform(true))} />
     <TopicStatus error={shownError} state={state} onDetails={() => { if (shownError || state) setStatusOpen(true); }} />
     {picker ? <Dialog title={picker === 'group' ? '关注群' : '目标会话'} onClose={() => setPicker('')} width={540} height={450}>
+      {picker === 'target' ? <View style={{ paddingHorizontal: 16, paddingTop: 12, flexDirection: 'row', gap: 8 }}>
+        <View style={{ flex: 1 }}><Search value={targetQuery} onChange={setTargetQuery} placeholder="搜索此项目会话" /></View>
+        <TopicIcon icon="RefreshCw" label="刷新会话" busy={targets.isFetching} onPress={() => { void targets.refetch(); }} />
+      </View> : null}
       <ScrollView contentContainerStyle={{ padding: 16, gap: 8 }}>
         {picker === 'group' ? <>
           <Button active={!group} onPress={() => { setGroup(undefined); setPicker(''); }}>全部关注群</Button>
           {channels.map(channel => <Button key={groupKey(channel)} active={Boolean(group && groupKey(group) === groupKey(channel))}
             onPress={() => { setGroup(channel); setPicker(''); }}>{channel.name}</Button>)}
-        </> : targets.data?.length ? targets.data.map(item => <Button key={item.workspaceId} active={target === item.workspaceId}
-          onPress={() => { setTarget(item.workspaceId); setPreview(undefined); setPicker(''); }}>{workspaceNames[item.workspaceId] || item.workspaceId}</Button>)
-          : <Label muted>{targets.error ? topicError(targets.error.message) : '先在 Workspace 打开开发会话'}</Label>}
+        </> : targets.isLoading ? <ActivityIndicator /> : targets.data?.length ? targets.data
+          .filter(item => !targetQuery || [item.title, item.provider, workspaceNames[item.workspaceId]].some(text => text?.toLowerCase().includes(targetQuery.toLowerCase())))
+          .map(item => <View key={targetKey(item)} style={{ gap: 3 }}>
+            <Button icon="MessageSquare" active={target === targetKey(item)}
+              onPress={() => { setTarget(targetKey(item)); setPreview(undefined); setPicker(''); }}>{(item.agentId === currentAgentId ? '当前 · ' : '') + (item.title || workspaceNames[item.workspaceId] || item.agentId)}</Button>
+            {item.provider ? <Label muted>{item.provider + (item.status === 'running' ? ' · 进行中' : '')}</Label> : null}
+          </View>)
+          : <View style={{ alignItems: 'center', gap: 10, padding: 20 }}><Icon name="MessagesSquare" size={28} color={c.foregroundMuted} />
+            <Label muted>{targets.error ? topicError(targets.error.message) : '此项目暂无会话'}</Label>
+            <Button onPress={() => { void targets.refetch(); }}>刷新会话</Button>
+          </View>}
       </ScrollView>
     </Dialog> : null}
-    {previewOpen && preview ? <Dialog title="所选材料" onClose={() => setPreviewOpen(false)} width={800} height={750}
-      footer={<><Button onPress={() => setPreviewOpen(false)}>返回</Button><Button variant="primary" disabled={busy || preview.state === 'accepted'}
-        onPress={() => ignoreFailure(perform(true))}>带入会话</Button></>}>
+    {previewOpen ? <Dialog title="所选材料" onClose={() => setPreviewOpen(false)} width={800} height={750}
+      footer={<><Button onPress={() => setPreviewOpen(false)}>返回</Button><Button variant="primary" disabled={busy || !counts.topics || preview?.state === 'accepted' && !openSession}
+        onPress={() => preview?.state === 'accepted' && openSession ? openSession() : ignoreFailure(perform(true))}>{preview?.state === 'accepted' ? openSession ? '打开会话' : '已发送' : '发送到会话'}</Button></>}>
       <ScrollView contentContainerStyle={{ padding: 18, gap: 16 }}>
         {Object.values(basket).map(selected => <View key={selected.topic.id} style={{ gap: 8 }}>
-          <Label large>{selected.topic.title}</Label><Label muted>{groupName(selected.topic)}</Label>
+          <Label large>{topicTitle(selected.topic)}</Label><Label muted>{groupName(selected.topic)}</Label>
           {selected.messages.map(message => <View key={message.id} style={{ borderLeftWidth: 2, borderLeftColor: c.accent, paddingLeft: 12 }}>
-            <Label>{message.text || '附件消息'}</Label>
+            <Label muted>{senderName(message) + ' · ' + topicTime(message.createdAt)}</Label>
+            {messageText(message) ? <Label>{messageText(message)}</Label> : null}
           </View>)}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {selectedAssets(selected).map(({ message, asset }) => <TopicAsset key={asset.id} {...{ client, message, asset }}

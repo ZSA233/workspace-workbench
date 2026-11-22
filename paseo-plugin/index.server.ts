@@ -121,6 +121,7 @@ export default function contribute(server: PluginServerContext) {
         || contract.name === "workspace.workbench.orchestrate" && (input as { action?: string }).action === "status"
         || contract.name === "workspace.workbench.session" && ["status", "receipt", "history", "wait"].includes(String((input as { action?: string }).action))
         || contract.name === 'workspace.workbench.communications-delivery' && ['delivery.status','delivery.targets'].includes((input as {request?:{action?:string}}).request?.action||'')
+        || contract.name === 'workspace.workbench.archive-topics-delivery' && ['targets','receipt'].includes((input as {request?:{action?:string}}).request?.action||'')
         || contract.name === "workspace.workbench.coordinator-review" && (input as { action?: string }).action === "read"
         || contract.name === "workspace.workbench.lifecycle" && (input as { action?: string }).action === "inspect",
     )),

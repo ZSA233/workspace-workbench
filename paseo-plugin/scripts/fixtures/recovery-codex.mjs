@@ -40,12 +40,13 @@ createInterface({ input: process.stdin }).on("line", line => {
       current = read(params.threadId);
       const text = (params.input || []).filter(item => item.type === "text").map(item => item.text).join("\n");
       if (!current.scenario) current.scenario = text;
-      const turn = { id: randomUUID(), items: params.input?.length ? [{ id: randomUUID(), type: "userMessage", content: [{ type: "text", text }] }] : [], status: "inProgress", error: null };
+      const turn = { id: randomUUID(), items: params.input?.length ? [{ id: randomUUID(), type: "userMessage", content:
+        process.env.WORKBENCH_RECOVERY_FIXTURE_SUCCEED === '1' ? params.input : [{ type: "text", text }] }] : [], status: "inProgress", error: null };
       current.inputs ||= []; current.inputs.push(params.input || []);
       current.turns.push(turn); save(current); reply({ turn });
       setTimeout(() => notify("turn/started", { threadId: current.id, turn }), 25);
       setTimeout(() => {
-        const failing = !text.includes("MANUAL_CONTINUE") && (current.scenario.includes("ALWAYS_CAPACITY") || current.scenario.includes("QUOTA") || current.turns.length === 1);
+        const failing = process.env.WORKBENCH_RECOVERY_FIXTURE_SUCCEED !== '1' && !text.includes("MANUAL_CONTINUE") && (current.scenario.includes("ALWAYS_CAPACITY") || current.scenario.includes("QUOTA") || current.turns.length === 1);
         if (failing) {
           turn.status = "failed";
           turn.error = { message: current.scenario.includes("QUOTA") ? "Quota exceeded. Check your plan and billing details." : current.scenario.includes("NETWORK") ? "stream disconnected before completion: connection reset by peer" : "Selected model is at capacity. Please try a different model.", codexErrorInfo: current.scenario.includes("QUOTA") ? "usageLimitExceeded" : "serverOverloaded" };

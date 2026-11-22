@@ -38,6 +38,7 @@ export async function startArchiveFixture() {
   const state = archiveFixture();
   const token = 'a'.repeat(64);
   const image = readFileSync(new URL('../../../docs/design/archive-topics/concept-c-refined.png', import.meta.url));
+  const pdf = Buffer.from('%PDF-1.7\n1 0 obj<</Type/Catalog>>endobj\n%%EOF');
   const server = createServer(async (req, res) => {
     state.requests.push({ method: req.method || 'GET', url: req.url || '' });
     const url = new URL(req.url || '/', 'http://fixture');
@@ -87,6 +88,10 @@ export async function startArchiveFixture() {
       const anchor = state.topics.flatMap(topic => topic.messages).find(message => message.id === context[1]);
       return send({ items: [state.context, ...(anchor ? [anchor] : [])], hasBefore: false, hasAfter: false });
     }
+    if (path === 'libraries/default/assets/pdf-original') {
+      res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length });
+      return res.end(pdf);
+    }
     if (/^libraries\/default\/assets\/image-[123]$/.test(path)) {
       res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': image.length });
       return res.end(image);
@@ -95,7 +100,7 @@ export async function startArchiveFixture() {
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as { port: number };
-  return { state, token, image, url: 'http://127.0.0.1:' + address.port,
+  return { state, token, image, pdf, url: 'http://127.0.0.1:' + address.port,
     imageHash: createHash('sha256').update(image).digest('hex'),
     close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
   };

@@ -287,6 +287,13 @@ export function artifactSnapshotContent(artifact: ResolvedWorkbenchArtifact): { 
   return { content: artifact.bytes.toString("utf8"), binary: false, truncated: false };
 }
 
+/** Registered originals already live on the same host as the target session. */
+export function storedArtifactFileAttachment(id: string) {
+  const { metadata } = readStoredArtifact(id);
+  return { type: 'uploaded_file' as const, id: metadata.id, fileName: metadata.title,
+    mimeType: metadata.mimeType, size: metadata.size, path: bytesPath(id) };
+}
+
 export async function authorizeArtifactCaller(input: { token: string }, context: { paseo: PaseoApi }): Promise<{ cwd?: string }> {
   const identity = await liveAgentIdentity(input.token, context.paseo);
   if (!identity) throw new Error("artifact_caller_context_invalid");

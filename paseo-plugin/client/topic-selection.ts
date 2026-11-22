@@ -9,6 +9,7 @@ export function changeMessage(basket: TopicBasket, topic: ArchiveTopicDetail, me
   const current = basket[topic.id] || { topic, messages: [], assetIds: [], includeAnalysis: false, contexts: {} };
   const selected = current.messages.some(item => item.id === message.id);
   return compact({ ...basket, [topic.id]: { ...current, messages: selected ? current.messages.filter(item => item.id !== message.id) : uniqueMessages([...current.messages, message]),
+    assetIds: selected ? current.assetIds : [...new Set([...current.assetIds, ...message.assets.filter(asset => asset.state === 'ready' && supportedArtifact(asset.mimeType || '', asset.size)).map(asset => asset.id)])],
     contexts: contextOf ? { ...current.contexts, [message.id]: contextOf } : current.contexts,
     topic: { ...current.topic, messages: uniqueMessages([...current.topic.messages, message]) } } });
 }

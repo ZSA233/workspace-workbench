@@ -1,9 +1,17 @@
-import type { ArchiveAsset, ArchiveChannel, ArchiveDirectory, ArchiveGroup, ArchiveMessage, ArchiveTopicDetail, ArchiveTool, TopicContext, TopicPage, WatchedGroup } from '../shared/extensions/project-communications/topics.ts';
+import type { ArchiveAsset, ArchiveChannel, ArchiveDirectory, ArchiveGroup, ArchiveMessage, ArchiveTopic, ArchiveTopicDetail, ArchiveTool, TopicContext, TopicPage, WatchedGroup } from '../shared/extensions/project-communications/topics.ts';
 import { groupKey } from '../shared/extensions/project-communications/topics.ts';
 import type { CommunicationsConnection } from './communications-connection.ts';
 import { MAX_REGISTERED_BYTES } from '../shared/artifact-limits.ts';
 
 const segment = (value: string) => encodeURIComponent(value);
+function topicHeader(topic: ArchiveTopic): ArchiveTopic {
+  const answer: unknown = topic.lastAnswer;
+  return { id: topic.id, title: topic.title, question: topic.question, issueSummary: topic.issueSummary, preview: topic.preview,
+    sourceId: topic.sourceId, channelId: topic.channelId, sourceAccountId: topic.sourceAccountId,
+    revision: topic.revision, inputRevision: topic.inputRevision, status: topic.status, category: topic.category,
+    updatedAt: topic.updatedAt, rootMessageId: topic.rootMessageId, summary: topic.summary, messageCount: topic.messageCount,
+    lastAnswer: typeof answer === 'string' ? answer : typeof answer === 'object' && answer !== null && 'answer' in answer && typeof answer.answer === 'string' ? answer.answer : '' };
+}
 export class ArchiveTopics {
   readonly connection: CommunicationsConnection;
   private contexts = new Map<string, Promise<TopicContext>>();
@@ -33,17 +41,13 @@ export class ArchiveTopics {
     const page = await this.connection.archive<TopicPage>(this.path('topics?' + query));
     // Keep the upstream cursor even when a page has no matches in this project's
     // followed groups; the UI must still offer the next page.
-    return { ...page, items: (page.items || []).filter(topic => this.allows(topic)) };
+    return { ...page, items: (page.items || []).filter(topic => this.allows(topic)).map(topicHeader) };
   }
   async read(id: string): Promise<ArchiveTopicDetail> {
     const topic = await this.connection.archive<ArchiveTopicDetail>(this.path('topics/' + segment(id)));
     this.scope(topic);
-    const answer: unknown = topic.lastAnswer;
     return {
-      id: topic.id, title: topic.title, sourceId: topic.sourceId, channelId: topic.channelId,
-      sourceAccountId: topic.sourceAccountId, revision: topic.revision, inputRevision: topic.inputRevision,
-      status: topic.status, category: topic.category, updatedAt: topic.updatedAt, rootMessageId: topic.rootMessageId,
-      summary: topic.summary, lastAnswer: typeof answer === 'string' ? answer : typeof answer === 'object' && answer !== null && 'answer' in answer && typeof answer.answer === 'string' ? answer.answer : '',
+      ...topicHeader(topic),
       messages: (topic.messages || []).map(message => ({ ...message, assets: message.assets || [] })),
       messageCount: topic.messageCount, hasMoreMessages: topic.hasMoreMessages,
     };

@@ -4,14 +4,14 @@ import { Icon, ScrollView } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
 import { basketCounts, changeAsset, changeMessage, selectedAssets, type TopicBasket } from '../../topic-selection';
 import type { TopicMaterialPreview } from '../../../shared/extensions/project-communications/topics';
-import { senderName, topicTitle } from '../../../shared/extensions/project-communications/topics';
+import { messageText, senderName, topicTitle } from '../../../shared/extensions/project-communications/topics';
 import { Button, Label, useColors, useTouch } from './ui';
 import { MediaCount, TopicAsset, TopicIcon } from './topic-ui';
 
-export function TopicMaterialBasket({ client, basket, edit, busy, narrow, target, targetName, preview, onTarget, onPreview, onSend }: {
+export function TopicMaterialBasket({ client, basket, edit, busy, narrow, target, targetName, preview, onTarget, onPreview, onSend, onOpenSession }: {
   client: TopicsClient; basket: TopicBasket; edit(change: (current: TopicBasket) => TopicBasket): void;
   busy: boolean; narrow: boolean; target: string; targetName: string; preview?: TopicMaterialPreview;
-  onTarget(): void; onPreview(): void; onSend(): void;
+  onTarget(): void; onPreview(): void; onSend(): void; onOpenSession?(): void;
 }) {
   const c = useColors(), touch = useTouch(), counts = basketCounts(basket), [collapsed, setCollapsed] = useState(false);
   const overLimit = counts.topics > 20 || counts.messages > 100 || counts.assets > 20;
@@ -35,8 +35,8 @@ export function TopicMaterialBasket({ client, basket, edit, busy, narrow, target
         <View style={{ flexDirection: 'row', gap: 9, alignItems: 'center', flex: narrow ? undefined : 1 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
             {selected.messages.map(message => <View key={message.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-              <View style={{ flex: 1 }}><Label muted lines={1}>{senderName(message) + '：' + (message.text || '附件消息')}</Label></View>
-              <TopicIcon compact id={'topic-remove-message-' + message.id} icon="X" label={'移除原文：' + (message.text.slice(0,24) || '附件消息')} disabled={busy}
+              <View style={{ flex: 1 }}><Label muted lines={1}>{senderName(message) + (messageText(message) ? '：' + messageText(message) : '')}</Label></View>
+              <TopicIcon compact id={'topic-remove-message-' + message.id} icon="X" label={'移除原文：' + (messageText(message).slice(0,24) || '附件消息')} disabled={busy}
                 onPress={() => edit(current => changeMessage(current, selected.topic, message, selected.contexts[message.id]))} />
             </View>)}
             {selected.includeAnalysis ? <MediaCount icon="Sparkles" label="已选分析" /> : null}
@@ -50,7 +50,7 @@ export function TopicMaterialBasket({ client, basket, edit, busy, narrow, target
       </View>)}
     </ScrollView> : null}
     <View style={{ flexDirection: 'row', gap: 6, padding: 10, alignItems: 'center', borderTopWidth: 1, borderTopColor: c.border }}>
-      <Pressable accessibilityRole="button" accessibilityLabel={targetName || '选择目标会话'} disabled={busy} onPress={onTarget}
+      <Pressable testID="topics-target" accessibilityRole="button" accessibilityLabel={targetName || '选择目标会话'} disabled={busy} onPress={onTarget}
         {...(Platform.OS === 'web' ? {title:targetName || '选择目标会话'} : {})}
         style={{ flexDirection: 'row', alignItems: 'center', gap: 7, minHeight: touch ? 44 : 32, maxWidth: narrow ? 160 : 240,
           paddingHorizontal: 10, borderWidth: 1, borderColor: c.border, borderRadius: 5, flexShrink: 1 }}>
@@ -59,10 +59,10 @@ export function TopicMaterialBasket({ client, basket, edit, busy, narrow, target
         <Icon name="ChevronDown" size={12} color={c.foregroundMuted} />
       </Pressable>
       <View style={{ flex: 1 }} />
-      <TopicIcon id="topics-preview" icon="Eye" label="预览所选材料" disabled={busy || !target || !counts.topics || overLimit} onPress={onPreview} />
+      <TopicIcon id="topics-preview" icon="Eye" label="预览所选材料" disabled={busy || !counts.topics || overLimit} onPress={onPreview} />
       <Button id="topics-send" icon={preview?.state === 'accepted' ? 'Check' : uncertain ? 'CircleHelp' : 'Send'} variant="primary"
-        disabled={busy || !target || !counts.topics || overLimit || preview?.state === 'accepted'} onPress={onSend}>
-        {busy ? '处理中' : preview?.state === 'accepted' ? '已交接' : uncertain ? '查回执' : '带入会话'}
+        disabled={busy || !counts.topics || overLimit || preview?.state === 'accepted' && !onOpenSession} onPress={preview?.state === 'accepted' ? onOpenSession || onSend : onSend}>
+        {busy ? '发送中' : preview?.state === 'accepted' ? onOpenSession ? '打开会话' : '已发送' : uncertain ? '查回执' : '发送到会话'}
       </Button>
     </View>
   </View>;

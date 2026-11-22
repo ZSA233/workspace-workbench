@@ -13,6 +13,7 @@ import type { AgentContext } from './agent-provider.ts';
 import { CommunicationsConnection, defaultServiceConnection, localServiceToken } from './communications-connection.ts';
 import { ArchiveTopics } from './archive-topics.ts';
 import { TopicMaterials } from './topic-materials.ts';
+import { assertTopicSession, deliverTopicSession, topicSessionReceipt, topicTargets } from './topic-targets.ts';
 import type { TopicAction } from '../shared/extensions/project-communications/topics.ts';
 
 type Settings={version:number;enabled:Record<string,boolean>;connections?:Record<string,{revision:number;config:ServiceConnection}>;[key:string]:unknown};
@@ -69,7 +70,7 @@ export class WorkbenchExtensions {
     if(request.action!=='directory'&&!this.settings(route).enabled[id])throw Error('extension_disabled');
     const archive=new ArchiveTopics(await this.archiveClient(route,id));
     const materials=new TopicMaterials(route.stateRoot,createHash('sha256').update(JSON.stringify([route.configPath,settings.revision,settings.config])).digest('hex'));
-    const targets=()=>withProject({projectConfig},()=>allAgentBindings().map(item=>({workspaceId:item.workspaceId,agentId:item.agentId})));
+    const targets=()=>topicTargets(route,context);
     switch(request.action){
       case 'directory':return archive.directory(request.libraryId);
       case 'list':return archive.list(request);
@@ -80,13 +81,23 @@ export class WorkbenchExtensions {
       case 'group.configure':return archive.configure(request);
       case 'targets':return targets();
       case 'preview':{
-        const target=(await targets()).find(item=>item.workspaceId===request.workspaceId);
+        const candidates=request.targetId?.startsWith('session:') ? await targets() : await topicTargets(route);
+        const target=candidates.find(item=>request.targetId ? item.id===request.targetId : item.kind==='workspace'&&item.workspaceId===request.workspaceId);
         if(!target)throw Error('topic_target_unavailable');
-        return withProject({projectConfig},()=>materials.preview(archive,target.workspaceId,target.agentId,request.selections));
+        return withProject({projectConfig},()=>materials.preview(archive,target.workspaceId,target.agentId,request.selections,target));
       }
       case 'send':case 'receipt':{
         if(!context)throw Error('extension_host_delivery_unavailable');
-        const preview=materials.read(request.id),target=(await targets()).find(item=>item.workspaceId===preview.workspaceId);
+        const preview=materials.read(request.id);
+        if(preview.session){
+          await assertTopicSession(route,context,preview.session);
+          const current=()=>{if(this.closed||this.connectionSettings(route,id).revision!==revision||!this.settings(route).enabled[id])throw Error('project_connection_changed');};
+          current();
+          return request.action==='receipt'
+            ? materials.receipt(request.id,preview.session.agentId,value=>topicSessionReceipt(route,context,preview.session!,value.id))
+            : materials.send(request.id,preview.session.agentId,value=>deliverTopicSession(route,context,preview.session!,value,current));
+        }
+        const target=(await topicTargets(route)).find(item=>item.workspaceId===preview.workspaceId);
         if(!target)throw Error('topic_target_unavailable');
         if(request.action==='receipt')return materials.receipt(request.id,target.agentId,value=>withProject({projectConfig},()=>handleSessionOperation({projectConfig,workspaceId:value.workspaceId,action:'receipt',requestId:'archive-topic:'+value.id,attachments:[],behavior:'steer',limit:20,timeoutMs:0},context)) as Promise<{delivery:string;messageId?:string}>);
         const host=createExtensionHost(route,context);

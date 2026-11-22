@@ -9,13 +9,13 @@ export type ArchiveChannel = WatchedGroup & { id: string; name: string; provider
 export type ArchiveGroup = WatchedGroup & { id: string; name: string; revision: number; enabled: boolean; analysisEnabled?: boolean; autoDiscover?: boolean; discoveryAction?: 'collect' | 'investigate'; replyMode?: 'off' | 'restrained'; allowedTools: string[] };
 export type ArchiveTool = { id: string; name?: string; description?: string; enabled: boolean; builtin?: boolean; readOnly?: boolean };
 export type ArchiveAsset = { id: string; name: string; kind?: string; state: string; mimeType?: string; size?: number; sha256?: string; error?: string };
-export type ArchiveMessage = { id: string; text: string; sender: string | { name?: string; displayName?: string; id?: string }; createdAt: number; version: string; sourceId: string; channelId: string; sourceAccountId?: string; archiveId?: string; assets: ArchiveAsset[]; quote?: unknown };
-export type ArchiveTopic = { id: string; title: string; sourceId: string; channelId: string; sourceAccountId?: string; revision: number; inputRevision: number; status: string; category?: string; updatedAt: number; messageCount?: number; summary?: string; lastAnswer?: string; rootMessageId?: string };
+export type ArchiveMessage = { id: string; text: string; displayText?: string; sender: string | { name?: string; displayName?: string; id?: string }; createdAt: number; version: string; sourceId: string; channelId: string; sourceAccountId?: string; archiveId?: string; assets: ArchiveAsset[]; quote?: unknown };
+export type ArchiveTopic = { id: string; title: string; issueSummary?: string; question?: string; preview?: string; sourceId: string; channelId: string; sourceAccountId?: string; revision: number; inputRevision: number; status: string; category?: string; updatedAt: number; messageCount?: number; summary?: string; lastAnswer?: string; rootMessageId?: string };
 export type ArchiveTopicDetail = ArchiveTopic & { messages: ArchiveMessage[]; messageCount: number; hasMoreMessages: boolean };
 export type TopicPage = { items: ArchiveTopic[]; hasMore: boolean; next?: { beforeUpdated: number; beforeId: string } };
 export type ArchiveDirectory = { libraries: ArchiveLibrary[]; channels: ArchiveChannel[]; groups: ArchiveGroup[]; tools: ArchiveTool[] };
 export type TopicContext = { items: ArchiveMessage[]; hasBefore?: boolean; hasAfter?: boolean };
-export type TopicTarget = { workspaceId: string; agentId: string };
+export type TopicTarget = { id?: string; kind?: 'workspace' | 'session'; workspaceId: string; agentId: string; title?: string; provider?: string; status?: string; cwd?: string; hostWorkspaceId?: string };
 const messageRef = z.object({ id, version: z.string().min(1).max(512), contextOf: id.optional() });
 const assetRef = z.object({ id, messageId: id, messageVersion: z.string().min(1).max(512), contextOf: id.optional() });
 export const topicSelectionSchema = z.object({
@@ -29,6 +29,7 @@ export type TopicMaterialPreview = {
   topics: Array<{ id: string; title: string; revision: number; inputRevision: number; messageCount: number; assetCount: number }>;
   assets: Array<{ id: string; name: string; mimeType: string; sha256: string; size: number }>;
   messageId?: string; readConfirmed: false;
+  targetId?: string;
 };
 export const topicActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('directory'), libraryId: id.optional() }),
@@ -39,7 +40,7 @@ export const topicActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('asset'), topicId: id, messageId: id, assetId: id, contextOf: id.optional() }),
   z.object({ action: z.literal('group.configure'), sourceId: id, channelId: id, revision: z.number().int().nonnegative(), collect: z.boolean().optional(), allowedTools: z.array(id).max(32), requestId: id }),
   z.object({ action: z.literal('targets') }),
-  z.object({ action: z.literal('preview'), workspaceId: id, selections: z.array(topicSelectionSchema).min(1).max(20) }),
+  z.object({ action: z.literal('preview'), workspaceId: id.optional(), targetId: id.optional(), selections: z.array(topicSelectionSchema).min(1).max(20) }),
   z.object({ action: z.enum(['send', 'receipt']), id }),
 ]);
 export type TopicAction = z.infer<typeof topicActionSchema>;
@@ -52,10 +53,4 @@ export const archiveTopicsDeliveryRpc = defineRpc({ name: 'workspace.workbench.a
 export function groupKey(group: WatchedGroup) { return JSON.stringify([group.sourceId, group.channelId]); }
 export function senderName(message: ArchiveMessage) { return typeof message.sender === 'string' ? message.sender : message.sender?.displayName || message.sender?.name || message.sender?.id || '未知作者'; }
 export function assetIsImage(asset: ArchiveAsset) { return asset.kind === 'image' || Boolean(asset.mimeType?.startsWith('image/')); }
-export function topicTitle(topic: Pick<ArchiveTopic,'title'>) {
-  const title = topic.title?.trim() || '';
-  if (/^\[图片消息\]/.test(title)) return '图片话题';
-  if (/^\[视频消息\]/.test(title)) return '视频话题';
-  if (/^\[(文件|附件)消息\]/.test(title)) return '附件话题';
-  return title || '未命名话题';
-}
+export { messageText, topicTime, topicTitle } from './topic-presentation.ts';

@@ -111,9 +111,10 @@ writeFileSync(
     daemon: { listen: `0.0.0.0:${port}`, relay: { enabled: false }, mcp: { enabled: false, injectIntoAgents: false } },
     features: { webUi: { enabled: process.env.WORKBENCH_LIVE_UI === "1",
       ...(process.env.WORKBENCH_LIVE_UI === "1" && process.env.WORKBENCH_LIVE_WEB_DIST ? {distDir:resolve(process.env.WORKBENCH_LIVE_WEB_DIST)} : {}) } },
-    ...(process.env.WORKBENCH_LIVE_RECOVERY === "1" ? { agents: { providers: { codex: {
+    ...(process.env.WORKBENCH_LIVE_RECOVERY === "1" || process.env.WORKBENCH_LIVE_TOPICS === '1' ? { agents: { providers: { codex: {
       command: [process.execPath, join(plugin, "scripts/fixtures/recovery-codex.mjs")],
-      env: { WORKBENCH_RECOVERY_FIXTURE_ROOT: join(root, "recovery-codex") },
+      env: { WORKBENCH_RECOVERY_FIXTURE_ROOT: join(root, "recovery-codex"),
+        ...(process.env.WORKBENCH_LIVE_TOPICS === '1' ? { WORKBENCH_RECOVERY_FIXTURE_SUCCEED: '1' } : {}) },
     } } } } : {}),
     plugins: {
       "workspace-workbench-paseo": {
@@ -658,7 +659,8 @@ fs.writeFileSync(${JSON.stringify(proof)},JSON.stringify({first:collect(process.
     "actual plugin request recovered a crashed project backend",
   );
   if (process.env.WORKBENCH_LIVE_UI === "1") {
-    console.log(JSON.stringify({ kind: "ui-ready", url: `http://127.0.0.1:${port}`, project: resolve(configs[0], ".."), continueFile: join(root, "continue") }));
+    console.log(JSON.stringify({ kind: "ui-ready", url: `http://127.0.0.1:${port}`, project: resolve(configs[0], ".."), continueFile: join(root, "continue"),
+      ...(process.env.WORKBENCH_LIVE_TOPICS === '1' ? { topicsFixtureRoot: join(root, 'recovery-codex') } : {}) }));
     await wait(() => existsSync(join(root, "continue")), 600_000);
   }
   await execFileAsync(

@@ -3,7 +3,7 @@ import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { TopicsClient } from '../../use-topics';
 import { uniqueMessages } from '../../topic-selection';
-import { topicTitle } from '../../../shared/extensions/project-communications/topics';
+import { topicTime, topicTitle } from '../../../shared/extensions/project-communications/topics';
 import type { ArchiveAsset, ArchiveMessage, ArchiveTopic, ArchiveTopicDetail, SelectedTopic } from '../../../shared/extensions/project-communications/topics';
 import { Button, Label, ignoreFailure, shortTime, tint, useColors } from './ui';
 import { Check, ContextDialog, MediaCount, OriginalMessage, TopicAsset, TopicIcon, topicError } from './topic-ui';
@@ -42,7 +42,7 @@ export function TopicRow(p: TopicRowProps) {
         label={'选择话题 ' + topicTitle(p.topic)} onPress={p.onSelect} />
       <View {...(Platform.OS === 'web' ? { title: changed ? '有新材料，已选范围保持原样' : p.topic.status === 'closed' ? '已关闭' : '跟进中' } : {})}
         style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: changed ? c.statusWarning : p.selected ? c.accent : c.foregroundMuted }} />
-      <Pressable testID={'topic-expand-' + p.topic.id} accessibilityRole="button" accessibilityLabel={p.topic.title}
+      <Pressable testID={'topic-expand-' + p.topic.id} accessibilityRole="button" accessibilityLabel={topicTitle(p.topic)}
         accessibilityState={{ expanded: p.expanded }} onPress={p.onExpand}
         style={{ flex: 1, minWidth: 0, paddingHorizontal: 5, paddingVertical: 5, gap: 2 }}>
         <Text numberOfLines={2} style={{ color: c.foreground, fontSize: 13, lineHeight: 20, fontWeight: '600' }}>{topicTitle(p.topic)}</Text>
@@ -54,7 +54,7 @@ export function TopicRow(p: TopicRowProps) {
       </> : null}
       {changed ? <TopicIcon icon="RefreshCw" label="重新读取并清除此话题选择" disabled={p.busy}
         onPress={() => { p.onReload(); void detail.refetch(); }} />
-        : <Text style={{ color: c.foregroundMuted, fontSize: 10 }}>{shortTime(p.topic.updatedAt)}</Text>}
+        : <Text style={{ color: c.foregroundMuted, fontSize: 10 }}>{topicTime(p.topic.updatedAt)}</Text>}
       <TopicIcon icon={p.expanded ? 'ChevronUp' : 'ChevronDown'} label={p.expanded ? '收起话题' : '展开话题'}
         onPress={p.onExpand} busy={p.loading} />
     </View>

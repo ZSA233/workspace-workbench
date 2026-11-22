@@ -1,7 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { clearWorkbenchWorkspaceSnapshots, setWorkbenchWorkspaceSnapshot } from "../client/surface-context.ts";
+import { clearWorkbenchWorkspaceSnapshots, setWorkbenchWorkspaceSnapshot, workspaceSnapshotFromHost } from "../client/surface-context.ts";
+
+test("Host workspace directories use both supported Paseo field names", () => {
+  assert.deepEqual(workspaceSnapshotFromHost({ id: "current", workspaceDirectory: "/project", name: "Project" }), {
+    id: "current", directory: "/project", name: "Project",
+  });
+  assert.deepEqual(workspaceSnapshotFromHost({ id: "legacy", directory: "/legacy" }), {
+    id: "legacy", directory: "/legacy", name: "legacy",
+  });
+  assert.equal(workspaceSnapshotFromHost({ id: "empty" }), null);
+});
 
 test("Surface uses the plugin-owned workspace snapshot instead of host Surface hooks", () => {
   clearWorkbenchWorkspaceSnapshots();

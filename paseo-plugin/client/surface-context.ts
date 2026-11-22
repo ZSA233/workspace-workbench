@@ -7,6 +7,16 @@ export type WorkbenchWorkspaceSnapshot = {
   name: string;
 };
 
+export function workspaceSnapshotFromHost(workspace: {
+  id: string;
+  directory?: string | null;
+  workspaceDirectory?: string | null;
+  name?: string | null;
+}): WorkbenchWorkspaceSnapshot | null {
+  const directory = workspace.directory || workspace.workspaceDirectory;
+  return workspace.id && directory ? { id: workspace.id, directory, name: workspace.name || workspace.id } : null;
+}
+
 export type WorkbenchSurfaceProps = PluginSurfaceProps & {
   target?: { workspaceId: string; agentId?: string };
 };

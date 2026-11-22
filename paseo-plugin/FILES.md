@@ -94,3 +94,15 @@ node --experimental-strip-types --max-old-space-size=192 paseo-plugin/scripts/ve
 UI 脚本加载实际插件，并使用隔离的 Paseo home、项目注册表和临时 Git 仓库。Chromium 测试的导出目标是实际 OPFS 文件句柄；它验证流式提交，不代替 Windows 原生保存选择器验收。大文件脚本验证超过 4 GiB 的文件、归档、完整性与内存；它是 Node 文件服务实测，不是 Windows 客户端吞吐测试。
 
 具体证据和平台待验收项见仓库的 `docs/workspace-files-verification.md`。
+
+## Access Paseo 工作台
+
+Access 域名提供下载交接 v1 时，浏览器委托会先把所选主机的一次性凭据交给同源适配器。适配器核对该主机身份并保持有界上游流，浏览器或 Access Pocket 再领取正文；不再把远端 `serverId` 与聚合入口的本机 `/api/status` 混为一谈。
+
+Access Pocket 需 0.2.9 或更新版本。旧版提示更新，避免把交接提示保存成空文件。未提供该能力的普通部署仍使用原来的同源校验；原 Paseo Pocket 的文件保存桥保持兼容。
+
+Access Pocket 始终由 HTTP 交接调用原生保存器，即使 WebView 同时暴露 `showSaveFilePicker`，也不走桌面浏览器写入和 OPFS 暂存路径。仅检测这个函数存在，会绕过上述交接；旧独立 Pocket 的 `WorkbenchFileSave` 写入器和普通桌面浏览器保存行为保持原样。
+
+目录或多选 ZIP 准备完成后，委托下载会重新读取该任务的最终名称，再调用保存器；不使用后台轮询尚未更新的目录名，避免丢失 `.zip` 后缀。
+
+任务记录为 `delegated`，表示交给浏览器或系统保存，不能据此宣称本机文件已写完。私有主机地址、凭据和任意文件路径不会交给 Android 脚本桥。

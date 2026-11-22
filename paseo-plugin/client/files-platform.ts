@@ -1,6 +1,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { FILE_CHUNK_BYTES } from '../shared/files.ts';
+import { tryAccessDownload } from './access-download.ts';
 
 // Browser capabilities stay in this adapter; the Workbench also runs in native renderers.
 const web = globalThis as any;
@@ -121,8 +122,16 @@ export function pickSaveDestination(name: string): Promise<SaveDestination> {
   if (web.showSaveFilePicker) return web.showSaveFilePicker({ suggestedName: name }).then((handle: any) => ({ open: () => handle.createWritable(), discard: async () => {} }));
   return Promise.reject(new Error('Choose a browser with file saving support, or use Pocket'));
 }
-export function canSave() { return Boolean(web.showSaveFilePicker || web.WorkbenchFileSave?.open); }
-export async function delegateDownload(url: string, serverId: string) {
+export function canSave() {
+  if (web.WorkbenchFileSave?.open) return true;
+  // Modern WebViews can expose showSaveFilePicker without this shell owning
+  // that browser writer. Access owns a held HTTP stream and its native picker;
+  // choosing the desktop API here bypasses that handoff entirely.
+  if (/\bAccessPocket\//.test(web.navigator?.userAgent || '')) return false;
+  return typeof web.showSaveFilePicker === 'function';
+}
+export async function delegateDownload(url: string, serverId: string, filename = 'download') {
+  if (await tryAccessDownload(url, serverId, filename, web)) return;
   const parsed = new web.URL(url, web.location?.href);
   if (!['https:', 'http:'].includes(parsed.protocol) || parsed.origin !== web.location?.origin || !parsed.pathname.startsWith('/api/')) throw new Error('Host download URL must use this page’s trusted origin');
   const status = await web.fetch(new web.URL('/api/status', parsed.origin).href, { credentials: 'same-origin', cache: 'no-store', redirect: 'error' });

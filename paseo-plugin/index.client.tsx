@@ -10,7 +10,7 @@ import { DocumentPanel, FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel }
 import { atInitializationStage, createRegistrationScope, INITIALIZATION_REVISION, type RegistrationScope } from "./client/initialization";
 import { localeFromHostProps } from "./client/i18n";
 import { configureNativeDiagnosticReporter, installNativeRenderErrorHook, reportNativeDiagnostic } from "./client/native-diagnostics";
-import { clearWorkbenchWorkspaceSnapshots, markWorkbenchWorkspaceSnapshotsReady, removeWorkbenchWorkspaceSnapshot, setWorkbenchWorkspaceSnapshot } from "./client/surface-context";
+import { clearWorkbenchWorkspaceSnapshots, markWorkbenchWorkspaceSnapshotsReady, removeWorkbenchWorkspaceSnapshot, setWorkbenchWorkspaceSnapshot, workspaceSnapshotFromHost } from "./client/surface-context";
 import { createRegistrationQueue } from "./client/registration-queue";
 import { createDiagnosticSender } from "./client/diagnostic-sender";
 import { createAndroidWorkspaceContext } from "./client/android-workspace-context";
@@ -23,7 +23,7 @@ const observerSurfaceId = "workbench";
 // panels continue to work when that API is absent.
 type WorkspaceApiCompatibility = {
   open?: (directory: string) => Promise<{ id: string }>;
-  subscribe?: (handler: (update: { kind: string; id: string; workspace?: { id: string; directory?: string | null; name?: string | null } }) => void) => () => void;
+  subscribe?: (handler: (update: { kind: string; id: string; workspace?: { id: string; directory?: string | null; workspaceDirectory?: string | null; name?: string | null } }) => void) => () => void;
   list?: (options?: { subscribe?: Record<string, never>; page?: { limit: number; cursor?: string } }) => Promise<{
     entries: Array<{ id: string; directory?: string | null; workspaceDirectory?: string | null; name?: string | null }>;
     pageInfo?: { hasMore: boolean; nextCursor?: string | null };
@@ -255,7 +255,8 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
       if (disposed) return;
       if (update.kind === "upsert" && update.workspace) {
         addHeaderButton(update.workspace.id);
-        if (update.workspace.directory) setWorkbenchWorkspaceSnapshot({ id: update.workspace.id, directory: update.workspace.directory, name: update.workspace.name || update.workspace.id });
+        const snapshot = workspaceSnapshotFromHost(update.workspace);
+        if (snapshot) setWorkbenchWorkspaceSnapshot(snapshot);
       } else {
         removeHeaderButton(update.id);
         removeWorkbenchWorkspaceSnapshot(update.id);
@@ -272,7 +273,8 @@ function contributeClient(client: PluginClientContext, scope: RegistrationScope,
         if (disposed) return;
         for (const workspace of entries) {
           addHeaderButton(workspace.id);
-          if (workspace.directory) setWorkbenchWorkspaceSnapshot({ id: workspace.id, directory: workspace.directory, name: workspace.name || workspace.id });
+          const snapshot = workspaceSnapshotFromHost(workspace);
+          if (snapshot) setWorkbenchWorkspaceSnapshot(snapshot);
         }
         markWorkbenchWorkspaceSnapshotsReady(true);
       })

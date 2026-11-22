@@ -8,10 +8,10 @@ import { messageText, senderName, topicTitle } from '../../../shared/extensions/
 import { Button, Label, useColors } from './ui';
 import { MediaCount, TopicAsset, TopicIcon } from './topic-ui';
 
-export function TopicMaterialBasket({ client, basket, edit, busy, narrow, preview, hasNote, onSend, onOpenSession }: {
+export function TopicMaterialBasket({ client, basket, edit, busy, narrow, preview, hasNote, onSend, onOpenSession,onEdit }: {
   client: TopicsClient; basket: TopicBasket; edit(change: (current: TopicBasket) => TopicBasket): void;
   busy: boolean; narrow: boolean; preview?: TopicMaterialPreview; hasNote: boolean;
-  onSend(): void; onOpenSession?(): void;
+  onSend(): void; onOpenSession?(): void;onEdit():void;
 }) {
   const c = useColors(), counts = basketCounts(basket), [collapsed, setCollapsed] = useState(false);
   const overLimit = counts.topics > 20 || counts.messages > 100 || counts.assets > 20;
@@ -35,7 +35,8 @@ export function TopicMaterialBasket({ client, basket, edit, busy, narrow, previe
         <View style={{ flexDirection: 'row', gap: 9, alignItems: 'center', flex: narrow ? undefined : 1 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
             {selected.messages.map(message => <View key={message.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-              <View style={{ flex: 1 }}><Label muted lines={1}>{senderName(message) + (messageText(message) ? '：' + messageText(message) : '')}</Label></View>
+              <View style={{ flex: 1 }}><Label muted lines={1}>{senderName(message) + ((selected.editedTexts?.[message.id]??messageText(message)) ? '：' + (selected.editedTexts?.[message.id]??messageText(message)) : '')}</Label></View>
+              <TopicIcon compact icon="PenLine" label="编辑所选材料" disabled={busy||uncertain} onPress={onEdit}/>
               <TopicIcon compact id={'topic-remove-message-' + message.id} icon="X" label={'移除原文：' + (messageText(message).slice(0,24) || '附件消息')} disabled={busy}
                 onPress={() => edit(current => changeMessage(current, selected.topic, message, selected.contexts[message.id]))} />
             </View>)}

@@ -428,6 +428,58 @@ test('long-original delivery keeps the users instructions inline as well as the 
   } finally { await s.close(); }
 });
 
+test('selected pictures follow their original message chronology across topics',async()=>{
+  const s=await setup();
+  try{
+    s.state.topics[2].messages[0].createdAt=s.state.topics[0].messages[0].createdAt-60000;
+    const first=await s.archive.read('topic-1'),earlier=await s.archive.read('topic-3');
+    const original=s.archive.original.bind(s.archive);
+    s.archive.original=async asset=>{const value=await original(asset);return {...value,bytes:Buffer.concat([value.bytes,Buffer.from(asset.id)])};};
+    const materials=new TopicMaterials(join(s.root,'state'),'scope');
+    const selections=[first,earlier].map(topic=>({...selection(topic),messages:[],assets:[{id:topic.messages[0].assets[0].id,messageId:topic.messages[0].id,messageVersion:topic.messages[0].version}]}));
+    const preview=await s.inProject(()=>materials.preview(s.archive,'workspace','agent',selections,undefined,{note:'看一下图片。'}));
+    assert.equal(materials.read(preview.id).references[0].title,'image-3.png');
+    assert.equal(materials.read(preview.id).references[1].title,'image-1.png');
+  }finally{await s.close();}
+});
+
+test('edited originals are frozen separately; formatted text, alias relationships and image bytes reach the native session',async()=>{
+  const s=await setup();
+  try{
+    const host=nativeCreation(s.root),topic=await s.archive.read('topic-1'),selected=selection(topic),original=topic.messages[0];
+    selected.messages=[{id:topic.messages[1].id,version:topic.messages[1].version},{id:original.id,version:original.version,editedText:'@阿宁 我已核对，这里是补充后的原文。'}];
+    selected.assets=[{id:'image-1',messageId:original.id,messageVersion:original.version}];
+    s.state.topics[0].messages[1].createdAt=original.createdAt+60000;
+    const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',newSession:{provider:'codex',model:'analysis-model'},
+      content:{layout:'auto',identity:'alias',timeZone:'Asia/Shanghai',template:'本次目标：{{note}}\n\n{{materials}}'},note:'只分析，不修改。',selections:[selected]},host.context) as TopicMaterialPreview;
+    assert.ok(preview.text.includes('@参与者 B 我已核对'));assert.ok(preview.text.includes('参与者 A（已编辑）'));
+    assert.ok(preview.text.indexOf('参与者 A（已编辑）')<preview.text.indexOf('参与者 B ·'));
+    assert.equal(preview.text.includes('小林'),false);assert.equal(preview.text.includes('阿宁'),false);
+    const raw=JSON.parse(readFileSync(join(s.root,'state/extensions/topic-materials',createHash('sha256').update(preview.id).digest('hex')+'.json'),'utf8'));
+    assert.equal(raw.originalTexts.find((entry:any)=>entry.messageId===original.id).text,original.text);
+    assert.ok(raw.originalTexts.find((entry:any)=>entry.messageId===original.id).editedText.includes('补充后的原文'));
+    await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context);
+    assert.equal(host.state.sent[0].text,preview.text);assert.deepEqual(Buffer.from(host.state.sent[0].options.images[0].data,'base64'),s.image);
+    assert.equal(s.state.topics[0].messages[0].text,original.text);
+    selected.messages[0].editedText='确认后改写不会改变已固定的发送内容';
+    await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context);assert.equal(host.state.sent.length,1);
+  }finally{await s.close();}
+});
+
+test('an edited message still must match the selected archive version and template changes preserve unrelated preferences',async()=>{
+  const s=await setup();
+  try{
+    const host=nativeCreation(s.root),topic=await s.archive.read('topic-1'),selected=selection(topic);
+    selected.messages[0].editedText='修改稿';selected.messages[0].version='old-version';
+    await assert.rejects(s.host.topics(s.config,'project-communications',2,{action:'preview',newSession:{provider:'codex',model:'analysis-model'},selections:[selected]},host.context),/topic_message_version_changed/);
+    const value={destination:'new' as const,newSession:{provider:'codex',model:'analysis-model',modeId:'full-access'},material:{layout:'auto' as const,identity:'alias' as const,presetId:'custom',presets:[{id:'custom',name:'排查',body:'任务：{{note}}\n\n材料：{{materials}}'}]}};
+    await s.host.topics(s.config,'project-communications',2,{action:'preferences',value});
+    const restarted=new WorkbenchExtensions();
+    try{assert.deepEqual(await restarted.topics(s.config,'project-communications',2,{action:'preferences'}),value);}finally{await restarted.close();}
+    assert.equal(host.creation.created.length,0);
+  }finally{await s.close();}
+});
+
 test('new sessions use a host-listed model and selected originals; preview creates nothing and repeated sends create once', async () => {
   const s = await setup();
   try {

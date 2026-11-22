@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { archiveFixture } from './helpers/archive-service.ts';
-import { basketCounts, basketSelections, changeAsset, changeMessage, selectTopic } from '../client/topic-selection.ts';
+import { basketCounts, basketSelections, changeAsset, changeMessage, editSelectedMessage,selectTopic } from '../client/topic-selection.ts';
 
 test('late messages and originals never expand an already selected topic', () => {
   const { topics } = archiveFixture(), topic = topics[0];
@@ -38,4 +38,14 @@ test('reselecting original messages preserves source chronology', () => {
   basket = changeMessage(basket, topic, topic.messages[1]);
   basket = changeMessage(basket, topic, topic.messages[1]);
   assert.deepEqual(basketSelections(basket)[0].messages.map(message => message.id), ['message-1','message-2']);
+});
+
+test('editing a selection preserves originals, survives unrelated updates and clears on explicit deselection',()=>{
+  const {topics}=archiveFixture(),topic=topics[0],message=topic.messages[0],original=message.text;
+  let basket=editSelectedMessage(selectTopic({},topic),message,'修正后的文字');
+  assert.equal(message.text,original);assert.equal(basketSelections(basket)[0].messages[0].editedText,'修正后的文字');
+  basket=changeAsset(basket,topic,message,message.assets[0]);
+  assert.equal(basketSelections(basket)[0].messages[0].editedText,'修正后的文字');
+  basket=changeMessage(basket,topic,message);basket=changeMessage(basket,topic,message);
+  assert.equal(basketSelections(basket)[0].messages.find(item=>item.id===message.id)?.editedText,undefined);
 });

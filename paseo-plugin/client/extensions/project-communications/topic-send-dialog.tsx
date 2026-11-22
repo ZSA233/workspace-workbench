@@ -3,23 +3,26 @@ import { ActivityIndicator, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { Icon, ScrollView, TextInput } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
-import { basketCounts, selectedAssets, type TopicBasket } from '../../topic-selection';
-import { messageText, senderName, topicTime, topicTitle, TOPIC_NOTE_LIMIT,
-  type TopicMaterialPreview, type TopicModel, type TopicNewSession, type TopicTarget, type WatchedGroup } from '../../../shared/extensions/project-communications/topics';
+import { basketCounts, type TopicBasket } from '../../topic-selection';
+import { TOPIC_NOTE_LIMIT,
+  type ArchiveMessage,type TopicMaterialPreview, type TopicModel, type TopicNewSession, type TopicTarget, type WatchedGroup } from '../../../shared/extensions/project-communications/topics';
 import { Button, Choice, Dialog, Label, Search, useColors } from './ui';
-import { MediaCount, TopicAsset, TopicIcon, TopicStatus, topicError } from './topic-ui';
+import { MediaCount, TopicIcon, TopicStatus, topicError } from './topic-ui';
 import { TopicSessionControls } from './topic-session-controls';
 import { topicChoiceAvailable,topicEffortLabel,topicModelChoice,topicModelKey } from '../../topic-session-choice';
+import {TopicMaterialActions,TopicMaterialRows,type useTopicMaterialDraft} from './topic-material-editor';
+import type {TopicMaterialSettings} from '../../../shared/extensions/project-communications/topic-content';
 
 type TargetDirectory = { data?: TopicTarget[]; isLoading: boolean; isFetching: boolean; error: Error | null; refetch(): Promise<unknown> };
 const targetKey = (target: TopicTarget) => target.id || 'workspace:' + target.workspaceId;
 const modelName = (target?: TopicTarget) => target?.provider ? [target.provider, target.model || '当前模型'].join(' · ') : '沿用会话模型';
 
 export function TopicSendDialog({ client, basket, note, destination, newSession, targets, target, workspaceNames, currentAgentId, groupName,
-  busy, preview, error, preferencesReady,preferencesError,onRetryPreferences,onClose, onOpenSession, onNote, onDestination, onTarget, onModel, onConfirm }: {
+  busy, preview, error, preferencesReady,preferencesError,onRetryPreferences,materialSettings,materialDraft,onMaterialSettings,onEditText,onClose, onOpenSession, onNote, onDestination, onTarget, onModel, onConfirm }: {
   client: TopicsClient; basket: TopicBasket; note: string; destination: 'existing' | 'new'; newSession?: TopicNewSession;
   targets: TargetDirectory; target?: TopicTarget; workspaceNames: Record<string, string>; currentAgentId?: string;
   groupName(group: WatchedGroup): string; busy: boolean; preview?: TopicMaterialPreview; error: string; preferencesReady:boolean;preferencesError:boolean;onRetryPreferences():void;
+  materialSettings:TopicMaterialSettings;materialDraft:ReturnType<typeof useTopicMaterialDraft>['draft'];onMaterialSettings(value:TopicMaterialSettings):void;onEditText(message:ArchiveMessage,text:string|undefined):void;
   onClose(): void; onOpenSession?(): void; onNote(value: string): void; onDestination(value: 'existing' | 'new'): void;
   onTarget(target: TopicTarget): void; onModel(model: TopicNewSession): void; onConfirm(): void;
 }) {
@@ -45,7 +48,7 @@ export function TopicSendDialog({ client, basket, note, destination, newSession,
   return <Dialog id="topics-send-dialog" title="发送到会话" onClose={onClose} width={800} height={790}
     footer={<><Button onPress={onClose}>{accepted ? '完成' : '返回'}</Button>
       <Button id="topics-confirm" icon={accepted ? 'ArrowUpRight' : pending ? 'CircleHelp' : 'Send'} variant="primary"
-        disabled={busy || !counts.topics || overLimit || (accepted ? !onOpenSession : !pending && missing)}
+        disabled={busy || !counts.topics || overLimit || (!pending&&!accepted&&(Boolean(materialDraft.error)||!materialDraft.text.trim()&&!counts.assets)) || (accepted ? !onOpenSession : !pending && missing)}
         onPress={accepted && onOpenSession ? onOpenSession : onConfirm}>
         {busy ? destination === 'new' ? '创建并发送中' : '发送中' : accepted ? '打开会话' : pending ? '查回执' : destination === 'new' ? '创建并发送' : '确认发送'}
       </Button></>}>
@@ -73,22 +76,12 @@ export function TopicSendDialog({ client, basket, note, destination, newSession,
           style={{ color: c.foreground, backgroundColor: c.surface2, borderColor: c.border, borderWidth: 1, borderRadius: 6,
             fontSize: 13, lineHeight: 21, padding: 10, minHeight: 100, maxHeight: 170, textAlignVertical: 'top' }} />
       </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+      <View style={{ flexDirection: 'row',flexWrap:'wrap', alignItems: 'center', gap: 8 }}>
         <Label strong>所选材料</Label><MediaCount icon="Layers" count={counts.topics} label="话题" />
         <MediaCount icon="MessageSquare" count={counts.messages} label="原文" /><MediaCount icon="Image" count={counts.assets} label="附件" />
+        <View style={{flex:1}}/><TopicMaterialActions {...{client,basket,note,locked}} settings={materialSettings} draft={materialDraft} onSettings={onMaterialSettings} onEdit={onEditText}/>
       </View>
-      {Object.values(basket).map(selected => <View key={selected.topic.id} style={{ gap: 8, paddingTop: 12, borderTopWidth: 1, borderTopColor: c.border }}>
-        <Label strong lines={2}>{topicTitle(selected.topic)}</Label><Label muted>{groupName(selected.topic)}</Label>
-        {selected.messages.map(message => <View key={message.id} style={{ borderLeftWidth: 2, borderLeftColor: c.accent, paddingLeft: 12 }}>
-          <Label muted>{senderName(message) + ' · ' + topicTime(message.createdAt)}</Label>
-          {messageText(message) ? <Label>{messageText(message)}</Label> : null}
-        </View>)}
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {selectedAssets(selected).map(({ message, asset }) => <TopicAsset key={asset.id} {...{ client, message, asset }} topicId={selected.topic.id}
-            contextOf={selected.contexts[message.id]} checked disabled onToggle={() => undefined} />)}
-        </View>
-        {selected.includeAnalysis ? <Label>{selected.topic.lastAnswer || selected.topic.summary}</Label> : null}
-      </View>)}
+      <TopicMaterialRows {...{client,basket,note,locked}} settings={materialSettings} draft={materialDraft} onSettings={onMaterialSettings} onEdit={onEditText}/>
     </ScrollView>
     <TopicStatus id="topics-send-status" error={failure} state={state} onDetails={() => undefined} />
     {picker ? <Dialog title="目标会话" onClose={() => setPicker(false)} width={560} height={500}>

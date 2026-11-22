@@ -37,9 +37,9 @@ export function TopicSessionControls({models,choice,locked,loading,refreshing,un
     <Choice id="topics-model" icon="Cpu" disabled={locked||loading} onPress={()=>open('model')}
       label={loading?'加载模型':selected?topicProviderLabel(selected.provider)+' · '+selected.label:'选择 Provider / 模型'}/>
     <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>
-      <View style={{flex:1,minWidth:150}}><Choice id="topics-effort" icon="Brain" disabled={locked||!selected?.thinkingOptions?.length}
+      <View style={{flex:1,minWidth:170}}><Choice id="topics-effort" icon="Brain" disabled={locked||!selected?.thinkingOptions?.length}
         onPress={()=>open('effort')} label={'推理强度 · '+(choice?.thinkingOptionId&&!selected?.thinkingOptions?.some(option=>option.id===choice.thinkingOptionId)?'重新选择':effort?topicEffortLabel(effort):'宿主默认')}/></View>
-      <View style={{flex:1,minWidth:150}}><Choice id="topics-permission" icon="Shield" disabled={locked||!selected?.permissionModes?.length}
+      <View style={{flex:1,minWidth:170}}><Choice id="topics-permission" icon="Shield" disabled={locked||!selected?.permissionModes?.length}
         onPress={()=>open('permission')} label={'权限 · '+(choice?.modeId&&!permission?'重新选择':permission?.label||'宿主默认')}/></View>
     </View>
     {unavailable||selected?.permissionsUnavailable||!loading&&!models.length?<View style={{flexDirection:'row',alignItems:'center',gap:8}}>

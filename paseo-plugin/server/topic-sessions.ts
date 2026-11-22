@@ -51,7 +51,7 @@ const labels = (route: ProjectRoute, id: string) => ({ 'workspace-workbench.role
 const messageId = (id: string) => digest({ kind: 'archive-topic-new-session', id });
 
 export async function createTopicSession(route: ProjectRoute, context: AgentContext,
-  value: { id: string; text: string; dispatchText?: string; references: ReviewArtifactReference[]; newSession: TopicNewSession }, beforeCreate: () => void,
+  value: { id: string; text: string; sessionTitle?:string;dispatchText?: string; references: ReviewArtifactReference[]; newSession: TopicNewSession }, beforeCreate: () => void,
   recordCreated: (session:TopicSessionIdentity,messageId:string)=>void) {
   await assertTopicModel(route, context, value.newSession);
     beforeCreate();
@@ -59,7 +59,7 @@ export async function createTopicSession(route: ProjectRoute, context: AgentCont
     // ordinary image-message path as existing sessions. Never replay either phase.
     const handle = await context.paseo.agents.create({ cwd: route.sourceRoot,
       idempotencyKey: 'archive-topic:' + value.id,
-      title: (value.text.split('\n').find(line=>line.trim())?.trim() || (value.references.some(item=>item.mimeType?.startsWith('image/'))?'图片讨论':'材料讨论')).slice(0,80),
+      title: (value.sessionTitle||value.text.split('\n').find(line=>line.trim())?.trim() || (value.references.some(item=>item.mimeType?.startsWith('image/'))?'图片讨论':'材料讨论')).slice(0,80),
       labels: labels(route, value.id),
       config: { provider: value.newSession.provider + '/' + value.newSession.model,
         ...(value.newSession.thinkingOptionId?{thinkingOptionId:value.newSession.thinkingOptionId}:{}),

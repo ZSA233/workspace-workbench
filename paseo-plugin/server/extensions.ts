@@ -93,12 +93,12 @@ export class WorkbenchExtensions {
           if(request.targetId||request.workspaceId)throw Error('topic_target_conflict');
           if(!context)throw Error('extension_host_delivery_unavailable');
           await assertTopicModel(route,context,request.newSession);
-          return withProject({projectConfig},()=>materials.preview(archive,'','',request.selections,undefined,{note:request.note,newSession:request.newSession}));
+          return withProject({projectConfig},()=>materials.preview(archive,'','',request.selections,undefined,{note:request.note,newSession:request.newSession,content:request.content}));
         }
         const candidates=request.targetId?.startsWith('session:') ? await targets() : await topicTargets(route);
         const target=candidates.find(item=>request.targetId ? item.id===request.targetId : item.kind==='workspace'&&item.workspaceId===request.workspaceId);
         if(!target)throw Error('topic_target_unavailable');
-        return withProject({projectConfig},()=>materials.preview(archive,target.workspaceId,target.agentId,request.selections,target,{note:request.note}));
+        return withProject({projectConfig},()=>materials.preview(archive,target.workspaceId,target.agentId,request.selections,target,{note:request.note,content:request.content}));
       }
       case 'send':case 'receipt':{
         if(!context)throw Error('extension_host_delivery_unavailable');

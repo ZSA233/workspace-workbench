@@ -3,7 +3,7 @@ import { ActivityIndicator, View } from 'react-native';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Icon, ScrollView } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
-import { basketCounts, basketSelections, changeAsset, changeMessage, compact, selectTopic, type TopicBasket } from '../../topic-selection';
+import { basketContentEntries,basketCounts, basketSelections, changeAsset, changeMessage, compact, editSelectedMessage, selectTopic, type TopicBasket } from '../../topic-selection';
 import { groupKey, type ArchiveTopic, type ArchiveTopicDetail, type TopicMaterialPreview, type TopicPage, type TopicTarget, type WatchedGroup } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, Search, ignoreFailure, useColors } from './ui';
 import { Check, MediaCount, TopicIcon, TopicStatus, topicError } from './topic-ui';
@@ -11,6 +11,8 @@ import { TopicRow } from './topic-row';
 import { TopicMaterialBasket } from './topic-basket';
 import { TopicSendDialog } from './topic-send-dialog';
 import { useTopicSessionPreferences } from '../../use-topic-session-preferences';
+import {defaultTopicMaterialSettings,topicContentPeople,type TopicContentAlias} from '../../../shared/extensions/project-communications/topic-content';
+import {useTopicMaterialDraft} from './topic-material-editor';
 
 type TopicsPanelProps = {
   client: TopicsClient; width: number; onSettings(): void; workspaceNames: Record<string, string>; currentWorkspaceId?: string;
@@ -22,7 +24,7 @@ export function TopicsPanel(props: TopicsPanelProps) {
   const c = useColors(), { client, onSettings } = props;
   const [error, setError] = useState(''), [statusOpen, setStatusOpen] = useState(false);
   // Navigation stays available in every project; activation only gates data and delivery.
-  if (client.enabled) return <ActiveTopicsPanel {...props} />;
+  if (client.enabled) return <ActiveTopicsPanel key={client.projectConfig} {...props} />;
   const failure = error || client.error;
   return <View testID="workbench-topics-panel" style={{ flex: 1, minHeight: 0, backgroundColor: c.surface1 }}>
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 12 }}>
@@ -50,11 +52,15 @@ export function TopicsPanel(props: TopicsPanelProps) {
 function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentWorkspaceId, currentAgentId, onOpenSession }: TopicsPanelProps) {
   const c = useColors(), cache = useQueryClient(), narrow = width > 0 && width < 580;
   const [query, setQuery] = useState(''), [group, setGroup] = useState<WatchedGroup>();
-  const [expanded, setExpanded] = useState<Set<string>>(new Set()), [basket, setBasket] = useState<TopicBasket>({});
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [selection,setSelection]=useState<{basket:TopicBasket;aliases:TopicContentAlias[];registry:TopicContentAlias[]}>({basket:{},aliases:[],registry:[]});
+  const basket=selection.basket;
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [picker, setPicker] = useState<'group' | ''>('');
   const [note, setNote] = useState('');
   const preferences=useTopicSessionPreferences(client),{destination,newSession}=preferences.value;
+  const materialSettings=preferences.value.material||defaultTopicMaterialSettings;
+  const material=useTopicMaterialDraft(basket,materialSettings,note,selection.aliases);
   const [preview, setPreview] = useState<TopicMaterialPreview>(), [previewOpen, setPreviewOpen] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [statusOpen, setStatusOpen] = useState(false);
   const list = useInfiniteQuery({
@@ -90,7 +96,12 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
     || client.directory?.groups.find(item => groupKey(item) === groupKey(value))?.name || value.channelId;
   const edit = (change: (current: TopicBasket) => TopicBasket) => {
     if (busy) return;
-    setBasket(change); setPreview(undefined); setError('');
+    setSelection(current=>{
+      const basket=change(current.basket);
+      if(!Object.keys(basket).length)return {basket,aliases:[],registry:[]};
+      const aliases=topicContentPeople(basketContentEntries(basket),current.registry).map(({key,label})=>({key,label}));
+      return {basket,aliases,registry:[...current.registry,...aliases.filter(item=>!current.registry.some(saved=>saved.key===item.key))]};
+    }); setPreview(undefined); setError('');
   };
   const select = async (topic: ArchiveTopic) => {
     if (basket[topic.id]) { edit(current => selectTopic(current, current[topic.id].topic)); return; }
@@ -116,7 +127,7 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
         return;
       }
       const prepared = preview || await client.call<TopicMaterialPreview>({
-        action: 'preview', ...(destination === 'new' ? { newSession } : { targetId: target }), note, selections: basketSelections(basket),
+        action: 'preview', ...(destination === 'new' ? { newSession } : { targetId: target }), note,content:material.options, selections: basketSelections(basket),
       });
       // Keep the frozen request locked even if its acknowledgement is lost.
       setPreview({...prepared,state:'sending'});
@@ -168,6 +179,7 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
       {list.hasNextPage ? <View style={{ padding: 10 }}><Button disabled={list.isFetchingNextPage} onPress={() => ignoreFailure(list.fetchNextPage())}>更多话题</Button></View> : null}
     </ScrollView>
     <TopicMaterialBasket {...{ client, basket, edit, busy, narrow, preview }} hasNote={Boolean(note.trim())} onOpenSession={openSession}
+      onEdit={()=>setPreviewOpen(true)}
       onSend={() => { setPreviewOpen(true); void targets.refetch(); }} />
     <TopicStatus error={shownError} state={state} onDetails={() => { if (shownError || state) setStatusOpen(true); }} />
     {picker ? <Dialog title="关注群" onClose={() => setPicker('')} width={540} height={450}>
@@ -179,6 +191,9 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
     </Dialog> : null}
     {previewOpen ? <TopicSendDialog {...{client,basket,note,destination,newSession,targets,workspaceNames,currentAgentId,groupName,busy,preview}}
       preferencesReady={preferences.ready} preferencesError={Boolean(preferences.error)} onRetryPreferences={preferences.retry}
+      materialSettings={materialSettings} materialDraft={material.draft}
+      onMaterialSettings={value=>{preferences.update({material:value});setPreview(undefined);}}
+      onEditText={(message,text)=>edit(current=>editSelectedMessage(current,message,text))}
       target={selectedTarget} error={shownError} onClose={() => setPreviewOpen(false)} onOpenSession={openSession}
       onNote={value => { setNote(value); setPreview(undefined); }}
       onDestination={value => { preferences.update({destination:value}); setPreview(undefined); }}

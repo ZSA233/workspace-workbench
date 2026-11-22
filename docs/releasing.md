@@ -77,6 +77,21 @@ paseo plugin ls workspace-workbench-paseo --json
 固定版本可以使用 `vX.Y.Z` ref 或对应的 GitHub Release 压缩包。固定 tag 不会通过
 `paseo plugin update` 自动跳到下一个版本，升级时需要显式切换 ref。
 
+## 多主机开发与更新
+
+Git 工作目录、已安装插件和项目扩展开关分别保存在各台主机。推送代码或创建 Release
+不会自动更新其他主机的工作目录、目录安装或项目设置。
+
+多机开发时，先将每台机器尚未提交的改动保存到独立分支并推送，再基于远程 `main`
+合并、解决冲突并提交。已被新版覆盖的实现保留合并历史，使用新版行为；各开发目录
+在工作区干净后通过 `git fetch origin` 和 `git merge --ff-only origin/main` 同步结果。
+`stable` 由发布流程推进，本地稳定分支只快进到 `origin/stable`。
+
+每台使用插件的主机都需要执行更新，并核对 daemon 的主机名／server ID、安装来源和
+commit。正式安装使用上述 Git `stable` 来源；目录安装和固定 tag 需要显式迁移。
+“话题”还需在对应项目启用扩展。服务连接及关注群属于项目设置，凭据只保存在主机的
+秘密存储中；同步代码不会复制凭据、扩大关注群或改变服务采集／回复策略。
+
 ## Release 附件
 
 GitHub Release 提供包含 Node 后端源码的

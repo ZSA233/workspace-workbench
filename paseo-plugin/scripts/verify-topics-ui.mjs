@@ -72,6 +72,7 @@ try {
   page.on('pageerror', error => report.pageErrors.push(error.message));
   page.on('console', message => { if (['error', 'warning'].includes(message.type())) report.console.push(message.text()); });
   await openIsolatedWorkbench(page, ui.url, 'a');
+  assert.equal(await page.getByText(/^(审核集|Review set|Agent 审核|Agent Review)$/).filter({ visible: true }).count(), 0);
   await page.getByText('话题', { exact: true }).filter({ visible: true }).first().click();
   const panel = page.getByTestId('workbench-topics-panel');
   await panel.waitFor();

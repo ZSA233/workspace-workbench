@@ -66,6 +66,8 @@ type ObserverPanelContentProps = PanelProps & {
   paseoWorkspace: { directory: string; name: string } | null;
 };
 type ChangeTreeMode = "tree" | "files";
+// Keep review tools available internally while their navigation is temporarily hidden.
+const reviewTabsVisible = false;
 
 
 function comparablePath(value: string): string {
@@ -869,10 +871,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabs}>
         <TabButton active={tab === "workspace"} label={localizedCopy.tabWorkspace} onPress={() => setTab("workspace")} theme={theme} styles={styles} />
         <TabButton active={tab === "files"} label={locale === "zh-CN" ? "文件" : "Files"} onPress={() => setTab("files")} theme={theme} styles={styles} />
-        <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} />
+        {reviewTabsVisible ? <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} /> : null}
         {communications.enabled ? <TabButton active={tab==='communications'} label="话题" onPress={()=>{closeWorkspaceSelector();setTab('communications');}} theme={theme} styles={styles}/> : null}
         {cacheCapable ? <TabButton active={tab === 'cache'} label={locale === 'zh-CN' ? '缓存与空间' : 'Caches & space'} onPress={() => { closeWorkspaceSelector(); setTab('cache'); }} theme={theme} styles={styles} /> : null}
-        {selectedWorkspaceId && selectedWorkspace?.kind !== "linked-live" && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
+        {reviewTabsVisible && selectedWorkspaceId && selectedWorkspace?.kind !== "linked-live" && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
       </ScrollView>
       <View
         style={styles.bodyShell}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -13,6 +13,7 @@ import { putAgentBinding } from '../server/agent-store.ts';
 import { readStoredArtifact } from '../server/artifacts.ts';
 import { topicActionSchema, type ArchiveTopicDetail, type TopicMaterialPreview, type TopicSelection, type TopicTarget } from '../shared/extensions/project-communications/topics.ts';
 import type { AgentContext } from '../server/agent-provider.ts';
+import type { PaseoAgentCreateOptions } from '@getpaseo/client';
 import { startArchiveFixture } from './helpers/archive-service.ts';
 
 async function setup() {
@@ -59,6 +60,30 @@ function nativeSession(root: string) {
     }),
   } } } as unknown as AgentContext;
   return { agent, state, context };
+}
+
+function nativeCreation(root: string) {
+  const native = nativeSession(root);
+  const created: PaseoAgentCreateOptions[] = [];
+  const state = { available: true, uncertain: false, created, discoveryCalls: [] as string[] };
+  const api = native.context.paseo;
+  Object.assign(api, { providers: {
+    listAvailable: async () => ({ providers: [{provider:'codex',available:state.available},{provider:'offline',available:false}] }),
+    listModels: async (provider: string, options: {cwd: string}) => {
+      state.discoveryCalls.push(provider); assert.equal(realpathSync(options.cwd), realpathSync(root));
+      return { models: [{id:'analysis-model',label:'分析模型',isDefault:true},{id:'hidden-model',label:'不可选模型',isSelectable:false}] };
+    },
+  } });
+  api.agents.create = async options => {
+    state.created.push(options);
+    Object.assign(native.agent, { id: 'new-topic-agent', cwd: options.cwd, title: options.title, labels: options.labels });
+    native.state.sent.push({text:options.prompt!,options:{messageId:options.clientMessageId!,images:options.images || [],attachments:options.attachments as never}});
+    if (state.uncertain) throw Error('creation acknowledgement lost');
+    return Object.assign(api.agents.ref(native.agent.id), {id:native.agent.id});
+  };
+  api.agents.list = async options => ({ entries: Object.entries(options?.filter?.labels || {}).every(([key, value]) =>
+    (native.agent.labels as Record<string,string>)[key] === value) ? [{agent:native.agent}] : [], pageInfo:{hasMore:false} }) as never;
+  return { ...native, creation: state };
 }
 
 test('archive activation never registers a collection project and directory strips credentials and history', async () => {
@@ -199,6 +224,16 @@ test('a confirmed receipt cannot be downgraded by a late uncertain send result',
     finish();
     assert.equal((await sending).state, 'accepted');
     assert.equal(materials.read(preview.id).messageId, 'receipt');
+    const another = await s.inProject(() => materials.preview(s.archive,'workspace','agent-a',[selection(topic)]));
+    await materials.send(another.id,'agent-a',async()=>({delivery:'uncertain'}));
+    let release!:()=>void;
+    const late = materials.receipt(another.id,'agent-a',async()=>{
+      await new Promise<void>(resolve=>{release=resolve;});
+      return {delivery:'uncertain',session:{agentId:'agent-a',cwd:s.root,hostWorkspaceId:'host-workspace'}};
+    });
+    await materials.receipt(another.id,'agent-a',async()=>({delivery:'accepted',messageId:'confirmed'}));
+    release();
+    assert.equal((await late).state,'accepted'); assert.equal(materials.read(another.id).messageId,'confirmed');
   } finally { await s.close(); }
 });
 
@@ -352,5 +387,92 @@ test('a changed Workbench binding cannot be bypassed by treating its worker as a
     await assert.rejects(s.host.topics(s.config, 'project-communications', 2,
       { action: 'preview', targetId: 'session:agent-a', selections: [selection(topic)] }, native.context), /topic_target_unavailable/);
     assert.equal(native.state.sent.length, 0);
+  } finally { await s.close(); }
+});
+
+test('per-send instructions are frozen separately from archive originals and never become a later default', async () => {
+  const s = await setup();
+  try {
+    const native = nativeSession(s.root), topic = await s.archive.read('topic-1');
+    const note = '请先核对截图。\n只分析问题原因，暂不修改代码。';
+    const request = {action:'preview' as const,targetId:'session:'+native.agent.id,note,selections:[selection(topic)]};
+    const preview = await s.host.topics(s.config,'project-communications',2,request,native.context) as TopicMaterialPreview;
+    request.note = 'later edited draft';
+    assert.equal(preview.note,note); assert.ok(preview.text.indexOf(note) < preview.text.indexOf('# 话题原始材料'));
+    assert.equal(topic.messages[0].text,s.state.topics[0].messages[0].text);
+    await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},native.context);
+    assert.ok(native.state.sent[0].text.includes(note)); assert.equal(native.state.sent[0].text.includes(request.note),false);
+    const next = await s.host.topics(s.config,'project-communications',2,{...request,note:undefined},native.context) as TopicMaterialPreview;
+    assert.equal(next.note,undefined); assert.equal(next.text.includes(note),false);
+    assert.equal(s.state.requests.some(item=>item.method==='POST'),false);
+    assert.equal(topicActionSchema.safeParse({...request,note:'x'.repeat(8001)}).success,false);
+  } finally { await s.close(); }
+});
+
+test('long-original delivery keeps the users instructions inline as well as the complete source document', async () => {
+  const s = await setup();
+  try {
+    s.state.topics[0].messages[0].text = '完整原文。'.repeat(8000);
+    const materials = new TopicMaterials(join(s.root,'state'),'scope'), topic = await s.archive.read('topic-1');
+    const preview = await s.inProject(()=>materials.preview(s.archive,'workspace','agent-a',[selection(topic)],undefined,{note:'先给出三个结论。'}));
+    const stored = materials.read(preview.id);
+    assert.ok(stored.dispatchText?.startsWith('# 本次要求（用户补充）\n\n先给出三个结论。'));
+    s.inProject(()=>assert.equal(readStoredArtifact(stored.references[0].assetId!).bytes.toString('utf8'),preview.text));
+  } finally { await s.close(); }
+});
+
+test('new sessions use a host-listed model and selected originals; preview creates nothing and repeated sends create once', async () => {
+  const s = await setup();
+  try {
+    const host = nativeCreation(s.root), topic = await s.archive.read('topic-1'), selected = selection(topic);
+    const models = await s.host.topics(s.config,'project-communications',2,{action:'models'},host.context) as Array<{model:string}>;
+    assert.deepEqual(models.map(item=>item.model),['analysis-model']); assert.deepEqual(host.creation.discoveryCalls,['codex']);
+    selected.assets = [{id:'image-1',messageId:'message-1',messageVersion:topic.messages[0].version}];
+    const preview = await s.host.topics(s.config,'project-communications',2,{action:'preview',newSession:{provider:'codex',model:'analysis-model'},note:'请先分析图片中的问题。',selections:[selected]},host.context) as TopicMaterialPreview;
+    assert.equal(host.creation.created.length,0);
+    const send = ()=>s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context) as Promise<TopicMaterialPreview>;
+    await Promise.all([send(),send()]);
+    const result = await send();
+    assert.equal(result.state,'accepted'); assert.equal(result.targetAgentId,'new-topic-agent');
+    assert.equal(host.creation.created.length,1);
+    const options = host.creation.created[0];
+    assert.equal(options.cwd,realpathSync(s.root)); assert.equal(options.config.provider,'codex/analysis-model');
+    assert.equal(options.config.modeId,undefined); assert.equal(options.config.options,undefined);
+    assert.ok(options.prompt?.includes('请先分析图片中的问题。')); assert.ok(options.prompt?.includes(topic.messages[0].text));
+    assert.equal(options.prompt?.includes(topic.messages[1].text),false);
+    assert.deepEqual(Buffer.from(options.images![0].data,'base64'),s.image);
+    assert.equal(host.agent.features[0].value,true);
+  } finally { await s.close(); }
+});
+
+test('a lost new-session acknowledgement is reconciled by scoped labels without creating or sending again', async () => {
+  const s = await setup();
+  try {
+    const host = nativeCreation(s.root); host.creation.uncertain = true;
+    const topic = await s.archive.read('topic-1');
+    const preview = await s.host.topics(s.config,'project-communications',2,{action:'preview',newSession:{provider:'codex',model:'analysis-model'},selections:[selection(topic)]},host.context) as TopicMaterialPreview;
+    const send = ()=>s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context) as Promise<TopicMaterialPreview>;
+    assert.equal((await send()).state,'uncertain'); assert.equal((await send()).state,'uncertain');
+    const restarted = new WorkbenchExtensions();
+    try {
+      const receipt = await restarted.topics(s.config,'project-communications',2,{action:'receipt',id:preview.id},host.context) as TopicMaterialPreview;
+      assert.equal(receipt.state,'accepted'); assert.equal(receipt.targetAgentId,'new-topic-agent');
+      assert.equal(host.creation.created.length,1); assert.equal(host.state.sent.length,1);
+    } finally { await restarted.close(); }
+  } finally { await s.close(); }
+});
+
+test('model changes and conflicting destinations fail before a new conversation is created', async () => {
+  const s = await setup();
+  try {
+    const host = nativeCreation(s.root), topic = await s.archive.read('topic-1');
+    const request = {action:'preview' as const,newSession:{provider:'codex',model:'analysis-model'},selections:[selection(topic)]};
+    assert.equal(topicActionSchema.safeParse({...request,targetId:'session:any'}).success,false);
+    await assert.rejects(s.host.topics(s.config,'project-communications',2,{...request,newSession:{provider:'codex',model:'hidden-model'}},host.context),/topic_model_unavailable/);
+    const preview = await s.host.topics(s.config,'project-communications',2,request,host.context) as TopicMaterialPreview;
+    host.creation.available = false;
+    await assert.rejects(s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context),/topic_model_unavailable/);
+    const stored = JSON.parse(readFileSync(join(s.root,'state/extensions/topic-materials',createHash('sha256').update(preview.id).digest('hex')+'.json'),'utf8'));
+    assert.equal(stored.state,'preview'); assert.equal(host.creation.created.length,0);
   } finally { await s.close(); }
 });

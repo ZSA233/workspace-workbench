@@ -39,6 +39,7 @@ export function topicError(error: string) {
     topic_material_version_changed: '话题有更新，请重新选材', topic_message_version_changed: '原文有更新，请重新选材',
     topic_asset_version_changed: '原件有更新，请重新选材', topic_asset_not_ready: '附件尚未就绪',
     topic_target_unavailable: '请选择目标会话', topic_target_changed: '目标会话已变化', topic_targets_incomplete: '会话列表未完整加载，请重试',
+    topic_models_unavailable: '模型列表暂不可用', topic_model_unavailable: '所选模型暂不可用，请重新选择', topic_session_ambiguous: '新会话状态待核对，请勿重复发送',
     topic_material_scope_changed: '连接已变化，请重新预览', project_connection_changed: '连接已变化',
     agent_revision_conflict: '配置有更新，请刷新', settings_revision_conflict: '配置有更新，请刷新',
     topic_material_limit: '材料数量超限', topic_material_bytes_limit: '附件合计超过 24 MB',
@@ -53,9 +54,9 @@ export function topicError(error: string) {
   const known = Object.entries(messages).find(([key]) => error.includes(key));
   return known?.[1] || (error.includes('API Token') ? '请配置服务连接' : error.includes('不可达') ? 'AI 助手暂不可达' : error);
 }
-export function TopicStatus({ error, state, onDetails }: { error?: string; state?: string; onDetails: () => void }) {
+export function TopicStatus({ error, state, onDetails, id = 'topics-status' }: { error?: string; state?: string; onDetails: () => void; id?: string }) {
   const c = useColors();
-  return <Pressable testID="topics-status" accessibilityRole="button" accessibilityLabel={error ? topicError(error) : state || '已连接'} onPress={onDetails}
+  return <Pressable testID={id} accessibilityRole="button" accessibilityLabel={error ? topicError(error) : state || '已连接'} onPress={onDetails}
     {...(Platform.OS === 'web' ? { title: error || state || '已连接' } : {})}
     style={{ height: 27, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6, borderTopWidth: 1, borderTopColor: c.border }}>
     <Icon name={error ? 'CircleAlert' : state === '已交接' ? 'CircleCheck' : 'Circle'} size={12} color={error ? c.statusWarning : c.foregroundMuted} />

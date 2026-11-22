@@ -14,6 +14,7 @@ import { CommunicationsConnection, defaultServiceConnection, localServiceToken }
 import { ArchiveTopics } from './archive-topics.ts';
 import { TopicMaterials } from './topic-materials.ts';
 import { assertTopicSession, deliverTopicSession, topicSessionReceipt, topicTargets } from './topic-targets.ts';
+import { assertTopicModel, createTopicSession, newTopicSessionReceipt, topicModels } from './topic-sessions.ts';
 import type { TopicAction } from '../shared/extensions/project-communications/topics.ts';
 
 type Settings={version:number;enabled:Record<string,boolean>;connections?:Record<string,{revision:number;config:ServiceConnection}>;[key:string]:unknown};
@@ -80,18 +81,35 @@ export class WorkbenchExtensions {
       case 'asset':return archive.asset(request.topicId,request.messageId,request.assetId,request.contextOf);
       case 'group.configure':return archive.configure(request);
       case 'targets':return targets();
+      case 'models':{
+        if(!context)throw Error('extension_host_delivery_unavailable');
+        return topicModels(route,context);
+      }
       case 'preview':{
+        if(request.newSession){
+          if(request.targetId||request.workspaceId)throw Error('topic_target_conflict');
+          if(!context)throw Error('extension_host_delivery_unavailable');
+          await assertTopicModel(route,context,request.newSession);
+          return withProject({projectConfig},()=>materials.preview(archive,'','',request.selections,undefined,{note:request.note,newSession:request.newSession}));
+        }
         const candidates=request.targetId?.startsWith('session:') ? await targets() : await topicTargets(route);
         const target=candidates.find(item=>request.targetId ? item.id===request.targetId : item.kind==='workspace'&&item.workspaceId===request.workspaceId);
         if(!target)throw Error('topic_target_unavailable');
-        return withProject({projectConfig},()=>materials.preview(archive,target.workspaceId,target.agentId,request.selections,target));
+        return withProject({projectConfig},()=>materials.preview(archive,target.workspaceId,target.agentId,request.selections,target,{note:request.note}));
       }
       case 'send':case 'receipt':{
         if(!context)throw Error('extension_host_delivery_unavailable');
         const preview=materials.read(request.id);
+        const current=()=>{if(this.closed||this.connectionSettings(route,id).revision!==revision||!this.settings(route).enabled[id])throw Error('project_connection_changed');};
+        if(preview.newSession){
+          if(request.action==='send'&&preview.state==='preview')await assertTopicModel(route,context,preview.newSession);
+          current();
+          return request.action==='receipt'
+            ? materials.receipt(request.id,preview.agentId,value=>newTopicSessionReceipt(route,context,value))
+            : materials.send(request.id,preview.agentId,value=>createTopicSession(route,context,{...value,newSession:preview.newSession!},current));
+        }
         if(preview.session){
           await assertTopicSession(route,context,preview.session);
-          const current=()=>{if(this.closed||this.connectionSettings(route,id).revision!==revision||!this.settings(route).enabled[id])throw Error('project_connection_changed');};
           current();
           return request.action==='receipt'
             ? materials.receipt(request.id,preview.session.agentId,value=>topicSessionReceipt(route,context,preview.session!,value.id))

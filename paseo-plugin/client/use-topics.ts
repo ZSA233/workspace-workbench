@@ -18,7 +18,7 @@ export function useTopics(projectConfig: string, foreground: boolean, visible: b
   const call = useCallback(async <T = unknown,>(request: TopicAction): Promise<T> => {
     const captured = scopeKey;
     try {
-      const endpoint = ['targets', 'preview', 'send', 'receipt'].includes(request.action) ? deliveryRpc : rpc;
+      const endpoint = ['targets', 'models', 'preview', 'send', 'receipt'].includes(request.action) ? deliveryRpc : rpc;
       const result = await endpoint({ projectConfig, extensionId: 'project-communications', connectionRevision: revision, request });
       if (current.current !== captured) throw Error('project_connection_changed');
       setFailure(undefined);

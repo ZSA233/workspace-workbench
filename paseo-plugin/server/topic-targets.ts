@@ -38,7 +38,7 @@ export async function topicTargets(route: ProjectRoute, context?: AgentContext):
       seen.add(agent.id);
       result.push({ ...(binding || { id: 'session:' + agent.id, kind: 'session' as const, workspaceId: agent.workspaceId || '', agentId: agent.id,
         cwd: agent.cwd, hostWorkspaceId: agent.workspaceId || '' }),
-        title: agent.title || (agent.provider + ' · ' + basename(agent.cwd)), provider: agent.provider, status: agent.status });
+        title: agent.title || (agent.provider + ' · ' + basename(agent.cwd)), provider: agent.provider, model: agent.runtimeInfo?.model || agent.model || undefined, status: agent.status });
     }
     if (!value.pageInfo.hasMore) break;
     cursor = value.pageInfo.nextCursor || undefined;

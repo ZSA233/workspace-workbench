@@ -15,7 +15,12 @@ export type ArchiveTopicDetail = ArchiveTopic & { messages: ArchiveMessage[]; me
 export type TopicPage = { items: ArchiveTopic[]; hasMore: boolean; next?: { beforeUpdated: number; beforeId: string } };
 export type ArchiveDirectory = { libraries: ArchiveLibrary[]; channels: ArchiveChannel[]; groups: ArchiveGroup[]; tools: ArchiveTool[] };
 export type TopicContext = { items: ArchiveMessage[]; hasBefore?: boolean; hasAfter?: boolean };
-export type TopicTarget = { id?: string; kind?: 'workspace' | 'session'; workspaceId: string; agentId: string; title?: string; provider?: string; status?: string; cwd?: string; hostWorkspaceId?: string };
+export type TopicTarget = { id?: string; kind?: 'workspace' | 'session'; workspaceId: string; agentId: string; title?: string; provider?: string; model?: string; status?: string; cwd?: string; hostWorkspaceId?: string };
+export const TOPIC_NOTE_LIMIT = 8000;
+export const topicNoteSchema = z.string().max(TOPIC_NOTE_LIMIT);
+export const topicNewSessionSchema = z.object({ provider: id, model: id });
+export type TopicNewSession = z.infer<typeof topicNewSessionSchema>;
+export type TopicModel = TopicNewSession & { label: string; isDefault: boolean };
 const messageRef = z.object({ id, version: z.string().min(1).max(512), contextOf: id.optional() });
 const assetRef = z.object({ id, messageId: id, messageVersion: z.string().min(1).max(512), contextOf: id.optional() });
 export const topicSelectionSchema = z.object({
@@ -30,6 +35,7 @@ export type TopicMaterialPreview = {
   assets: Array<{ id: string; name: string; mimeType: string; sha256: string; size: number }>;
   messageId?: string; readConfirmed: false;
   targetId?: string;
+  targetAgentId?: string; note?: string; newSession?: TopicNewSession;
 };
 export const topicActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('directory'), libraryId: id.optional() }),
@@ -40,7 +46,9 @@ export const topicActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('asset'), topicId: id, messageId: id, assetId: id, contextOf: id.optional() }),
   z.object({ action: z.literal('group.configure'), sourceId: id, channelId: id, revision: z.number().int().nonnegative(), collect: z.boolean().optional(), allowedTools: z.array(id).max(32), requestId: id }),
   z.object({ action: z.literal('targets') }),
-  z.object({ action: z.literal('preview'), workspaceId: id.optional(), targetId: id.optional(), selections: z.array(topicSelectionSchema).min(1).max(20) }),
+  z.object({ action: z.literal('models') }),
+  z.object({ action: z.literal('preview'), workspaceId: id.optional(), targetId: id.optional(), newSession: topicNewSessionSchema.optional(), note: topicNoteSchema.optional(), selections: z.array(topicSelectionSchema).min(1).max(20) })
+    .refine(value => !value.newSession || !value.workspaceId && !value.targetId, 'topic_target_conflict'),
   z.object({ action: z.enum(['send', 'receipt']), id }),
 ]);
 export type TopicAction = z.infer<typeof topicActionSchema>;

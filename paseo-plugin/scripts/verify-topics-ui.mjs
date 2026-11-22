@@ -104,11 +104,20 @@ try {
   assert.ok((await page.getByTestId('topic-row-topic-1').innerText()).includes('11-19 16:20'));
   await page.getByTestId('topic-message-message-1').click();
   await page.getByTestId('topic-basket-topic-1').getByRole('img', { name: 'image-1.png', exact: true }).waitFor();
-  await page.getByTestId('topics-preview').click();
-  const initialPreview = page.getByRole('dialog', { name: '所选材料', exact: true });
+  assert.equal(await page.getByTestId('topics-preview').count(), 0, 'the redundant eye action is removed');
+  await page.getByTestId('topics-send').click();
+  const initialPreview = page.getByTestId('topics-send-dialog');
   await initialPreview.getByRole('img', { name: 'image-1.png', exact: true }).waitFor();
   assert.equal((await initialPreview.innerText()).includes('mediaId='), false);
+  await page.getByTestId('topics-send-note').fill('本次先定位问题，不修改代码。');
   await initialPreview.getByRole('button', { name: '返回', exact: true }).click();
+  await page.getByTestId('topics-send').click();
+  assert.equal(await page.getByTestId('topics-send-note').inputValue(), '本次先定位问题，不修改代码。');
+  const frozenRoot = join(ui.project, 'state', 'extensions', 'topic-materials');
+  assert.equal(existsSync(frozenRoot) && readdirSync(frozenRoot).some(name => name.endsWith('.json')), false,
+    'opening and closing confirmation must not freeze or dispatch anything');
+  await initialPreview.getByRole('button', { name: '返回', exact: true }).click();
+  check('send opens a material confirmation with an optional per-send note; closing keeps the draft and creates no conversation or delivery');
   await page.getByTestId('topic-detail-topic-1').getByRole('button', { name: '查看上下文', exact: true }).first().click();
   const context = page.getByRole('dialog', { name: '上下文', exact: true });
   await context.getByText('这是原消息前的一条补充，只有主动选择后才交接。', { exact: true }).waitFor();
@@ -116,9 +125,12 @@ try {
   await context.getByRole('button', { name: '完成', exact: true }).click();
   check('archive titles, caption-only originals and context display cleanly; older dates are explicit and a checked message previews its image before a target is chosen');
   const nativeSession = await createPaseoApi(client).agents.create({ cwd: ui.project, config: { provider: 'codex/recovery-fixture' }, title: '档案材料验收会话' });
+  await page.getByTestId('topics-send').click();
   await page.getByTestId('topics-target').click();
   const targetPicker = page.getByRole('dialog', { name: '目标会话', exact: true });
   await targetPicker.getByRole('button', { name: '档案材料验收会话', exact: true }).click();
+  assert.ok((await initialPreview.innerText()).includes('codex · recovery-fixture'));
+  await initialPreview.getByRole('button', { name: '返回', exact: true }).click();
   await page.getByRole('button', { name: '清空材料', exact: true }).click();
   await page.getByTestId('topic-select-topic-1').click();
   await page.getByTestId('topic-basket-topic-1').waitFor();
@@ -136,11 +148,14 @@ try {
   assert.equal(await page.getByTestId('topic-detail-topic-1').getByRole('checkbox', { name: '选择 image-1.png', exact: true }).getAttribute('aria-checked'), 'false');
   await page.getByTestId('topic-detail-topic-1').getByRole('checkbox', { name: '选择 image-1.png', exact: true }).click();
   check('original text and image choices are independent and immediately reflected in source and basket');
-  await page.getByTestId('topics-preview').click();
-  const preview = page.getByRole('dialog', { name: '所选材料', exact: true });
+  await page.getByTestId('topics-send').click();
+  const preview = page.getByTestId('topics-send-dialog');
   await preview.waitFor();
   assert.ok((await preview.innerText()).includes('文件列表出现长错误提示后，目录被往下挤了。'));
   assert.equal((await preview.innerText()).includes('派生分析'), false);
+  assert.equal(await page.getByTestId('topics-send-note').inputValue(), '', 'clearing a material batch clears its note');
+  await page.getByTestId('topics-send-note').fill('先核对原始图片，再给出排查步骤。');
+  await preview.screenshot({ path: join(output, 'topics-send-confirmation.png') });
   await preview.getByRole('button', { name: '返回', exact: true }).click();
   check('preview shows exactly the chosen originals and image thumbnails, excluding optional analysis');
   await page.getByTestId('topics-settings').click();
@@ -158,6 +173,10 @@ try {
   assert.ok(await page.getByTestId('topics-send').isVisible());
   const bounds = await panel.boundingBox(), send = await page.getByTestId('topics-send').boundingBox();
   assert.ok(send.x >= bounds.x && send.x + send.width <= bounds.x + bounds.width + 1);
+  await page.getByTestId('topics-send').click();
+  await page.getByTestId('topics-send-note').fill('窄屏的本次说明仍然可以编辑。');
+  await preview.screenshot({ path: join(output, 'topics-send-confirmation-narrow.png') });
+  await preview.getByRole('button', { name: '返回', exact: true }).click();
   check('narrow viewport preserves selected materials, complete primary action and independent scrolling');
   const beforeError = await page.getByTestId('topics-basket').boundingBox();
   fixture.state.failLists = true;
@@ -183,7 +202,9 @@ try {
   // selection again must now fail instead of mixing in the new message.
   await page.getByTestId('topic-basket-topic-1').getByTestId('topic-remove-message-message-2').click();
   await page.getByTestId('topics-send').click();
-  await page.getByTestId('topics-status').getByText('话题有更新，请重新选材', { exact: true }).waitFor();
+  await page.getByTestId('topics-confirm').click();
+  await page.getByTestId('topics-send-status').getByText('话题有更新，请重新选材', { exact: true }).waitFor();
+  await preview.getByRole('button', { name: '返回', exact: true }).click();
   const footerAfter = await page.getByTestId('topics-basket').boundingBox();
   assert.equal(await page.getByText('late original must not be selected', { exact: true }).count(), 0);
   await shot('topics-c-update-notice');
@@ -191,14 +212,17 @@ try {
   await page.getByRole('button', { name: '重新读取并清除此话题选择', exact: true }).click();
   await page.getByTestId('topic-basket-topic-1').waitFor({ state: 'detached' });
   writeFileSync(join(ui.project, 'state', 'agent-bindings.json'), JSON.stringify(fixtureBindings));
+  await page.getByTestId('topics-send').click();
   await page.getByTestId('topics-target').click();
   await targetPicker.getByRole('button', { name: 'topics-dev', exact: true }).click();
-  await page.getByTestId('topics-send').click();
-  await page.getByRole('button', { name: '查回执', exact: true }).waitFor();
+  await page.getByTestId('topics-confirm').click();
+  await page.getByTestId('topics-confirm').getByText('查回执', { exact: true }).waitFor();
+  assert.equal(await page.getByTestId('topics-send-note').isEditable(), false);
   const previewsBefore = readdirSync(join(ui.project, 'state', 'extensions', 'topic-materials')).filter(name => name.endsWith('.json')).length;
-  await page.getByRole('button', { name: '查回执', exact: true }).click();
+  await page.getByTestId('topics-confirm').click();
   const previewsAfter = readdirSync(join(ui.project, 'state', 'extensions', 'topic-materials')).filter(name => name.endsWith('.json')).length;
   assert.equal(previewsBefore, previewsAfter);
+  await preview.getByRole('button', { name: '返回', exact: true }).click();
   check('an unavailable fixture worker yields uncertain receipt and queries never create another delivery');
   await page.getByTestId('topics-settings').click();
   await settings.getByRole('button', { name: '停用话题', exact: true }).click();
@@ -231,30 +255,74 @@ try {
   check('an empty followed-group scope opens actual follow settings; saving a follow restores topics and leaves service discovery policy unchanged');
   await page.getByTestId('topic-expand-topic-1').click();
   await page.getByTestId('topic-message-message-1').click();
+  await page.getByTestId('topics-send').click();
   await page.getByTestId('topics-target').click();
   await targetPicker.getByRole('button', { name: '档案材料验收会话', exact: true }).click();
-  await page.getByTestId('topics-send').click();
+  const existingNote = '请先检查截图中的布局问题，只给出排查建议。';
+  await page.getByTestId('topics-send-note').fill(existingNote);
+  await page.getByTestId('topics-confirm').click();
   await page.getByTestId('topics-send').getByText('打开会话', { exact: true }).waitFor();
-  let deliveredImage = false;
+  let deliveredImage = false, deliveredNote = false;
   for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
     const records = existsSync(ui.topicsFixtureRoot) ? readdirSync(ui.topicsFixtureRoot).filter(name => name.endsWith('.json')) : [];
     for (const name of records) {
       const record = JSON.parse(readFileSync(join(ui.topicsFixtureRoot, name), 'utf8'));
       for (const item of (record.inputs || []).flat()) {
+        if (item.type === 'text' && item.text.includes(existingNote)) deliveredNote = true;
         const bytes = item.type === 'localImage' && item.path ? readFileSync(item.path)
           : item.type === 'image' && typeof item.url === 'string' && item.url.startsWith('data:') ? Buffer.from(item.url.split(',')[1], 'base64') : undefined;
         if (bytes && createHash('sha256').update(bytes).digest('hex') === fixture.imageHash) deliveredImage = true;
       }
     }
-    if (deliveredImage) break;
+    if (deliveredImage && deliveredNote) break;
     await page.waitForTimeout(100);
   }
   assert.equal(deliveredImage, true, 'the actual isolated Paseo host must deliver original image bytes to its local protocol fixture');
+  assert.equal(deliveredNote, true, 'the host must deliver the users instructions together with the selected originals');
   await shot('topics-native-send-accepted');
   await page.getByTestId('topics-send').click();
-  await page.getByText('RECOVERY_FIXTURE_COMPLETED', { exact: true }).waitFor();
+  await page.getByText('RECOVERY_FIXTURE_COMPLETED', { exact: true }).filter({visible:true}).last().waitFor();
   assert.equal(await page.getByTestId('workbench-topics-panel').count(), 0);
   check('actual isolated Paseo sends original image bytes into an existing native session and opens that conversation; the local provider is a protocol fixture, not a model');
+  await openIsolatedWorkbench(page, ui.url, 'a');
+  await page.getByText('话题', { exact: true }).filter({ visible: true }).first().click();
+  await page.getByTestId('topic-select-topic-1').click();
+  await page.getByTestId('topics-send').click();
+  await page.getByTestId('topics-send-dialog').getByRole('button', { name: '新建会话', exact: true }).click();
+  await page.getByTestId('topics-model').getByText(/ · /).waitFor();
+  await page.getByTestId('topics-model').click();
+  await page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: 'codex · Topic analysis fixture', exact: true }).click();
+  const freshNote = '用新会话分析这组材料，先解释图片中的问题。';
+  assert.equal(await page.getByTestId('topics-send-note').inputValue(), '');
+  await page.getByTestId('topics-send-note').fill(freshNote);
+  const topicSessionCount = async () => (await createPaseoApi(client).agents.list({filter:{labels:{'workspace-workbench.role':'topic-session'}},page:{limit:100}})).entries.length;
+  assert.equal(await topicSessionCount(), 0, 'selecting a model must not create an empty conversation');
+  await page.getByTestId('topics-send-dialog').screenshot({ path: join(output, 'topics-new-session-confirmation.png') });
+  await page.getByTestId('topics-confirm').click();
+  await page.getByTestId('topics-send').getByText('打开会话', { exact: true }).waitFor();
+  assert.equal(await topicSessionCount(), 1);
+  let freshDelivery = false;
+  for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
+    for (const name of readdirSync(ui.topicsFixtureRoot).filter(name => name.endsWith('.json'))) {
+      const record = JSON.parse(readFileSync(join(ui.topicsFixtureRoot, name), 'utf8'));
+      if (record.requestedModel !== 'topic-alternate') continue;
+      const inputs = (record.inputs || []).flat();
+      const hasNote = inputs.some(item => item.type === 'text' && item.text.includes(freshNote));
+      const hasImage = inputs.some(item => {
+        const bytes = item.type === 'localImage' && item.path ? readFileSync(item.path)
+          : item.type === 'image' && item.url?.startsWith('data:') ? Buffer.from(item.url.split(',')[1], 'base64') : undefined;
+        return bytes && createHash('sha256').update(bytes).digest('hex') === fixture.imageHash;
+      });
+      if (hasNote && hasImage) freshDelivery = true;
+    }
+    if (freshDelivery) break;
+    await page.waitForTimeout(100);
+  }
+  assert.equal(freshDelivery, true, 'the chosen alternate model must receive the note and original image bytes in the newly created session');
+  await page.getByTestId('topics-send').click();
+  await page.getByText('RECOVERY_FIXTURE_COMPLETED', { exact: true }).filter({visible:true}).last().waitFor();
+  assert.equal(await page.getByTestId('workbench-topics-panel').count(), 0);
+  check('confirmation creates one new native session with the explicitly selected host model, original image bytes and per-send instructions, then opens it');
   const pdfTopic = fixture.state.topics[3], pdfMessage = pdfTopic.messages[0];
   pdfMessage.assets.push({ id: 'pdf-original', name: 'feedback.pdf', kind: 'file', mimeType: 'application/pdf', state: 'ready' });
   const currentConnection = await rpc('workspace.workbench.communications-connection', { action: 'read' });
@@ -283,7 +351,7 @@ try {
   assert.equal(report.pageErrors.length, 0, JSON.stringify(report.pageErrors));
   report.fidelity.push('same flat topic-list + bottom-basket architecture as refined C',
     'short control labels; source text remains intact', 'selected rows use the workbench blue accent and checked controls',
-    'original media is shown as thumbnails with individual selection', 'target/preview/send controls remain in the fixed footer',
+    'original media is shown as thumbnails with individual selection', 'one footer action opens material confirmation, per-send notes and existing/new session choices',
     'narrow layout keeps the toolbar compact; source and basket retain separate scrolling');
   report.ok = true;
 } catch (error) {

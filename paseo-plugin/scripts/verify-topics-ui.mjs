@@ -59,7 +59,6 @@ try {
   await rpc('workspace.workbench.communications-connection', { action: 'configure', revision: 1, connection: {
     endpoint: fixture.url, projectId: 'legacy-unused', libraryId: 'default', watchedGroups: [{ sourceId: 'dingtalk:fixture', channelId: 'feedback' }],
   }, token: fixture.token });
-  await rpc('workspace.workbench.extensions', { action: 'enable' });
   const created = await backendRequest(join(ui.project, 's.sock'), 'workspace.create', { name: 'topics-dev', repositories: ['one'] }, 30000);
   assert.ok(created.ok, JSON.stringify(created));
   writeFileSync(join(ui.project, 'state', 'agent-bindings.json'), JSON.stringify({ schemaVersion: 'workspace.workbench.agent-bindings/v2', bindings: [{
@@ -76,7 +75,15 @@ try {
   await page.getByText('话题', { exact: true }).filter({ visible: true }).first().click();
   const panel = page.getByTestId('workbench-topics-panel');
   await panel.waitFor();
+  await page.getByTestId('topics-enable').getByText('启用话题', { exact: true }).waitFor();
+  assert.equal(fixture.state.requests.some(request => /\/topics(?:[/?]|$)/.test(request.url)), false,
+    'the visible disabled entry must not read topic originals');
+  const beforeEnable = await rpc('workspace.workbench.communications-connection', { action: 'read' });
+  assert.deepEqual(beforeEnable.connection.watchedGroups, [{ sourceId: 'dingtalk:fixture', channelId: 'feedback' }]);
+  await shot('topics-disabled-entry');
+  await page.getByTestId('topics-enable').click();
   await page.getByTestId('topic-row-topic-1').waitFor();
+  check('a disabled project keeps its topic tab and followed groups; activation opens existing topics without changing scope');
   assert.equal(await panel.getByText(/DWS|模型与预算|需求台账|自动回复/).count(), 0);
   check('actual plugin renders the topics entry with no collection/model/requirements UI');
   await page.getByTestId('topic-expand-topic-1').click();
@@ -158,6 +165,35 @@ try {
   const previewsAfter = readdirSync(join(ui.project, 'state', 'extensions', 'topic-materials')).filter(name => name.endsWith('.json')).length;
   assert.equal(previewsBefore, previewsAfter);
   check('an unavailable fixture worker yields uncertain receipt and queries never create another delivery');
+  await page.getByTestId('topics-settings').click();
+  await settings.getByRole('button', { name: '停用话题', exact: true }).click();
+  await settings.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByTestId('topics-enable').waitFor();
+  assert.equal(await page.getByRole('tab', { name: '话题', exact: true }).isVisible(), true);
+  const whileDisabled = await rpc('workspace.workbench.communications-connection', { action: 'read' });
+  assert.deepEqual(whileDisabled.connection.watchedGroups, beforeEnable.connection.watchedGroups);
+  await page.getByTestId('topics-enable').click();
+  await page.getByTestId('topic-row-topic-1').waitFor();
+  check('disabling leaves the active topic tab in place; re-enabling retains the saved followed-group scope');
+
+  const discoveryBefore = JSON.stringify(fixture.state.groups);
+  await page.getByTestId('topics-settings').click();
+  const follow = settings.getByRole('checkbox', { name: '关注 产研反馈群', exact: true });
+  assert.equal(await follow.getAttribute('aria-checked'), 'true');
+  await follow.click();
+  await settings.getByRole('button', { name: '保存', exact: true }).click();
+  await settings.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByText('此项目尚未关注群', { exact: true }).waitFor();
+  await shot('topics-no-followed-groups');
+  await page.getByRole('button', { name: '选择关注群', exact: true }).first().click();
+  await follow.waitFor();
+  assert.equal(await follow.getAttribute('aria-checked'), 'false');
+  await follow.click();
+  await settings.getByRole('button', { name: '保存', exact: true }).click();
+  await settings.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByTestId('topic-row-topic-1').waitFor();
+  assert.equal(JSON.stringify(fixture.state.groups), discoveryBefore);
+  check('an empty followed-group scope opens actual follow settings; saving a follow restores topics and leaves service discovery policy unchanged');
   assert.equal(fixture.state.requests.some(request => request.url.startsWith('/v1/projects')), false);
   assert.equal(report.pageErrors.length, 0, JSON.stringify(report.pageErrors));
   report.fidelity.push('same flat topic-list + bottom-basket architecture as refined C',

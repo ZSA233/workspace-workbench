@@ -11,9 +11,40 @@ import { selectedAssets } from '../../topic-selection';
 import { TopicRow } from './topic-row';
 import { TopicMaterialBasket } from './topic-basket';
 
-export function TopicsPanel({ client, width, onSettings, workspaceNames, currentWorkspaceId }: {
+type TopicsPanelProps = {
   client: TopicsClient; width: number; onSettings(): void; workspaceNames: Record<string, string>; currentWorkspaceId?: string;
-}) {
+};
+
+export function TopicsPanel(props: TopicsPanelProps) {
+  const c = useColors(), { client, onSettings } = props;
+  const [error, setError] = useState(''), [statusOpen, setStatusOpen] = useState(false);
+  // Navigation stays available in every project; activation only gates data and delivery.
+  if (client.enabled) return <ActiveTopicsPanel {...props} />;
+  const failure = error || client.error;
+  return <View testID="workbench-topics-panel" style={{ flex: 1, minHeight: 0, backgroundColor: c.surface1 }}>
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 12 }}>
+      {!client.state && !failure ? <ActivityIndicator color={c.accent} /> : <>
+        <Icon name="Layers" size={28} color={c.foregroundMuted} />
+        <Label muted>此项目尚未启用话题</Label>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Button id="topics-enable" variant="primary" icon={client.connection?.hasToken ? 'Power' : 'Link'}
+            disabled={client.changing} onPress={() => {
+              if (!client.connection?.hasToken) { onSettings(); return; }
+              setError('');
+              void client.setEnabled(true).catch(failure => setError(failure instanceof Error ? failure.message : String(failure)));
+            }}>{client.connection?.hasToken ? '启用话题' : '连接 AI 助手'}</Button>
+          {client.connection?.hasToken ? <TopicIcon icon="Settings" label="关注设置" onPress={onSettings} /> : null}
+        </View>
+      </>}
+    </View>
+    <TopicStatus error={failure} state="" onDetails={() => { if (failure) setStatusOpen(true); }} />
+    {statusOpen ? <Dialog title="话题状态" onClose={() => setStatusOpen(false)} width={600} height={360}>
+      <ScrollView contentContainerStyle={{ padding: 18 }}><Label>{failure}</Label></ScrollView>
+    </Dialog> : null}
+  </View>;
+}
+
+function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentWorkspaceId }: TopicsPanelProps) {
   const c = useColors(), cache = useQueryClient(), narrow = width > 0 && width < 580;
   const [query, setQuery] = useState(''), [group, setGroup] = useState<WatchedGroup>();
   const [expanded, setExpanded] = useState<Set<string>>(new Set()), [basket, setBasket] = useState<TopicBasket>({});
@@ -44,7 +75,7 @@ export function TopicsPanel({ client, width, onSettings, workspaceNames, current
   for (const item of list.data?.pages.flatMap(page => page.items) || []) if (!indexed.has(item.id)) indexed.set(item.id, item);
   const items = [...indexed.values()], counts = basketCounts(basket);
   const watched = client.connection?.connection.watchedGroups || [];
-  const channels = (client.directory?.channels || []).filter(channel => !watched.length || watched.some(value => groupKey(value) === groupKey(channel)));
+  const channels = (client.directory?.channels || []).filter(channel => watched.some(value => groupKey(value) === groupKey(channel)));
   const groupName = (value: WatchedGroup) => client.directory?.channels.find(channel => groupKey(channel) === groupKey(value))?.name
     || client.directory?.groups.find(item => groupKey(item) === groupKey(value))?.name || value.channelId;
   const edit = (change: (current: TopicBasket) => TopicBasket) => {
@@ -90,7 +121,8 @@ export function TopicsPanel({ client, width, onSettings, workspaceNames, current
   return <View testID="workbench-topics-panel" style={{ flex: 1, minHeight: 0, backgroundColor: c.surface1 }}>
     <View style={{ padding: 10, gap: 6, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: c.border }}>
       <View style={{ flex: 1, minWidth: 80 }}><Search value={query} onChange={setQuery} placeholder="搜索话题" /></View>
-      <Button icon="Users" label={group ? groupName(group) : '全部关注群'} onPress={() => setPicker('group')}>{width > 0 && width < 430 ? undefined : group ? groupName(group).slice(0, 12) : '全部关注群'}</Button>
+      <Button icon="Users" label={!watched.length ? '选择关注群' : group ? groupName(group) : '全部关注群'}
+        onPress={() => watched.length ? setPicker('group') : onSettings()}>{width > 0 && width < 430 ? undefined : !watched.length ? '选择关注群' : group ? groupName(group).slice(0, 12) : '全部关注群'}</Button>
       <TopicIcon id="topics-refresh" icon="RefreshCw" label="刷新话题" busy={list.isFetching} onPress={() => ignoreFailure(client.refresh())} />
       <TopicIcon id="topics-settings" icon="Settings" label="关注设置" onPress={onSettings} />
     </View>
@@ -103,8 +135,9 @@ export function TopicsPanel({ client, width, onSettings, workspaceNames, current
     <ScrollView testID="topics-list" style={{ flex: 1, minHeight: 70 }}>
       {list.isLoading ? <ActivityIndicator style={{ padding: 20 }} /> : null}
       {!list.isLoading && !items.length ? <View style={{ alignItems: 'center', padding: 30, gap: 10 }}>
-        <Icon name="Layers" size={28} color={c.foregroundMuted} /><Label muted>{query ? '没有匹配话题' : '暂无话题'}</Label>
+        <Icon name="Layers" size={28} color={c.foregroundMuted} /><Label muted>{query ? '没有匹配话题' : !watched.length ? '此项目尚未关注群' : '暂无话题'}</Label>
         {!client.connection?.hasToken ? <Button onPress={onSettings}>连接 AI 助手</Button> : null}
+        {client.connection?.hasToken && !watched.length ? <Button onPress={onSettings}>选择关注群</Button> : null}
       </View> : null}
       {items.map(topic => <TopicRow key={topic.id} {...{ topic, client, narrow, busy }} groupName={groupName(topic)}
         selected={basket[topic.id]} expanded={expanded.has(topic.id)} loading={loading.has(topic.id)}

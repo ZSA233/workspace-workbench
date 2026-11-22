@@ -4,9 +4,7 @@ import type { ReviewArtifactReference } from '../shared/review-packet.ts';
 import type { TopicModel, TopicNewSession } from '../shared/extensions/project-communications/topics.ts';
 import type { TopicSessionIdentity } from './topic-targets.ts';
 import { digest } from './orchestration-state.ts';
-import { withProject } from './projects.ts';
-import { resolveArtifactReference, resolvedArtifactImageAttachments, storedArtifactFileAttachment } from './artifacts.ts';
-import { assertTopicSession } from './topic-targets.ts';
+import { assertTopicSession, deliverTopicSession, topicMessageId } from './topic-targets.ts';
 
 export async function topicModels(route: ProjectRoute, context: AgentContext): Promise<TopicModel[]> {
   const available = await context.paseo.providers.listAvailable();
@@ -41,29 +39,27 @@ const labels = (route: ProjectRoute, id: string) => ({ 'workspace-workbench.role
 const messageId = (id: string) => digest({ kind: 'archive-topic-new-session', id });
 
 export async function createTopicSession(route: ProjectRoute, context: AgentContext,
-  value: { id: string; text: string; dispatchText?: string; references: ReviewArtifactReference[]; newSession: TopicNewSession; topics: Array<{title: string}> }, beforeCreate: () => void) {
+  value: { id: string; text: string; dispatchText?: string; references: ReviewArtifactReference[]; newSession: TopicNewSession }, beforeCreate: () => void,
+  recordCreated: (session:TopicSessionIdentity,messageId:string)=>void) {
   await assertTopicModel(route, context, value.newSession);
-  return withProject({ projectConfig: route.configPath }, async () => {
-    const assets = value.references.map(reference => resolveArtifactReference(reference, { repositories: [] }));
     beforeCreate();
-    // The durable material claim precedes this single create-and-prompt call.
-    // Labels also allow old hosts to reconcile a lost creation acknowledgement.
+    // Create an empty native session, journal its identity, then use the same
+    // ordinary image-message path as existing sessions. Never replay either phase.
     const handle = await context.paseo.agents.create({ cwd: route.sourceRoot,
-      idempotencyKey: 'archive-topic:' + value.id, clientMessageId: messageId(value.id),
-      title: value.topics[0]?.title.slice(0, 80) || '话题分析', labels: labels(route, value.id),
+      idempotencyKey: 'archive-topic:' + value.id,
+      title: (value.text.split('\n').find(line=>line.trim())?.trim() || (value.references.some(item=>item.mimeType?.startsWith('image/'))?'图片讨论':'材料讨论')).slice(0,80),
+      labels: labels(route, value.id),
       config: { provider: value.newSession.provider + '/' + value.newSession.model },
-      prompt: value.dispatchText || value.text, images: resolvedArtifactImageAttachments(assets),
-      attachments: assets.filter(asset => !asset.mimeType.startsWith('image/')).map(asset => storedArtifactFileAttachment(asset.assetId)),
     });
     const agent = (await handle.refresh())?.agent;
     if (!agent || agent.id !== handle.id || agent.cwd !== route.sourceRoot || Object.entries(labels(route, value.id)).some(([key, value]) => agent.labels?.[key] !== value)) throw Error('topic_target_changed');
     const session = { agentId: agent.id, cwd: agent.cwd, hostWorkspaceId: agent.workspaceId || '' };
     await assertTopicSession(route, context, session);
-    return { delivery: 'accepted', messageId: messageId(value.id), session };
-  });
+    recordCreated(session,topicMessageId(value.id,session));
+    return {...await deliverTopicSession(route,context,session,value,beforeCreate),session};
 }
 
-export async function newTopicSessionReceipt(route: ProjectRoute, context: AgentContext, value: { id: string; session?: TopicSessionIdentity }) {
+export async function newTopicSessionReceipt(route: ProjectRoute, context: AgentContext, value: { id: string; session?: TopicSessionIdentity; messageId?:string }) {
   let session = value.session;
   if (!session) {
     const page = await context.paseo.agents.list({ filter: { includeArchived: false, labels: labels(route, value.id) }, page: { limit: 2 } });
@@ -76,7 +72,7 @@ export async function newTopicSessionReceipt(route: ProjectRoute, context: Agent
   }
   await assertTopicSession(route, context, session);
   const page = await context.paseo.agents.ref(session.agentId).timeline.refetch({ limit: 100 });
-  const expected = messageId(value.id), accepted = !page.error && page.entries.some(entry => entry.item.type === 'user_message'
+  const expected = value.messageId || messageId(value.id), accepted = !page.error && page.entries.some(entry => entry.item.type === 'user_message'
     && (entry.item.messageId === expected || entry.item.clientMessageId === expected));
   return { delivery: accepted ? 'accepted' : 'uncertain', messageId: expected, session };
 }

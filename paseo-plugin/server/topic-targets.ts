@@ -10,6 +10,7 @@ import { withProject } from './projects.ts';
 import { actualPlanningState } from './execution-policy.ts';
 import { digest } from './orchestration-state.ts';
 import { resolveArtifactReference, resolvedArtifactImageAttachments, storedArtifactFileAttachment } from './artifacts.ts';
+import { appendTopicImages } from './topic-chat-media.ts';
 
 export type TopicSessionIdentity = { agentId: string; cwd: string; hostWorkspaceId: string };
 function inside(root: string, path: string) {
@@ -55,13 +56,16 @@ export async function assertTopicSession(route: ProjectRoute, context: AgentCont
   return { agent, planningState: actualPlanningState(agent) };
 }
 
-function messageId(id: string, target: TopicSessionIdentity) { return digest({ kind: 'archive-topic-session', id, agentId: target.agentId }); }
+export function topicMessageId(id: string, target: TopicSessionIdentity) { return digest({ kind: 'archive-topic-session', id, agentId: target.agentId }); }
 export async function deliverTopicSession(route: ProjectRoute, context: AgentContext, target: TopicSessionIdentity,
   value: { id: string; text: string; dispatchText?: string; references: ReviewArtifactReference[] }, beforeSend?: () => void) {
   return withProject({ projectConfig: route.configPath }, async () => {
     await assertTopicSession(route, context, target);
     const assets = value.references.map(reference => resolveArtifactReference(reference, { repositories: [] }));
-    const id = messageId(value.id, target);
+    const id = topicMessageId(value.id, target);
+    beforeSend?.();
+    await appendTopicImages(route,context,target.agentId,value);
+    await assertTopicSession(route,context,target);
     beforeSend?.();
     try {
       // Sending a supplement preserves the session's current planning/permission mode.
@@ -75,7 +79,7 @@ export async function deliverTopicSession(route: ProjectRoute, context: AgentCon
 
 export async function topicSessionReceipt(route: ProjectRoute, context: AgentContext, target: TopicSessionIdentity, id: string) {
   await assertTopicSession(route, context, target);
-  const expected = messageId(id, target);
+  const expected = topicMessageId(id, target);
   const page = await context.paseo.agents.ref(target.agentId).timeline.refetch({ limit: 100 });
   const accepted = !page.error && page.entries.some(entry => entry.item.type === 'user_message'
     && (entry.item.messageId === expected || entry.item.clientMessageId === expected));

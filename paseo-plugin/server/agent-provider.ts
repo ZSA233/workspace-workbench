@@ -47,7 +47,7 @@ type RuntimeResult = {
   };
 };
 
-export type AgentContext = { paseo: PaseoApi; query?: typeof queryObserver; exportHistory?: (agentId: string) => Promise<{ attachment: { type: string; text?: string } | null; itemCount: number }> };
+export type AgentContext = { paseo: PaseoApi; pluginPaseo?: PaseoApi; query?: typeof queryObserver; exportHistory?: (agentId: string) => Promise<{ attachment: { type: string; text?: string } | null; itemCount: number }> };
 
 function samePath(left: string | null | undefined, right: string | null | undefined): boolean {
   if (!left || !right) return false;

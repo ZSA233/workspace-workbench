@@ -5,6 +5,8 @@ import {handleChangeNotes} from './server/change-notes';
 import { creationSource } from './server/workspace-creator';
 import { defineRpc } from "@getpaseo/plugin";
 import { archiveTopicsRpc, archiveTopicsDeliveryRpc } from './shared/extensions/project-communications/topics.ts';
+import { topicChatMediaRpc } from './shared/topic-chat-media-rpc.ts';
+import { readTopicChatMedia } from './server/topic-chat-media.ts';
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import { handleHandoffMaterials } from "./server/handoff-access";
@@ -46,7 +48,7 @@ import { defaultMcpGatewayEntry,McpGatewayManager,setMcpGateway } from "./server
 import { closeObserverBridge,handleObserver,observerQuery } from "./server/observer";
 import { digest } from "./server/orchestration-state";
 import { orchestrate } from "./server/orchestrator";
-import { registeredProjects,withProject } from "./server/projects";
+import { registeredProjects,resolveProject,withProject } from "./server/projects";
 import { handleProjectBackendStart,handleProjectBackendStatus,handleProjectRuntimeSettingsGet,handleProjectRuntimeSettingsUpdate,handleProjectSetupSave,handleProjectSetupScan,handleProjectStorage } from "./server/setup";
 import { handleWorkspaceLifecycle } from "./server/workspace-lifecycle";
 import { agentDelegate,agentStatusQuery } from "./shared/agent";
@@ -109,7 +111,7 @@ export default function contribute(server: PluginServerContext) {
   const withHost: PluginServerContext = {
     ...measured,
     handle: (contract, handler) => measured.handle(contract, (input, context) => host.run(
-      (paseo, client) => handler(input, Object.assign({}, context, { paseo, exportHistory: async (agentId: string) => {
+      (paseo, client) => handler(input, Object.assign({}, context, { paseo, pluginPaseo: context.paseo, exportHistory: async (agentId: string) => {
         if (!client.buildAgentForkContext) throw new Error("handoff_history_unavailable: Host history export is unavailable");
         try { return await client.buildAgentForkContext(agentId); }
         catch (error) {
@@ -151,6 +153,7 @@ export default function contribute(server: PluginServerContext) {
   measured.handle(extensionsRpc, input => input.action === 'status' ? extensions.state(input.projectConfig,input.extensionId) : extensions.setEnabled(input.projectConfig,input.extensionId,input.action==='enable'));
   measured.handle(communicationsRpc, input => extensions.request(input.projectConfig,input.extensionId,input.request));
   measured.handle(archiveTopicsRpc,input=>extensions.topics(input.projectConfig,input.extensionId,input.connectionRevision,input.request));
+  measured.handle(topicChatMediaRpc,input=>readTopicChatMedia(resolveProject(input),input));
   withHost.handle(archiveTopicsDeliveryRpc,(input,context)=>extensions.topics(input.projectConfig,input.extensionId,input.connectionRevision,input.request,context));
   // Delivery alone needs the host connection. Other extension operations remain usable while it reconnects.
   withHost.handle(communicationsDeliveryRpc,(input,context)=>extensions.request(input.projectConfig,input.extensionId,input.request,context));

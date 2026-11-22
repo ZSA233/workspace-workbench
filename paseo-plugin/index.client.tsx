@@ -1,7 +1,7 @@
 import {configureDocumentOpener,clearDocuments,openDocument} from "./client/document-store";
-import type { PluginAgentPanelProps, PluginClientContext, PluginSurfaceProps, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
-import { Platform, Text, View } from "react-native";
-import { useEffect, useSyncExternalStore } from "react";
+import type { PluginAgentPanelProps, PluginClientContext, PluginSurfaceProps, PluginWorkspacePanelProps, PluginTimelineItemProps } from "@getpaseo/plugin/client";
+import { ActivityIndicator, Platform, Text, View } from "react-native";
+import { useEffect, useState, useSyncExternalStore, type ComponentType } from "react";
 import { contextSurfacePrefix, createOpenGuard, workbenchDestination } from "./client/open-workbench";
 
 import { clearFileReviews, configureFileReviewOpener, openFileReview } from "./client/file-review-store";
@@ -16,8 +16,17 @@ import { createDiagnosticSender } from "./client/diagnostic-sender";
 import { createAndroidWorkspaceContext } from "./client/android-workspace-context";
 import { observeDesktopWorkspaceContext, type DesktopWorkspaceDirectoryApi } from "./client/desktop-workspace-context";
 import { workspaceDirectorySnapshot } from "./client/workspace-directory";
+import {topicChatMediaKind,topicChatMediaSchema,type TopicChatMedia} from './shared/topic-chat-media';
 
 const observerSurfaceId = "workbench";
+const loadTopicChatImages=()=>import('./client/topic-chat-media');
+function TopicChatImageEntry(props:PluginTimelineItemProps<TopicChatMedia>){
+  const [Component,setComponent]=useState<ComponentType<typeof props>>(),[failed,setFailed]=useState(false);
+  useEffect(()=>{let active=true;void loadTopicChatImages().then(module=>{if(active)setComponent(()=>module.TopicChatImages);})
+    .catch(()=>{if(active)setFailed(true);});return ()=>{active=false;};},[]);
+  return Component?<Component {...props}/>:<View style={{alignSelf:'flex-end',width:180,height:120,justifyContent:'center',alignItems:'center'}}>
+    {failed?<Text style={{color:props.theme.colors.foregroundMuted,fontSize:12}}>图片暂不可用</Text>:<ActivityIndicator color={props.theme.colors.foregroundMuted}/>}</View>;
+}
 
 // Paseo 0.8 exposes workspace actions on the injected API. Older desktop
 // shells can still evaluate a plugin bundle before they enforce the manifest
@@ -55,6 +64,8 @@ export default function contribute(client: PluginClientContext) {
 }
 
 function contributeClient(client: PluginClientContext, scope: RegistrationScope, platform: string) {
+  if(typeof client.addTimelineRenderer==='function')scope.optional('topic-chat-images',()=>client.addTimelineRenderer({kind:topicChatMediaKind,version:1,schema:topicChatMediaSchema,
+    Component:TopicChatImageEntry}));
   const workspaceApi = ((client as unknown as { paseo?: { workspaces?: WorkspaceApiCompatibility } }).paseo)?.workspaces;
   const androidContext = platform === "android" ? createAndroidWorkspaceContext(workspaceApi) : null;
   if (androidContext) scope.own("android-workspace-context", androidContext.close);

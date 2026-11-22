@@ -15,6 +15,7 @@ import { ArchiveTopics } from './archive-topics.ts';
 import { TopicMaterials } from './topic-materials.ts';
 import { assertTopicSession, deliverTopicSession, topicSessionReceipt, topicTargets } from './topic-targets.ts';
 import { assertTopicModel, createTopicSession, newTopicSessionReceipt, topicModels } from './topic-sessions.ts';
+import { appendTopicImages } from './topic-chat-media.ts';
 import type { TopicAction } from '../shared/extensions/project-communications/topics.ts';
 
 type Settings={version:number;enabled:Record<string,boolean>;connections?:Record<string,{revision:number;config:ServiceConnection}>;[key:string]:unknown};
@@ -104,13 +105,21 @@ export class WorkbenchExtensions {
         if(preview.newSession){
           if(request.action==='send'&&preview.state==='preview')await assertTopicModel(route,context,preview.newSession);
           current();
+          if(request.action==='receipt'&&preview.state==='accepted'&&preview.session){
+            await assertTopicSession(route,context,preview.session);
+            await appendTopicImages(route,context,preview.session.agentId,preview);
+          }
           return request.action==='receipt'
             ? materials.receipt(request.id,preview.agentId,value=>newTopicSessionReceipt(route,context,value))
-            : materials.send(request.id,preview.agentId,value=>createTopicSession(route,context,{...value,newSession:preview.newSession!},current));
+            : materials.send(request.id,preview.agentId,value=>createTopicSession(route,context,{...value,newSession:preview.newSession!},current,(session,messageId)=>{
+              materials.recordSession(value.id,session,messageId);
+              Object.assign(value,{session,messageId,targetAgentId:session.agentId,workspaceId:session.hostWorkspaceId});
+            }));
         }
         if(preview.session){
           await assertTopicSession(route,context,preview.session);
           current();
+          if(request.action==='receipt'&&preview.state==='accepted')await appendTopicImages(route,context,preview.session.agentId,preview);
           return request.action==='receipt'
             ? materials.receipt(request.id,preview.session.agentId,value=>topicSessionReceipt(route,context,preview.session!,value.id))
             : materials.send(request.id,preview.session.agentId,value=>deliverTopicSession(route,context,preview.session!,value,current));
@@ -120,7 +129,10 @@ export class WorkbenchExtensions {
         if(request.action==='receipt')return materials.receipt(request.id,target.agentId,value=>withProject({projectConfig},()=>handleSessionOperation({projectConfig,workspaceId:value.workspaceId,action:'receipt',requestId:'archive-topic:'+value.id,attachments:[],behavior:'steer',limit:20,timeoutMs:0},context)) as Promise<{delivery:string;messageId?:string}>);
         const host=createExtensionHost(route,context);
         if(this.closed||this.connectionSettings(route,id).revision!==revision||!this.settings(route).enabled[id])throw Error('project_connection_changed');
-        return materials.send(request.id,target.agentId,value=>host.deliver({workspaceId:value.workspaceId,requestId:'archive-topic:'+value.id,text:value.dispatchText||value.text,attachments:value.references}));
+        return materials.send(request.id,target.agentId,async value=>{
+          await appendTopicImages(route,context,target.agentId,value); current();
+          return host.deliver({workspaceId:value.workspaceId,requestId:'archive-topic:'+value.id,text:value.dispatchText||value.text||'请查看图片。',attachments:value.references});
+        });
       }
     }
   }

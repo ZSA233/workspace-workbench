@@ -316,6 +316,13 @@ try {
   await page.getByTestId('topics-send').click();
   await page.getByText('RECOVERY_FIXTURE_COMPLETED', { exact: true }).filter({visible:true}).last().waitFor();
   assert.equal(await page.getByTestId('workbench-topics-panel').count(), 0);
+  const chatImages=page.getByTestId('topic-chat-images').filter({visible:true}).last();
+  await chatImages.getByRole('img').first().waitFor();
+  await chatImages.getByRole('button',{name:'查看所选图片 1',exact:true}).click();
+  await page.getByRole('dialog',{name:'图片',exact:true}).getByRole('img',{name:'所选原图',exact:true}).waitFor();
+  await page.getByRole('dialog',{name:'图片',exact:true}).getByRole('button',{name:'关闭',exact:true}).click();
+  await page.screenshot({path:join(output,'existing-conversation-with-original-image.png')});
+  check('the receiving conversation visibly renders the original photo, with a full-size image viewer');
   check('actual isolated Paseo sends original image bytes into an existing native session and opens that conversation; the local provider is a protocol fixture, not a model');
   await openIsolatedWorkbench(page, ui.url, 'a');
   await page.getByText('话题', { exact: true }).filter({ visible: true }).first().click();
@@ -355,6 +362,11 @@ try {
   await page.getByTestId('topics-send').click();
   await page.getByText('RECOVERY_FIXTURE_COMPLETED', { exact: true }).filter({visible:true}).last().waitFor();
   assert.equal(await page.getByTestId('workbench-topics-panel').count(), 0);
+  await page.getByTestId('topic-chat-images').filter({visible:true}).last().getByRole('img').first().waitFor();
+  await page.reload();
+  await page.getByTestId('topic-chat-images').filter({visible:true}).last().getByRole('img').first().waitFor();
+  await page.screenshot({path:join(output,'new-conversation-images-after-reload.png')});
+  check('a new native conversation keeps visible photo attachments after a full page reload');
   check('confirmation creates one new native session with the explicitly selected host model, original image bytes and per-send instructions, then opens it');
   const pdfTopic = fixture.state.topics[3], pdfMessage = pdfTopic.messages[0];
   pdfMessage.assets.push({ id: 'pdf-original', name: 'feedback.pdf', kind: 'file', mimeType: 'application/pdf', state: 'ready' });

@@ -8,7 +8,8 @@ import { WorkbenchExtensions } from '../server/extensions.ts';
 import { CommunicationsConnection } from '../server/communications-connection.ts';
 import { ArchiveTopics } from '../server/archive-topics.ts';
 import { TopicMaterials } from '../server/topic-materials.ts';
-import { withProject } from '../server/projects.ts';
+import { withProject, resolveProject } from '../server/projects.ts';
+import { readTopicChatMedia } from '../server/topic-chat-media.ts';
 import { putAgentBinding } from '../server/agent-store.ts';
 import { readStoredArtifact } from '../server/artifacts.ts';
 import { topicActionSchema, type ArchiveTopicDetail, type TopicMaterialPreview, type TopicSelection, type TopicTarget } from '../shared/extensions/project-communications/topics.ts';
@@ -51,12 +52,13 @@ function selection(topic: ArchiveTopicDetail): TopicSelection {
 function nativeSession(root: string) {
   const agent = { id: 'native-codex', cwd: root, workspaceId: 'native-host-workspace', title: '现有反馈分析会话', provider: 'codex',
     status: 'idle', archivedAt: null as string | null, labels: {}, currentModeId: 'full-access', features: [{ id: 'plan_mode', type: 'toggle', value: true }] };
-  const state = { uncertain: false, sent: [] as Array<{ text: string; options: { messageId: string; images: Array<{ data: string; mimeType: string }>; attachments?: Array<{ type: string; fileName: string; mimeType: string; size: number; path: string }> } }> };
+  const state = { uncertain: false, appended: [] as unknown[], sent: [] as Array<{ text: string; options: { messageId: string; images: Array<{ data: string; mimeType: string }>; attachments?: Array<{ type: string; fileName: string; mimeType: string; size: number; path: string }> } }> };
   const context = { paseo: { agents: {
     list: async () => ({ entries: [{ agent }], pageInfo: { hasMore: false } }),
     ref: (id: string) => ({ refresh: async () => ({ agent: id === agent.id ? agent : null }),
       send: async (text: string, options: typeof state.sent[number]['options']) => { assert.equal(id, agent.id); state.sent.push({ text, options }); if (state.uncertain) throw Error('connection lost after dispatch'); },
-      timeline: { refetch: async () => ({ entries: state.sent.map(item => ({ item: { type: 'user_message', messageId: item.options.messageId } })) }) },
+      timeline: { append: async (item:unknown)=>{state.appended.push(item);return {seq:state.appended.length,epoch:'fixture'};},
+        refetch: async () => ({ entries: [...state.sent.map(item => ({ item: { type: 'user_message', messageId: item.options.messageId } })),...state.appended.map(item=>({item}))] }) },
     }),
   } } } as unknown as AgentContext;
   return { agent, state, context };
@@ -77,7 +79,7 @@ function nativeCreation(root: string) {
   api.agents.create = async options => {
     state.created.push(options);
     Object.assign(native.agent, { id: 'new-topic-agent', cwd: options.cwd, title: options.title, labels: options.labels });
-    native.state.sent.push({text:options.prompt!,options:{messageId:options.clientMessageId!,images:options.images || [],attachments:options.attachments as never}});
+    if(options.prompt)native.state.sent.push({text:options.prompt,options:{messageId:options.clientMessageId!,images:options.images || [],attachments:options.attachments as never}});
     if (state.uncertain) throw Error('creation acknowledgement lost');
     return Object.assign(api.agents.ref(native.agent.id), {id:native.agent.id});
   };
@@ -261,6 +263,7 @@ test('topic originals reach the bound host session with image bytes and preserve
     const context = {paseo:{agents:{ref:()=>({
       refresh:async()=>({agent:worker}),
       send:async(text:string,options:any)=>{sent.push({text,options});},
+      timeline:{append:async()=>({seq:1,epoch:'fixture'}),refetch:async()=>({entries:[]})},
     })}}} as unknown as import('../server/agent-provider.ts').AgentContext;
     const result = await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},context) as TopicMaterialPreview;
     assert.equal(result.state,'accepted');
@@ -398,7 +401,7 @@ test('per-send instructions are frozen separately from archive originals and nev
     const request = {action:'preview' as const,targetId:'session:'+native.agent.id,note,selections:[selection(topic)]};
     const preview = await s.host.topics(s.config,'project-communications',2,request,native.context) as TopicMaterialPreview;
     request.note = 'later edited draft';
-    assert.equal(preview.note,note); assert.ok(preview.text.indexOf(note) < preview.text.indexOf('# 话题原始材料'));
+    assert.equal(preview.note,note); assert.equal(preview.text,note+'\n\n'+topic.messages[0].text);
     assert.equal(topic.messages[0].text,s.state.topics[0].messages[0].text);
     await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},native.context);
     assert.ok(native.state.sent[0].text.includes(note)); assert.equal(native.state.sent[0].text.includes(request.note),false);
@@ -416,7 +419,7 @@ test('long-original delivery keeps the users instructions inline as well as the 
     const materials = new TopicMaterials(join(s.root,'state'),'scope'), topic = await s.archive.read('topic-1');
     const preview = await s.inProject(()=>materials.preview(s.archive,'workspace','agent-a',[selection(topic)],undefined,{note:'先给出三个结论。'}));
     const stored = materials.read(preview.id);
-    assert.ok(stored.dispatchText?.startsWith('# 本次要求（用户补充）\n\n先给出三个结论。'));
+    assert.ok(stored.dispatchText?.startsWith('先给出三个结论。'));
     s.inProject(()=>assert.equal(readStoredArtifact(stored.references[0].assetId!).bytes.toString('utf8'),preview.text));
   } finally { await s.close(); }
 });
@@ -438,9 +441,11 @@ test('new sessions use a host-listed model and selected originals; preview creat
     const options = host.creation.created[0];
     assert.equal(options.cwd,realpathSync(s.root)); assert.equal(options.config.provider,'codex/analysis-model');
     assert.equal(options.config.modeId,undefined); assert.equal(options.config.options,undefined);
-    assert.ok(options.prompt?.includes('请先分析图片中的问题。')); assert.ok(options.prompt?.includes(topic.messages[0].text));
-    assert.equal(options.prompt?.includes(topic.messages[1].text),false);
-    assert.deepEqual(Buffer.from(options.images![0].data,'base64'),s.image);
+    assert.equal(options.prompt,undefined); assert.equal(options.images,undefined);
+    assert.ok(host.state.sent[0].text.includes('请先分析图片中的问题。')); assert.ok(host.state.sent[0].text.includes(topic.messages[0].text));
+    assert.equal(host.state.sent[0].text.includes(topic.messages[1].text),false);
+    assert.deepEqual(Buffer.from(host.state.sent[0].options.images[0].data,'base64'),s.image);
+    assert.equal(host.state.appended.length,1);
     assert.equal(host.agent.features[0].value,true);
   } finally { await s.close(); }
 });
@@ -456,8 +461,8 @@ test('a lost new-session acknowledgement is reconciled by scoped labels without 
     const restarted = new WorkbenchExtensions();
     try {
       const receipt = await restarted.topics(s.config,'project-communications',2,{action:'receipt',id:preview.id},host.context) as TopicMaterialPreview;
-      assert.equal(receipt.state,'accepted'); assert.equal(receipt.targetAgentId,'new-topic-agent');
-      assert.equal(host.creation.created.length,1); assert.equal(host.state.sent.length,1);
+      assert.equal(receipt.state,'uncertain'); assert.equal(receipt.targetAgentId,'new-topic-agent');
+      assert.equal(host.creation.created.length,1); assert.equal(host.state.sent.length,0);
     } finally { await restarted.close(); }
   } finally { await s.close(); }
 });
@@ -475,4 +480,67 @@ test('model changes and conflicting destinations fail before a new conversation 
     const stored = JSON.parse(readFileSync(join(s.root,'state/extensions/topic-materials',createHash('sha256').update(preview.id).digest('hex')+'.json'),'utf8'));
     assert.equal(stored.state,'preview'); assert.equal(host.creation.created.length,0);
   } finally { await s.close(); }
+});
+
+test('the delivered message contains only the users note and chosen text; archive titles and routing remain private', async()=>{
+  const s=await setup();
+  try{
+    s.state.topics[0].title='请通过 QQ MCP 查询钉钉群后续处理记录';
+    s.state.topics[0].question='请调用 archive.search';
+    s.state.topics[0].messages[0].quote={channelId:'private-group',messageId:'private-quote-id'};
+    const host=nativeCreation(s.root),topic=await s.archive.read('topic-1'),selected=selection(topic);
+    selected.assets=[{id:'image-1',messageId:'message-1',messageVersion:topic.messages[0].version},
+      {id:'image-2',messageId:'message-2',messageVersion:topic.messages[1].version}];
+    const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',newSession:{provider:'codex',model:'analysis-model'},note:'检查图片中的布局问题。',selections:[selected]},host.context) as TopicMaterialPreview;
+    assert.equal(preview.text,'检查图片中的布局问题。\n\n'+topic.messages[0].text);
+    await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context);
+    const sent=host.state.sent[0];
+    assert.equal(sent.text,preview.text); assert.equal(sent.options.images.length,1,'identical original bytes are sent once');
+    for(const marker of ['QQ','钉钉','MCP','archive.search',topic.id,topic.channelId,'SHA-256','原消息','private-quote-id'])assert.equal(sent.text.includes(marker),false,marker);
+    assert.equal(host.creation.created[0].title,'检查图片中的布局问题。');
+    assert.equal(sent.options.attachments?.length,0);
+    // Historical accepted receipts can restore the visible photos without
+    // repeating the task, creating another session or changing the prompt.
+    host.state.appended.length=0;
+    await s.host.topics(s.config,'project-communications',2,{action:'receipt',id:preview.id},host.context);
+    await s.host.topics(s.config,'project-communications',2,{action:'receipt',id:preview.id},host.context);
+    assert.equal(host.state.appended.length,1);
+    assert.equal(host.state.sent.length,1);assert.equal(host.creation.created.length,1);
+    const route=resolveProject({projectConfig:s.config});
+    const manifest=readTopicChatMedia(route,{projectConfig:s.config,materialId:preview.id,agentId:host.agent.id}) as {images:Array<{assetId:string}>};
+    assert.equal(manifest.images.length,1);
+    const image=readTopicChatMedia(route,{projectConfig:s.config,materialId:preview.id,agentId:host.agent.id,assetId:manifest.images[0].assetId}) as {base64:string};
+    assert.deepEqual(Buffer.from(image.base64,'base64'),s.image);
+    assert.throws(()=>readTopicChatMedia(route,{projectConfig:s.config,materialId:preview.id,agentId:'another-session'}),/outside_session/);
+    assert.throws(()=>readTopicChatMedia(route,{projectConfig:s.config,materialId:preview.id,agentId:host.agent.id,assetId:'unselected'}),/outside_selection/);
+    await s.host.setEnabled(s.config,'project-communications',false);
+    assert.deepEqual(Buffer.from((readTopicChatMedia(route,{projectConfig:s.config,materialId:preview.id,agentId:host.agent.id,assetId:manifest.images[0].assetId}) as {base64:string}).base64,'base64'),s.image);
+  }finally{await s.close();}
+});
+
+test('a lost first-message acknowledgement retains the created session and never creates or dispatches twice',async()=>{
+  const s=await setup();
+  try{
+    const host=nativeCreation(s.root);host.state.uncertain=true;
+    const topic=await s.archive.read('topic-1'),selected=selection(topic);
+    selected.assets=[{id:'image-1',messageId:'message-1',messageVersion:topic.messages[0].version}];
+    const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',newSession:{provider:'codex',model:'analysis-model'},selections:[selected]},host.context) as TopicMaterialPreview;
+    const send=()=>s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context) as Promise<TopicMaterialPreview>;
+    assert.equal((await send()).state,'uncertain');assert.equal((await send()).state,'uncertain');
+    const receipt=await s.host.topics(s.config,'project-communications',2,{action:'receipt',id:preview.id},host.context) as TopicMaterialPreview;
+    assert.equal(receipt.state,'accepted');assert.equal(receipt.targetAgentId,host.agent.id);
+    assert.equal(host.creation.created.length,1);assert.equal(host.state.sent.length,1);assert.equal(host.state.appended.length,1);
+  }finally{await s.close();}
+});
+
+test('an image-only selection sends an empty caption with original image parts, never a file or placeholder',async()=>{
+  const s=await setup();
+  try{
+    s.state.topics[0].messages[0].text='[图片消息](mediaId=$opaque)';s.state.topics[0].messages[0].displayText='';
+    const host=nativeSession(s.root),topic=await s.archive.read('topic-1'),selected=selection(topic);
+    selected.assets=[{id:'image-1',messageId:'message-1',messageVersion:topic.messages[0].version}];
+    const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',targetId:'session:'+host.agent.id,selections:[selected]},host.context) as TopicMaterialPreview;
+    await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context);
+    assert.equal(host.state.sent[0].text,'');assert.equal(host.state.sent[0].options.images.length,1);assert.equal(host.state.sent[0].options.attachments?.length,0);
+  }finally{await s.close();}
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -67,14 +67,18 @@ function nativeSession(root: string) {
 function nativeCreation(root: string) {
   const native = nativeSession(root);
   const created: PaseoAgentCreateOptions[] = [];
-  const state = { available: true, uncertain: false, created, discoveryCalls: [] as string[] };
+  const state = { available: true, uncertain: false, created, discoveryCalls: [] as string[],
+    thinkingOptions:[{id:'low',label:'Low',isDefault:true},{id:'high',label:'High'}],
+    permissionModes:[{id:'auto',label:'Default Permissions'},{id:'full-access',label:'Full Access'}] };
   const api = native.context.paseo;
   Object.assign(api, { providers: {
     listAvailable: async () => ({ providers: [{provider:'codex',available:state.available},{provider:'offline',available:false}] }),
     listModels: async (provider: string, options: {cwd: string}) => {
       state.discoveryCalls.push(provider); assert.equal(realpathSync(options.cwd), realpathSync(root));
-      return { models: [{id:'analysis-model',label:'分析模型',isDefault:true},{id:'hidden-model',label:'不可选模型',isSelectable:false}] };
+      return { models: [{id:'analysis-model',label:'分析模型',isDefault:true,thinkingOptions:state.thinkingOptions,defaultThinkingOptionId:'low'},
+        {id:'hidden-model',label:'不可选模型',isSelectable:false}] };
     },
+    listModes:async()=>({modes:state.permissionModes}),
   } });
   api.agents.create = async options => {
     state.created.push(options);
@@ -448,6 +452,57 @@ test('new sessions use a host-listed model and selected originals; preview creat
     assert.equal(host.state.appended.length,1);
     assert.equal(host.agent.features[0].value,true);
   } finally { await s.close(); }
+});
+
+test('new sessions receive the selected effort and permission preset without adding planning or provider options',async()=>{
+  const s=await setup();
+  try{
+    const host=nativeCreation(s.root),topic=await s.archive.read('topic-1');
+    const models=await s.host.topics(s.config,'project-communications',2,{action:'models'},host.context) as import('../shared/extensions/project-communications/topics.ts').TopicModel[];
+    assert.deepEqual(models[0].thinkingOptions,host.creation.thinkingOptions);
+    assert.deepEqual(models[0].permissionModes,host.creation.permissionModes);
+    const choice={provider:'codex',model:'analysis-model',thinkingOptionId:'high',modeId:'full-access'};
+    const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',newSession:choice,selections:[selection(topic)]},host.context) as TopicMaterialPreview;
+    assert.deepEqual(preview.newSession,choice);
+    await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context);
+    assert.deepEqual(host.creation.created[0].config,{provider:'codex/analysis-model',thinkingOptionId:'high',modeId:'full-access'});
+    assert.equal(host.agent.features[0].value,true);
+  }finally{await s.close();}
+});
+
+test('removed model efforts or permission presets are rejected before creating or sending',async()=>{
+  const s=await setup();
+  try{
+    const host=nativeCreation(s.root),topic=await s.archive.read('topic-1');
+    const request={action:'preview' as const,newSession:{provider:'codex',model:'analysis-model',thinkingOptionId:'high',modeId:'full-access'},selections:[selection(topic)]};
+    await assert.rejects(s.host.topics(s.config,'project-communications',2,{...request,newSession:{...request.newSession,thinkingOptionId:'invented'}},host.context),/topic_effort_unavailable/);
+    await assert.rejects(s.host.topics(s.config,'project-communications',2,{...request,newSession:{...request.newSession,modeId:'invented'}},host.context),/topic_permission_unavailable/);
+    const preview=await s.host.topics(s.config,'project-communications',2,request,host.context) as TopicMaterialPreview;
+    host.creation.thinkingOptions=host.creation.thinkingOptions.filter(option=>option.id!=='high');
+    await assert.rejects(s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context),/topic_effort_unavailable/);
+    host.creation.thinkingOptions.push({id:'high',label:'High'});
+    host.creation.permissionModes=host.creation.permissionModes.filter(mode=>mode.id!=='full-access');
+    await assert.rejects(s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context),/topic_permission_unavailable/);
+    assert.equal(host.creation.created.length,0);assert.equal(host.state.sent.length,0);
+  }finally{await s.close();}
+});
+
+test('session choices survive connector restart without reading the archive or changing followed groups and unknown settings',async()=>{
+  const s=await setup();
+  try{
+    const path=join(s.root,'state','extensions','topic-session-preferences.json');
+    mkdirSync(join(s.root,'state','extensions'),{recursive:true});
+    writeFileSync(path,JSON.stringify({version:1,history:{keep:true},selection:{custom:'retain'}}));
+    const before=s.state.requests.length,connection=await s.host.connection(s.config,'project-communications','read');
+    const value={destination:'new' as const,newSession:{provider:'codex',model:'analysis-model',thinkingOptionId:'high',modeId:'full-access'},targetId:'session:previous'};
+    await s.host.topics(s.config,'project-communications',2,{action:'preferences',value});
+    const restarted=new WorkbenchExtensions();
+    try{assert.deepEqual(await restarted.topics(s.config,'project-communications',2,{action:'preferences'}),value);}
+    finally{await restarted.close();}
+    assert.equal(s.state.requests.length,before);
+    assert.deepEqual((await s.host.connection(s.config,'project-communications','read')).connection,connection.connection);
+    const stored=JSON.parse(readFileSync(path,'utf8'));assert.deepEqual(stored.history,{keep:true});assert.equal(stored.selection.custom,'retain');
+  }finally{await s.close();}
 });
 
 test('a lost new-session acknowledgement is reconciled by scoped labels without creating or sending again', async () => {

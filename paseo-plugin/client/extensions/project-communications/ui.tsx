@@ -49,6 +49,15 @@ export function Button({ children, onPress, disabled = false, active = false, id
     {children ? <Text style={{ fontSize: 12, fontWeight: primary ? '600' : '400', color }}>{children}</Text> : null}
   </Pressable>;
 }
+export function Choice({id,icon,label,disabled,onPress}:{id:string;icon:string;label:string;disabled:boolean;onPress():void}) {
+  const c=useColors(),touch=useTouch();
+  return <Pressable testID={id} accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={onPress}
+    style={{minHeight:touch?44:36,flexDirection:'row',alignItems:'center',gap:8,paddingHorizontal:10,paddingVertical:6,
+      borderWidth:1,borderColor:c.border,borderRadius:5,backgroundColor:c.surface1,opacity:disabled?0.45:1}}>
+    <Icon name={icon} size={15} color={c.foregroundMuted}/><Text numberOfLines={1} style={{flex:1,minWidth:0,color:c.foreground,fontSize:12}}>{label}</Text>
+    <Icon name="ChevronDown" size={13} color={c.foregroundMuted}/>
+  </Pressable>;
+}
 export function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: Category | 'neutral' | 'info' | 'warning' | 'success' }) {
   const c = useColors(), color = tone === 'bug' ? c.statusDanger : tone === 'warning' || tone === 'feedback' ? c.statusWarning
     : tone === 'success' ? c.statusSuccess : tone === 'change' || tone === 'info' ? c.accent : c.foregroundMuted;

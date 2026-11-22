@@ -15,11 +15,17 @@ export async function topicModels(route: ProjectRoute, context: AgentContext): P
   // Bound provider discovery; one unavailable provider does not hide the others.
   for (let offset = 0; offset < providers.length; offset += 4) {
     const batch = providers.slice(offset, offset + 4);
-    const values = await Promise.allSettled(batch.map(item => context.paseo.providers.listModels(item.provider, { cwd: route.sourceRoot })));
+    const values = await Promise.allSettled(batch.map(async item => {
+      const [models,modes]=await Promise.all([context.paseo.providers.listModels(item.provider,{cwd:route.sourceRoot}),
+        context.paseo.providers.listModes(item.provider,{cwd:route.sourceRoot}).catch(()=>({modes:[],error:'unavailable'}))]);
+      return {models,modes};
+    }));
     values.forEach((value, index) => {
-      if (value.status !== 'fulfilled' || value.value.error) { failed = true; return; }
-      for (const model of value.value.models || []) if (model.isSelectable !== false) result.push({
+      if (value.status !== 'fulfilled' || value.value.models.error) { failed = true; return; }
+      for (const model of value.value.models.models || []) if (model.isSelectable !== false) result.push({
         provider: batch[index].provider, model: model.id, label: model.label || model.id, isDefault: model.isDefault === true,
+        thinkingOptions:model.thinkingOptions?.map(({id,label,isDefault})=>({id,label,...(isDefault===undefined?{}:{isDefault})})),defaultThinkingOptionId:model.defaultThinkingOptionId,
+        permissionModes:value.value.modes.modes?.map(({id,label})=>({id,label})),permissionsUnavailable:Boolean(value.value.modes.error),
       });
     });
   }
@@ -31,7 +37,13 @@ export async function assertTopicModel(route: ProjectRoute, context: AgentContex
   const available = await context.paseo.providers.listAvailable();
   if (available.error || !available.providers.some(item => item.available && item.provider === choice.provider)) throw Error('topic_model_unavailable');
   const value = await context.paseo.providers.listModels(choice.provider, { cwd: route.sourceRoot });
-  if (value.error || !value.models?.some(model => model.id === choice.model && model.isSelectable !== false)) throw Error('topic_model_unavailable');
+  const model=value.models?.find(model=>model.id===choice.model&&model.isSelectable!==false);
+  if (value.error || !model) throw Error('topic_model_unavailable');
+  if(choice.thinkingOptionId&&!model.thinkingOptions?.some(option=>option.id===choice.thinkingOptionId))throw Error('topic_effort_unavailable');
+  if(choice.modeId){
+    const modes=await context.paseo.providers.listModes(choice.provider,{cwd:route.sourceRoot});
+    if(modes.error||!modes.modes?.some(mode=>mode.id===choice.modeId))throw Error('topic_permission_unavailable');
+  }
 }
 
 const labels = (route: ProjectRoute, id: string) => ({ 'workspace-workbench.role': 'topic-session',
@@ -49,7 +61,9 @@ export async function createTopicSession(route: ProjectRoute, context: AgentCont
       idempotencyKey: 'archive-topic:' + value.id,
       title: (value.text.split('\n').find(line=>line.trim())?.trim() || (value.references.some(item=>item.mimeType?.startsWith('image/'))?'图片讨论':'材料讨论')).slice(0,80),
       labels: labels(route, value.id),
-      config: { provider: value.newSession.provider + '/' + value.newSession.model },
+      config: { provider: value.newSession.provider + '/' + value.newSession.model,
+        ...(value.newSession.thinkingOptionId?{thinkingOptionId:value.newSession.thinkingOptionId}:{}),
+        ...(value.newSession.modeId?{modeId:value.newSession.modeId}:{}) },
     });
     const agent = (await handle.refresh())?.agent;
     if (!agent || agent.id !== handle.id || agent.cwd !== route.sourceRoot || Object.entries(labels(route, value.id)).some(([key, value]) => agent.labels?.[key] !== value)) throw Error('topic_target_changed');

@@ -50,6 +50,7 @@ export function topicError(error: string) {
     topic_message_not_associated: '原文已移出话题', extension_disabled: '话题未启用',
     service_unavailable: 'AI 助手暂不可用', unauthorized: '服务授权已失效',
     workspace_session_missing: '目标会话暂不可用',
+    topic_effort_unavailable:'此模型的推理强度已变化，请重新选择',topic_permission_unavailable:'此权限预设已变化，请重新选择',
   };
   const known = Object.entries(messages).find(([key]) => error.includes(key));
   return known?.[1] || (error.includes('API Token') ? '请配置服务连接' : error.includes('不可达') ? 'AI 助手暂不可达' : error);

@@ -4,12 +4,13 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { Icon, ScrollView } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
 import { basketCounts, basketSelections, changeAsset, changeMessage, compact, selectTopic, type TopicBasket } from '../../topic-selection';
-import { groupKey, type ArchiveTopic, type ArchiveTopicDetail, type TopicMaterialPreview, type TopicNewSession, type TopicPage, type TopicTarget, type WatchedGroup } from '../../../shared/extensions/project-communications/topics';
+import { groupKey, type ArchiveTopic, type ArchiveTopicDetail, type TopicMaterialPreview, type TopicPage, type TopicTarget, type WatchedGroup } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, Search, ignoreFailure, useColors } from './ui';
 import { Check, MediaCount, TopicIcon, TopicStatus, topicError } from './topic-ui';
 import { TopicRow } from './topic-row';
 import { TopicMaterialBasket } from './topic-basket';
 import { TopicSendDialog } from './topic-send-dialog';
+import { useTopicSessionPreferences } from '../../use-topic-session-preferences';
 
 type TopicsPanelProps = {
   client: TopicsClient; width: number; onSettings(): void; workspaceNames: Record<string, string>; currentWorkspaceId?: string;
@@ -50,10 +51,10 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
   const c = useColors(), cache = useQueryClient(), narrow = width > 0 && width < 580;
   const [query, setQuery] = useState(''), [group, setGroup] = useState<WatchedGroup>();
   const [expanded, setExpanded] = useState<Set<string>>(new Set()), [basket, setBasket] = useState<TopicBasket>({});
-  const [loading, setLoading] = useState<Set<string>>(new Set()), [target, setTarget] = useState('');
+  const [loading, setLoading] = useState<Set<string>>(new Set());
   const [picker, setPicker] = useState<'group' | ''>('');
-  const [note, setNote] = useState(''), [destination, setDestination] = useState<'existing' | 'new'>('existing');
-  const [newSession, setNewSession] = useState<TopicNewSession>();
+  const [note, setNote] = useState('');
+  const preferences=useTopicSessionPreferences(client),{destination,newSession}=preferences.value;
   const [preview, setPreview] = useState<TopicMaterialPreview>(), [previewOpen, setPreviewOpen] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [statusOpen, setStatusOpen] = useState(false);
   const list = useInfiniteQuery({
@@ -69,14 +70,11 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
     queryFn: () => client.call<TopicTarget[]>({ action: 'targets' }),
     enabled: client.enabled && client.active, retry: false, staleTime: 10000, refetchOnWindowFocus: false,
   });
-  useEffect(() => {
-    if (target || !targets.data) return;
-    const current = targets.data.find(item => item.agentId === currentAgentId)
-      || targets.data.find(item => item.kind !== 'session' && item.workspaceId === currentWorkspaceId);
-    if (current) setTarget(targetKey(current));
-    else if (targets.data.length === 1) setTarget(targetKey(targets.data[0]));
-  }, [targets.data, currentWorkspaceId, currentAgentId, target]);
-  const selectedTarget = targets.data?.find(item => targetKey(item) === target);
+  const selectedTarget = targets.data?.find(item => targetKey(item) === preferences.value.targetId)
+    || targets.data?.find(item=>item.agentId===currentAgentId)
+    || targets.data?.find(item=>item.kind!=='session'&&item.workspaceId===currentWorkspaceId)
+    || (targets.data?.length===1?targets.data[0]:undefined);
+  const target=selectedTarget?targetKey(selectedTarget):'';
   const deliveredAgentId = preview?.targetAgentId || selectedTarget?.agentId;
   const openSession = deliveredAgentId && onOpenSession ? () => {
     const failed = () => setError('会话暂未打开，请重试');
@@ -129,7 +127,7 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
     finally { setBusy(false); }
   };
   const overLimit = counts.topics > 20 || counts.messages > 100 || counts.assets > 20;
-  const shownError = error || client.error || list.error?.message || (overLimit ? 'topic_material_limit' : '');
+  const shownError = error || preferences.error || client.error || list.error?.message || (overLimit ? 'topic_material_limit' : '');
   const state = preview?.state === 'accepted' ? '已交接' : preview?.state === 'uncertain' || preview?.state === 'sending' ? '回执待确认' : '';
   const removeTopic = (id: string) => edit(current => { const next = { ...current }; delete next[id]; return next; });
   const selectPage = async () => {
@@ -180,11 +178,12 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
       </ScrollView>
     </Dialog> : null}
     {previewOpen ? <TopicSendDialog {...{client,basket,note,destination,newSession,targets,workspaceNames,currentAgentId,groupName,busy,preview}}
+      preferencesReady={preferences.ready} preferencesError={Boolean(preferences.error)} onRetryPreferences={preferences.retry}
       target={selectedTarget} error={shownError} onClose={() => setPreviewOpen(false)} onOpenSession={openSession}
       onNote={value => { setNote(value); setPreview(undefined); }}
-      onDestination={value => { setDestination(value); setPreview(undefined); }}
-      onTarget={value => { setTarget(targetKey(value)); setPreview(undefined); }}
-      onModel={value => { setNewSession(value); setPreview(undefined); }} onConfirm={() => ignoreFailure(perform())} /> : null}
+      onDestination={value => { preferences.update({destination:value}); setPreview(undefined); }}
+      onTarget={value => { preferences.update({targetId:targetKey(value)}); setPreview(undefined); }}
+      onModel={value => { preferences.update({newSession:value}); setPreview(undefined); }} onConfirm={() => ignoreFailure(perform())} /> : null}
     {statusOpen ? <Dialog title={state || '连接状态'} onClose={() => setStatusOpen(false)} width={520} height={260}>
       <View style={{ padding: 18, gap: 8 }}><Label>{shownError ? topicError(shownError) : state}</Label>
         {shownError && topicError(shownError) !== shownError ? <Label muted>{shownError}</Label> : null}

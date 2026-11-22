@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import WebSocket from 'ws';
 import { backendRequest } from '../server/backend-supervisor.ts';
 import { startArchiveFixture } from '../tests/helpers/archive-service.ts';
-import { openIsolatedWorkbench } from './ui-project-selection.mjs';
+import { openIsolatedWorkbench, selectGlobalWorkbenchProject } from './ui-project-selection.mjs';
 
 const plugin = resolve(import.meta.dirname, '..');
 const output = process.env.WORKBENCH_VERIFY_OUTPUT || mkdtempSync(join(tmpdir(), 'wb-topics-ui-'));
@@ -330,8 +330,38 @@ try {
   await page.getByTestId('topics-send').click();
   await page.getByTestId('topics-send-dialog').getByRole('button', { name: '新建会话', exact: true }).click();
   await page.getByTestId('topics-model').getByText(/ · /).waitFor();
+  await page.getByTestId('topics-permission').getByText('权限 · Full Access',{exact:true}).waitFor();
   await page.getByTestId('topics-model').click();
-  await page.getByRole('dialog', { name: '选择模型', exact: true }).getByRole('button', { name: 'codex · Topic analysis fixture', exact: true }).click();
+  const modelPicker=page.getByTestId('topics-session-picker');
+  await modelPicker.getByRole('button',{name:'Codex',exact:true}).waitFor();
+  assert.equal(await modelPicker.getByRole('button',{name:'Topic analysis fixture',exact:true}).count(),0);
+  await modelPicker.getByRole('button',{name:'Codex',exact:true}).click();
+  await modelPicker.getByRole('button',{name:'Topic analysis fixture',exact:true}).waitFor();
+  await modelPicker.screenshot({path:join(output,'topics-provider-models.png')});
+  await modelPicker.getByRole('button',{name:'返回 Provider',exact:true}).click();
+  await modelPicker.getByRole('button',{name:'Codex',exact:true}).click();
+  await modelPicker.getByRole('button',{name:'Topic analysis fixture',exact:true}).click();
+  await page.getByTestId('topics-effort').click();
+  await page.getByTestId('topics-effort-high').click();
+  await page.getByTestId('topics-permission').click();
+  await page.getByTestId('topics-permission-auto').click();
+  await page.getByTestId('topics-permission').click();
+  await page.getByTestId('topics-permission-full-access').click();
+  for(const deadline=Date.now()+5000;;){
+    const remembered=await rpc('workspace.workbench.archive-topics',{connectionRevision:(await rpc('workspace.workbench.communications-connection',{action:'read'})).revision,request:{action:'preferences'}});
+    if(remembered.newSession?.model==='topic-alternate'&&remembered.newSession?.thinkingOptionId==='high'&&remembered.newSession?.modeId==='full-access')break;
+    if(Date.now()>deadline)throw Error('last_session_choice_not_persisted');
+    await page.waitForTimeout(50);
+  }
+  await page.reload();
+  await selectGlobalWorkbenchProject(page,'a');
+  await page.getByText('话题',{exact:true}).filter({visible:true}).first().click();
+  await page.getByTestId('topic-select-topic-1').click();
+  await page.getByTestId('topics-send').click();
+  await page.getByTestId('topics-model').getByText('Codex · Topic analysis fixture',{exact:true}).waitFor();
+  await page.getByTestId('topics-effort').getByText('推理强度 · High',{exact:true}).waitFor();
+  await page.getByTestId('topics-permission').getByText('权限 · Full Access',{exact:true}).waitFor();
+  check('provider-first model selection, per-model effort and Full Access choices survive a full page reload');
   const freshNote = '用新会话分析这组材料，先解释图片中的问题。';
   assert.equal(await page.getByTestId('topics-send-note').inputValue(), '');
   await page.getByTestId('topics-send-note').fill(freshNote);
@@ -346,6 +376,8 @@ try {
     for (const name of readdirSync(ui.topicsFixtureRoot).filter(name => name.endsWith('.json'))) {
       const record = JSON.parse(readFileSync(join(ui.topicsFixtureRoot, name), 'utf8'));
       if (record.requestedModel !== 'topic-alternate') continue;
+      assert.equal(record.creationOptions?.approvalPolicy,'never');
+      assert.equal(record.creationOptions?.sandbox,'danger-full-access');
       const inputs = (record.inputs || []).flat();
       const hasNote = inputs.some(item => item.type === 'text' && item.text.includes(freshNote));
       const hasImage = inputs.some(item => {
@@ -353,12 +385,12 @@ try {
           : item.type === 'image' && item.url?.startsWith('data:') ? Buffer.from(item.url.split(',')[1], 'base64') : undefined;
         return bytes && createHash('sha256').update(bytes).digest('hex') === fixture.imageHash;
       });
-      if (hasNote && hasImage) freshDelivery = true;
+      if (hasNote && hasImage && record.turnOptions?.some(option=>option.effort==='high'&&option.approvalPolicy==='never'&&option.sandboxPolicy?.type==='dangerFullAccess')) freshDelivery = true;
     }
     if (freshDelivery) break;
     await page.waitForTimeout(100);
   }
-  assert.equal(freshDelivery, true, 'the chosen alternate model must receive the note and original image bytes in the newly created session');
+  assert.equal(freshDelivery, true, 'the provider must receive the selected model, high effort, Full Access, note and original images');
   await page.getByTestId('topics-send').click();
   await page.getByText('RECOVERY_FIXTURE_COMPLETED', { exact: true }).filter({visible:true}).last().waitFor();
   assert.equal(await page.getByTestId('workbench-topics-panel').count(), 0);

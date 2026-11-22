@@ -16,6 +16,7 @@ import { TopicMaterials } from './topic-materials.ts';
 import { assertTopicSession, deliverTopicSession, topicSessionReceipt, topicTargets } from './topic-targets.ts';
 import { assertTopicModel, createTopicSession, newTopicSessionReceipt, topicModels } from './topic-sessions.ts';
 import { appendTopicImages } from './topic-chat-media.ts';
+import { topicSessionPreferences } from './topic-session-preferences.ts';
 import type { TopicAction } from '../shared/extensions/project-communications/topics.ts';
 
 type Settings={version:number;enabled:Record<string,boolean>;connections?:Record<string,{revision:number;config:ServiceConnection}>;[key:string]:unknown};
@@ -70,6 +71,7 @@ export class WorkbenchExtensions {
     this.registry.get(id);const route=resolveProject({projectConfig}),settings=this.connectionSettings(route,id);
     if(settings.revision!==revision)throw Error('project_connection_changed');
     if(request.action!=='directory'&&!this.settings(route).enabled[id])throw Error('extension_disabled');
+    if(request.action==='preferences')return topicSessionPreferences(route,request.value);
     const archive=new ArchiveTopics(await this.archiveClient(route,id));
     const materials=new TopicMaterials(route.stateRoot,createHash('sha256').update(JSON.stringify([route.configPath,settings.revision,settings.config])).digest('hex'));
     const targets=()=>topicTargets(route,context);

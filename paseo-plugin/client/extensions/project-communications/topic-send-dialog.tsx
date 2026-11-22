@@ -79,7 +79,7 @@ export function TopicSendDialog({ client, basket, note, destination, newSession,
       <View style={{ flexDirection: 'row',flexWrap:'wrap', alignItems: 'center', gap: 8 }}>
         <Label strong>所选材料</Label><MediaCount icon="Layers" count={counts.topics} label="话题" />
         <MediaCount icon="MessageSquare" count={counts.messages} label="原文" /><MediaCount icon="Image" count={counts.assets} label="附件" />
-        <View style={{flex:1}}/><TopicMaterialActions {...{client,basket,note,locked}} settings={materialSettings} draft={materialDraft} onSettings={onMaterialSettings} onEdit={onEditText}/>
+        <TopicMaterialActions {...{client,basket,note,locked}} settings={materialSettings} draft={materialDraft} onSettings={onMaterialSettings} onEdit={onEditText}/>
       </View>
       <TopicMaterialRows {...{client,basket,note,locked}} settings={materialSettings} draft={materialDraft} onSettings={onMaterialSettings} onEdit={onEditText}/>
     </ScrollView>

@@ -1,6 +1,6 @@
 {
   "name": "workspace-workbench-paseo",
-  "version": "0.10.4",
+  "version": "0.10.5",
   "description": "Paseo plugin for Workspace Workbench multi-repository observation.",
   "type": "module",
   "private": false,
@@ -37,6 +37,7 @@
     "@noble/hashes": "^2.4.0",
     "@parcel/watcher": "^2.5.6",
     "markdown-it": "^15.0.3",
+    "pinyin-pro": "^3.29.5",
     "prismjs": "^1.30.0",
     "react-native-svg": "^15.14.0",
     "smol-toml": "^1.9.0",

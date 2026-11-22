@@ -37,3 +37,26 @@ test('timestamps distinguish today, earlier dates and previous years in the view
   assert.equal(topicTime(new Date(2025, 0, 2, 9, 3).getTime(), now), '2025-01-02 09:03');
   assert.equal(topicTime(NaN, now), '');
 });
+
+
+test('a complete video transport envelope is projected as media without swallowing ordinary captions or URLs',()=>{
+  const asset={id:'clip',name:'attachment',mimeType:'video',state:'pending'};
+  const text='fileName=mmexport1794999988991.mp4\nurl: @opaque-video-id';
+  const message={text,assets:[asset]};
+  assert.equal(messageText(message),'');assert.equal(message.text,text);
+  assert.equal(messageText({...message,text:'[视频消息](mediaId=@native) '+text.replace('\n',' ')}),'');
+  assert.equal(messageText({text,assets:[]}),text);
+  const caption='附件示例：'+text+'\n按钮出现镜像';
+  assert.equal(messageText({...message,text:caption}),caption);
+  assert.equal(messageText({...message,text:'参考视频 https://example.test/video.mp4'}),'参考视频 https://example.test/video.mp4');
+});
+
+
+test('native media metadata and its download boilerplate are hidden while surrounding captions survive',()=>{
+  const assets=[{id:'clip',name:'视频.mp4',mimeType:'video/mp4',state:'ready'}];
+  const envelope='[视频消息](mediaId=@same) fileName=clip.mp4 url: @same 注意: 如需下载 使用 dws chat message download-media 命令下载。';
+  assert.equal(messageText({text:envelope,assets}),'');
+  assert.equal(messageText({text:'先看这个问题 '+envelope+' 然后比较字幕。',assets}),'先看这个问题  然后比较字幕。');
+  const mismatched='[视频消息](mediaId=@one) fileName=clip.mp4 url: @two 这是正文';
+  assert.ok(messageText({text:mismatched,assets}).includes('这是正文'));
+});

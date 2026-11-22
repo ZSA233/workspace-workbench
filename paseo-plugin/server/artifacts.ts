@@ -70,6 +70,9 @@ function inferMimeType(path: string): string {
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
     ".gif": "image/gif",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
     ".pdf": "application/pdf",
     ".md": "text/markdown",
     ".markdown": "text/markdown",
@@ -227,7 +230,7 @@ export function resolveArtifactReference(reference: ReviewArtifactReference, run
       mimeType: reference.mimeType || stored.metadata.mimeType,
       bytes: stored.bytes,
       size: stored.metadata.size,
-      binary: stored.metadata.mimeType.startsWith("image/") || stored.metadata.mimeType === "application/pdf",
+      binary: stored.metadata.mimeType.startsWith("image/") || stored.metadata.mimeType.startsWith("video/") || stored.metadata.mimeType === "application/pdf",
     };
   }
   const repository = resolveRepository(reference, runtime);
@@ -249,7 +252,7 @@ export function resolveArtifactReference(reference: ReviewArtifactReference, run
     mimeType,
     bytes,
     size: bytes.length,
-    binary: mimeType.startsWith("image/") || mimeType === "application/pdf",
+    binary: mimeType.startsWith("image/") || mimeType.startsWith("video/") || mimeType === "application/pdf",
   };
 }
 

@@ -24,7 +24,7 @@ test('message and original-image selection are independent and context keeps its
 });
 test('pending, unsupported and oversized attachments stay unselected', () => {
   const { topics } = archiveFixture(), topic = structuredClone(topics[1]);
-  topic.messages[0].assets.push({ id: 'video', state: 'ready', name: 'movie.mp4', mimeType: 'video/mp4' },
+  topic.messages[0].assets.push({ id: 'zip', state: 'ready', name: 'bundle.zip', mimeType: 'application/zip' },
     { id: 'large', state: 'ready', name: 'huge.png', mimeType: 'image/png', size: 10 * 1024 * 1024 });
   const basket = selectTopic({}, topic);
   assert.equal(basketCounts(basket).assets, 0);
@@ -48,4 +48,15 @@ test('editing a selection preserves originals, survives unrelated updates and cl
   assert.equal(basketSelections(basket)[0].messages[0].editedText,'修正后的文字');
   basket=changeMessage(basket,topic,message);basket=changeMessage(basket,topic,message);
   assert.equal(basketSelections(basket)[0].messages.find(item=>item.id===message.id)?.editedText,undefined);
+});
+
+
+test('ready supported videos can be selected with their original message and retain independent selection',()=>{
+  const {topics}=archiveFixture(),topic=topics[0],message=topic.messages[0];
+  message.assets=[{id:'clip',state:'ready',name:'视频.mp4',mimeType:'video/mp4',kind:'video',size:1024}];
+  let basket=changeMessage({},topic,message);
+  assert.deepEqual(basketCounts(basket),{topics:1,messages:1,assets:1});
+  basket=changeMessage(basket,topic,message);
+  assert.deepEqual(basketCounts(basket),{topics:1,messages:0,assets:1});
+  assert.deepEqual(basketCounts(changeAsset(basket,topic,message,message.assets[0])),{topics:0,messages:0,assets:0});
 });

@@ -11,6 +11,7 @@ import { TopicMaterials } from '../server/topic-materials.ts';
 import { withProject, resolveProject } from '../server/projects.ts';
 import { readTopicChatMedia } from '../server/topic-chat-media.ts';
 import { putAgentBinding } from '../server/agent-store.ts';
+import { prepareTopicVideo } from '../server/topic-video.ts';
 import { readStoredArtifact } from '../server/artifacts.ts';
 import { topicActionSchema, type ArchiveTopicDetail, type TopicMaterialPreview, type TopicSelection, type TopicTarget } from '../shared/extensions/project-communications/topics.ts';
 import type { AgentContext } from '../server/agent-provider.ts';
@@ -452,8 +453,8 @@ test('edited originals are frozen separately; formatted text, alias relationship
     s.state.topics[0].messages[1].createdAt=original.createdAt+60000;
     const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',newSession:{provider:'codex',model:'analysis-model'},
       content:{layout:'auto',identity:'alias',timeZone:'Asia/Shanghai',template:'本次目标：{{note}}\n\n{{materials}}'},note:'只分析，不修改。',selections:[selected]},host.context) as TopicMaterialPreview;
-    assert.ok(preview.text.includes('@参与者 B 我已核对'));assert.ok(preview.text.includes('参与者 A（已编辑）'));
-    assert.ok(preview.text.indexOf('参与者 A（已编辑）')<preview.text.indexOf('参与者 B ·'));
+    assert.ok(preview.text.includes('@AN 我已核对'));assert.ok(preview.text.includes('XL（已编辑）'));
+    assert.ok(preview.text.indexOf('XL（已编辑）')<preview.text.indexOf('AN ·'));
     assert.equal(preview.text.includes('小林'),false);assert.equal(preview.text.includes('阿宁'),false);
     const raw=JSON.parse(readFileSync(join(s.root,'state/extensions/topic-materials',createHash('sha256').update(preview.id).digest('hex')+'.json'),'utf8'));
     assert.equal(raw.originalTexts.find((entry:any)=>entry.messageId===original.id).text,original.text);
@@ -649,5 +650,108 @@ test('an image-only selection sends an empty caption with original image parts, 
     const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',targetId:'session:'+host.agent.id,selections:[selected]},host.context) as TopicMaterialPreview;
     await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context);
     assert.equal(host.state.sent[0].text,'');assert.equal(host.state.sent[0].options.images.length,1);assert.equal(host.state.sent[0].options.attachments?.length,0);
+  }finally{await s.close();}
+});
+
+
+function pendingVideo(s:Awaited<ReturnType<typeof setup>>,id='video-original') {
+  const topic=s.state.topics[0],message=topic.messages[0];
+  message.text='fileName=mmexport123.mp4\nurl: @opaque';
+  message.assets=[{id,name:'attachment',state:'pending',mimeType:'video'}];
+  return {topic,message};
+}
+
+test('saved videos recover canonical MIME, size and ready state across topic, page and context reads without exposing transport metadata',async()=>{
+  const s=await setup();
+  try{
+    const {topic,message}=pendingVideo(s);s.state.context.assets=structuredClone(message.assets);
+    const detail=await s.archive.read(topic.id),asset=detail.messages[0].assets[0];
+    assert.deepEqual(asset,{id:'video-original',name:'视频.mp4',kind:'video',state:'ready',mimeType:'video/mp4',size:s.video.length});
+    assert.equal(s.state.topics[0].messages[0].assets[0].state,'pending');
+    assert.equal((await s.archive.messages(topic.id,0)).items[0].assets[0].state,'ready');
+    assert.equal((await s.archive.context(topic.id,message.id)).items[0].assets[0].state,'ready');
+    assert.equal(s.state.requests.filter(item=>item.method==='GET'&&item.url.endsWith('/assets/video-original')).length,0);
+    assert.equal(s.state.requests.filter(item=>item.method==='HEAD'&&item.url.endsWith('/assets/video-original')).length,1);
+    const original=await s.archive.asset(topic.id,message.id,asset.id) as {mimeType:string;base64:string};
+    assert.equal(original.mimeType,'video/mp4');assert.deepEqual(Buffer.from(original.base64,'base64'),s.video);
+  }finally{await s.close();}
+});
+
+test('unavailable video originals remain pending and outside-scope messages never trigger metadata requests',async()=>{
+  const s=await setup();
+  try{
+    const {topic,message}=pendingVideo(s);s.state.unavailableAssets.add('video-original');
+    assert.equal((await s.archive.read(topic.id)).messages[0].assets[0].state,'pending');
+    await assert.rejects(s.archive.asset(topic.id,message.id,'video-original'),/asset_not_ready/);
+    const before=s.state.requests.length;message.channelId='outside-followed-scope';
+    await assert.rejects(s.archive.read(topic.id),/message_outside_scope/);
+    assert.equal(s.state.requests.slice(before).some(item=>item.method==='HEAD'),false);
+  }finally{await s.close();}
+});
+
+test('selected video originals and timepoint images reach the native session, remain visible after restart and never auto-replay',async()=>{
+  const s=await setup();
+  try{
+    const {topic:source}=pendingVideo(s),host=nativeSession(s.root),topic=await s.archive.read(source.id),selected=selection(topic);
+    selected.assets=[{id:'video-original',messageId:topic.messages[0].id,messageVersion:topic.messages[0].version}];
+    const video=await s.archive.asset(topic.id,topic.messages[0].id,'video-original',undefined,'video-preview') as Awaited<ReturnType<typeof prepareTopicVideo>>;
+    assert.equal(video.frames.length,4);assert.equal(video.duration,2);
+    assert.ok(video.frames.every((frame,index)=>index===0||frame.time>video.frames[index-1].time));
+    const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',targetId:'session:'+host.agent.id,note:'请检查视频中的展示问题',selections:[selected]},host.context) as TopicMaterialPreview;
+    assert.equal(preview.assets.length,1);assert.equal(preview.text.includes('fileName='),false);assert.equal(preview.text.includes('@opaque'),false);
+    assert.ok(preview.text.includes('原视频'));assert.ok(preview.text.includes('不含音频转写'));assert.ok(preview.text.includes('附图 4'));
+    const stored=JSON.parse(readFileSync(join(s.root,'state/extensions/topic-materials',createHash('sha256').update(preview.id).digest('hex')+'.json'),'utf8'));
+    assert.equal(stored.originalTexts[0].text,s.state.topics[0].messages[0].text);
+    const send=()=>s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context) as Promise<TopicMaterialPreview>;
+    assert.equal((await send()).state,'accepted');assert.equal((await send()).state,'accepted');assert.equal(host.state.sent.length,1);
+    const received=host.state.sent[0];assert.deepEqual(received.options.images,video.frames.map(frame=>({data:frame.base64,mimeType:frame.mimeType})));
+    assert.equal(received.options.attachments?.length,1);assert.equal(received.options.attachments?.[0].mimeType,'video/mp4');
+    assert.deepEqual(readFileSync(received.options.attachments![0].path),s.video);
+    const route=resolveProject({projectConfig:s.config}),manifest=readTopicChatMedia(route,{projectConfig:s.config,materialId:preview.id,agentId:host.agent.id}) as {images:unknown[];videos:Array<{assetId:string;frames:Array<{assetId:string}>}>};
+    assert.equal(manifest.images.length,0);assert.equal(manifest.videos.length,1);assert.equal(manifest.videos[0].frames.length,4);
+    await s.host.setEnabled(s.config,'project-communications',false);
+    const frozen=readTopicChatMedia(route,{projectConfig:s.config,materialId:preview.id,agentId:host.agent.id,assetId:manifest.videos[0].assetId}) as {base64:string};
+    assert.deepEqual(Buffer.from(frozen.base64,'base64'),s.video);
+    assert.throws(()=>readTopicChatMedia(route,{projectConfig:s.config,materialId:preview.id,agentId:'another',assetId:manifest.videos[0].assetId}),/outside_session/);
+  }finally{await s.close();}
+});
+
+test('decoding rejects invalid files and aborted work without leaving a sendable preview',async()=>{
+  await assert.rejects(prepareTopicVideo(Buffer.from('not a video')),/video_decode_failed/);
+  const controller=new AbortController();controller.abort();
+  await assert.rejects(prepareTopicVideo(Buffer.from('a different clip'),controller.signal),/extension_host_unloaded/);
+});
+
+
+test('missing legacy attachments borrow only same-version source metadata and preserve original snapshot text',async()=>{
+  const s=await setup();
+  try{
+    const {topic,message}=pendingVideo(s);
+    message.text='[视频消息](mediaId=@legacy) '+message.text;
+    const original=structuredClone(message);original.text='newer-looking source body must stay private';
+    s.state.originalMessages.set(message.id,original);message.assets=[];
+    let current=await s.archive.read(topic.id);
+    assert.equal(current.messages[0].text,message.text);assert.equal(current.messages[0].assets[0].state,'ready');
+    const thumbnail=await s.archive.asset(topic.id,message.id,'video-original',undefined,'thumbnail') as {mimeType:string;base64:string};
+    assert.equal(thumbnail.mimeType,'image/png');assert.deepEqual(Buffer.from(thumbnail.base64,'base64'),s.image);
+    original.version='newer-version';current=await s.archive.read(topic.id);assert.equal(current.messages[0].assets.length,0);
+    original.version=message.version;original.channelId='another-group';current=await s.archive.read(topic.id);assert.equal(current.messages[0].assets.length,0);
+  }finally{await s.close();}
+});
+
+
+test('the same video linked to two selected messages is delivered once with one set of frames',async()=>{
+  const s=await setup();
+  try{
+    const {topic:source}=pendingVideo(s),second=source.messages[1];
+    second.assets=[{id:'video-duplicate',name:'attachment',mimeType:'video',state:'pending'}];
+    const host=nativeSession(s.root),topic=await s.archive.read(source.id),selected=selection(topic);
+    selected.messages=topic.messages.map(message=>({id:message.id,version:message.version}));
+    selected.assets=topic.messages.map(message=>({id:message.assets[0].id,messageId:message.id,messageVersion:message.version}));
+    const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',targetId:'session:'+host.agent.id,selections:[selected]},host.context) as TopicMaterialPreview;
+    await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},host.context);
+    assert.equal(host.state.sent.length,1);assert.equal(host.state.sent[0].options.images.length,4);assert.equal(host.state.sent[0].options.attachments?.length,1);
+    const manifest=readTopicChatMedia(resolveProject({projectConfig:s.config}),{projectConfig:s.config,materialId:preview.id,agentId:host.agent.id}) as {videos:unknown[]};
+    assert.equal(manifest.videos.length,1);
   }finally{await s.close();}
 });

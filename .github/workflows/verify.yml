@@ -31,6 +31,12 @@ jobs:
           if [ -n "$RELEASE_TAG" ]; then node scripts/version.mjs --check --tag "$RELEASE_TAG"; else node scripts/version.mjs --check; fi
       - run: npm ci
         working-directory: paseo-plugin
+      - name: Prepare video test tools
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
       - name: Typecheck and test
         shell: bash
         run: |

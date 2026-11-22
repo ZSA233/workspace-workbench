@@ -8,9 +8,11 @@ import type { ReviewArtifactReference } from '../shared/review-packet.ts';
 import { readStoredArtifact, storeArtifactBytes } from './artifacts.ts';
 import type { ArchiveTopics } from './archive-topics.ts';
 import {prepareTopicContent,topicMessageKey,type TopicContentEntry,type TopicContentOptions} from '../shared/extensions/project-communications/topic-content.ts';
+import {prepareTopicVideo} from './topic-video.ts';
+import {videoTime,type TopicStoredVideo} from '../shared/topic-video.ts';
 
 type StoredPreview = TopicMaterialPreview & { scope: string; agentId: string; references: ReviewArtifactReference[]; dispatchText?: string;
-  session?: TopicSessionIdentity;content?:TopicContentOptions;sessionTitle?:string; originalTexts?: Array<{ topicId: string; messageId: string; version: string; text: string; displayText?: string;editedText?:string;sender?:ArchiveMessage['sender'];createdAt?:number; quote?: unknown }> };
+  session?: TopicSessionIdentity;content?:TopicContentOptions;sessionTitle?:string;videoMaterials?:TopicStoredVideo[]; originalTexts?: Array<{ topicId: string; messageId: string; version: string; text: string; displayText?: string;editedText?:string;sender?:ArchiveMessage['sender'];createdAt?:number; quote?: unknown }> };
 type DeliveryResult = { delivery: string; messageId?: string; session?: TopicSessionIdentity };
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 function register(input: Parameters<typeof storeArtifactBytes>[0]) {
@@ -39,7 +41,7 @@ export class TopicMaterials {
     return value;
   }
   public(value: StoredPreview): TopicMaterialPreview {
-    const { scope, agentId, references, dispatchText, session, originalTexts, content, sessionTitle, ...result } = value; return result;
+    const { scope, agentId, references, dispatchText, session, originalTexts, content, sessionTitle, videoMaterials, ...result } = value; return result;
   }
   async preview(archive: ArchiveTopics, workspaceId: string, agentId: string, selections: TopicSelection[], target?: TopicTarget, options: {note?: string; newSession?: TopicNewSession;content?:TopicContentOptions} = {}) {
     const note = topicNoteSchema.parse(options.note || '');
@@ -83,20 +85,40 @@ export class TopicMaterials {
         if(!selection.messages.some(message=>message.id===original.id))entries.push({topicId:topic.id,message:original,includeText:false,
           assetIds:selection.assets.filter(asset=>asset.messageId===original.id).map(asset=>asset.id)});
         const key = JSON.stringify([archive.libraryId, asset.id]);
-        if (files.has(key)){associate(files.get(key)!,original);continue;}
+        if (files.has(key)){
+          const existing=files.get(key)!;associate(existing,original);
+          for(const frame of value.videoMaterials?.find(item=>item.assetId===existing)?.frames||[])associate(frame.assetId,original);
+          continue;
+        }
         const data = await archive.original(asset); bytes += data.bytes.length;
         if (bytes > 24 * 1024 * 1024) throw Error('topic_material_bytes_limit');
         const sha256 = hash(data.bytes);
         if (asset.sha256 && asset.sha256 !== sha256) throw Error('topic_asset_version_changed');
-        const mimeType = asset.mimeType || data.mimeType;
+        const mimeType = (asset.mimeType || data.mimeType).toLowerCase();
+        if(mimeType.startsWith('video/')&&mimeType!==data.mimeType.toLowerCase())throw Error('topic_asset_version_changed');
         const contentKey = mimeType.toLowerCase() + ':' + sha256;
         if (!contents.has(contentKey)) {
           const id = 'topic-' + hash(key + ':' + sha256);
-          const stored = register({ id, title: asset.name || '附件', mimeType, bytes: data.bytes, kind: mimeType.startsWith('image/') ? 'image' : mimeType === 'application/pdf' ? 'pdf' : 'document' });
+          const stored = register({ id, title: asset.name || '附件', mimeType, bytes: data.bytes, kind: mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('video/') ? 'file' : mimeType === 'application/pdf' ? 'pdf' : 'document' });
           value.references.push({ id, assetId: id, title: stored.title, mimeType: stored.mimeType, kind: stored.kind, required: false });
           contents.set(contentKey,id);
+          if(mimeType.startsWith('video/')) {
+            const video=await prepareTopicVideo(data.bytes,archive.connection.signal);
+            if((value.videoMaterials||[]).reduce((count,item)=>count+item.frames.length,0)+video.frames.length>24)throw Error('topic_video_frame_limit');
+            const frozen:TopicStoredVideo={assetId:id,name:stored.title,duration:video.duration,frames:[]};
+            for(const frame of video.frames) {
+              const frameBytes=Buffer.from(frame.base64,'base64');bytes+=frameBytes.length;
+              if(bytes>24*1024*1024)throw Error('topic_material_bytes_limit');
+              const frameId='topic-frame-'+hash(sha256+':'+frame.time+':'+hash(frameBytes));
+              const image=register({id:frameId,title:stored.title+' · '+videoTime(frame.time)+'.jpg',mimeType:frame.mimeType,bytes:frameBytes,kind:'image'});
+              value.references.push({id:frameId,assetId:frameId,title:image.title,mimeType:image.mimeType,kind:'image',required:false});
+              frozen.frames.push({assetId:frameId,time:frame.time});
+            }
+            (value.videoMaterials||=[]).push(frozen);
+          }
         }
         files.set(key,contents.get(contentKey)!);associate(contents.get(contentKey)!,original);
+        for(const frame of value.videoMaterials?.find(item=>item.assetId===contents.get(contentKey))?.frames||[])associate(frame.assetId,original);
         value.assets.push({ id: asset.id, name: asset.name || '附件', mimeType, sha256, size: data.bytes.length });
       }
       if (selection.includeAnalysis) sections.push(topic.lastAnswer || topic.summary || '');
@@ -112,6 +134,13 @@ export class TopicMaterials {
     const order=new Map(rendered.rows.map((row,index)=>[row.key,index]));
     const position=(reference:ReviewArtifactReference)=>Math.min(...[...(parents.get(reference.id)||[])].map(key=>order.get(key)??Infinity));
     value.references.sort((left,right)=>position(left)-position(right));
+    if(value.videoMaterials?.length) {
+      const referenceOrder=new Map(value.references.map((reference,index)=>[reference.assetId,index]));
+      const imageOrder=new Map(value.references.filter(reference=>reference.mimeType?.startsWith('image/')).map((reference,index)=>[reference.assetId,index+1]));
+      value.videoMaterials.sort((left,right)=>(referenceOrder.get(left.assetId)??Infinity)-(referenceOrder.get(right.assetId)??Infinity));
+      value.text += (value.text.trim()?'\n\n':'')+value.videoMaterials.map((video,index)=>
+        '视频 '+(index+1)+'：'+video.name+'（'+videoTime(video.duration)+'）。已附原视频和 '+video.frames.length+' 张时间点画面：'+video.frames.map(frame=>'附图 '+imageOrder.get(frame.assetId)+' = '+videoTime(frame.time)).join('、')+'。画面不含音频转写。').join('\n');
+    }
     value.sessionTitle=(rendered.noteText.split('\n').find(line=>line.trim())||rendered.rows.find(row=>row.text.trim())?.text.split('\n').find(line=>line.trim()))?.slice(0,80);
     if(!value.text.trim()&&!value.references.length)throw Error('topic_material_empty');
     if (value.text.length > 120000 || value.originalTexts!.reduce((length, item) => length + item.text.length, 0) > 120000) throw Error('topic_material_text_limit');

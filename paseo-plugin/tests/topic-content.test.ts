@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type {ArchiveMessage} from '../shared/extensions/project-communications/topics.ts';
-import {prepareTopicContent,topicContentPeople,type TopicContentEntry} from '../shared/extensions/project-communications/topic-content.ts';
+import {prepareTopicContent,topicContentPeople,topicPersonLabel,type TopicContentEntry} from '../shared/extensions/project-communications/topic-content.ts';
 
 const first=Date.parse('2026-11-19T08:20:00Z');
 function message(id:string,name:string,text:string,time=first,patch:Partial<ArchiveMessage>={}):ArchiveMessage{
@@ -17,28 +17,28 @@ test('a single speaker keeps ordinary forwarded text without a sender/time wrapp
 
 test('multiple topics become one chronological conversation with consistent speaker, mention, reply and note identities',()=>{
   const a=message('a','张三','@李四 请确认这一步。'),b=message('b','李四','@张三(张三) 收到，我来处理。',first+60000,{quote:{messageId:'a'}});
-  const result=prepareTopicContent([entry(b,'second'),entry(a,'first')],{},'请重点看李四的回应。');
+  const result=prepareTopicContent([entry(b,'second'),entry(a,'first')],{identity:'alias'},'请重点看李四的回应。');
   assert.equal(result.conversation,true);assert.equal(result.rows[0].message.id,'a');assert.equal(result.rows[1].message.id,'b');
-  assert.equal(result.rows[0].speaker,'参与者 A');assert.equal(result.rows[0].text,'@参与者 B 请确认这一步。');
-  assert.equal(result.rows[1].text,'@参与者 A 收到，我来处理。');assert.equal(result.rows[1].replyTo,'参与者 A');
-  assert.ok(result.text.startsWith('请重点看参与者 B的回应。'));
+  assert.equal(result.rows[0].speaker,'ZS');assert.equal(result.rows[0].text,'@LS 请确认这一步。');
+  assert.equal(result.rows[1].text,'@ZS 收到，我来处理。');assert.equal(result.rows[1].replyTo,'ZS');
+  assert.ok(result.text.startsWith('请重点看LS的回应。'));
   assert.ok(result.text.includes('2026-11-19 16:20'));assert.ok(result.text.includes('2026-11-19 16:21'));
   for(const value of ['张三','李四','private-group','person-','account'])assert.equal(result.text.includes(value),false,value);
 });
 
 test('source identity keeps renamed authors together and distinguishes people sharing a display name',()=>{
   const result=prepareTopicContent([entry(message('a','张三','第一条',first,{senderId:'same'})),entry(message('b','小张','@张三 我补充一下。',first+1000,{senderId:'same'})),
-    entry(message('c','李四','@小张 好的。',first+2000))]);
+    entry(message('c','李四','@小张 好的。',first+2000))],{identity:'alias'});
   assert.equal(result.rows[0].speaker,result.rows[1].speaker);assert.equal(result.people.length,2);
-  assert.equal(result.rows[2].text,'@参与者 A 好的。');
+  assert.equal(result.rows[2].text,'@ZS 好的。');
   const ambiguous=prepareTopicContent([entry(message('a','小张','第一条',first,{senderId:'first'})),entry(message('b','小张','第二条',first+1,{senderId:'second'})),
-    entry(message('c','李四','@小张 请确认。',first+2))]);
+    entry(message('c','李四','@小张 请确认。',first+2))],{identity:'alias'});
   assert.equal(ambiguous.people.length,3);assert.ok(ambiguous.rows[2].text.includes('@小张'));assert.ok(ambiguous.unresolved.includes('小张'));
 });
 
 test('unknown mentions, code, emails and package paths survive identity processing',()=>{
   const a=message('a','Alice','Alice@example.com https://host.test/Alice @Alice/sdk `@Alice`\n```ts\n@Alice\n```\n@未入选的人 还有问题。');
-  const result=prepareTopicContent([entry(a)]);
+  const result=prepareTopicContent([entry(a)],{identity:'alias'});
   for(const value of ['Alice@example.com','https://host.test/Alice','@Alice/sdk','`@Alice`','@未入选的人'])assert.ok(result.text.includes(value),value);
   assert.ok(result.unresolved.includes('未入选的人'));
 });
@@ -53,9 +53,9 @@ test('adding earlier context never renumbers the existing speakers or edited ref
   const a=entry(message('a','张三','最初选中的内容',first+60000)),b=entry(message('b','李四','@张三 好的。',first+120000));
   const aliases=topicContentPeople([a,b]).map(({key,label})=>({key,label}));
   const earlier=entry(message('earlier','王五','更早的上下文',first));
-  const result=prepareTopicContent([a,b,earlier],{aliases});
-  assert.equal(result.rows[0].speaker,'参与者 C');assert.equal(result.rows[1].speaker,'参与者 A');assert.equal(result.rows[2].speaker,'参与者 B');
-  assert.equal(result.rows[2].text,'@参与者 A 好的。');
+  const result=prepareTopicContent([a,b,earlier],{identity:'alias',aliases});
+  assert.equal(result.rows[0].speaker,'WW');assert.equal(result.rows[1].speaker,'ZS');assert.equal(result.rows[2].speaker,'LS');
+  assert.equal(result.rows[2].text,'@ZS 好的。');
 });
 
 test('source versions keep original text separate from editable delivery text and duplicate selections are not repeated',()=>{
@@ -75,5 +75,37 @@ test('image-only material never pulls in its unselected source text',()=>{
   const image={id:'image',name:'image.png',mimeType:'image/png',state:'ready'};
   const a=message('a','张三','不应发送的文字',first,{assets:[image]}),b=message('b','李四','第二条消息',first+1000);
   const result=prepareTopicContent([{...entry(a),includeText:false,assetIds:['image']},entry(b)]);
-  assert.equal(result.text.includes('不应发送'),false);assert.ok(result.text.includes('参与者 A'));assert.ok(result.text.includes('第二条消息'));
+  assert.equal(result.text.includes('不应发送'),false);assert.ok(result.text.includes('张三'));assert.ok(result.text.includes('第二条消息'));
+});
+
+
+test('names are preserved by default and explicit alias selection stays reversible',()=>{
+  const entries=[entry(message('a','张三','@李四 请确认。')),entry(message('b','李四','@张三 收到。',first+1000))];
+  const original=prepareTopicContent(entries),aliased=prepareTopicContent(entries,{identity:'alias'});
+  assert.ok(original.text.includes('张三 · 2026-11-19 16:20'));assert.ok(original.text.includes('@李四 请确认。'));
+  assert.equal(original.text.includes('ZS ·'),false);assert.ok(aliased.text.includes('@LS 请确认。'));
+  assert.equal(prepareTopicContent(entries,{identity:'name'}).text,original.text);
+  assert.equal(entries[0].message.text,'@李四 请确认。');
+});
+
+
+test('Chinese names use pinyin initials while non-Chinese names retain their spelling across topics',()=>{
+  for(const [name,label]of [['王远','WY'],['罗罡','LG'],['祝硕安','ZSA'],['曾乐乐','ZLL'],['John Smith','John Smith'],['Mónica','Mónica'],['Alice张','AliceZ']])assert.equal(topicPersonLabel(name),label);
+  const a=entry(message('a','王远','@John Smith 请确认。')),b=entry(message('b','John Smith','@王远 已确认。',first+1000));
+  const result=prepareTopicContent([b,a],{identity:'alias'});
+  assert.equal(result.rows[0].speaker,'WY');assert.equal(result.rows[0].text,'@John Smith 请确认。');
+  assert.equal(result.rows[1].speaker,'John Smith');assert.equal(result.rows[1].text,'@WY 已确认。');
+  assert.equal(prepareTopicContent([a],{identity:'alias'}).rows[0].speaker,'WY');
+});
+
+test('identical initials remain distinct and added context preserves existing labels without ordinal assignment',()=>{
+  const a=entry(message('a','张三','第一条')),b=entry(message('b','赵四','第二条',first+1));
+  const both=prepareTopicContent([a,b],{identity:'alias'}),reversed=prepareTopicContent([b,a],{identity:'alias'});
+  assert.notEqual(both.rows[0].speaker,both.rows[1].speaker);
+  assert.ok(both.rows.every(row=>row.speaker.startsWith('ZS')));
+  assert.deepEqual(both.people.map(person=>[person.key,person.label]),reversed.people.map(person=>[person.key,person.label]));
+  const before=topicContentPeople([b]).map(({key,label})=>({key,label}));
+  assert.equal(prepareTopicContent([a,b],{identity:'alias',aliases:before}).rows[1].speaker,'ZS');
+  const legacy=before.map(item=>({...item,label:'参与者 A'}));
+  assert.equal(prepareTopicContent([b],{identity:'alias',aliases:legacy}).rows[0].speaker,'ZS');
 });

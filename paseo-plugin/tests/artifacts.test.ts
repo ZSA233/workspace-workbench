@@ -9,6 +9,7 @@ import { registerArtifact } from "../server/artifacts.ts";
 import { writeState } from "../server/orchestration-state.ts";
 import {
   artifactImageAttachments,
+  artifactSnapshotContent,
   listArtifacts,
   materializeReviewArtifact,
   readStoredArtifact,
@@ -83,4 +84,17 @@ test("the coordinator can register a generated image by local path", async () =>
     else process.env.WORKSPACE_WORKBENCH_CONFIG = previousConfig;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test('video artifacts stay binary and never become UTF-8 review text',()=>{
+  const root=mkdtempSync(join(tmpdir(),'workbench-video-artifact-')),previous=process.env.WORKSPACE_WORKBENCH_ARTIFACT_ROOT;
+  process.env.WORKSPACE_WORKBENCH_ARTIFACT_ROOT=root;
+  try{
+    const bytes=readFileSync(new URL('./fixtures/topic-video.mp4',import.meta.url));
+    storeArtifactBytes({id:'selected-video',title:'视频.mp4',kind:'file',mimeType:'video/mp4',bytes});
+    const resolved=resolveArtifactReference({id:'selected-video',assetId:'selected-video',kind:'file',required:false},{repositories:[]});
+    assert.equal(resolved.binary,true);assert.deepEqual(artifactSnapshotContent(resolved),{binary:true,truncated:false});
+    assert.deepEqual(artifactImageAttachments([{assetId:'selected-video',mimeType:'video/mp4',status:'ready'}]),[]);
+  }finally{if(previous===undefined)delete process.env.WORKSPACE_WORKBENCH_ARTIFACT_ROOT;else process.env.WORKSPACE_WORKBENCH_ARTIFACT_ROOT=previous;rmSync(root,{recursive:true,force:true});}
 });

@@ -7,7 +7,7 @@ import type {ArchiveMessage} from '../../../shared/extensions/project-communicat
 import {messageText} from '../../../shared/extensions/project-communications/topics';
 import {prepareTopicContent,topicBuiltInTemplates,topicContentOptions,topicTemplateError,TOPIC_TEXT_LIMIT,
   type TopicContentAlias,type TopicMaterialSettings,type TopicTemplate} from '../../../shared/extensions/project-communications/topic-content';
-import {Badge,Button,Dialog,Field,Label,Toggle,useColors} from './ui';
+import {Badge,Button,Dialog,Field,Label,useColors} from './ui';
 import {TopicAsset,TopicIcon} from './topic-ui';
 
 export function useTopicMaterialDraft(basket:TopicBasket,settings:TopicMaterialSettings,note:string,aliases:TopicContentAlias[]){
@@ -33,9 +33,14 @@ export function TopicMaterialActions({basket,settings,note,locked,onSettings,dra
     onSettings({...settings,presetId:id,presets:previous?settings.presets.map(item=>item.id===id?value:item):[...settings.presets,{...value,id}]});setEditor(undefined);
   };
   return <>
-    <View style={{flexDirection:'row',alignItems:'center',gap:7}}>
+    <View style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:7}}>
+      <View testID="topics-identity-choice" style={{flexDirection:'row',gap:3}}>
+        <Button id="topics-identity-name" icon="UserRound" active={settings.identity==='name'} disabled={locked}
+          onPress={()=>onSettings({...settings,identity:'name'})}>保留原名</Button>
+        <Button id="topics-identity-alias" icon="CaseUpper" active={settings.identity==='alias'} disabled={locked}
+          onPress={()=>onSettings({...settings,identity:'alias'})}>姓名缩写</Button>
+      </View>
       <Badge tone="info">{draft.conversation?'对话 · 按时间':'简洁'}</Badge>
-      {settings.identity==='alias'?<Badge>化名</Badge>:null}
       {preset.id!=='forward'?<Badge>{shortName(preset.name,10)}</Badge>:null}
       {draft.unresolved.length?<Button variant="link" icon="CircleHelp" onPress={()=>setDialog('people')}>{draft.unresolved.length+' 待确认'}</Button>:null}
       <TopicIcon id="topics-material-menu" icon="Ellipsis" label="材料处理与预设" disabled={locked} onPress={()=>setDialog('menu')}/>
@@ -47,7 +52,6 @@ export function TopicMaterialActions({basket,settings,note,locked,onSettings,dra
             <Button key={layout} icon={icon} active={settings.layout===layout} onPress={()=>onSettings({...settings,layout})}>{label}</Button>)}
         </View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:8}}>
-          <Toggle label="参与者化名" checked={settings.identity==='alias'} onChange={value=>onSettings({...settings,identity:value?'alias':'name'})}/>
           <Button variant="link" icon="Users" onPress={()=>setDialog('people')}>查看对应</Button>
         </View>
         <View style={{gap:7}}><Label muted>说明预设</Label>
@@ -111,7 +115,7 @@ export function TopicMaterialRows({client,basket,settings,locked,onEdit,draft}:P
         <TextInput testID={'topics-edit-text-'+row.message.id} accessibilityLabel="本次发送的文字" value={row.editedText===undefined?messageText(row.message):row.editedText}
           onChangeText={text=>onEdit(row.message,text)} editable={!locked} multiline maxLength={TOPIC_TEXT_LIMIT} autoCapitalize="none" autoCorrect={false}
           style={{minHeight:90,maxHeight:240,padding:10,borderWidth:1,borderColor:c.border,borderRadius:6,color:c.foreground,fontSize:13,lineHeight:22,textAlignVertical:'top'}}/>
-        {settings.identity==='alias'&&row.text!==(row.editedText===undefined?messageText(row.message):row.editedText)?<><Label muted>化名预览</Label><Label>{row.text}</Label></>:null}
+        {settings.identity==='alias'&&row.text!==(row.editedText===undefined?messageText(row.message):row.editedText)?<><Label muted>缩写预览</Label><Label>{row.text}</Label></>:null}
       </>:row.text?<Label>{row.text}</Label>:null}
       <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>
         {row.message.assets.filter(asset=>row.assetIds?.includes(asset.id)).map(asset=><TopicAsset key={asset.id} {...{client,asset,message:row.message}}

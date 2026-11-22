@@ -81,7 +81,7 @@ export class WorkbenchExtensions {
       case 'read':return archive.read(request.topicId);
       case 'messages':return archive.messages(request.topicId,request.offset);
       case 'context':return archive.context(request.topicId,request.messageId);
-      case 'asset':return archive.asset(request.topicId,request.messageId,request.assetId,request.contextOf);
+      case 'asset':return archive.asset(request.topicId,request.messageId,request.assetId,request.contextOf,request.part||request.view);
       case 'group.configure':return archive.configure(request);
       case 'targets':return targets();
       case 'models':{

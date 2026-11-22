@@ -27,6 +27,10 @@ fixture.state.topics[0].messages[0].createdAt = fixture.state.topics[0].updatedA
 fixture.state.context.displayText = fixture.state.context.text;
 fixture.state.context.text = '[图片消息](mediaId=$context-image)' + fixture.state.context.text;
 fixture.state.context.assets = [{ id: 'context-image', kind: 'image', mimeType: 'image/png', state: 'ready', name: 'context.png' }];
+const videoTopic=fixture.state.topics[3],videoMessage=videoTopic.messages[0];
+videoTopic.title='视频播放与镜像反馈';
+videoMessage.text='fileName=mmexport123.mp4\nurl: @opaque-native-video';
+videoMessage.assets=[{id:'video-original',name:'attachment',mimeType:'video',state:'pending'}];
 const host = spawn(process.execPath, [join(plugin, 'scripts/verify-live.mjs')], {
   env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_LIVE_TOPICS: '1', WORKBENCH_VERIFY_OUTPUT: output },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -379,6 +383,9 @@ try {
   await page.getByTestId('topics-edit-message-1').click();
   await page.getByTestId('topics-edit-text-message-1').fill(editedMarker+' @阿宁 请确认。');
   await page.getByTestId('topics-edit-message-1').click();
+  await page.getByTestId('topics-identity-name').click();
+  assert.ok((await page.getByTestId('topics-send-dialog').innerText()).includes('@阿宁 请确认。'));
+  await page.getByTestId('topics-identity-alias').click();
   await page.getByTestId('topics-material-menu').click();
   const materialMenu=page.getByRole('dialog',{name:'材料处理',exact:true});
   await materialMenu.getByRole('button',{name:'查看对应',exact:true}).click();
@@ -396,7 +403,7 @@ try {
   const finalContent=page.getByTestId('topics-final-content');
   const finalText=await finalContent.innerText();
   assert.ok(finalText.includes(presetInstruction));assert.ok(finalText.includes(freshNote));assert.ok(finalText.includes(editedMarker));
-  assert.ok(finalText.includes('参与者 A'));assert.ok(finalText.includes('参与者 B'));assert.ok(finalText.includes('2026-11-19 16:20'));
+  assert.ok(finalText.includes('XL'));assert.ok(finalText.includes('AN'));assert.ok(finalText.includes('2026-11-19 16:20'));
   assert.equal(finalText.includes('阿宁'),false);assert.equal(finalText.includes('小林'),false);assert.equal(finalText.includes('mediaId='),false);
   await finalContent.screenshot({path:join(output,'topics-edited-conversation-preview.png')});
   await finalContent.getByRole('button',{name:'关闭',exact:true}).click();
@@ -410,7 +417,7 @@ try {
   await editedDialog.screenshot({path:join(output,'topics-editable-material-phone.png')});
   await page.setViewportSize({width:1448,height:1120});
   await page.waitForFunction(()=>{const node=document.querySelector('[data-testid="topics-send-dialog"]');return node&&node.getBoundingClientRect().width>390;});
-  check('editable multi-speaker material keeps dated chronology, participant aliases and mention relationships, with a reusable custom instruction template');
+  check('editable multi-speaker material keeps dated chronology, pinyin name initials and mention relationships, with a reusable custom instruction template');
   const topicSessionCount = async () => (await createPaseoApi(client).agents.list({filter:{labels:{'workspace-workbench.role':'topic-session'}},page:{limit:100}})).entries.length;
   assert.equal(await topicSessionCount(), 0, 'selecting a model must not create an empty conversation');
   await page.getByTestId('topics-send-dialog').screenshot({ path: join(output, 'topics-new-session-confirmation.png') });
@@ -470,6 +477,72 @@ try {
   }
   assert.equal(deliveredPdf, true, 'the host must make the selected PDF original available to the target provider');
   check('native non-image delivery retains original bytes through a typed host file attachment');
+  await openIsolatedWorkbench(page,ui.url,'a');
+  await page.getByText('话题',{exact:true}).filter({visible:true}).first().click();
+  await page.getByTestId('topic-row-topic-1').waitFor();
+  await panel.getByPlaceholder('搜索话题').fill('视频播放');
+  await page.getByTestId('topic-row-topic-4').waitFor();
+  await page.getByTestId('topic-expand-topic-4').click();
+  const videoTile=panel.getByRole('button',{name:'查看 视频.mp4',exact:true});
+  await videoTile.getByRole('img').waitFor();
+  assert.equal((await panel.innerText()).includes('fileName='),false);
+  assert.equal((await panel.innerText()).includes('@opaque-native-video'),false);
+  await videoTile.click();
+  const videoDialog=page.getByTestId('topics-asset-preview');
+  await videoDialog.getByTestId('topic-video-frames').getByRole('img').nth(3).waitFor();
+  await page.waitForFunction(()=>{const video=document.querySelector('[data-testid="topics-asset-preview"] video');return video&&video.readyState>=2&&video.duration===2;});
+  await videoDialog.getByTestId('topic-video-player').evaluate(video=>video.play());
+  await page.waitForFunction(()=>document.querySelector('[data-testid="topics-asset-preview"] video')?.currentTime>0);
+  await videoDialog.getByTestId('topic-video-player').evaluate(video=>video.pause());
+  await videoDialog.screenshot({path:join(output,'topics-video-original-and-frames.png')});
+  await page.setViewportSize({width:390,height:844});
+  await page.waitForFunction(()=>{const video=document.querySelector('[data-testid="topic-video-player"]');if(!video)return false;const rect=video.getBoundingClientRect();return rect.x>=0&&rect.right<=window.innerWidth;});
+  await videoDialog.screenshot({path:join(output,'topics-video-phone.png')});
+  await page.setViewportSize({width:1448,height:1120});
+  await videoDialog.getByRole('button',{name:'关闭',exact:true}).click();
+  check('a saved video advertised upstream as pending/video renders a real thumbnail and plays in the actual browser, with dated frame previews and a phone layout');
+  await page.getByTestId('topic-message-'+videoMessage.id).click();
+  await page.getByTestId('topics-send').click();
+  await page.getByTestId('topics-identity-name').click();
+  const videoNote='检查所选视频里的镜像展示，仅依据已附材料。';
+  await page.getByTestId('topics-send-note').fill(videoNote);
+  const expectedFrames=await deliver({action:'asset',part:'video-preview',topicId:videoTopic.id,messageId:videoMessage.id,assetId:'video-original'});
+  await page.getByTestId('topics-send-dialog').screenshot({path:join(output,'topics-video-send-name-choice.png')});
+  await page.getByTestId('topics-confirm').click();
+  await page.getByTestId('topics-send').getByText('打开会话',{exact:true}).waitFor();
+  let videoReceived=false;
+  const expectedHashes=expectedFrames.frames.map(frame=>createHash('sha256').update(Buffer.from(frame.base64,'base64')).digest('hex'));
+  for(const deadline=Date.now()+20000;Date.now()<deadline;){
+    for(const name of readdirSync(ui.topicsFixtureRoot).filter(name=>name.endsWith('.json'))){
+      const record=JSON.parse(readFileSync(join(ui.topicsFixtureRoot,name),'utf8'));
+      for(const input of record.inputs||[]){
+        if(!input.some(item=>item.type==='text'&&item.text.includes(videoNote)))continue;
+        const hashes=input.flatMap(item=>{
+          const bytes=item.type==='localImage'&&item.path?readFileSync(item.path):item.type==='image'&&item.url?.startsWith('data:')?Buffer.from(item.url.split(',')[1],'base64'):undefined;
+          return bytes?[createHash('sha256').update(bytes).digest('hex')]:[];
+        });
+        const file=input.find(item=>item.type==='text'&&item.text.includes('Uploaded file: 视频.mp4'));
+        const path=file&&/Path: ([^\n]+)/.exec(file.text)?.[1];
+        if(path&&readFileSync(path).equals(fixture.video)&&JSON.stringify(hashes)===JSON.stringify(expectedHashes))videoReceived=true;
+      }
+    }
+    if(videoReceived)break;
+    await page.waitForTimeout(100);
+  }
+  assert.equal(videoReceived,true,'the actual provider protocol must receive the original MP4 file and all four native image parts');
+  await page.getByTestId('topics-send').click();
+  await page.getByTestId('topic-chat-video').filter({visible:true}).last().waitFor();
+  await page.reload();
+  const chatVideo=page.getByTestId('topic-chat-video').filter({visible:true}).last();
+  await chatVideo.getByRole('img',{name:'所选视频 1',exact:true}).waitFor();
+  await chatVideo.click();
+  const chatVideoDialog=page.getByRole('dialog',{name:'视频',exact:true});
+  await chatVideoDialog.getByTestId('topic-video-frames').getByRole('img').nth(3).waitFor();
+  await page.waitForFunction(()=>{const video=document.querySelector('[data-testid="topic-video-player"]');return video&&video.readyState>=2&&video.duration===2;});
+  await chatVideoDialog.screenshot({path:join(output,'conversation-video-after-reload.png')});
+  await chatVideoDialog.getByRole('button',{name:'关闭',exact:true}).click();
+  assert.equal((await deliver({action:'preferences'})).material.identity,'name');
+  check('the actual local provider receives video bytes plus four native frame images; the conversation video still plays after reload and the visible identity choice is remembered');
   assert.equal(fixture.state.requests.some(request => request.url.startsWith('/v1/projects')), false);
   assert.equal(report.pageErrors.length, 0, JSON.stringify(report.pageErrors));
   report.fidelity.push('same flat topic-list + bottom-basket architecture as refined C',

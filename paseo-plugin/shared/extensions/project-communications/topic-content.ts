@@ -1,30 +1,9 @@
-import {z} from 'zod';
+import {pinyin} from 'pinyin-pro';
 import type {ArchiveMessage} from './topics.ts';
 import {messageText} from './topic-presentation.ts';
 
-export const TOPIC_TEXT_LIMIT=120000;
-export const topicTemplateSchema=z.object({id:z.string().min(1).max(80),name:z.string().trim().min(1).max(40),body:z.string().max(12000)});
-export type TopicTemplate=z.infer<typeof topicTemplateSchema>;
-export const topicMaterialSettingsSchema=z.object({layout:z.enum(['auto','text','conversation']).default('auto'),
-  identity:z.enum(['alias','name']).default('alias'),presetId:z.string().max(80).default('forward'),presets:z.array(topicTemplateSchema).max(8).default([])});
-export type TopicMaterialSettings=z.infer<typeof topicMaterialSettingsSchema>;
-export const topicContentOptionsSchema=z.object({layout:z.enum(['auto','text','conversation']).default('auto'),identity:z.enum(['alias','name']).default('alias'),
-  timeZone:z.string().min(1).max(100).default('Asia/Shanghai'),template:z.string().max(12000).default('{{note}}\n\n{{materials}}'),
-  aliases:z.array(z.object({key:z.string().min(1).max(4096),label:z.string().regex(/^参与者 [A-Z]+$/).max(40)})).max(512).optional()});
-export type TopicContentOptions=z.infer<typeof topicContentOptionsSchema>;
-export const defaultTopicMaterialSettings:TopicMaterialSettings={layout:'auto',identity:'alias',presetId:'forward',presets:[]};
-export const topicBuiltInTemplates:TopicTemplate[]=[{id:'forward',name:'普通转发',body:'{{note}}\n\n{{materials}}'},
-  {id:'discussion',name:'对话整理',body:'{{note}}\n\n以下是我选择的对话片段。请结合发言顺序、说话者和相互回应来理解，不要把不同人的说法混为一谈。\n\n{{materials}}'}];
-export function topicTemplateError(body:string){
-  if(body.length>12000)return '模板内容过长';
-  if(body.split('{{materials}}').length!==2)return '请保留一处「所选材料」';
-  if(body.split('{{note}}').length!==2)return '请保留一处「本次说明」';
-  return '';
-}
-export function topicContentOptions(settings:TopicMaterialSettings,timeZone:string):TopicContentOptions{
-  const preset=[...topicBuiltInTemplates,...settings.presets].find(item=>item.id===settings.presetId)||topicBuiltInTemplates[0];
-  return {layout:settings.layout,identity:settings.identity,timeZone,template:preset.body};
-}
+export * from './topic-content-settings.ts';
+import {topicContentOptionsSchema,topicTemplateError,TOPIC_TEXT_LIMIT,type TopicContentOptions} from './topic-content-settings.ts';
 
 export type TopicContentEntry={topicId:string;message:ArchiveMessage;editedText?:string;includeText?:boolean;assetIds?:string[]};
 export type TopicContentPerson={key:string;name:string;label:string;scope:string;scopes:string[];sourceId?:string;names:string[]};
@@ -36,7 +15,18 @@ const scope=(message:ArchiveMessage)=>JSON.stringify([message.sourceId,message.s
 const senderId=(message:ArchiveMessage)=>message.senderId||(typeof message.sender==='object'?message.sender.id:'');
 export const topicMessageKey=(message:ArchiveMessage)=>JSON.stringify([message.sourceId,message.sourceAccountId||'',message.channelId,message.id,message.version]);
 function personKey(message:ArchiveMessage){const id=senderId(message),name=sender(message);return id?JSON.stringify([message.sourceId,message.sourceAccountId||'',id]):JSON.stringify([scope(message),name==='未知参与者'?message.id:name]);}
-function letters(index:number){let value=index+1,result='';while(value){value--;result=String.fromCharCode(65+value%26)+result;value=Math.floor(value/26);}return result;}
+const nameLabels=new Map<string,string>();
+/** Stable names rather than selection ordinals; surname readings come from the
+ * pinyin dictionary. Non-Chinese names and name fragments keep their spelling. */
+export function topicPersonLabel(name:string){
+  if(nameLabels.has(name))return nameLabels.get(name)!;
+  const choices=names(name),base=choices.length>1?choices[1]:name;
+  const label=pinyin(base,{type:'all',toneType:'none',surname:'head'}).map(part=>part.isZh?part.first.toUpperCase():part.origin).join('');
+  nameLabels.set(name,label);if(nameLabels.size>512)nameLabels.delete(nameLabels.keys().next().value!);
+  return label;
+}
+function nameSuffix(key:string){let hash=2166136261;for(const char of key)hash=Math.imul(hash^char.codePointAt(0)!,16777619);return (hash>>>0).toString(16).padStart(8,'0').toUpperCase();}
+
 export function chronologicalMessages<T extends {message:ArchiveMessage}>(entries:T[]):T[]{
   return entries.map((entry,index)=>({entry,index})).sort((a,b)=>{
     const left=a.entry.message,right=b.entry.message,knownLeft=left.timestampKnown!==false&&Number.isFinite(left.createdAt),knownRight=right.timestampKnown!==false&&Number.isFinite(right.createdAt);
@@ -58,13 +48,16 @@ function names(name:string){
 /** A batch keeps its chosen aliases when earlier context is added later. */
 export function topicContentPeople(entries:TopicContentEntry[],saved:TopicContentAlias[]=[]){
   const people:TopicContentPerson[]=[],personByKey=new Map<string,TopicContentPerson>(),labels=new Map<string,string>(),used=new Set<string>();
-  for(const item of saved){if(labels.has(item.key)||used.has(item.label))throw Error('topic_content_alias_invalid');labels.set(item.key,item.label);used.add(item.label);}
-  let ordinal=0;
+  for(const item of saved){
+    if(labels.has(item.key)||used.has(item.label))throw Error('topic_content_alias_invalid');
+    // Old A/B/C labels remain valid in frozen receipts; new drafts migrate to names.
+    if(/^参与者 [A-Z]+$/.test(item.label))continue;
+    labels.set(item.key,item.label);used.add(item.label);
+  }
   const add=(key:string,name:string,message:ArchiveMessage,sourceId?:string)=>{
     let person=personByKey.get(key);
     if(!person){
-      let label=labels.get(key);if(!label){while(used.has('参与者 '+letters(ordinal)))ordinal++;label='参与者 '+letters(ordinal++);used.add(label);}
-      person={key,name,names:[name],label,scope:scope(message),scopes:[scope(message)],sourceId};people.push(person);personByKey.set(key,person);
+      person={key,name,names:[name],label:'',scope:scope(message),scopes:[scope(message)],sourceId};people.push(person);personByKey.set(key,person);
     }else {if(!person.names.includes(name))person.names.push(name);if(!person.scopes.includes(scope(message)))person.scopes.push(scope(message));}
     return person;
   };
@@ -75,8 +68,21 @@ export function topicContentPeople(entries:TopicContentEntry[],saved:TopicConten
     const id=mention.id||mention.userId||mention.senderId,name=mention.displayName||mention.name;
     if(id&&name)add(JSON.stringify([message.sourceId,message.sourceAccountId||'',id]),name,message,id);
   }
+  for(const person of [...people].sort((left,right)=>left.key<right.key?-1:left.key>right.key?1:0)){
+    const base=topicPersonLabel(person.name);let label=labels.get(person.key);
+    if(!label){
+      label=base;
+      if(used.has(label)){
+        const suffix=nameSuffix(person.key);let length=4;
+        while(used.has(label=base+'·'+suffix.slice(0,length))){if(length++>=8)throw Error('topic_content_alias_invalid');}
+      }
+      used.add(label);
+    }
+    person.label=label;
+  }
   return people;
 }
+
 function word(char:string){return Boolean(char)&&(/[a-zA-Z0-9_]/.test(char)||char.charCodeAt(0)>127&&char.trim()!=='');}
 function asciiWord(char:string){return Boolean(char)&&/[a-zA-Z0-9_]/.test(char);}
 const punctuation=new Set([' ', '\n','\r','\t','，','。','！','？','：','；',',','!','?',':',';','（','）','(',')','[',']','{','}','<','>']);

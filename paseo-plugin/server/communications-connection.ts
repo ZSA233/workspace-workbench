@@ -17,6 +17,20 @@ export class CommunicationsConnection {
   readonly config:ServiceConnection;
   private token:()=>string;
   constructor(config:ServiceConnection,token:()=>string){this.config=config;this.token=token;}
+  get signal() { return this.controller.signal; }
+  async metadata(path:string):Promise<{mimeType:string;size?:number}> {
+    const token=this.token();if(!token)throw Error('service_unauthorized');
+    if(this.controller.signal.aborted)throw Error('extension_host_unloaded');
+    const controller=new AbortController(),cancel=()=>controller.abort(),timer=setTimeout(cancel,5000);
+    this.controller.signal.addEventListener('abort',cancel,{once:true});
+    try {
+      const response=await fetch(this.config.endpoint.replace(/\/$/,'')+path,{method:'HEAD',headers:{Authorization:`Bearer ${token}`},signal:controller.signal,redirect:'error'});
+      if(!response.ok)throw Error('service_http_'+response.status);
+      const length=response.headers.get('content-length'),size=length===null?undefined:Number(length);
+      return {mimeType:(response.headers.get('content-type')||'').split(';')[0].trim().toLowerCase(),
+        ...(size!==undefined&&Number.isSafeInteger(size)&&size>0?{size}:{})};
+    } finally {clearTimeout(timer);this.controller.signal.removeEventListener('abort',cancel);}
+  }
   async bytes(path:string,method='GET',body?:unknown,limit=12*1024*1024):Promise<{bytes:Buffer;mimeType:string}> {
     if(this.controller.signal.aborted)throw Error('extension_host_unloaded');
     const token=this.token();if(!token)throw Error('独立沟通服务尚未配置 API Token；请先启动服务并配置连接');

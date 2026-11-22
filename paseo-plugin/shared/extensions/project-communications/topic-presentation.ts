@@ -2,13 +2,19 @@ import type { ArchiveMessage, ArchiveTopic } from './topics.ts';
 
 const mediaMarker = /\[(?:图片|视频|媒体|文件|附件)消息\]\s*\(\s*(?:mediaId|fileId|assetId)\s*=[^\r\n)]*\)/g;
 const mediaLine = /^[ \t]*\[(?:图片|视频|媒体|文件|附件)(?:消息)?\][ \t]*$/gm;
+const mediaEnvelope = /\[(?:图片|视频|媒体|文件|附件)消息\]\s*\(\s*(?:mediaId|fileId|assetId)\s*=([^\r\n)]*)\)\s*fileName=[^\r\n]*?\s+url[:：][ \t]*([^\s]+)(?:[ \t]*注意[:：][ \t]*如需下载[ \t]*使用[ \t]*dws[ \t]+chat[ \t]+message[ \t]+download-media[ \t]*命令下载[。.]?)?/g;
 const genericTitles = new Set(['群反馈', '反馈排查', '新话题', '单聊问题', '问题排查', '附件反馈']);
 
 /** A display projection only: source text and its version remain untouched. */
 export function messageText(message: Pick<ArchiveMessage, 'text' | 'displayText'> & Partial<Pick<ArchiveMessage, 'assets'>>) {
   const text = typeof message.displayText === 'string' ? message.displayText : message.text || '';
   if (!message.assets?.length) return text;
-  return text.replace(mediaMarker, '').replace(mediaLine, '').replace(/\n{3,}/g, '\n\n').trim();
+  // Only a complete, known video transport envelope is hidden. Ordinary URLs,
+  // captions and fileName examples remain user content.
+  const video = message.assets.some(asset => asset.kind === 'video' || asset.mimeType === 'video' || asset.mimeType?.startsWith('video/'));
+  const clean = text.replace(mediaEnvelope, (match,reference:string,url:string)=>reference.trim()===url?'':match).replace(mediaMarker, '').replace(mediaLine, '').trim();
+  const projected = video ? clean.replace(/^fileName\s*=\s*[^\r\n]+?\.(?:mp4|mov|webm)\s+url\s*:\s*@[^\s]+\s*$/i, '') : clean;
+  return projected.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function titleText(value: string | undefined) {

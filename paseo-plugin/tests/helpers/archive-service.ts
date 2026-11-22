@@ -31,6 +31,8 @@ export function archiveFixture() {
       analysisEnabled: true, autoDiscover: true, discoveryAction: 'collect', replyMode: 'off', allowedTools: ['messages.read'], customHistory: { retain: true } }],
     libraries: [{ id: 'default', name: '示例资料库' }],
     failLists: false,
+    unavailableAssets: new Set<string>(),
+    originalMessages: new Map<string,ArchiveMessage>(),
     requests: [] as Array<{ method: string; url: string }>,
   };
 }
@@ -39,6 +41,7 @@ export async function startArchiveFixture() {
   const token = 'a'.repeat(64);
   const image = readFileSync(new URL('../../../docs/design/archive-topics/concept-c-refined.png', import.meta.url));
   const pdf = Buffer.from('%PDF-1.7\n1 0 obj<</Type/Catalog>>endobj\n%%EOF');
+  const video = readFileSync(new URL('../fixtures/topic-video.mp4', import.meta.url));
   const server = createServer(async (req, res) => {
     state.requests.push({ method: req.method || 'GET', url: req.url || '' });
     const url = new URL(req.url || '/', 'http://fixture');
@@ -80,7 +83,7 @@ export async function startArchiveFixture() {
     }
     const original = /^libraries\/default\/messages\/([^/]+)$/.exec(path);
     if (original) {
-      const message = state.topics.flatMap(topic => topic.messages).find(message => message.id === original[1]);
+      const message = state.originalMessages.get(original[1]) || state.topics.flatMap(topic => topic.messages).find(message => message.id === original[1]);
       return message ? send(message) : send('message_missing',404);
     }
     const context = /^libraries\/default\/messages\/([^/]+)\/context$/.exec(path);
@@ -92,6 +95,14 @@ export async function startArchiveFixture() {
       res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length });
       return res.end(pdf);
     }
+    if (/^libraries\/default\/assets\/video-(original|duplicate)$/.test(path)) {
+      if(state.unavailableAssets.has(path.split('/').at(-1)!))return send('asset_not_ready',404);
+      if(url.searchParams.get('view')==='thumbnail') {
+        res.writeHead(200,{'Content-Type':'image/png','Content-Length':image.length});return res.end(image);
+      }
+      res.writeHead(200, {'Content-Type':'video/mp4','Content-Length':video.length});
+      return res.end(video);
+    }
     if (/^libraries\/default\/assets\/image-[123]$/.test(path)) {
       res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': image.length });
       return res.end(image);
@@ -100,7 +111,7 @@ export async function startArchiveFixture() {
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as { port: number };
-  return { state, token, image, pdf, url: 'http://127.0.0.1:' + address.port,
+  return { state, token, image, pdf, video, url: 'http://127.0.0.1:' + address.port,
     imageHash: createHash('sha256').update(image).digest('hex'),
     close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
   };

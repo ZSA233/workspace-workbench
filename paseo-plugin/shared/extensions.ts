@@ -1,5 +1,6 @@
 import { defineRpc } from '@getpaseo/plugin';
 import { z } from 'zod';
+import { watchedGroupSchema } from './extensions/project-communications/topics.ts';
 
 export const EXTENSION_API_VERSION = 1;
 export type ExtensionManifest = {
@@ -21,6 +22,8 @@ export const serviceConnectionSchema = z.object({
     if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1','localhost','[::1]'].includes(url.hostname)))) ctx.addIssue({ code:'custom', message:'服务地址需使用 HTTPS；本机可使用 HTTP，地址中不能包含凭证或查询参数' });
   }),
   projectId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
+  libraryId: z.string().min(1).max(128).optional(),
+  watchedGroups: z.array(watchedGroupSchema).max(100).optional(),
 });
 export type ServiceConnection = z.infer<typeof serviceConnectionSchema>;
 export type ServiceConnectionStatus = { revision:number; connection:ServiceConnection; hasToken:boolean; localToken:boolean; connected?:boolean; detail?:string; serviceVersion?:string };

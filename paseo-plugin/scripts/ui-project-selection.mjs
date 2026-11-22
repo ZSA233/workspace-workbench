@@ -1,7 +1,7 @@
 /** The global entry has no workspace context, so test fixtures choose explicitly. */
 export async function selectGlobalWorkbenchProject(page, projectName) {
-  const chooser = page.getByText("Select project", { exact: true }).filter({ visible: true }).first();
-  const repositories = page.getByText("Repositories", { exact: true }).filter({ visible: true }).first();
+  const chooser = page.getByText(/^(Select project|选择项目)$/).filter({ visible: true }).first();
+  const repositories = page.getByText(/^(Repositories|仓库)$/).filter({ visible: true }).first();
   const state = await Promise.race([
     chooser.waitFor({ timeout: 30000 }).then(() => "choose"),
     repositories.waitFor({ timeout: 30000 }).then(() => "ready"),

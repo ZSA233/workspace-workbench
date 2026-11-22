@@ -4,6 +4,7 @@ import { queryObserver } from './server/observer';
 import {handleChangeNotes} from './server/change-notes';
 import { creationSource } from './server/workspace-creator';
 import { defineRpc } from "@getpaseo/plugin";
+import { archiveTopicsRpc, archiveTopicsDeliveryRpc } from './shared/extensions/project-communications/topics.ts';
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import { handleHandoffMaterials } from "./server/handoff-access";
@@ -148,6 +149,8 @@ export default function contribute(server: PluginServerContext) {
   measured.handle(communicationsConnectionRpc,input=>extensions.connection(input.projectConfig,input.extensionId,input.action,input));
   measured.handle(extensionsRpc, input => input.action === 'status' ? extensions.state(input.projectConfig,input.extensionId) : extensions.setEnabled(input.projectConfig,input.extensionId,input.action==='enable'));
   measured.handle(communicationsRpc, input => extensions.request(input.projectConfig,input.extensionId,input.request));
+  measured.handle(archiveTopicsRpc,input=>extensions.topics(input.projectConfig,input.extensionId,input.connectionRevision,input.request));
+  withHost.handle(archiveTopicsDeliveryRpc,(input,context)=>extensions.topics(input.projectConfig,input.extensionId,input.connectionRevision,input.request,context));
   // Delivery alone needs the host connection. Other extension operations remain usable while it reconnects.
   withHost.handle(communicationsDeliveryRpc,(input,context)=>extensions.request(input.projectConfig,input.extensionId,input.request,context));
   withHost.handle(workspaceHandoffPreview, (input, context) => withProject(input, () => orchestrate("preview", { requestId: digest(input.handoff), workspaceId: input.workspaceId, baseRefs: {}, handoff: input.handoff }, input.parentAgentId, context)));

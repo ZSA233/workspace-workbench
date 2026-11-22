@@ -33,8 +33,16 @@ export async function startService(home) {
   const exit = new Promise((resolveExit, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolveExit({ code, signal })); });
   const started = Date.now();
   try {
-    while (!stdout.includes('communications-service-ready')) {
+    while (true) {
       if (child.exitCode !== null || Date.now() - started > 15000) throw Error('Go service did not become ready: ' + stderr);
+      const tokenFile = join(home, 'api-token');
+      if (existsSync(tokenFile)) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}/health`, { headers: { Authorization: 'Bearer ' + readFileSync(tokenFile, 'utf8').trim() }, signal: AbortSignal.timeout(500) });
+          const health = await response.json();
+          if (response.ok && health.product === 'project-communications-service' && health.apiVersion === 1) break;
+        } catch {}
+      }
       await new Promise(resolveWait => setTimeout(resolveWait, 10));
     }
   } catch (error) { child.kill('SIGKILL'); await exit; throw error; }

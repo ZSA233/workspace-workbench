@@ -40,7 +40,7 @@ export function Button({ children, onPress, disabled = false, active = false, id
 }) {
   const c = useColors(), touch = useTouch(), primary = variant === 'primary', plain = variant === 'link' || variant === 'ghost';
   const color = primary ? c.accentForeground : active || variant === 'link' ? c.accent : c.foreground;
-  return <Pressable testID={id} accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled, selected: active }} disabled={disabled} onPress={onPress}
+  return <Pressable testID={id} accessibilityLabel={label} {...(Platform.OS === 'web' && label ? {title:label} : {})} accessibilityRole="button" accessibilityState={{ disabled, selected: active }} disabled={disabled} onPress={onPress}
     style={({ hovered, pressed }: any) => ({ minHeight: touch ? 44 : 30, minWidth: !children ? touch ? 44 : 30 : undefined,
       justifyContent: 'center', alignItems: 'center', flexDirection: 'row', gap: 6, paddingHorizontal: children ? plain ? 5 : 12 : 6, paddingVertical: 4,
       borderRadius: 5, borderWidth: plain ? 0 : 1, borderColor: primary || active ? c.accent : c.border,
@@ -62,10 +62,10 @@ export function Count({ value }: { value: number }) {
     <Text style={{ color: '#fff', fontSize: 11, lineHeight: 16 }}>{value}</Text>
   </View>;
 }
-export function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+export function Toggle({ label, checked, onChange, disabled = false }: { label: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
   const c = useColors(), touch = useTouch();
-  return <Pressable accessibilityRole="switch" accessibilityLabel={label} aria-checked={checked} accessibilityState={{ checked }} onPress={() => onChange(!checked)}
-    style={{ minHeight: touch ? 44 : 32, flexDirection: 'row', alignItems: 'center', gap: 9, alignSelf: 'flex-start' }}>
+  return <Pressable accessibilityRole="switch" accessibilityLabel={label} aria-checked={checked} accessibilityState={{ checked, disabled }} disabled={disabled} onPress={() => onChange(!checked)}
+    style={{ minHeight: touch ? 44 : 32, flexDirection: 'row', alignItems: 'center', gap: 9, alignSelf: 'flex-start', opacity: disabled ? 0.45 : 1 }}>
     <View style={{ width: 35, height: 21, borderRadius: 11, backgroundColor: checked ? c.accent : c.foregroundMuted }}><View style={{ position: 'absolute', left: checked ? 16 : 2, top: 2, width: 17, height: 17, borderRadius: 9, backgroundColor: '#fff' }} /></View>
     <Label>{label}</Label>
   </Pressable>;

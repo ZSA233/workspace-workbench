@@ -4,13 +4,16 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { builtinExtensionRegistry } from './backend/extensions/registry.ts';
 import { serviceConnectionSchema, type ServiceConnection, type ServiceConnectionStatus, type ExtensionState } from '../shared/extensions.ts';
-import type { CommunicationsAction, Delivery, Snapshot } from '../shared/extensions/project-communications/shared.ts';
+import type { CommunicationsAction, Delivery } from '../shared/extensions/project-communications/shared.ts';
 import { resolveProject, withProject, type ProjectRoute } from './projects.ts';
 import { handleSessionOperation } from './session-tools.ts';
 import { allAgentBindings } from './agent-store.ts';
 import { createExtensionHost } from './extension-host.ts';
 import type { AgentContext } from './agent-provider.ts';
 import { CommunicationsConnection, defaultServiceConnection, localServiceToken } from './communications-connection.ts';
+import { ArchiveTopics } from './archive-topics.ts';
+import { TopicMaterials } from './topic-materials.ts';
+import type { TopicAction } from '../shared/extensions/project-communications/topics.ts';
 
 type Settings={version:number;enabled:Record<string,boolean>;connections?:Record<string,{revision:number;config:ServiceConnection}>;[key:string]:unknown};
 type OwnedConnection={connection:CommunicationsConnection;revision:number;ready:Promise<unknown>};
@@ -18,6 +21,7 @@ type OwnedConnection={connection:CommunicationsConnection;revision:number;ready:
 export class WorkbenchExtensions {
   readonly registry=builtinExtensionRegistry();
   private clients=new Map<string,OwnedConnection>();private closed=false;
+  private archives=new Map<string,OwnedConnection>();
   private key(route:ProjectRoute,id:string){return route.configPath+'\0'+id;}
   private settingsPath(route:ProjectRoute){return join(route.stateRoot,'extensions','enabled.json');}
   private settings(route:ProjectRoute):Settings {const path=this.settingsPath(route);if(!existsSync(path))return {version:1,enabled:{}};const raw=JSON.parse(readFileSync(path,'utf8'));if(raw.version!==1||!raw.enabled||typeof raw.enabled!=='object')throw Error('extension_settings_invalid');return raw;}
@@ -32,11 +36,11 @@ export class WorkbenchExtensions {
       const old=this.settings(route),current=this.connectionSettings(route,id);if(input?.revision!==current.revision)throw Error('settings_revision_conflict');
       const config=serviceConnectionSchema.parse(input?.connection),file=this.credentialFile(route);
       if(input?.token!==undefined||current.config.endpoint!==config.endpoint){mkdirSync(dirname(file),{recursive:true,mode:0o700});const temporary=file+'.'+randomUUID();writeFileSync(temporary,input?.token||'',{mode:0o600});renameSync(temporary,file);}
-      this.write(route,{...old,connections:{...old.connections,[id]:{revision:current.revision+1,config}}});this.clients.get(this.key(route,id))?.connection.close();this.clients.delete(this.key(route,id));
+      this.write(route,{...old,connections:{...old.connections,[id]:{revision:current.revision+1,config}}});this.clients.get(this.key(route,id))?.connection.close();this.clients.delete(this.key(route,id));this.archives.get(this.key(route,id))?.connection.close();this.archives.delete(this.key(route,id));
     }
     const current=this.connectionSettings(route,id),file=this.credentialFile(route),hasStored=existsSync(file)&&Boolean(readFileSync(file,'utf8').trim());
     const result:ServiceConnectionStatus={revision:current.revision,connection:current.config,hasToken:Boolean(this.token(route,current.config)),localToken:!hasStored&&Boolean(localServiceToken(current.config))};
-    if(action==='check'){const client=new CommunicationsConnection(current.config,()=>this.token(route,current.config));try{const health=await client.check();result.connected=true;result.serviceVersion=health.version;result.detail='独立服务 API 已连接；钉钉授权与消息能力需分别验证';}catch(error){result.connected=false;result.detail=error instanceof Error?error.message:'service_connection_failed';}finally{client.close();}}
+    if(action==='check'){const client=new CommunicationsConnection(current.config,()=>this.token(route,current.config));try{const health=await client.check();result.connected=true;result.serviceVersion=health.version;result.detail='AI 助手已连接';}catch(error){result.connected=false;result.detail=error instanceof Error?error.message:'service_connection_failed';}finally{client.close();}}
     return result;
   }
   private async client(route:ProjectRoute,id:string){
@@ -48,10 +52,49 @@ export class WorkbenchExtensions {
   }
   async state(projectConfig:string,id:string):Promise<ExtensionState>{
     const route=resolveProject({projectConfig}),manifest=this.registry.get(id),enabled=Boolean(this.settings(route).enabled[id]);if(!enabled)return {manifest,enabled:false,state:'disabled',unread:0};
-    try{const snapshot=await (await this.client(route,id)).action({action:'snapshot'}) as Snapshot;return {manifest,enabled:true,state:'ready',unread:snapshot.unread};}
+    try{await this.archiveClient(route,id);return {manifest,enabled:true,state:'ready',unread:0};}
     catch(error){return {manifest,enabled:true,state:'failed',unread:0,error:error instanceof Error?error.message:'service_unavailable'};}
   }
-  async setEnabled(projectConfig:string,id:string,enabled:boolean){const route=resolveProject({projectConfig});this.registry.get(id);const old=this.settings(route);this.write(route,{...old,enabled:{...old.enabled,[id]:enabled}});if(!enabled){this.clients.get(this.key(route,id))?.connection.close();this.clients.delete(this.key(route,id));}return this.state(projectConfig,id);}
+  async setEnabled(projectConfig:string,id:string,enabled:boolean){const route=resolveProject({projectConfig});this.registry.get(id);const old=this.settings(route);this.write(route,{...old,enabled:{...old.enabled,[id]:enabled}});if(!enabled){this.clients.get(this.key(route,id))?.connection.close();this.clients.delete(this.key(route,id));this.archives.get(this.key(route,id))?.connection.close();this.archives.delete(this.key(route,id));}return this.state(projectConfig,id);}
+  private async archiveClient(route:ProjectRoute,id:string){
+    if(this.closed)throw Error('extension_host_unloaded');
+    const settings=this.connectionSettings(route,id),key=this.key(route,id);let owned=this.archives.get(key);
+    if(!owned||owned.revision!==settings.revision){owned?.connection.close();const connection=new CommunicationsConnection(settings.config,()=>this.token(route,settings.config));owned={connection,revision:settings.revision,ready:connection.check()};this.archives.set(key,owned);
+      const captured=owned;void owned.ready.catch(()=>{if(this.archives.get(key)===captured)this.archives.delete(key);connection.close();});}
+    await owned.ready;return owned.connection;
+  }
+  async topics(projectConfig:string,id:string,revision:number,request:TopicAction,context?:AgentContext):Promise<unknown>{
+    this.registry.get(id);const route=resolveProject({projectConfig}),settings=this.connectionSettings(route,id);
+    if(settings.revision!==revision)throw Error('project_connection_changed');
+    if(request.action!=='directory'&&!this.settings(route).enabled[id])throw Error('extension_disabled');
+    const archive=new ArchiveTopics(await this.archiveClient(route,id));
+    const materials=new TopicMaterials(route.stateRoot,createHash('sha256').update(JSON.stringify([route.configPath,settings.revision,settings.config])).digest('hex'));
+    const targets=()=>withProject({projectConfig},()=>allAgentBindings().map(item=>({workspaceId:item.workspaceId,agentId:item.agentId})));
+    switch(request.action){
+      case 'directory':return archive.directory(request.libraryId);
+      case 'list':return archive.list(request);
+      case 'read':return archive.read(request.topicId);
+      case 'messages':return archive.messages(request.topicId,request.offset);
+      case 'context':return archive.context(request.topicId,request.messageId);
+      case 'asset':return archive.asset(request.topicId,request.messageId,request.assetId,request.contextOf);
+      case 'group.configure':return archive.configure(request);
+      case 'targets':return targets();
+      case 'preview':{
+        const target=(await targets()).find(item=>item.workspaceId===request.workspaceId);
+        if(!target)throw Error('topic_target_unavailable');
+        return withProject({projectConfig},()=>materials.preview(archive,target.workspaceId,target.agentId,request.selections));
+      }
+      case 'send':case 'receipt':{
+        if(!context)throw Error('extension_host_delivery_unavailable');
+        const preview=materials.read(request.id),target=(await targets()).find(item=>item.workspaceId===preview.workspaceId);
+        if(!target)throw Error('topic_target_unavailable');
+        if(request.action==='receipt')return materials.receipt(request.id,target.agentId,value=>withProject({projectConfig},()=>handleSessionOperation({projectConfig,workspaceId:value.workspaceId,action:'receipt',requestId:'archive-topic:'+value.id,attachments:[],behavior:'steer',limit:20,timeoutMs:0},context)) as Promise<{delivery:string;messageId?:string}>);
+        const host=createExtensionHost(route,context);
+        if(this.closed||this.connectionSettings(route,id).revision!==revision||!this.settings(route).enabled[id])throw Error('project_connection_changed');
+        return materials.send(request.id,target.agentId,value=>host.deliver({workspaceId:value.workspaceId,requestId:'archive-topic:'+value.id,text:value.dispatchText||value.text,attachments:value.references}));
+      }
+    }
+  }
   async request(projectConfig:string,id:string,request:CommunicationsAction,context?:AgentContext):Promise<any>{
     const route=resolveProject({projectConfig});this.registry.get(id);const client=await this.client(route,id);
     if(request.action==='delivery.targets')return withProject({projectConfig},()=>allAgentBindings().map(item=>({workspaceId:item.workspaceId,agentId:item.agentId})));
@@ -72,5 +115,5 @@ export class WorkbenchExtensions {
     }
     return client.action(request);
   }
-  async close(){this.closed=true;for(const owned of this.clients.values())owned.connection.close();this.clients.clear();}
+  async close(){this.closed=true;for(const owned of [...this.clients.values(),...this.archives.values()])owned.connection.close();this.clients.clear();this.archives.clear();}
 }

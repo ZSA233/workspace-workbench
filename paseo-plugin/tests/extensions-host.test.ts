@@ -50,6 +50,9 @@ else process.exit(2);
     mkdirSync(join(state, 'extensions'), { recursive: true }); writeFileSync(join(state, 'extensions', 'enabled.json'), JSON.stringify({ version: 1, enabled: {}, unknown: 'retain' }));
     const initial = await host.connection(config, 'project-communications', 'read');
     await host.connection(config, 'project-communications', 'configure', { revision: initial.revision, connection: { endpoint: service.url, projectId: 'same-project' }, token: service.token });
+    // Archive activation no longer creates a collection project as a side effect.
+    // This compatibility scenario explicitly provisions its legacy project.
+    await service.request('/v1/projects/same-project', 'PUT', { name: 'test' });
     assert.equal((await host.setEnabled(config, 'project-communications', true)).state, 'ready');
     const before = await direct({ action: 'snapshot' }); before.config.source = { executable, mode: 'custom', clientId: 'fixture-app', profile: '', botId: 'bot' };
     await direct({ action: 'configure', revision: before.revision, config: before.config, appSecret: 'fixture-secret' });

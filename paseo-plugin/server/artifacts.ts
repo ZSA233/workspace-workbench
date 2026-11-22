@@ -8,7 +8,8 @@ import { liveAgentIdentity } from "./agent-identity.ts";
 import type { ReviewArtifactReference, ReviewArtifactKind } from "../shared/review-packet.ts";
 import type { ArtifactListResponse, ArtifactRegisterResponse } from "../shared/artifacts.ts";
 
-export const MAX_REGISTERED_BYTES = 8 * 1024 * 1024;
+import { MAX_REGISTERED_BYTES, supportedArtifact } from '../shared/artifact-limits.ts';
+export { MAX_REGISTERED_BYTES } from '../shared/artifact-limits.ts';
 export const MAX_TEXT_BYTES = 512 * 1024;
 const ASSET_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 
@@ -102,10 +103,7 @@ function inferMimeType(path: string): string {
 }
 
 function isAllowedMimeType(mimeType: string): boolean {
-  return [
-    "image/png", "image/jpeg", "image/webp", "image/gif",
-    "application/pdf", "text/plain", "text/markdown", "text/html", "application/json",
-  ].includes(mimeType.toLowerCase());
+  return supportedArtifact(mimeType);
 }
 
 function inferArtifactKind(mimeType: string): ReviewArtifactKind {

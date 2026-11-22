@@ -1,0 +1,61 @@
+import { defineRpc } from '@getpaseo/plugin';
+import { z } from 'zod';
+
+const id = z.string().min(1).max(512).refine(value => value !== '.' && value !== '..' && !/[\u0000-\u001f]/.test(value));
+export const watchedGroupSchema = z.object({ sourceId: id, channelId: id });
+export type WatchedGroup = z.infer<typeof watchedGroupSchema>;
+export type ArchiveLibrary = { id: string; name: string; projectId?: string };
+export type ArchiveChannel = WatchedGroup & { id: string; name: string; provider?: string; state?: string };
+export type ArchiveGroup = WatchedGroup & { id: string; name: string; revision: number; enabled: boolean; analysisEnabled?: boolean; autoDiscover?: boolean; discoveryAction?: 'collect' | 'investigate'; replyMode?: 'off' | 'restrained'; allowedTools: string[] };
+export type ArchiveTool = { id: string; name?: string; description?: string; enabled: boolean; builtin?: boolean; readOnly?: boolean };
+export type ArchiveAsset = { id: string; name: string; kind?: string; state: string; mimeType?: string; size?: number; sha256?: string; error?: string };
+export type ArchiveMessage = { id: string; text: string; sender: string | { name?: string; displayName?: string; id?: string }; createdAt: number; version: string; sourceId: string; channelId: string; sourceAccountId?: string; archiveId?: string; assets: ArchiveAsset[]; quote?: unknown };
+export type ArchiveTopic = { id: string; title: string; sourceId: string; channelId: string; sourceAccountId?: string; revision: number; inputRevision: number; status: string; category?: string; updatedAt: number; messageCount?: number; summary?: string; lastAnswer?: string; rootMessageId?: string };
+export type ArchiveTopicDetail = ArchiveTopic & { messages: ArchiveMessage[]; messageCount: number; hasMoreMessages: boolean };
+export type TopicPage = { items: ArchiveTopic[]; hasMore: boolean; next?: { beforeUpdated: number; beforeId: string } };
+export type ArchiveDirectory = { libraries: ArchiveLibrary[]; channels: ArchiveChannel[]; groups: ArchiveGroup[]; tools: ArchiveTool[] };
+export type TopicContext = { items: ArchiveMessage[]; hasBefore?: boolean; hasAfter?: boolean };
+export type TopicTarget = { workspaceId: string; agentId: string };
+const messageRef = z.object({ id, version: z.string().min(1).max(512), contextOf: id.optional() });
+const assetRef = z.object({ id, messageId: id, messageVersion: z.string().min(1).max(512), contextOf: id.optional() });
+export const topicSelectionSchema = z.object({
+  topicId: id, revision: z.number().int().nonnegative(), inputRevision: z.number().int().nonnegative(),
+  messages: z.array(messageRef).max(100), assets: z.array(assetRef).max(20), includeAnalysis: z.boolean().default(false),
+});
+export type TopicSelection = z.infer<typeof topicSelectionSchema>;
+export type SelectedTopic = { topic: ArchiveTopicDetail; messages: ArchiveMessage[]; assetIds: string[]; includeAnalysis: boolean; contexts: Record<string, string> };
+export type TopicMaterialPreview = {
+  id: string; workspaceId: string; text: string; createdAt: number; state: 'preview' | 'sending' | 'accepted' | 'uncertain';
+  topics: Array<{ id: string; title: string; revision: number; inputRevision: number; messageCount: number; assetCount: number }>;
+  assets: Array<{ id: string; name: string; mimeType: string; sha256: string; size: number }>;
+  messageId?: string; readConfirmed: false;
+};
+export const topicActionSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('directory'), libraryId: id.optional() }),
+  z.object({ action: z.literal('list'), query: z.string().max(500).default(''), group: watchedGroupSchema.optional(), beforeUpdated: z.number().int().nonnegative().optional(), beforeId: id.optional(), limit: z.number().int().min(1).max(50).default(30) }),
+  z.object({ action: z.literal('read'), topicId: id }),
+  z.object({ action: z.literal('messages'), topicId: id, offset: z.number().int().min(0).max(100000) }),
+  z.object({ action: z.literal('context'), topicId: id, messageId: id }),
+  z.object({ action: z.literal('asset'), topicId: id, messageId: id, assetId: id, contextOf: id.optional() }),
+  z.object({ action: z.literal('group.configure'), sourceId: id, channelId: id, revision: z.number().int().nonnegative(), collect: z.boolean().optional(), allowedTools: z.array(id).max(32), requestId: id }),
+  z.object({ action: z.literal('targets') }),
+  z.object({ action: z.literal('preview'), workspaceId: id, selections: z.array(topicSelectionSchema).min(1).max(20) }),
+  z.object({ action: z.enum(['send', 'receipt']), id }),
+]);
+export type TopicAction = z.infer<typeof topicActionSchema>;
+export const archiveTopicsRpc = defineRpc({
+  name: 'workspace.workbench.archive-topics',
+  input: z.object({ projectConfig: z.string().min(1), extensionId: z.literal('project-communications'), connectionRevision: z.number().int().positive(), request: topicActionSchema }),
+  output: z.unknown(),
+});
+export const archiveTopicsDeliveryRpc = defineRpc({ name: 'workspace.workbench.archive-topics-delivery', input: archiveTopicsRpc.input, output: archiveTopicsRpc.output });
+export function groupKey(group: WatchedGroup) { return JSON.stringify([group.sourceId, group.channelId]); }
+export function senderName(message: ArchiveMessage) { return typeof message.sender === 'string' ? message.sender : message.sender?.displayName || message.sender?.name || message.sender?.id || '未知作者'; }
+export function assetIsImage(asset: ArchiveAsset) { return asset.kind === 'image' || Boolean(asset.mimeType?.startsWith('image/')); }
+export function topicTitle(topic: Pick<ArchiveTopic,'title'>) {
+  const title = topic.title?.trim() || '';
+  if (/^\[图片消息\]/.test(title)) return '图片话题';
+  if (/^\[视频消息\]/.test(title)) return '视频话题';
+  if (/^\[(文件|附件)消息\]/.test(title)) return '附件话题';
+  return title || '未命名话题';
+}

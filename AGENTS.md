@@ -34,3 +34,11 @@ plugin or register temporary projects in their normal registry. Distinguish this
 actual-host evidence from mocked Agent/session tests in execution reports.
 
 Browser file delegation may use the versioned same-origin Access HTTP download adapter. Validate capability, token, host identity and the returned fixed handoff path before navigation; never accept arbitrary download origins or expose a business JavaScript bridge. Retain the legacy native Pocket save owner and mark browser handoff as delegated, not locally completed.
+
+Archive topic integration uses the AI Assistant archive-v2 API. The external
+service owns DWS, collection, discovery and model operations. The Workbench
+connector owns project-followed groups, explicit original-material selection and
+host session delivery; local following and remote discovery policy are separate.
+Keep topic reads in `server/archive-topics.ts` and frozen previews/receipts in
+`server/topic-materials.ts`. Refreshing must not expand selected materials.
+Preserve legacy extension IDs, API-v1 compatibility and historical requirements.

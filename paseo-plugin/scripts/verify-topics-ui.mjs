@@ -78,6 +78,31 @@ try {
   }] };
   browser = await chromium.launch({ headless: true, executablePath: browserExecutable() });
   page = await browser.newPage({ viewport: { width: 1448, height: 1120 }, locale: 'zh-CN', colorScheme: 'dark' });
+  let loseNextTopicSend = false, lostTopicResponses = 0;
+  await page.routeWebSocket(/\/ws(?:\?|$)/, socket => {
+    const server = socket.connectToServer(), pending = new Set();
+    socket.onMessage(message => {
+      try {
+        const envelope = JSON.parse(String(message)), value = envelope.type === 'session' ? envelope.message : envelope;
+        if (loseNextTopicSend && value.type === 'plugin.rpc.invoke.request' && value.method === 'workspace.workbench.archive-topics-delivery' && value.input?.request?.action === 'send') {
+          pending.add(value.requestId); loseNextTopicSend = false;
+        }
+      } catch {}
+      server.send(message);
+    });
+    server.onMessage(message => {
+      try {
+        const envelope = JSON.parse(String(message)), value = envelope.type === 'session' ? envelope.message : envelope;
+        if (value.type === 'plugin.rpc.invoke.response' && pending.delete(value.payload.requestId)) {
+          lostTopicResponses++;
+          const response = {type:'rpc_error',payload:{requestId:value.payload.requestId,requestType:'plugin.rpc.invoke.request',code:'handler_error',error:'fixture_acknowledgement_lost_after_dispatch'}};
+          socket.send(JSON.stringify(envelope.type === 'session' ? {...envelope,message:response} : response));
+          return;
+        }
+      } catch {}
+      socket.send(message);
+    });
+  });
   page.setDefaultTimeout(20000);
   page.on('pageerror', error => report.pageErrors.push(error.message));
   page.on('console', message => { if (['error', 'warning'].includes(message.type())) report.console.push(message.text()); });
@@ -260,8 +285,16 @@ try {
   await targetPicker.getByRole('button', { name: '档案材料验收会话', exact: true }).click();
   const existingNote = '请先检查截图中的布局问题，只给出排查建议。';
   await page.getByTestId('topics-send-note').fill(existingNote);
+  loseNextTopicSend = true;
+  await page.getByTestId('topics-confirm').click();
+  await page.getByTestId('topics-confirm').getByText('查回执',{exact:true}).waitFor();
+  assert.equal(lostTopicResponses,1);
+  assert.equal(await page.getByTestId('topics-send-note').isEditable(),false);
+  const frozenBeforeReceipt = readdirSync(frozenRoot).filter(name=>name.endsWith('.json')).length;
   await page.getByTestId('topics-confirm').click();
   await page.getByTestId('topics-send').getByText('打开会话', { exact: true }).waitFor();
+  assert.equal(readdirSync(frozenRoot).filter(name=>name.endsWith('.json')).length,frozenBeforeReceipt);
+  check('a lost frontend acknowledgement keeps the note and target locked; querying the saved receipt reconciles the accepted send without a second snapshot or dispatch');
   let deliveredImage = false, deliveredNote = false;
   for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
     const records = existsSync(ui.topicsFixtureRoot) ? readdirSync(ui.topicsFixtureRoot).filter(name => name.endsWith('.json')) : [];

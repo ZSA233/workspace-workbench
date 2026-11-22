@@ -112,12 +112,16 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
     setBusy(true); setError('');
     try {
       if (preview?.state === 'sending' || preview?.state === 'uncertain') {
-        setPreview(await client.call<TopicMaterialPreview>({ action: 'receipt', id: preview.id })); return;
+        const receipt = await client.call<TopicMaterialPreview>({ action: 'receipt', id: preview.id });
+        setPreview(receipt);
+        if (receipt.state === 'accepted') setPreviewOpen(false);
+        return;
       }
       const prepared = preview || await client.call<TopicMaterialPreview>({
         action: 'preview', ...(destination === 'new' ? { newSession } : { targetId: target }), note, selections: basketSelections(basket),
       });
-      setPreview(prepared);
+      // Keep the frozen request locked even if its acknowledgement is lost.
+      setPreview({...prepared,state:'sending'});
       const sent = await client.call<TopicMaterialPreview>({ action: 'send', id: prepared.id });
       setPreview(sent);
       if (sent.state === 'accepted') setPreviewOpen(false);

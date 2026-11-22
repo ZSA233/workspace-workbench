@@ -6,6 +6,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { chromium } from 'playwright';
+import { openGlobalWorkbench } from './ui-project-selection.mjs';
 import { backendRequest } from '../server/backend-supervisor.ts';
 const exec = promisify(execFile);
 const plugin = resolve(import.meta.dirname, '..');
@@ -69,7 +70,7 @@ try {
   await page.getByText('Search for directory', { exact: true }).click();
   await page.getByPlaceholder('Search directories or enter a path...').fill(ui.project);
   await page.getByText('Open this path', { exact: true }).click();
-  await page.getByText('Workspace Workbench', { exact: true }).first().click();
+  await openGlobalWorkbench(page, 'a');
   await page.getByText('Main workspace', { exact: true }).first().click();
   await page.getByText('history-continuity', { exact: true }).last().click();
   const rows = page.locator('[data-testid^="workbench-commit-"]');
@@ -154,7 +155,7 @@ try {
   await page.mouse.wheel(0, 800);
   await page.waitForFunction(() => window.diffScroller()?.scrollTop > 400);
   const savedOffset = await page.evaluate(() => window.diffScroller().scrollTop);
-  await page.getByText('Workspace Workbench', { exact: true }).first().click();
+  await openGlobalWorkbench(page, 'a');
   await page.getByText('OTHER', { exact: true }).first().click();
   await page.getByText(/^OTHER sample [01] line 0$/).first().waitFor();
   assert.equal(await page.evaluate(() => window.diffScroller().scrollTop), 0);

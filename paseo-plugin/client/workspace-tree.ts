@@ -33,6 +33,8 @@ export function workspaceForest(all: readonly WorkspaceSummary[], matches: reado
     while (trail.length) {
       const source = trail.shift()!;
       if (!source || typeof source.instanceKey !== 'string' || !source.id || source.id === 'main' || seen.has(source.instanceKey)) break;
+      // Deleted sources remain in provenance, but no longer create selector rows.
+      if (!actual.has(source.instanceKey)) { seen.add(source.instanceKey); continue; }
       const parent = get(source);
       let check: string | undefined = parent.key;
       const inspected = new Set<string>();

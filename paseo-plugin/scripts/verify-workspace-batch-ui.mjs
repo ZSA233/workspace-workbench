@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright';
+import { openGlobalWorkbench } from './ui-project-selection.mjs';
 import { backendRequest } from '../server/backend-supervisor.ts';
 const plugin = resolve(import.meta.dirname, '..');
 const output = process.env.WORKBENCH_VERIFY_OUTPUT || '/tmp/workbench-batch-ui';
@@ -34,7 +35,7 @@ try {
   await page.getByText('Search for directory', { exact: true }).click();
   await page.getByPlaceholder('Search directories or enter a path...').fill(ui.project);
   await page.getByText('Open this path', { exact: true }).click();
-  await page.getByText('Workspace Workbench', { exact: true }).first().click();
+  await openGlobalWorkbench(page, 'a');
   await page.getByTestId('workbench-graph-content').waitFor({ timeout: 30000 });
   const button = name => page.getByRole('button', { name, exact: true });
   const search = page.getByPlaceholder('Search workspaces…');

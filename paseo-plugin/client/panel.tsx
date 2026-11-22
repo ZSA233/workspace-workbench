@@ -135,8 +135,9 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }
   const directory = props.paseoWorkspace?.directory || "";
   const snapshotStatus = useWorkbenchWorkspaceSnapshotStatus();
-  const hostContextPending = Boolean(props.hostWorkspaceId) && snapshotStatus === "pending";
-  const hostContextRequired = Boolean(props.hostWorkspaceId) && snapshotStatus === "available";
+  const hostContextRequired = Boolean(props.hostWorkspaceId);
+  const hostContextPending = hostContextRequired && !directory && snapshotStatus === "pending";
+  const hostContextUnavailable = hostContextRequired && !directory && snapshotStatus !== "pending";
   let projects;
   try {
     projects = useQuery({ queryKey: ["workbench-projects", props.host.id, directory], queryFn: () => getProjects({ directory: directory || undefined }), refetchOnWindowFocus: false, retry: false });
@@ -147,10 +148,8 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
   }
   let memory;
   try {
-    // The global sidebar has no host Workspace ID. Its host instance ID can
-    // change between surfaces, so using it here made the project picker forget
-    // the last choice on every new conversation. Workspace panels still scope
-    // memory to their concrete Paseo Workspace.
+    // Preserve separately scoped preferences without guessing a global
+    // surface's current project from those preferences.
     memory = useProjectMemory(props.hostWorkspaceId || "global");
     reportNativeDiagnostic("observer-memory-hook-ready", { ready: String(memory.ready) });
   } catch (error) {
@@ -158,41 +157,49 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     throw error;
   }
   const [pickingProject, setPickingProject] = useState(false);
-  const [chosen, setChosen] = useState("");
-  const [setupProject, setSetupProject] = useState<ProjectInfo | null>(null);
+  const [chosenProject, setChosenProject] = useState<{ context: string; configPath: string } | null>(null);
+  const [setupProject, setSetupProject] = useState<{ context: string; project: ProjectInfo } | null>(null);
+  const contextKey = JSON.stringify([props.hostWorkspaceId, directory]);
+  const chosen = chosenProject?.context === contextKey ? chosenProject.configPath : "";
   const detected = directory ? projects.data?.filter((p) => [p.sourceRoot, p.workspaceRoot].some((root) => pathContains(root, directory))).sort((a, b) => b.sourceRoot.length - a.sourceRoot.length)[0] : undefined;
-  const active = setupProject || (hostContextPending ? undefined : chooseProject(projects.data || [], detected, chosen, memory.saved, Boolean(directory), hostContextRequired));
+  const active = (setupProject?.context === contextKey ? setupProject.project : undefined)
+    || chooseProject(projects.data || [], detected, chosen, memory.saved, Boolean(directory), hostContextRequired);
   useEffect(() => {
     setSetupProject(null);
-    setChosen("");
-  }, [directory]);
-  if (hostContextPending || (!directory && !memory.ready) || projects.isPending) {
+    setChosenProject(null);
+    setPickingProject(false);
+  }, [props.hostWorkspaceId, directory]);
+  if (hostContextPending) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.hostWorkspaceLoading}</Text>;
+  if (hostContextUnavailable) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.hostWorkspaceUnavailable}</Text>;
+  if (projects.isPending) {
     reportNativeDiagnostic("observer-first-branch", { branch: "memory-loading" });
     return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoading}</Text>;
   }
+  if (projects.isError) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoadFailed}</Text>;
   if (directory && !active) {
     reportNativeDiagnostic("observer-first-branch", { branch: "project-setup" });
     return <ProjectSetup
+    key={contextKey}
     directory={directory}
     theme={props.theme}
     onSaved={(project) => {
-      setSetupProject(project);
-      setChosen(project.configPath);
+      setSetupProject({ context: contextKey, project });
+      setChosenProject({ context: contextKey, configPath: project.configPath });
       void projects.refetch();
     }}
     />;
   }
-  if (!active || pickingProject) {
+  if (!active || (pickingProject && !hostContextRequired && !directory)) {
     reportNativeDiagnostic("observer-first-branch", { branch: "project-picker" });
     return <View style={{ padding: 12, gap: 8 }}>
+    {!props.hostWorkspaceId ? <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.globalProjectSelectionHint}</Text> : null}
     <Text style={{ color: props.theme.colors.foreground }}>{projects.isPending ? localizedCopy.projectLoading : projects.isError ? localizedCopy.projectLoadFailed : !projects.data?.length ? localizedCopy.noRegisteredProjects : localizedCopy.selectProject}</Text>
     {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => {
-      setChosen(p.configPath);
+      setChosenProject({ context: contextKey, configPath: p.configPath });
       setSetupProject(null);
       setPickingProject(false);
-      // Persist an explicit choice immediately. Waiting for the selected
-      // project's first full observation meant closing the panel during a
-      // cold start lost the choice and reopened the picker next time.
+      // Retain the preference for compatibility, without using it to infer
+      // the current workspace on the next global opening.
       memory.remember(p.configPath);
     }}><Text style={{ color: props.theme.colors.foreground }}>{p.displayName}</Text></Pressable>)}
     </View>;

@@ -46,6 +46,56 @@ test("setup scan prioritizes a parent Git checkout and exposes nested checkouts"
   }
 });
 
+test("a non-Git directory discovers multiple repositories through the default three levels", async () => {
+  const root = mkdtempSync(join(process.env.TMPDIR || "/tmp", "workbench-multi-repo-"));
+  const registry = join(root, "isolated-registry.json");
+  const previousRegistry = process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY;
+  process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = registry;
+  try {
+    for (const name of ["alpha", "beta", "group/gamma", "group/level/delta", "group/level/deeper/too-deep"]) {
+      const path = join(root, name); mkdirSync(path, { recursive: true }); git(path, "init", "-q");
+    }
+    const scan = await scanProject(root);
+    assert.equal(scan.gitRoot, null);
+    assert.equal(scan.projectRoot, realpathSync(root));
+    assert.deepEqual(scan.defaultRepositoryPaths, ["alpha", "beta", "group/gamma", "group/level/delta"]);
+    assert.deepEqual(scan.repositories.map((item) => item.repoPath), scan.defaultRepositoryPaths);
+    assert.ok(scan.repositories.every((item) => item.valid && item.selectedByDefault));
+    assert.equal(scan.scan?.incomplete, false);
+  } finally {
+    if (previousRegistry === undefined) delete process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY;
+    else process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = previousRegistry;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("setup saves a single project with the explicitly selected repositories under a non-Git root", async () => {
+  const root = mkdtempSync(join(process.env.TMPDIR || "/tmp", "workbench-multi-setup-"));
+  const home = mkdtempSync(join(process.env.TMPDIR || "/tmp", "workbench-multi-home-"));
+  const previousHome = process.env.HOME;
+  const previousRegistry = process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY;
+  const previousDownload = process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD;
+  process.env.HOME = home;
+  process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = join(home, "registry.json");
+  process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD = "1";
+  try {
+    for (const name of ["alpha", "beta", "not-selected"]) { const path = join(root, name); mkdirSync(path); git(path, "init", "-q"); }
+    const saved = await saveProjectSetup({ directory: root, repositories: ["alpha", "beta"], shareConfig: false });
+    const config = JSON.parse(readFileSync(saved.project.configPath, "utf8"));
+    assert.equal(saved.project.sourceRoot, realpathSync(root));
+    assert.deepEqual(config.repositories.map((item: { path: string }) => item.path), ["alpha", "beta"]);
+    assert.equal(existsSync(join(root, "not-selected", ".workspace-workbench")), false);
+    assert.deepEqual(JSON.parse(readFileSync(join(home, "registry.json"), "utf8")).configs, [saved.project.configPath]);
+  } finally {
+    await closeBackends();
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (previousRegistry === undefined) delete process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY; else process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY = previousRegistry;
+    if (previousDownload === undefined) delete process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD; else process.env.WORKSPACE_WORKBENCH_DISABLE_DOWNLOAD = previousDownload;
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("setup reuses an already registered project for the same source root", async () => {
   const root = temporaryGitProject();
   const registry = join(root, "registry.json");

@@ -27,10 +27,14 @@ paseo plugin install /path/to/workspace-workbench/paseo-plugin --json
 paseo plugin reload workspace-workbench-paseo --json
 ```
 
-首次使用时在 Paseo 的“设置 → 插件”中启用插件。打开没有项目配置的 Git 目录后，插件
-会自动扫描并列出可用仓库；确认后生成 `.workspace-workbench/project.json`，并自动登记
-项目、准备配置和启动后端。用户不需要编辑 JSON、维护项目注册表或手动创建 worktree。
+首次使用时在 Paseo 的“设置 → 插件”中启用插件，从当前工作区的“＋”菜单打开 Workbench。
+打开没有项目配置的目录后，插件会自动扫描并列出可用仓库；确认后生成
+`.workspace-workbench/project.json`，并自动登记项目、准备配置和启动后端。目录本身不是
+Git 仓库时也支持发现下方多个仓库并一起选择，默认向下扫描三层。用户不需要编辑 JSON、
+维护项目注册表或手动创建 worktree。
 如果同一源码根目录已有登记的项目配置，向导会打开该项目，不再生成第二份配置或覆盖其仓库清单。
+全局入口没有当前工作区上下文，需要手动选择已登记项目；无法读取工作区目录时，插件不会
+自动打开其他项目。
 
 ## 观察时序
 
@@ -47,7 +51,7 @@ paseo plugin reload workspace-workbench-paseo --json
 
 这里分为两个动作：
 
-1. **自动发现**：初始化向导扫描 Git 根目录和嵌套仓库，供用户确认项目配置范围。
+1. **自动发现**：初始化向导扫描 Git 根目录和嵌套仓库，或非 Git 目录下的仓库，供用户确认项目配置范围。
 2. **加入已有 Workspace**：在 Workspace 面板点击“添加仓库”后，插件自动列出项目配置
    中尚未加入当前 Workspace 的仓库。用户确认仓库和 base ref，系统自动创建隔离分支、
    更新 manifest、准备运行时并记录逐库结果。
@@ -237,6 +241,9 @@ Git watcher/reconciliation 可能向上发现外层仓库并重复扫描；用
 无头浏览器验收可运行 `npm --prefix paseo-plugin run test:plugin-ui`；首次使用先执行
 `npm --prefix paseo-plugin exec -- playwright install chromium`。测试会启动隔离的
 真实 Paseo 页面，验证自动刷新与崩溃恢复，并在 `.local/verification/ui/` 保存截图。
+工作区目录识别和非 Git 多仓初始化的专项验收可运行
+`node paseo-plugin/scripts/verify-workspace-routing-ui.mjs`；该脚本使用隔离的 Paseo home、
+项目注册表和临时仓库，不会重载用户正在使用的插件。
 
 ## Session tools and project caches
 

@@ -5,6 +5,7 @@ import {createInterface} from 'node:readline';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
+import {openGlobalWorkbench} from './ui-project-selection.mjs';
 import {DaemonClient} from '@getpaseo/client/internal/daemon-client';
 import WebSocket from 'ws';
 import {backendRequest} from '../server/backend-supervisor.ts';
@@ -68,7 +69,7 @@ try{
  await page.getByTestId('workspace-option-other-active').click();await toggle.click();await shortcut.click();
  await page.screenshot({path:join(output,'creator-narrow.png')});
  report.checks.push('320px actual host container keeps shortcut and filter clearing usable (not native device evidence)');
- const globalPage=await page.context().newPage();globalPage.on('pageerror',e=>report.pageErrors.push(e.message));await globalPage.goto(ui.url);await globalPage.getByRole('button',{name:'Workspace Workbench',exact:true}).first().click();
+ const globalPage=await page.context().newPage();globalPage.on('pageerror',e=>report.pageErrors.push(e.message));await globalPage.goto(ui.url);await openGlobalWorkbench(globalPage,'a');
  const surface=globalPage.locator('[aria-label="Workspace Workbench"]').filter({has:globalPage.getByTestId('workbench-workspace-selector-toggle')}).last();await surface.waitFor({timeout:30000});await surface.getByTestId('workbench-workspace-selector-toggle').click();
  await surface.getByRole('button',{name:'Creator session',exact:true}).click();await surface.getByRole('button',{name:/^Creator fixture · other-se \(1\)$/}).click();
  await surface.getByTestId('workspace-option-other-active').waitFor();assert.equal(await surface.getByTestId('workspace-option-mine-active').count(),0);

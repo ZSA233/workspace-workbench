@@ -106,12 +106,13 @@ export function ProjectSetup({ directory, theme, onSaved }: {
                 theme={theme}
               />
             ))}
-            {nested.length ? (
+            {nested.length && data.gitRoot ? (
               <Pressable accessibilityRole="button" onPress={() => setShowNested((current) => !current)} style={{ paddingVertical: 7 }}>
                 <Text style={{ color: accent, fontSize: 11, fontWeight: "600" }}>{showNested ? "⌄" : "›"} {copy.setupNestedRepositories} ({nested.length})</Text>
                 <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10, lineHeight: 14 }}>{copy.setupNestedHint}</Text>
               </Pressable>
             ) : null}
+            {nested.length && !data.gitRoot ? <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>{copy.setupDiscoveredRepositories} ({nested.length})</Text> : null}
             {(showNested || !data.gitRoot) ? nested.map((repository) => (
               <RepositoryOption
                 key={repository.repoPath}

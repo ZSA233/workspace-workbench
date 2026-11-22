@@ -2,28 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRpc } from "@getpaseo/plugin/client";
 import { observerSettings, observerSettingsRpc } from "../shared/settings.ts";
 
-export function chooseProject<T extends { configPath: string }>(projects: T[], contextual: T | undefined, chosen: string, saved: string, hasContext: boolean, requireContext = false) {
+export function chooseProject<T extends { configPath: string }>(projects: T[], contextual: T | undefined, chosen: string, _saved: string, hasContext: boolean, requireContext = false) {
   // A workspace directory is authoritative. If it has no matching project,
   // keep the caller in setup instead of silently showing a project remembered
   // from another directory.
   if (hasContext) return contextual;
-  // A host workspace can be known before Paseo provides its directory. Keep a
-  // manual choice and the host's remembered project usable in that window;
-  // waiting for a second picker here made agent/workspace surfaces ask for a
-  // project on every open. The explicit context above still wins whenever a
-  // directory is available.
-  if (requireContext) {
-    return projects.find((project) => project.configPath === chosen)
-      || projects.find((project) => project.configPath === saved)
-      || [...projects].sort((a, b) => a.configPath.localeCompare(b.configPath))[0];
-  }
-  return projects.find((project) => project.configPath === chosen)
-    || projects.find((project) => project.configPath === saved)
-    // A global/sidebar surface has no directory to identify a project. Pick a
-    // stable default and expose the three-dot project switcher for an
-    // explicit change; this removes the startup chooser after a fresh install
-    // while keeping the choice deterministic when no memory exists yet.
-    || [...projects].sort((a, b) => a.configPath.localeCompare(b.configPath))[0];
+  // A workspace ID without its directory cannot identify a project. The
+  // global surface likewise needs an explicit choice in this opening; saved
+  // entries could come from a completely unrelated workspace.
+  if (requireContext) return undefined;
+  return projects.find((project) => project.configPath === chosen);
 }
 
 export function useProjectMemory(hostId: string) {
@@ -51,9 +39,8 @@ export function useProjectMemory(hostId: string) {
         if (current.status !== "ready") return;
         const values = observerSettings.schema.parse(current.values);
         const lastProjectByHost = { ...values.lastProjectByHost, [hostId]: configPath };
-        // A global surface has no active Paseo Workspace context. Keep a
-        // stable last-used project so opening that surface does not require a
-        // project choice after every conversation switch.
+        // Retain the historic preference for compatibility. It is not used
+        // to infer the project of a surface lacking workspace context.
         if (hostId !== "global") lastProjectByHost.global = configPath;
         const result = await write({ revision: current.revision, values: { ...values, lastProjectByHost } });
         if (result.status === "saved") return;

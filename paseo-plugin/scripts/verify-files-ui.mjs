@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { chromium } from 'playwright';
 import { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import WebSocket from 'ws';
+import { openGlobalWorkbench } from './ui-project-selection.mjs';
+import { verifyFileNoticesUi } from './verify-files-notices-ui.mjs';
 const plugin = resolve(import.meta.dirname, '..'), output = resolve(process.env.WORKBENCH_VERIFY_OUTPUT || join(plugin, '../.local/verification/files'));
 await mkdir(output, { recursive: true });
 let child, client, browser, ui, logs = '';
@@ -46,8 +48,9 @@ try {
   });
   await page.goto(ui.url);
   await page.getByText('Workspace Workbench', { exact: true }).first().waitFor({ timeout: 20000 }); await pause(1000);
+  if (await page.getByText('Skip setup', { exact: true }).isVisible()) await page.getByText('Skip setup', { exact: true }).click();
   if (await page.getByText('Add project', { exact: true }).first().isVisible().catch(() => false)) { await page.getByText('Add project', { exact: true }).first().click(); await page.getByText('Search for directory', { exact: true }).click(); await page.getByPlaceholder('Search directories or enter a path...').fill(ui.project); await page.getByText('Open this path', { exact: true }).click(); }
-  await page.getByText('Workspace Workbench', { exact: true }).first().click();
+  await openGlobalWorkbench(page, 'a');
   await page.getByText('Repositories', { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 20000 });
   const gitTab = page.getByRole('tab', { name: 'Git', exact: true }), filesTab = page.getByRole('tab', { name: 'Files', exact: true });
   const gitBox = await gitTab.boundingBox(), filesBox = await filesTab.boundingBox();
@@ -55,6 +58,7 @@ try {
   check('Git is the default tab and Files follows it immediately');
   await page.getByText('Files', { exact: true }).click(); await page.locator('[data-file-path=""]').waitFor({ timeout: 20000 }); await page.locator('[data-file-path="one"]').waitFor({timeout:20000});
   const rootEntry = page.locator('[data-file-path=""]');
+  await verifyFileNoticesUi({ page, ui, output, report, check });
   await rootEntry.dispatchEvent('drop', { dataTransfer: await page.evaluateHandle(() => { const data = new DataTransfer(); data.items.add(new File(['drag upload proof\n'], 'drag-proof.txt', { type: 'text/plain', lastModified: 123 })); return data; }) });
   await wait(async () => { try { return await readFile(join(ui.project, 'drag-proof.txt'), 'utf8') === 'drag upload proof\n'; } catch { return false; } });
   const uploadCommitted = Date.now();
@@ -200,7 +204,7 @@ try {
     await wait(() => page.evaluate(() => window.__proofUploadBlocked));
     const upload = (await rpc({action:'tasks',limit:200})).tasks.find(t => t.direction === 'upload' && t.name === 'reselect-proof.bin');
     assert.equal(upload.offset, 512*1024);
-    await page.reload(); await page.getByText('Workspace Workbench',{exact:true}).first().waitFor({timeout:20000}); await page.getByText('Workspace Workbench',{exact:true}).first().click();
+    await page.reload(); await page.getByText('Workspace Workbench',{exact:true}).first().waitFor({timeout:20000}); await openGlobalWorkbench(page, 'a');
     await page.getByRole('button',{name:'Transfers',exact:true}).click(); await page.getByText('Select original file',{exact:true}).waitFor({timeout:15000});
     const [reselect] = await Promise.all([page.waitForEvent('filechooser'), page.getByText('Select original file',{exact:true}).click()]); await reselect.setFiles(originalPath);
     await wait(async () => (await rpc({action:'task',id:upload.id})).state === 'complete');
@@ -222,7 +226,7 @@ try {
   await rpc({action:'download',id:resumeDownloadId,workspaceId:mainId,paths:['refresh-proof.bin']});
   await wait(() => page.evaluate(() => window.__proofStagedOnce));
   assert.equal((await rpc({action:'task',id:resumeDownloadId})).offset,0,'refresh happens after local durability and before the ACK');
-  await page.reload(); await page.getByText('Workspace Workbench',{exact:true}).first().waitFor({timeout:20000}); await page.getByText('Workspace Workbench',{exact:true}).first().click();
+  await page.reload(); await page.getByText('Workspace Workbench',{exact:true}).first().waitFor({timeout:20000}); await openGlobalWorkbench(page, 'a');
   await wait(async () => (await rpc({action:'task',id:resumeDownloadId})).state === 'ready_to_save');
   const resumedReads = await page.evaluate(id => window.__proofReads.filter(read => read.id === id),resumeDownloadId);
   assert.equal(resumedReads[0]?.offset,512*1024,'the closed OPFS prefix survives refresh without redownloading offset zero');

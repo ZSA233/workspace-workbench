@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { createElement, useState } from 'react';
 import { ActivityIndicator, Image, Platform, Pressable, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { Icon, ScrollView, useToast } from '../../native-components';
@@ -68,18 +68,24 @@ export function TopicAsset({ client, topicId, message, asset, contextOf, checked
   client: TopicsClient; topicId: string; message: ArchiveMessage; asset: ArchiveAsset; contextOf?: string; checked: boolean; onToggle: () => void; disabled?: boolean; small?: boolean; removable?: boolean; tileWidth?: number;
 }) {
   const c = useColors(), [open, setOpen] = useState(false), image = assetIsImage(asset), video = asset.kind === 'video' || Boolean(asset.mimeType?.startsWith('video/'));
-  const data = useQuery({ queryKey: ['archive-image', client.scopeKey, topicId, message.id, message.version, asset.id],
-    queryFn: () => client.call<{ mimeType: string; base64: string }>({ action: 'asset', topicId, messageId: message.id, assetId: asset.id, contextOf }),
-    enabled: client.active && asset.state === 'ready' && image, retry: false, staleTime: Infinity, gcTime: 60000, refetchOnWindowFocus: false });
+  const data = useQuery({ queryKey: ['archive-image', client.scopeKey, topicId, message.id, message.version, asset.id, video ? 'thumbnail' : 'original'],
+    queryFn: () => client.call<{ mimeType: string; base64: string }>({ action: 'asset', topicId, messageId: message.id, assetId: asset.id, contextOf, ...(video ? {view:'thumbnail'} : {}) }),
+    enabled: client.active && asset.state === 'ready' && (image || video), retry: false, staleTime: Infinity, gcTime: 60000, refetchOnWindowFocus: false });
   const uri = data.data ? 'data:' + data.data.mimeType + ';base64,' + data.data.base64 : undefined;
+  const playback = useQuery({queryKey:['archive-video',client.scopeKey,topicId,message.id,message.version,asset.id],
+    queryFn:()=>client.call<{mimeType:string;base64:string}>({action:'asset',topicId,messageId:message.id,assetId:asset.id,contextOf}),
+    enabled:client.active&&open&&video&&asset.state==='ready'&&Platform.OS==='web',retry:false,gcTime:0,refetchOnWindowFocus:false});
+  const [playbackFailed,setPlaybackFailed]=useState(false);
+  const videoURI=playback.data?.mimeType.startsWith('video/')?'data:'+playback.data.mimeType+';base64,'+playback.data.base64:undefined;
   const width = small ? 54 : tileWidth, height = small ? 42 : Math.round(tileWidth * 0.64);
   const canSelect = supportedArtifact(asset.mimeType || '', asset.size);
   const state = asset.state !== 'ready' ? asset.state === 'pending' ? '等待原件' : '原件不可用' : !canSelect ? '原件已保存，暂不支持交接此格式或大小' : data.error ? topicError(data.error.message) : asset.name;
   return <View style={{ position: 'relative', width, height }}>
-    <Pressable accessibilityRole="button" accessibilityLabel={'查看 ' + asset.name} {...(Platform.OS === 'web' ? { title: state } : {})} onPress={() => setOpen(true)}
+    <Pressable accessibilityRole="button" accessibilityLabel={'查看 ' + asset.name} {...(Platform.OS === 'web' ? { title: state } : {})} onPress={() => {setPlaybackFailed(false);setOpen(true);}}
       style={{ width, height, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: checked ? c.accent : c.border, borderRadius: 5, overflow: 'hidden', backgroundColor: c.surface2 }}>
       {uri ? <Image source={{ uri }} accessibilityLabel={asset.name} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
         : data.isFetching ? <ActivityIndicator size="small" color={c.foregroundMuted} /> : <Icon name={data.error ? 'CircleAlert' : asset.state === 'pending' ? 'Clock' : image ? 'Image' : video ? 'Video' : 'FileText'} size={small ? 17 : 24} color={asset.state === 'ready' && !data.error ? c.foregroundMuted : c.statusWarning} />}
+      {video&&uri?<View style={{position:'absolute'}}><Icon name="Play" size={24} color="#ffffff"/></View>:null}
       {!small && !image ? <Text numberOfLines={1} style={{ fontSize: 10, color: c.foregroundMuted, paddingHorizontal: 4 }}>{asset.state === 'ready' ? asset.name : state}</Text> : null}
     </Pressable>
     <View style={{ position: 'absolute', top: small ? -8 : 0, right: small ? -8 : undefined, left: small ? undefined : 0, backgroundColor: tint(c.surface1, 'cc'), borderRadius: 4 }}>
@@ -87,7 +93,13 @@ export function TopicAsset({ client, topicId, message, asset, contextOf, checked
     </View>
     <Dialog open={open} id="topics-asset-preview" title={asset.name || '附件'} onClose={() => setOpen(false)} width={800} height={650}>
       <View style={{ flex: 1, padding: 16, gap: 12 }}>
-        {uri ? <Image source={{ uri }} accessibilityLabel={asset.name} style={{ flex: 1, width: '100%' }} resizeMode="contain" /> : <><Icon name={image ? 'Image' : 'FileText'} size={36} color={c.foregroundMuted} /><Label>{state}</Label></>}
+        {video ? <>
+          {videoURI&&Platform.OS==='web'?createElement('video',{src:videoURI,controls:true,preload:'metadata','aria-label':asset.name,
+            poster:uri,style:{width:'100%',height:'100%',maxHeight:500,objectFit:'contain'},onError:()=>setPlaybackFailed(true)}):
+            playback.isFetching?<ActivityIndicator/>:uri?<Image source={{uri}} accessibilityLabel={asset.name+' 封面'} style={{flex:1,width:'100%'}} resizeMode="contain"/>:null}
+          {playback.error||playbackFailed?<><Label warning>视频暂时无法播放，可重试；原件较大或编码不受支持时需在原话页查看。</Label><Button onPress={()=>{setPlaybackFailed(false);void playback.refetch();}}>重试视频</Button></>:null}
+          {Platform.OS!=='web'?<Label>此端仅展示视频封面，请在网页查看视频。</Label>:null}
+        </> : uri ? <Image source={{ uri }} accessibilityLabel={asset.name} style={{ flex: 1, width: '100%' }} resizeMode="contain" /> : <><Icon name={image ? 'Image' : 'FileText'} size={36} color={c.foregroundMuted} /><Label>{state}</Label></>}
         {data.error ? <Button onPress={() => { void data.refetch(); }}>重试</Button> : null}
       </View>
     </Dialog>

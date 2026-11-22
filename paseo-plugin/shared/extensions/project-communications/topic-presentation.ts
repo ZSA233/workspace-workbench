@@ -8,7 +8,8 @@ const genericTitles = new Set(['群反馈', '反馈排查', '新话题', '单聊
 export function messageText(message: Pick<ArchiveMessage, 'text' | 'displayText'> & Partial<Pick<ArchiveMessage, 'assets'>>) {
   const text = typeof message.displayText === 'string' ? message.displayText : message.text || '';
   if (!message.assets?.length) return text;
-  return text.replace(mediaMarker, '').replace(mediaLine, '').replace(/\n{3,}/g, '\n\n').trim();
+  const metadata = /\[(?:图片|视频|媒体|文件|附件)消息\]\s*\(\s*(?:mediaId|fileId|assetId)\s*=([^\r\n)]*)\)\s*fileName=[^\r\n]*?\s+url[:：][ \t]*([^\s]+)(?:[ \t]*注意[:：][ \t]*如需下载[ \t]*使用[ \t]*dws[ \t]+chat[ \t]+message[ \t]+download-media[ \t]*命令下载[。.]?)?/g;
+  return text.replace(metadata, (match, reference: string, url: string) => reference.trim() === url ? '' : match).replace(mediaMarker, '').replace(mediaLine, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function titleText(value: string | undefined) {

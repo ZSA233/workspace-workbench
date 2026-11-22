@@ -6,7 +6,7 @@ import type { TopicsClient } from '../../use-topics';
 import { basketCounts, type TopicBasket } from '../../topic-selection';
 import { TOPIC_NOTE_LIMIT,
   type ArchiveMessage,type TopicMaterialPreview, type TopicModel, type TopicNewSession, type TopicTarget, type WatchedGroup } from '../../../shared/extensions/project-communications/topics';
-import { Button, Choice, Dialog, Label, Search, useColors } from './ui';
+import { Button, Choice, Dialog, Label, Search, Toggle, useColors } from './ui';
 import { MediaCount, TopicIcon, TopicStatus, topicError } from './topic-ui';
 import { TopicSessionControls } from './topic-session-controls';
 import { topicChoiceAvailable,topicEffortLabel,topicModelChoice,topicModelKey } from '../../topic-session-choice';
@@ -68,6 +68,11 @@ export function TopicSendDialog({ client, basket, note, destination, newSession,
           </View>
         </View> : <TopicSessionControls models={models.data||[]} choice={newSession} locked={locked} loading={models.isLoading}
           refreshing={models.isFetching} unavailable={Boolean(models.error)} onRefresh={()=>{void models.refetch();}} onChange={onModel}/>}
+      </View>
+      <View style={{ gap: 7 }}>
+        <Toggle label="将姓名和 @ 提及替换为参与者 A、B、C" checked={materialSettings.identity==='alias'} disabled={locked}
+          onChange={value=>onMaterialSettings({...materialSettings,identity:value?'alias':'name'})}/>
+        <Label muted>{materialSettings.identity==='alias'?'发送内容使用化名，原始聊天保持原样。':'发送内容保留原姓名和 @ 提及。'}</Label>
       </View>
       <View style={{ gap: 7 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}><Icon name="PenLine" size={14} color={c.accent} /><Label strong>本次说明</Label><Label muted>可选</Label></View>

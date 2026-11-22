@@ -51,7 +51,7 @@ export const topicActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('read'), topicId: id }),
   z.object({ action: z.literal('messages'), topicId: id, offset: z.number().int().min(0).max(100000) }),
   z.object({ action: z.literal('context'), topicId: id, messageId: id }),
-  z.object({ action: z.literal('asset'), topicId: id, messageId: id, assetId: id, contextOf: id.optional() }),
+  z.object({ action: z.literal('asset'), topicId: id, messageId: id, assetId: id, contextOf: id.optional(), view: z.literal('thumbnail').optional() }),
   z.object({ action: z.literal('group.configure'), sourceId: id, channelId: id, revision: z.number().int().nonnegative(), collect: z.boolean().optional(), allowedTools: z.array(id).max(32), requestId: id }),
   z.object({ action: z.literal('targets') }),
   z.object({ action: z.literal('models') }),

@@ -43,12 +43,31 @@ export class ArchiveTopics {
     // followed groups; the UI must still offer the next page.
     return { ...page, items: (page.items || []).filter(topic => this.allows(topic)).map(topicHeader) };
   }
+  // Topic snapshots can predate attachment registration. Borrow only metadata
+  // from the exact same archived message version, never its newer body.
+  private async withAssets(topic: ArchiveTopicDetail, messages: ArchiveMessage[]) {
+    const result: ArchiveMessage[] = [];
+    for (let offset = 0; offset < messages.length; offset += 4) {
+      result.push(...await Promise.all(messages.slice(offset, offset + 4).map(async message => {
+        this.sameScope(topic, message);
+        const existing = (message.assets || []).filter(asset => asset.kind !== 'avatar');
+        if (existing.length || !/\[(?:视频|图片|媒体|附件|文件)消息\]/.test(message.text || '')) return {...message, assets: existing};
+        const current = await this.connection.archive<ArchiveMessage>(this.path('messages/' + segment(message.id)));
+        if (!current) return {...message, assets: existing};
+        this.sameScope(topic, current);
+        const matches = current.id === message.id && !!message.version && current.version === message.version &&
+          (!message.archiveId || current.archiveId === message.archiveId);
+        return {...message, assets: matches ? (current.assets || []).filter(asset => asset.kind !== 'avatar') : existing};
+      })));
+    }
+    return result;
+  }
   async read(id: string): Promise<ArchiveTopicDetail> {
     const topic = await this.connection.archive<ArchiveTopicDetail>(this.path('topics/' + segment(id)));
     this.scope(topic);
     return {
       ...topicHeader(topic),
-      messages: (topic.messages || []).map(message => ({ ...message, assets: message.assets || [] })),
+      messages: await this.withAssets(topic, topic.messages || []),
       messageCount: topic.messageCount, hasMoreMessages: topic.hasMoreMessages,
     };
   }
@@ -56,7 +75,7 @@ export class ArchiveTopics {
     const topic = await this.read(id);
     const page = await this.connection.archive<{ items: ArchiveMessage[]; hasMore: boolean }>(this.path('topics/' + segment(id) + '/messages?offset=' + offset));
     for (const message of page.items) this.sameScope(topic, message);
-    return page;
+    return {...page, items: await this.withAssets(topic, page.items)};
   }
   sameScope(topic: ArchiveTopicDetail, message: ArchiveMessage) {
     if (message.sourceId !== topic.sourceId || message.channelId !== topic.channelId ||
@@ -115,11 +134,11 @@ export class ArchiveTopics {
     if (!message) throw Error('topic_context_outside_scope');
     return message;
   }
-  async asset(topicId: string, messageId: string, assetId: string, contextOf?: string) {
+  async asset(topicId: string, messageId: string, assetId: string, contextOf?: string, view?: 'thumbnail') {
     const topic = await this.read(topicId), message = await this.message(topic, messageId, contextOf);
     const asset = message.assets.find(item => item.id === assetId);
     if (!asset || asset.state !== 'ready') throw Error('topic_asset_not_ready');
-    const data = await this.original(asset);
+    const data = view ? await this.connection.bytes('/v2/archive/' + this.path('assets/' + segment(asset.id)) + '?view=thumbnail', 'GET', undefined, MAX_REGISTERED_BYTES) : await this.connection.bytes('/v2/archive/' + this.path('assets/' + segment(asset.id)), 'GET', undefined, asset.kind === 'video' || asset.mimeType?.startsWith('video/') ? 32 * 1024 * 1024 : MAX_REGISTERED_BYTES);
     return { mimeType: data.mimeType, base64: data.bytes.toString('base64') };
   }
   original(asset: ArchiveAsset) { return this.connection.bytes('/v2/archive/' + this.path('assets/' + segment(asset.id)), 'GET', undefined, MAX_REGISTERED_BYTES); }

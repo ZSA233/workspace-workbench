@@ -49,7 +49,7 @@ paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
   --ref stable \
   --id workspace-workbench-paseo \
   --json
-paseo plugin update workspace-workbench-paseo --json
+paseo plugin update workspace-workbench-paseo --ref stable --json
 ```
 
 `stable` 跟随最近一次通过验证的发布版本。开发分支使用 `main`：
@@ -59,12 +59,13 @@ paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
   --ref main \
   --id workspace-workbench-paseo \
   --json
-paseo plugin update workspace-workbench-paseo --json
+paseo plugin update workspace-workbench-paseo --ref main --json
 ```
 
 首次使用时，先在 Paseo 的“设置 → 插件”中打开“启用插件”全局开关；如果插件显示为已启用但尚未运行，再执行 `paseo plugin reload workspace-workbench-paseo --json`。
 
 `paseo plugin update` 是显式的拉取、构建、验证和激活流程，不会在后台自动更新。
+更新时继续显式指定 `--ref`；部分宿主不会保存安装时的 ref，省略时会选择远程默认分支。
 查看插件的 Git 来源、ref 和 commit：
 
 ```sh

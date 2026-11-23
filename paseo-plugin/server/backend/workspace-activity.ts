@@ -18,6 +18,7 @@ const MAX_ENTRIES = 10_000;
 const RETRY_MS = [60_000, 300_000, 900_000];
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
+const SELECTOR_RECHECK_MS = 30_000;
 
 type RepositoryActivity = {
   owners?: Record<string, string>;
@@ -72,8 +73,8 @@ type Job = {
   separate?: boolean;
 };
 type Commit = { head: string | null; latestCommitAt: string | null };
-type Lease = { selected: string; visible: string[]; expires: number; sequence: number };
-type Demand = { selected: Set<string>; visible: Set<string> };
+type Lease = { selected: string; visible: string[]; openedAt: number; selectorSequence: number; expires: number; sequence: number };
+type Demand = { selected: Set<string>; visible: Set<string>; openedAt: number };
 
 const unknown: WorkspaceActivitySummary = {
   latestCommitAt: null, latestCommitObservedAt: null, latestCommitState: 'unknown',
@@ -117,6 +118,7 @@ export class WorkspaceActivityIndex {
   private headRunning = 0;
   private gitRunning = 0;
   private timer?: ReturnType<typeof setInterval>;
+  private refill?: ReturnType<typeof setTimeout>;
   private collect?: ReturnType<typeof setTimeout>;
   private writeTimer?: ReturnType<typeof setTimeout>;
   private counters = { started: 0, headChecks: 0, gitCommands: 0, reused: 0, failures: 0, maxHeadRunning: 0, maxGitRunning: 0 };
@@ -257,7 +259,11 @@ export class WorkspaceActivityIndex {
       const visible = Array.isArray(params.visibleWorkspaceIds)
         ? [...new Set<string>(params.visibleWorkspaceIds.slice(0, WORKSPACE_ACTIVITY_VISIBLE_LIMIT).filter((value: unknown): value is string => identity(value) && this.workspaces.has(value)))]
         : [];
-      this.leases.set(id, { selected, visible, expires: at + WORKSPACE_ACTIVITY_LEASE_MS, sequence });
+      const selectorSequence = Number.isSafeInteger(params.selectorSequence) && params.selectorSequence >= 0 ? params.selectorSequence : 0;
+      const openedAt = params.selectorOpen === true
+        ? previous?.openedAt && previous.selectorSequence === selectorSequence ? previous.openedAt : at
+        : 0;
+      this.leases.set(id, { selected, visible, openedAt, selectorSequence, expires: at + WORKSPACE_ACTIVITY_LEASE_MS, sequence });
       while (this.leases.size > 128) this.leases.delete(this.leases.keys().next().value!);
       if (selected && selected !== previous?.selected) {
         this.used.set(this.workspaces.get(selected)!.instanceKey, at);
@@ -289,17 +295,23 @@ export class WorkspaceActivityIndex {
 
   private demand(at: number): Demand {
     const selected = new Set<string>(), visible = new Set<string>();
+    let openedAt = 0;
     for (const [id, lease] of this.leases) {
       if (lease.expires <= at) { this.leases.delete(id); continue; }
       if (lease.selected) selected.add(lease.selected);
       for (const id of lease.visible) visible.add(id);
+      openedAt = Math.max(openedAt, lease.openedAt);
     }
-    return { selected, visible };
+    return { selected, visible, openedAt };
   }
   private due(target: Target, at: number, demand: Demand) {
     const previous = this.repositories.get(target.key);
     if (previous?.error && at < time(previous.attemptedAt) + RETRY_MS[Math.min(RETRY_MS.length, previous.failures || 1) - 1]) return false;
     if (target.changed || !previous?.checkedAt || previous.error) return true;
+    // Cold rows can be offscreen precisely because their commit date is stale.
+    // Each opening verifies older HEADs once, without promoting every heartbeat
+    // or forcing Git reads when the metadata is unchanged.
+    if (demand.openedAt - time(previous.checkedAt) >= SELECTOR_RECHECK_MS) return true;
     let interval = 30 * MINUTE;
     for (const id of Object.keys(target.owners)) {
       const owner = this.workspaces.get(id);
@@ -397,6 +409,14 @@ export class WorkspaceActivityIndex {
     if (this.timer || this.closed) return;
     this.timer = setInterval(() => this.tick(), TICK_MS);
     this.timer.unref();
+  }
+  private refillSoon() {
+    if (this.closed || this.refill || this.jobs.size >= MAX_PIPELINE) return;
+    // Yield to requests and coalesce completions, then fill available slots.
+    // The interval discovers newly due work; it must not throttle an existing
+    // backlog to eight cheap HEAD checks every 250 ms.
+    this.refill = setTimeout(() => { this.refill = undefined; this.tick(); }, 0);
+    this.refill.unref();
   }
   private tick() {
     const scans = this.activeScans();
@@ -593,6 +613,7 @@ export class WorkspaceActivityIndex {
     const target = job.target, key = target.key;
     if (this.jobs.get(key) !== job) return;
     this.jobs.delete(key);
+    this.refillSoon();
     if (!this.valid(job) || !commit && error === undefined) return;
     const previous = this.repositories.get(key);
     const now = new Date(this.clock()).toISOString();
@@ -675,6 +696,7 @@ export class WorkspaceActivityIndex {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.timer);
+    clearTimeout(this.refill);
     clearTimeout(this.collect);
     clearTimeout(this.writeTimer);
     for (const scan of this.activeScans()) this.cancel(scan.scanId);

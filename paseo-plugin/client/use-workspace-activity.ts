@@ -22,6 +22,7 @@ export function useWorkspaceActivity({ project, enabled, open, selectedWorkspace
   const input = useRef({ project, generation, enabled, selectedWorkspaceId, open, rpc, reloadRoster });
   input.current = { project, generation, enabled, selectedWorkspaceId, open, rpc, reloadRoster };
   const visible = useRef<string[]>([]);
+  const selectorSequence = useRef(0);
   const latestScroll = useRef(-Infinity);
   const connection = useRef<{ id: string; wake(): void; task(value: WorkspaceActivityScan): void; call: RPC; command?: Promise<void> } | null>(null);
   const [publication, publish] = useState<WorkspaceActivityPublication | null>(null);
@@ -35,6 +36,10 @@ export function useWorkspaceActivity({ project, enabled, open, selectedWorkspace
     visible.current = next;
     connection.current?.wake();
   }, []);
+
+  // Closing and reopening can happen between two throttled polls. Keep that
+  // opening distinct even when the backend never receives the closed state.
+  useEffect(() => { if (open) selectorSequence.current++; }, [open]);
 
   useEffect(() => {
     if (!enabled || !project || !generation) return;
@@ -85,6 +90,7 @@ export function useWorkspaceActivity({ project, enabled, open, selectedWorkspace
       let failed = false;
       try {
         const response = await call({ method: 'workspace.activity', params: { action: 'view', viewId, sequence: ++sequence,
+          selectorOpen: open, selectorSequence: selectorSequence.current,
           selectedWorkspaceId, visibleWorkspaceIds: open ? visible.current : [], cursor } });
         if (!current()) return;
         const value = response.ok ? response.result as WorkspaceActivityView : undefined;

@@ -33,6 +33,7 @@ export function archiveFixture() {
     failLists: false,
     unavailableAssets: new Set<string>(),
     originalMessages: new Map<string,ArchiveMessage>(),
+    assetInfo: new Map<string,Record<string,unknown>>(),
     requests: [] as Array<{ method: string; url: string }>,
   };
 }
@@ -91,6 +92,8 @@ export async function startArchiveFixture() {
       const anchor = state.topics.flatMap(topic => topic.messages).find(message => message.id === context[1]);
       return send({ items: [state.context, ...(anchor ? [anchor] : [])], hasBefore: false, hasAfter: false });
     }
+    const info = /^libraries\/default\/assets\/([^/]+)\/info$/.exec(path);
+    if (info) return state.assetInfo.has(info[1]) ? send(state.assetInfo.get(info[1])) : send('asset_info_unavailable', 404);
     if (path === 'libraries/default/assets/pdf-original') {
       res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length });
       return res.end(pdf);

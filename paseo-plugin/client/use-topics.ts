@@ -44,6 +44,8 @@ export function useTopics(projectConfig: string, foreground: boolean, visible: b
   };
   const refresh = useCallback(async () => { await Promise.all([
     cache.invalidateQueries({ queryKey: ['archive-topics', scopeKey] }),
+    cache.invalidateQueries({ queryKey: ['archive-topic', scopeKey] }),
+    cache.invalidateQueries({ queryKey: ['archive-context', scopeKey] }),
     cache.invalidateQueries({ queryKey: ['archive-directory', scopeKey] }),
   ]); }, [cache, scopeKey]);
   return { projectConfig, scopeKey, enabled, changing, setEnabled, call, refresh, connection: connection.data, updateConnection,

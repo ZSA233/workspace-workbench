@@ -3,7 +3,7 @@ import { sessionChanged } from "./session-observation.ts";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { PluginServerContext } from "@getpaseo/plugin/server";
+import type { PluginBeforeRequests, PluginServerContext } from "@getpaseo/plugin/server";
 import { registeredProjects, resolveProject, withProject } from "./projects.ts";
 import { readState, writeState, digest } from "./orchestration-state.ts";
 import { agentContextQuery } from "../shared/handoff.ts";
@@ -14,19 +14,27 @@ import { allAgentBindings, getAgentBinding, putAgentBinding, type AgentBinding }
 import { getMcpGateway, mcpGatewayConfig } from "./mcp-gateway.ts";
 import { claimSessionRecovery } from "./session-recovery/current.ts";
 
-function bridgeConfig(configPath: string): { enabled: true } | null {
+function bridgeEnabled(configPath: string): boolean {
   try {
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     const bridge = config.agent?.bridge;
-    if (config.agent?.provider !== "paseo" || !bridge || typeof bridge !== "object" || Array.isArray(bridge)) return null;
-    if ((bridge as Record<string, unknown>).autoInject === false) return null;
-    return { enabled: true };
+    // Registration already associates native Paseo sessions with this project.
+    // Legacy bridge script/provider settings configure delegation, not whether
+    // ordinary sessions may use Workbench tools.
+    return bridge?.autoInject !== false;
   } catch {
     // A stale or temporarily unreadable project config must not make the
     // host reject an otherwise valid Agent creation request.
-    return null;
+    return false;
   }
 }
+
+// Recent Paseo hosts add runtime MCP servers at session-open, including for
+// sessions created before this plugin was installed. Detect the additive host
+// capability instead of requiring old projects to rewrite their configuration.
+type SessionOpen = PluginBeforeRequests["agent.session_open"] & {
+  mcpServers?: NonNullable<PluginBeforeRequests["agent.create"]["config"]["mcpServers"]>;
+};
 
 export function registerAgentIntegration(server: PluginServerContext, currentApi?: () => Promise<import("@getpaseo/client").PaseoApi>): () => void {
   let api: import("@getpaseo/client").PaseoApi | null = null;
@@ -35,8 +43,7 @@ export function registerAgentIntegration(server: PluginServerContext, currentApi
     let project;
     try { project = resolveProject({ directory: request.config.cwd }); } catch { return request; }
     request = {...request,...await bindSessionRuntime(project,request.config,request.env || {})};
-    const bridge = bridgeConfig(project.configPath);
-    if (!bridge) return request;
+    if (!bridgeEnabled(project.configPath)) return request;
     const token = randomUUID();
     let gateway;
     try {
@@ -72,15 +79,27 @@ export function registerAgentIntegration(server: PluginServerContext, currentApi
     try { const project=resolveProject({directory:request.cwd}); request={...request,env:await bindSessionEnvironment(project,request.cwd,request.env || {})}; } catch {}
     let project;
     try { project = resolveProject({ directory: request.cwd }); } catch { return request; }
-    const bridge = bridgeConfig(project.configPath);
-    if (!bridge) return request;
+    if (!bridgeEnabled(project.configPath)) return request;
     try {
-      return withProject({ projectConfig: project.configPath }, () => {
-        const token = request.env?.WORKBENCH_AGENT_TOKEN;
+      return await withProject({ projectConfig: project.configPath }, async () => {
+        let token = request.env?.WORKBENCH_AGENT_TOKEN;
+        const runtimeMcp = (request as SessionOpen).mcpServers;
+        const attachAtOpen = !token && runtimeMcp !== undefined;
+        if (!token && !attachAtOpen) return request;
+        const currentSession = readState<{ token: string }>(`session:${request.agentId}`);
+        let gateway;
+        if (attachAtOpen) {
+          const prior = currentSession && readState<AgentIdentity>(`context:${currentSession.token}`);
+          // Only the host's exact Agent/cwd binding may be recovered. Never
+          // borrow another session's identity based on a shared directory.
+          if (prior && (prior.agentId !== request.agentId || prior.cwd !== request.cwd || prior.workspaceId)) return request;
+          token = prior ? currentSession!.token : randomUUID();
+          gateway = await mcpGatewayConfig(project.configPath, token!, "interactive", undefined, { waitForReady: false });
+          if (!prior) writeState(`context:${token}`, { agentId: request.agentId, cwd: request.cwd });
+        }
         // Bind the exact create-time token, never match concurrent creations by cwd.
         if (!token) return request;
         const pending = readState<AgentIdentity>(`context:${token}`);
-        const currentSession = readState<{ token: string }>(`session:${request.agentId}`);
         // A lost or mismatched Workbench record disables the optional bridge
         // for this session. It must not prevent the host from opening it.
         if (!pending || pending.revoked && currentSession?.token !== token || pending.cwd !== request.cwd || pending.agentId && pending.agentId !== request.agentId) {
@@ -92,7 +111,12 @@ export function registerAgentIntegration(server: PluginServerContext, currentApi
         if (prior && prior.token !== token) writeState(`context:${prior.token}`, { agentId: request.agentId, cwd: request.cwd, revoked: true });
         writeState(`context:${token}`, { agentId: request.agentId, cwd: request.cwd });
         writeState(`session:${request.agentId}`, { token });
-        return { ...request, env: { ...(request.env || {}), WORKBENCH_AGENT_ID: request.agentId, WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath } };
+        return { ...request,
+          // Older sessions may already have a manually saved server under the
+          // legacy name. Runtime contributions must not collide with it.
+          ...(gateway ? { mcpServers: { ...runtimeMcp, "workspace-workbench-session": gateway } } : {}),
+          env: { ...(request.env || {}), WORKBENCH_AGENT_ID: request.agentId, WORKBENCH_AGENT_TOKEN: token, WORKBENCH_PROJECT_CONFIG: project.configPath },
+        };
       });
     } catch (error) {
       // Storage/identity bookkeeping is best effort at the host lifecycle

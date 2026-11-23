@@ -52,6 +52,44 @@ test("HTTP context does not inherit a different process project when its header 
   assert.match(String(response.content[0]?.text), /workbench_project_config_unavailable/);
 });
 
+test("missing session identity fails before dispatch and cannot be repaired by connection retries", async () => {
+  const original = DaemonClient.prototype.invokePluginRpc;
+  let dispatched = 0;
+  DaemonClient.prototype.invokePluginRpc = async function () { dispatched++; return { ok: true }; };
+  try {
+    const response = await handle({ method: "tools/call", params: { name: "workbench_change_notes_write", arguments: { workspaceId: "sample" } } }, {}, { token: "" });
+    const result = JSON.parse(response.content[0].text);
+    assert.equal(result.error.code, "workbench_agent_token_unavailable");
+    assert.equal(result.error.retryable, false);
+    assert.equal(result.error.dispatched, false);
+    assert.equal(result.error.stage, "context");
+    assert.equal(result.error.nextAction, "resume_session_to_attach_workbench");
+    assert.equal(dispatched, 0);
+    assert.doesNotMatch(JSON.stringify(result), /workbench-mcp-router-test/);
+  } finally { DaemonClient.prototype.invokePluginRpc = original; }
+});
+
+test("connection status distinguishes a healthy service from a missing request identity", async () => {
+  const original = { connect: DaemonClient.prototype.connect, close: DaemonClient.prototype.close, invoke: DaemonClient.prototype.invokePluginRpc };
+  DaemonClient.prototype.connect = async function () {};
+  DaemonClient.prototype.close = async function () {};
+  DaemonClient.prototype.invokePluginRpc = async function () { return { ok: true }; };
+  try {
+    for (const token of ["", "private-identity"]) {
+      const response = await handle({ method: "tools/call", params: { name: "workbench_connection_status", arguments: {} } }, {}, { token });
+      const status = JSON.parse(response.content[0].text);
+      assert.equal(status.ok, true);
+      assert.equal(status.context.projectConfigured, true);
+      assert.equal(status.context.agentTokenPresent, Boolean(token));
+      assert.equal(status.context.identityValidated, false, "presence must not claim identity validation");
+      assert.equal(status.context.nextAction, token ? undefined : "resume_session_to_attach_workbench");
+      assert.doesNotMatch(JSON.stringify(status), /private-identity/);
+    }
+  } finally {
+    DaemonClient.prototype.connect = original.connect; DaemonClient.prototype.close = original.close; DaemonClient.prototype.invokePluginRpc = original.invoke;
+  }
+});
+
 test("workspace submit preserves task across MCP argument envelopes", async () => {
   const originalConnect = DaemonClient.prototype.connect;
   const originalClose = DaemonClient.prototype.close;

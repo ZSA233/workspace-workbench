@@ -7,6 +7,7 @@ import { topicTime, topicTitle } from '../../../shared/extensions/project-commun
 import type { ArchiveAsset, ArchiveMessage, ArchiveTopic, ArchiveTopicDetail, SelectedTopic } from '../../../shared/extensions/project-communications/topics';
 import { Button, Label, ignoreFailure, shortTime, tint, useColors } from './ui';
 import { Check, ContextDialog, MediaCount, OriginalMessage, TopicIcon, topicError } from './topic-ui';
+import { pendingTopicAssets, topicDisplayMessages, TOPIC_ASSET_REFRESH_MS } from '../../topic-asset-state';
 
 export type TopicRowProps = {
   topic: ArchiveTopic; client: TopicsClient; groupName: string; selected?: SelectedTopic;
@@ -23,7 +24,10 @@ export function TopicRow(p: TopicRowProps) {
   const detail = useQuery({
     queryKey: detailKey,
     queryFn: () => p.client.call<ArchiveTopicDetail>({ action: 'read', topicId: p.topic.id }),
-    enabled: p.expanded, retry: false, staleTime: Infinity, refetchOnWindowFocus: false,
+    enabled: p.expanded && p.client.active, retry: false, refetchOnWindowFocus: false,
+    staleTime: query => pendingTopicAssets(query.state.data) ? TOPIC_ASSET_REFRESH_MS : Infinity,
+    refetchInterval: query => p.expanded && p.client.active && pendingTopicAssets(query.state.data) ? TOPIC_ASSET_REFRESH_MS : false,
+    refetchIntervalInBackground: false,
   });
   const data = p.selected?.topic || detail.data;
   const changed = Boolean(data && (data.inputRevision !== p.topic.inputRevision || data.revision !== p.topic.revision));
@@ -35,7 +39,7 @@ export function TopicRow(p: TopicRowProps) {
       ...current, messages: uniqueMessages([...current.messages, ...page.items]), hasMoreMessages: page.hasMore,
     } : current);
   };
-  const messages = uniqueMessages([...(detail.data?.messages || []), ...(data?.messages || [])]);
+  const messages = topicDisplayMessages(detail.data?.messages || [], data?.messages);
   return <View testID={'topic-row-' + p.topic.id} style={{ borderBottomWidth: 1, borderBottomColor: c.border }}>
     <View style={{ flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 5, gap: 5, alignItems: 'center', backgroundColor: p.selected ? tint(c.accent, '18') : undefined }}>
       <Check id={'topic-select-' + p.topic.id} checked={Boolean(p.selected)} disabled={p.busy || p.loading}

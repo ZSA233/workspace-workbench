@@ -126,3 +126,59 @@ test("Agent creation is not blocked when Paseo becomes temporarily unavailable",
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("registered projects need no bridge setup; old sessions acquire their own runtime MCP identity", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "workbench-default-injection-")));
+  const config = join(root, "project.json");
+  const home = join(root, "paseo");
+  const previous = { home: process.env.PASEO_HOME, config: process.env.WORKSPACE_WORKBENCH_CONFIG };
+  process.env.PASEO_HOME = home;
+  process.env.WORKSPACE_WORKBENCH_CONFIG = config;
+  const project = { sourceRoot: root, workspaceRoot: root, stateRoot: root };
+  writeFileSync(config, JSON.stringify(project));
+  const manager = new McpGatewayManager(join(import.meta.dirname, "..", "mcp-gateway.mjs"), undefined,
+    async () => ({ ok: true, stage: "ready" }));
+  setMcpGateway(manager);
+  const hooks = new Map<string, (input: any) => Promise<any>>();
+  const server = { before: (name: string, handler: (input: any) => Promise<any>) => { hooks.set(name, handler); return () => {}; }, on: () => () => {}, handle: () => {} } as unknown as PluginServerContext;
+  const cleanup = registerAgentIntegration(server);
+  try {
+    const created = await hooks.get("agent.create")!({ request: { config: { provider: "codex", cwd: root, modeId: "plan" } } });
+    assert.ok(created.env.WORKBENCH_AGENT_TOKEN, "new projects inject without an agent section");
+    assert.equal(created.config.modeId, "plan");
+    const unrelated = { type: "http", url: "http://127.0.0.1:1/mcp" };
+    const open = { agentId: "old-session", cwd: root, purpose: "interactive", reason: "resume", env: { CUSTOM: "keep" }, mcpServers: { unrelated, "workspace-workbench": unrelated } };
+    const restored = await hooks.get("agent.session_open")!({ request: open });
+    const token = restored.env.WORKBENCH_AGENT_TOKEN;
+    assert.ok(token);
+    assert.notEqual(token, created.env.WORKBENCH_AGENT_TOKEN);
+    assert.equal(restored.env.WORKBENCH_AGENT_ID, open.agentId);
+    assert.equal(restored.env.CUSTOM, "keep");
+    assert.deepEqual(restored.mcpServers.unrelated, unrelated);
+    assert.deepEqual(restored.mcpServers["workspace-workbench"], unrelated);
+    assert.equal(restored.mcpServers["workspace-workbench-session"].headers.Authorization, `Bearer ${token}`);
+    assert.deepEqual(withProject({ projectConfig: config }, () => readState(`context:${token}`)), { agentId: open.agentId, cwd: root });
+    assert.deepEqual(withProject({ projectConfig: config }, () => readState(`session:${open.agentId}`)), { token });
+    const resumed = await hooks.get("agent.session_open")!({ request: open });
+    assert.equal(resumed.env.WORKBENCH_AGENT_TOKEN, token, "same Agent can recover its exact identity again");
+    const other = await hooks.get("agent.session_open")!({ request: { ...open, agentId: "parallel-session" } });
+    assert.notEqual(other.env.WORKBENCH_AGENT_TOKEN, token, "a shared cwd never shares authorship");
+    const forged = { ...open, agentId: "parallel-session", env: { WORKBENCH_AGENT_TOKEN: token } };
+    assert.deepEqual(await hooks.get("agent.session_open")!({ request: forged }), forged);
+    for (const request of [
+      { ...open, purpose: "history" },
+      { ...open, env: { WORKBENCH_WORKER_WORKSPACE: "worker" } },
+      { ...open, env: { WORKBENCH_REVIEW_ONLY: "1" } },
+      { ...open, mcpServers: undefined, agentId: "old-host-session" },
+    ]) assert.deepEqual(await hooks.get("agent.session_open")!({ request }), request);
+    writeFileSync(config, JSON.stringify({ ...project, agent: { bridge: { autoInject: false } } }));
+    assert.deepEqual(await hooks.get("agent.session_open")!({ request: open }), open);
+    const disabledCreate = { config: { provider: "codex", cwd: root }, env: {} };
+    assert.deepEqual(await hooks.get("agent.create")!({ request: disabledCreate }), disabledCreate);
+  } finally {
+    cleanup(); await manager.close(); setMcpGateway(null);
+    if (previous.home === undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previous.home;
+    if (previous.config === undefined) delete process.env.WORKSPACE_WORKBENCH_CONFIG; else process.env.WORKSPACE_WORKBENCH_CONFIG = previous.config;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

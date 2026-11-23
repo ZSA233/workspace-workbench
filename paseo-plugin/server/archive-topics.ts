@@ -55,20 +55,48 @@ export class ArchiveTopics {
       messageCount: topic.messageCount, hasMoreMessages: topic.hasMoreMessages,
     };
   }
+  private assetInfo(asset: ArchiveAsset): Promise<ArchiveAsset> {
+    if (asset.state === 'ready' && asset.mimeType?.includes('/') && asset.mimeType !== 'application/octet-stream') return Promise.resolve(asset);
+    const key = JSON.stringify(['info', asset.id, asset.state, asset.mimeType, asset.size]);
+    let pending = this.assetMetadata.get(key);
+    if (!pending) {
+      pending = (async () => {
+        try {
+          const info = await this.connection.archive<ArchiveAsset>(this.path('assets/' + segment(asset.id) + '/info'));
+          if (info.id !== asset.id) return asset;
+          const next: ArchiveAsset = { ...asset };
+          for (const field of ['name', 'state', 'mimeType', 'kind', 'error'] as const) {
+            if (typeof info[field] === 'string') next[field] = info[field];
+          }
+          if (Number.isSafeInteger(info.size) && info.size! >= 0) next.size = info.size;
+          if (typeof info.sha256 === 'string' && /^[a-f0-9]{64}$/.test(info.sha256)) next.sha256 = info.sha256;
+          return next;
+        } catch { return asset; }
+      })().then(value => {
+        if (value.state !== 'ready') this.assetMetadata.delete(key);
+        return value;
+      });
+      this.assetMetadata.set(key, pending);
+    }
+    return pending;
+  }
   private async hydrate(messages: ArchiveMessage[]) {
     const result:ArchiveMessage[]=[];
     for(let offset=0;offset<messages.length;offset+=4) {
       result.push(...await Promise.all(messages.slice(offset,offset+4).map(async message=>{
-        const assets=(message.assets||[]).filter(asset=>asset.kind!=='avatar');
-        if(assets.length||!/\[(?:视频|图片|媒体|附件|文件)消息\]/.test(message.text||''))return {...message,assets};
+        let assets=(message.assets||[]).filter(asset=>asset.kind!=='avatar');
         // Legacy topic snapshots can omit attachments. Borrow only the exact
         // original's asset metadata; never a newer body or another speaker's file.
-        try {
+        if (!assets.length && /\[(?:视频|图片|媒体|附件|文件)消息\]/.test(message.text||'')) try {
           const original=await this.connection.archive<ArchiveMessage>(this.path('messages/'+segment(message.id)));
           const matches=original.id===message.id&&original.version===message.version&&original.sourceId===message.sourceId&&
             original.channelId===message.channelId&&original.sourceAccountId===message.sourceAccountId&&(!message.archiveId||original.archiveId===message.archiveId);
-          return {...message,assets:matches?(original.assets||[]).filter(asset=>asset.kind!=='avatar'):assets};
-        } catch{return {...message,assets};}
+          if (matches) assets=(original.assets||[]).filter(asset=>asset.kind!=='avatar');
+        } catch { /* Keep the historical message when its original is unavailable. */ }
+        // Read metadata for these exact IDs only. A saved original can become
+        // ready without rewriting the immutable topic/message snapshot.
+        for (let index=0;index<assets.length;index++) assets[index]=await this.assetInfo(assets[index]);
+        return {...message,assets};
       })));
     }
     const videos=result.flatMap(message=>message.assets.flatMap((asset,index)=>assetIsVideo(asset)?[{message,asset,index}]:[]));

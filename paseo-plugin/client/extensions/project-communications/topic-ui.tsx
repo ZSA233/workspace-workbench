@@ -9,6 +9,7 @@ import { Button, Dialog, Label, tint, useColors, useTouch } from './ui';
 import { supportedArtifact } from '../../../shared/artifact-limits.ts';
 import {TopicVideoPlayer,TopicVideoFrames} from '../../topic-video';
 import {videoTime,type TopicVideoPreview} from '../../../shared/topic-video';
+import { pendingTopicAssets, TOPIC_ASSET_REFRESH_MS } from '../../topic-asset-state';
 
 export function TopicIcon({ icon, label, onPress, disabled = false, active = false, busy = false, id, compact = false }: {
   icon: string; label: string; onPress: () => void; disabled?: boolean; active?: boolean; busy?: boolean; id?: string; compact?: boolean;
@@ -92,7 +93,7 @@ export function TopicAsset({ client, topicId, message, asset, contextOf, checked
         : data.isFetching || frames.isFetching ? <ActivityIndicator size="small" color={c.foregroundMuted} /> : <Icon name={error ? 'CircleAlert' : asset.state === 'pending' ? 'Clock' : image ? 'Image' : video ? 'Video' : 'FileText'} size={small ? 17 : 24} color={asset.state === 'ready' && !error ? c.foregroundMuted : c.statusWarning} />}
       {video && thumbnail ? <View style={{position:'absolute',padding:5,borderRadius:20,backgroundColor:'#0009'}}><Icon name="Play" size={small?16:24} color="#fff"/></View> : null}
       {video && frames.data && !small ? <Text style={{position:'absolute',right:4,bottom:3,color:'#fff',backgroundColor:'#0009',fontSize:10,borderRadius:3,paddingHorizontal:3}}>{videoTime(frames.data.duration)}</Text>:null}
-      {!small && !image && !thumbnail ? <Text numberOfLines={1} style={{ fontSize: 10, color: c.foregroundMuted, paddingHorizontal: 4 }}>{asset.state === 'ready' ? video?'视频':asset.name : state}</Text> : null}
+      {!small && !thumbnail && (!image || asset.state !== 'ready') ? <Text numberOfLines={1} style={{ fontSize: 10, color: c.foregroundMuted, paddingHorizontal: 4 }}>{asset.state === 'ready' ? video?'视频':asset.name : state}</Text> : null}
     </Pressable>
     <View style={{ position: 'absolute', top: small ? -8 : 0, right: small ? -8 : undefined, left: small ? undefined : 0, backgroundColor: tint(c.surface1, 'cc'), borderRadius: 4 }}>
       {removable ? <TopicIcon compact icon="X" label={'移除 ' + asset.name} onPress={onToggle} disabled={disabled} /> : <Check checked={checked} label={'选择 ' + asset.name} onPress={onToggle} disabled={disabled || asset.state !== 'ready' || !canSelect} />}
@@ -129,7 +130,11 @@ export function OriginalMessage({ client, topicId, message, contextOf, selected,
 export function ContextDialog({ client, topicId, anchor, selected, selectedAssets, onMessage, onAsset, onClose, disabled }: {
   client: TopicsClient; topicId: string; anchor: string; selected: string[]; selectedAssets: string[]; onMessage: (message: ArchiveMessage) => void; onAsset: (message: ArchiveMessage, asset: ArchiveAsset) => void; onClose: () => void; disabled?: boolean;
 }) {
-  const query = useQuery({ queryKey: ['archive-context', client.scopeKey, topicId, anchor], queryFn: () => client.call<{ items: ArchiveMessage[] }>({ action: 'context', topicId, messageId: anchor }), retry: false, refetchOnWindowFocus: false });
+  const query = useQuery({ queryKey: ['archive-context', client.scopeKey, topicId, anchor], queryFn: () => client.call<{ items: ArchiveMessage[] }>({ action: 'context', topicId, messageId: anchor }),
+    enabled: client.active, retry: false, refetchOnWindowFocus: false,
+    staleTime: query => pendingTopicAssets(query.state.data) ? TOPIC_ASSET_REFRESH_MS : 0,
+    refetchInterval: query => client.active && pendingTopicAssets(query.state.data) ? TOPIC_ASSET_REFRESH_MS : false,
+    refetchIntervalInBackground: false });
   return <Dialog title="上下文" onClose={onClose} width={780} height={700} footer={<Button onPress={onClose}>完成</Button>}>
     <ScrollView contentContainerStyle={{ padding: 14 }}>
       {query.isLoading ? <ActivityIndicator /> : null}{query.error ? <Label warning>{topicError(query.error.message)}</Label> : null}

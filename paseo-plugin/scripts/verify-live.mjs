@@ -23,6 +23,7 @@ import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { deflateSync } from "node:zlib";
 import { verifySessionRecovery } from "./verify-session-recovery.mjs";
+import { verifyMcpIdentity } from "./verify-mcp-identity.mjs";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import WebSocket from "ws";
 const plugin = resolve(import.meta.dirname, ".."),
@@ -111,10 +112,11 @@ writeFileSync(
     daemon: { listen: `0.0.0.0:${port}`, relay: { enabled: false }, mcp: { enabled: false, injectIntoAgents: false } },
     features: { webUi: { enabled: process.env.WORKBENCH_LIVE_UI === "1",
       ...(process.env.WORKBENCH_LIVE_UI === "1" && process.env.WORKBENCH_LIVE_WEB_DIST ? {distDir:resolve(process.env.WORKBENCH_LIVE_WEB_DIST)} : {}) } },
-    ...(process.env.WORKBENCH_LIVE_RECOVERY === "1" || process.env.WORKBENCH_LIVE_TOPICS === '1' ? { agents: { providers: { codex: {
+    ...(process.env.WORKBENCH_LIVE_RECOVERY === "1" || process.env.WORKBENCH_LIVE_TOPICS === '1' || process.env.WORKBENCH_LIVE_MCP_IDENTITY === '1' ? { agents: { providers: { codex: {
       command: [process.execPath, join(plugin, "scripts/fixtures/recovery-codex.mjs")],
       env: { WORKBENCH_RECOVERY_FIXTURE_ROOT: join(root, "recovery-codex"),
-        ...(process.env.WORKBENCH_LIVE_TOPICS === '1' ? { WORKBENCH_RECOVERY_FIXTURE_SUCCEED: '1' } : {}) },
+        ...(process.env.WORKBENCH_LIVE_TOPICS === '1' || process.env.WORKBENCH_LIVE_MCP_IDENTITY === '1' ? { WORKBENCH_RECOVERY_FIXTURE_SUCCEED: '1' } : {}),
+        ...(process.env.WORKBENCH_LIVE_MCP_IDENTITY === '1' ? { WORKBENCH_MCP_IDENTITY_FIXTURE: '1' } : {}) },
     } } } } : {}),
     plugins: {
       "workspace-workbench-paseo": {
@@ -229,6 +231,9 @@ try {
   });
   if (process.env.WORKBENCH_LIVE_RECOVERY === "1") await verifySessionRecovery({ client, root, wait, report,
     reload: () => execFileAsync(cli, ["plugin", "reload", "workspace-workbench-paseo", "--host", `127.0.0.1:${port}`, "--json"], { env, timeout: 120000 }),
+  });
+  if (process.env.WORKBENCH_LIVE_MCP_IDENTITY === '1') await verifyMcpIdentity({client,root,configs,wait,report,
+    reload: () => execFileAsync(cli, ['plugin','reload','workspace-workbench-paseo','--host',`127.0.0.1:${port}`,'--json'], {env,timeout:120000}),
   });
   const health = [];
   // Exercise the new RPC boundaries in the real host without invoking a model.

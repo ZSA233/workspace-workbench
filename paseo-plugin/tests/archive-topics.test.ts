@@ -661,6 +661,45 @@ function pendingVideo(s:Awaited<ReturnType<typeof setup>>,id='video-original') {
   return {topic,message};
 }
 
+test('saved image originals replace pending topic metadata without changing the historical message or selection scope', async () => {
+  const s = await setup();
+  try {
+    const topic = s.state.topics[0], message = topic.messages[0], originalText = message.text;
+    message.assets = [{ id: 'image-1', name: 'attachment', state: 'pending', mimeType: 'application/octet-stream' }];
+    s.state.context.assets = structuredClone(message.assets);
+    s.state.assetInfo.set('image-1', { id: 'image-1', name: '图片.png', kind: 'image', state: 'ready', mimeType: 'image/png', size: s.image.length,
+      error: '', fetchable: true, remoteUrl: 'https://private.invalid/original', credential: 'must-not-reach-ui' });
+    const detail = await s.archive.read(topic.id), asset = detail.messages[0].assets[0];
+    assert.equal(asset.state, 'ready'); assert.equal(asset.mimeType, 'image/png'); assert.equal(asset.size, s.image.length);
+    assert.equal(detail.messages[0].text, originalText); assert.equal(detail.messages[0].version, message.version);
+    assert.deepEqual(detail.messages[0].assets.map(item => item.id), ['image-1']);
+    assert.equal(message.assets[0].state, 'pending', 'historical topic snapshots stay unchanged');
+    assert.equal(JSON.stringify(asset).includes('private.invalid'), false);
+    assert.equal(JSON.stringify(asset).includes('must-not-reach-ui'), false);
+    assert.equal((await s.archive.messages(topic.id, 0)).items[0].assets[0].state, 'ready');
+    assert.equal((await s.archive.context(topic.id, message.id)).items[0].assets[0].state, 'ready');
+    assert.equal(s.state.requests.filter(request => request.url.endsWith('/assets/image-1/info')).length, 1, 'same-ID metadata is merged within the request');
+    assert.equal(s.state.requests.some(request => request.url.endsWith('/assets/image-1') || request.method === 'POST'), false, 'metadata reads do not fetch or start acquiring the original');
+  } finally { await s.close(); }
+});
+
+test('pending metadata is retried on a later read and mismatched IDs cannot mark an original ready', async () => {
+  const s = await setup();
+  try {
+    const topic = s.state.topics[0], message = topic.messages[0];
+    message.assets = [{ id: 'image-1', name: 'attachment', state: 'pending', mimeType: 'image' }];
+    s.state.assetInfo.set('image-1', { id: 'another-image', state: 'ready', mimeType: 'image/png' });
+    assert.equal((await s.archive.read(topic.id)).messages[0].assets[0].state, 'pending');
+    s.state.assetInfo.set('image-1', { id: 'image-1', state: 'pending', mimeType: 'image/png' });
+    assert.equal((await s.archive.read(topic.id)).messages[0].assets[0].state, 'pending');
+    s.state.assetInfo.set('image-1', { id: 'image-1', state: 'ready', mimeType: 'image/png', size: s.image.length });
+    assert.equal((await s.archive.read(topic.id)).messages[0].assets[0].state, 'ready');
+    const count = s.state.requests.length; message.channelId = 'outside-followed-scope';
+    await assert.rejects(s.archive.read(topic.id), /message_outside_scope/);
+    assert.equal(s.state.requests.slice(count).some(request => request.url.includes('/assets/')), false);
+  } finally { await s.close(); }
+});
+
 test('saved videos recover canonical MIME, size and ready state across topic, page and context reads without exposing transport metadata',async()=>{
   const s=await setup();
   try{

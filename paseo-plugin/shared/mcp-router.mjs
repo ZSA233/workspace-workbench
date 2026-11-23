@@ -15,7 +15,7 @@ const materialTools = [
   { name: "workbench_handoff_search", description: "Search original documents and public conversation history, returning excerpts with source locations." },
   { name: "workbench_handoff_asset", description: "Fetch an original image or readable text asset from the assigned materials version." },
 ];
-const connectionTool = { name: "workbench_connection_status", description: "Check the local MCP, Paseo and plugin RPC connection without a project or Agent context." };
+const connectionTool = { name: "workbench_connection_status", description: "Check MCP/Paseo/plugin connectivity and report whether this request carries a project and Agent identity. Connectivity alone does not authorize notes or handoffs." };
 const noteTools=[
  {name:"workbench_change_notes_read",description:"Freeze changed locations and existing explanations. Follow nextOffset or supply up to 8 paths. Describe meaningful behavior changes; do not invent requirement evidence."},
  {name:"workbench_change_notes_write",description:"Write explanations: text needs old/new start/end; file only for binary, truncated or line-free changes. Use expectedRevision; retry same requestId. Cannot approve for user."}
@@ -354,7 +354,10 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
   let args = callArguments(message);
   if (tool?.name === "workbench_connection_status") {
     const status = await probePaseo(lifecycle);
-    return { content: [{ type: "text", text: JSON.stringify(status) }], isError: !status.ok };
+    const context = { projectConfigured: Boolean(runtime.projectConfig), agentTokenPresent: Boolean(runtime.token), identityValidated: false,
+      ...(!runtime.projectConfig ? { nextAction: "open_session_in_registered_project" }
+        : !runtime.token ? { nextAction: "resume_session_to_attach_workbench" } : {}) };
+    return { content: [{ type: "text", text: JSON.stringify({ ...status, context }) }], isError: !status.ok };
   }
   if ((tool?.name === "workbench_workspace_create" || tool?.name === "workbench_workspace_submit") && !args.requestId) {
     args = { ...args, requestId: stableRequestId(tool.name === "workbench_workspace_create" ? "create" : "submit", runtime.projectConfig, args) };
@@ -371,8 +374,12 @@ export async function handle(message, lifecycle = {}, overrides = {}) {
   }
   const needsToken = (!directWorkspaceAction || tool?.name === "workbench_workspace_preview") && !runtime.token;
   const failure = (code, dispatched = false, stage = "context") => ({ content: [{ type: "text", text: JSON.stringify({ ok: false,
-    error: { code: code.split(":")[0], message: code, retryable: !dispatched && /unavailable|timeout|not_dispatched/.test(code), dispatched, stage,
-      nextAction: dispatched ? "check_status_then_retry_same_identity" : "check_connection_then_retry_same_identity",
+    error: { code: code.split(":")[0], message: code === "workbench_agent_token_unavailable"
+      ? "This MCP request has no Workbench session identity. The request was not dispatched. Continue the same Paseo conversation after the updated plugin attaches its session context; repeated connection checks cannot supply the missing identity."
+      : code, retryable: !dispatched && !["workbench_agent_token_unavailable", "workbench_project_config_unavailable"].includes(code) && /unavailable|timeout|not_dispatched/.test(code), dispatched, stage,
+      nextAction: code === "workbench_agent_token_unavailable" ? "resume_session_to_attach_workbench"
+        : code === "workbench_project_config_unavailable" ? "open_session_in_registered_project"
+          : dispatched ? "check_status_then_retry_same_identity" : "check_connection_then_retry_same_identity",
       ...(args.requestId ? { requestId: args.requestId } : {}),
       ...(tool?.name === "workbench_workspace_create" ? { statusTool: "workbench_workspace_operation_status" }
         : tool?.name === "workbench_workspace_submit" ? { statusTool: "workbench_workspace_status" } : {}) } }) }], isError: true });

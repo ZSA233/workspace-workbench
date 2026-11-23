@@ -1,6 +1,6 @@
 /** Deterministic local Codex app-server protocol fixture. Never calls a model. */
 import { createInterface } from "node:readline";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 if (process.argv.includes("--version")) { console.log("codex-cli 0.161.0"); process.exit(0); }
@@ -15,6 +15,18 @@ const notify = (method, params) => send({ jsonrpc: "2.0", method, params });
 const save = thread => writeFileSync(join(root, `${thread.id}.json`), JSON.stringify(thread));
 const read = id => JSON.parse(readFileSync(join(root, `${id}.json`), "utf8"));
 let current;
+function captureMcp(method, params) {
+  if (process.env.WORKBENCH_MCP_IDENTITY_FIXTURE !== '1' || method === 'thread/read') return false;
+  const servers = params.config?.mcp_servers || {};
+  const bridge = servers['workspace-workbench-session'] || servers['workspace-workbench'];
+  const authorization = bridge?.http_headers?.Authorization;
+  (current.mcpLaunches ||= []).push({ method, agentId: process.env.WORKBENCH_AGENT_ID || null,
+    serverNames: Object.keys(servers), hasIdentity: Boolean(authorization),
+    tokenMatchesEnvironment: Boolean(authorization) && authorization === `Bearer ${process.env.WORKBENCH_AGENT_TOKEN}`,
+    authorizationDigest: authorization ? createHash('sha256').update(authorization).digest('hex') : null,
+  });
+  return true;
+}
 const workflow=()=>current?.creationOptions?.sandbox==='danger-full-access'
   ?{approvalPolicy:current.creationOptions.approvalPolicy,sandbox:{type:'dangerFullAccess'}}
   :{approvalPolicy:'on-request',sandbox:{type:'workspaceWrite',writableRoots:[current?.cwd]}};
@@ -40,10 +52,10 @@ createInterface({ input: process.stdin }).on("line", line => {
         current.requestedModel = params.model;
         current.creationOptions={approvalPolicy:params.approvalPolicy,sandbox:params.sandbox};
       }
-      save(current); return reply({ thread: current, model: current.requestedModel || "recovery-fixture", ...workflow() });
+      captureMcp(method, params); save(current); return reply({ thread: current, model: current.requestedModel || "recovery-fixture", ...workflow() });
     }
     if (method === "thread/read" || method === "thread/resume") {
-      current = read(params.threadId); return reply({ thread: current, model: current.requestedModel || "recovery-fixture", ...workflow() });
+      current = read(params.threadId); if (captureMcp(method, params)) save(current); return reply({ thread: current, model: current.requestedModel || "recovery-fixture", ...workflow() });
     }
     if (method === "turn/start") {
       current = read(params.threadId);

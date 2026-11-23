@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import { loadConfig } from '../server/backend/config.ts';
+import { Git } from '../server/backend/git.ts';
 import { WorkspaceActivityIndex } from '../server/backend/workspace-activity.ts';
 
 const oldDate = '2020-01-01T00:00:00Z';
@@ -84,9 +85,11 @@ test('current, visible and cold activity have separate deadlines and failed prob
   } finally { await index.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test('full checks merge and cancellation keeps finished verification and stops manual targets', async () => {
+test('full checks merge and cancellation keeps finished verification and stops manual targets', async t => {
   const f = await fixture();
   const { root, source, index } = f;
+  let release!: () => void;
+  const paused = new Promise<void>(resolve => { release = resolve; });
   try {
     const rows = [row('main', source)];
     for (let i = 0; i < 22; i++) {
@@ -99,6 +102,16 @@ test('full checks merge and cancellation keeps finished verification and stops m
     await until(() => index.status('initial').state === 'complete');
     assert.equal(index.health().started, rows.length);
     assert.ok(index.health().gitCommands < rows.length / 2);
+    const slowPath = rows.at(-1)!.repositories[0].worktreePath;
+    git(slowPath, ['commit', '--allow-empty', '-qm', 'separate slow commit']);
+    const slowHead = git(slowPath, ['rev-parse', 'HEAD']);
+    const originalRun = Git.prototype.run;
+    t.mock.method(Git.prototype, 'run', async function(this: Git, ...args: Parameters<Git['run']>) {
+      // Keep one real read unfinished regardless of how quickly the other
+      // batches drain; cancellation must not race a fully completed scan.
+      if (this.path === slowPath || args[0].includes(slowHead)) await paused;
+      return originalRun.apply(this, args);
+    });
     const first = index.startForIds('full', undefined, true);
     const second = index.startForIds('duplicate', undefined, true);
     assert.equal(first.total, rows.length);
@@ -108,12 +121,13 @@ test('full checks merge and cancellation keeps finished verification and stops m
     assert.equal(index.status('full').state, 'running');
     index.cancel('duplicate');
     assert.equal(index.status('full').state, 'cancelled');
+    release();
     const started = index.health().started;
     await delay(550);
     assert.equal(index.health().started, started);
     assert.ok(index.status('full').completed > 0);
     assert.ok(rows.every(workspace => index.summary(workspace).latestCommitAt));
-  } finally { await index.close(); await rm(root, { recursive: true, force: true }); }
+  } finally { release(); await index.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 test('opening the selector catches a new commit in an offscreen cold Workspace before its normal deadline', async () => {

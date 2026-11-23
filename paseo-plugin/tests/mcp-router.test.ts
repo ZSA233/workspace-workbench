@@ -70,6 +70,10 @@ test("missing session identity fails before dispatch and cannot be repaired by c
 });
 
 test("connection status distinguishes a healthy service from a missing request identity", async () => {
+  const home = mkdtempSync(join(tmpdir(), "workbench-context-probe-"));
+  const previousHome = process.env.PASEO_HOME;
+  writeFileSync(join(home, "paseo.pid"), JSON.stringify({ listen: "127.0.0.1:6767" }));
+  process.env.PASEO_HOME = home;
   const original = { connect: DaemonClient.prototype.connect, close: DaemonClient.prototype.close, invoke: DaemonClient.prototype.invokePluginRpc };
   DaemonClient.prototype.connect = async function () {};
   DaemonClient.prototype.close = async function () {};
@@ -87,6 +91,8 @@ test("connection status distinguishes a healthy service from a missing request i
     }
   } finally {
     DaemonClient.prototype.connect = original.connect; DaemonClient.prototype.close = original.close; DaemonClient.prototype.invokePluginRpc = original.invoke;
+    if (previousHome === undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

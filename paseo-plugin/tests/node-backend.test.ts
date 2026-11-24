@@ -348,6 +348,91 @@ test("Node backend preserves public rejection codes and idempotent records", asy
   }
 });
 
+test("Workspace creation prefers exact repository IDs and explains ambiguous aliases before journaling", async () => {
+  const f = fixture({ repositories: [
+    { id: "compose", path: "one", displayName: "shared" },
+    { id: "h5-compose", path: "two", displayName: "compose" },
+    { id: "other", path: "three", displayName: "shared" },
+  ] });
+  const service = new Service(f.config);
+  try {
+    const request = { requestId: "compose-create", name: "compose-workspace" };
+    await assert.rejects(service.handle("workspace.create", { ...request, repositories: ["shared"] }), {
+      code: "repository_invalid",
+      message: /ambiguous.*absolute source path/i,
+      details: { requested: "shared", matches: [
+        { id: "compose", path: join(f.root, "one") },
+        { id: "other", path: join(f.root, "three") },
+      ] },
+    });
+    await assert.rejects(service.handle("workspace.operation.status", { operationId: request.requestId }), {
+      code: "operation_not_found",
+      message: /before journaling/i,
+    });
+    assert.equal(existsSync(join(f.config.treesRoot, request.name)), false);
+
+    const created = await service.handle("workspace.create", {
+      ...request, repositories: ["compose"], baseRefs: { compose: "HEAD" },
+    });
+    assert.deepEqual(created.repositoryIds, ["compose"]);
+    assert.equal((await service.handle("workspace.operation.status", { operationId: request.requestId })).stage, "active");
+
+    const nestedPath = join(f.root, "two");
+    const added = await service.handle("workspace.addRepositories", {
+      workspaceId: created.id, repositories: [nestedPath], baseRefs: { [nestedPath]: "HEAD" },
+    });
+    assert.deepEqual(added.addedRepositories, ["h5-compose"]);
+    assert.equal(service.workspaces.repository(added, "compose").id, "compose");
+
+    const base = git(join(f.root, "one"), ["rev-parse", "HEAD"]);
+    const all = await service.handle("workspace.create", {
+      name: "all-repositories", baseRefs: { compose: base, [nestedPath]: "HEAD" },
+    });
+    assert.deepEqual(all.repositoryIds, ["compose", "h5-compose", "other"]);
+    assert.deepEqual(all.repositories.slice(0, 2).map((repo: Json) => repo.baseRef), [base, "HEAD"]);
+    await assert.rejects(service.handle("workspace.create", {
+      name: "ambiguous-base", baseRefs: { shared: "HEAD" },
+    }), { code: "request_invalid", message: /baseRefs.*ambiguous.*absolute source path/i });
+  } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("Workspace creation recovery keeps journaled scope and bases after repository aliases change", async (t) => {
+  const f = fixture({ repositories: [
+    { id: "one", path: "one", displayName: "shared" },
+    { id: "two", path: "two" },
+  ] });
+  let service = new Service(f.config);
+  try {
+    const materialize = service.workspaces.creation.materialize.bind(service.workspaces.creation);
+    t.mock.method(service.workspaces.creation, "materialize", async (plan: Json, workspace: Json) => {
+      if (plan.id === "two") throw new WorkbenchError("git_timeout", "injected before worktree creation");
+      return materialize(plan, workspace);
+    });
+    const request = { name: "recover-create", requestId: "recover-create-1", baseRefs: { shared: "HEAD" } };
+    await assert.rejects(service.handle("workspace.create", request), { code: "create_failed" });
+    const failed = await service.handle("workspace.operation.status", { operationId: request.requestId });
+    assert.equal(failed.stage, "create_failed");
+    await service.close();
+
+    const config = JSON.parse(readFileSync(f.configPath, "utf8"));
+    config.repositories[1].displayName = "shared";
+    config.repositories.push({ id: "three", path: "three" });
+    writeFileSync(f.configPath, JSON.stringify(config));
+    service = new Service(loadConfig(f.configPath));
+
+    const recovered = await service.handle("workspace.create", request);
+    assert.equal(recovered.state, "active");
+    assert.deepEqual(recovered.repositoryIds, ["one", "two"]);
+    assert.deepEqual(recovered.repositories, failed.result.repositories);
+  } finally {
+    await service.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test("historical execution reports do not block safe workspace cleanup", async () => {
   const f = fixture(), service = new Service(f.config);
   try {

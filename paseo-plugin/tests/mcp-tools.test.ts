@@ -16,7 +16,7 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
     input: '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n',
   });
   assert.equal(result.status, 0, result.stderr);
-  const response = JSON.parse(result.stdout.trim()) as { result: { tools: Array<{ name: string; description: string; inputSchema: { required: string[] } }> } };
+  const response = JSON.parse(result.stdout.trim()) as { result: { tools: Array<{ name: string; description: string; inputSchema: { required: string[]; properties: Record<string, { description?: string }> } }> } };
   assert.deepEqual(response.result.tools.map((tool) => tool.name), [
     "workbench_change_notes_read", "workbench_change_notes_write",
     "workbench_handoff_read", "workbench_handoff_search", "workbench_handoff_asset",
@@ -40,10 +40,15 @@ test("MCP exposes only the public Workbench tool names with compact schemas", ()
   const preview = response.result.tools.find((tool) => tool.name === "workbench_workspace_preview")!;
   const execute = response.result.tools.find((tool) => tool.name === "workbench_workspace_execute")!;
   const status = response.result.tools.find((tool) => tool.name === "workbench_workspace_status")!;
+  const create = response.result.tools.find((tool) => tool.name === "workbench_workspace_create")!;
+  const operationStatus = response.result.tools.find((tool) => tool.name === "workbench_workspace_operation_status")!;
   assert.match(preview.description, /without Git changes/);
   assert.match(preview.description, /local/);
   assert.match(execute.description, /requestId alone/);
   assert.match(status.description, /request ID/);
+  assert.match(create.inputSchema.properties.repositories.description ?? "", /Exact IDs take priority.*\/project\/h5\/compose/);
+  assert.match(create.inputSchema.properties.baseRefs.description ?? "", /\{"\/project\/h5\/compose":"HEAD"\}/);
+  assert.match(operationStatus.description, /rejected before journaling has no status/);
   const notes = response.result.tools.find(tool => tool.name === 'workbench_change_notes_write')!;
   const anchor = (notes.inputSchema as any).properties.batch.properties.operations.items.properties.content.properties.anchors.items;
   const line = anchor.anyOf.find((branch: any) => branch.properties.side.enum.includes('new'));

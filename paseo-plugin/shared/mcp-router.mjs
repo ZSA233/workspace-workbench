@@ -34,7 +34,7 @@ const publicTools = [
   { name: "workbench_workspace_create", description: "Create or reuse a Git Workspace only. This does not require an Agent, handoff, Reviewer or parent session." },
   { name: "workbench_workspace_delegate", description: "Explicitly delegate an already-created Workspace with the supplied handoff. Creating the Workspace and starting an Agent remain separate actions." },
   { name: "workbench_workspace_add_repositories", description: "Add repositories to an existing flat managed Workspace without creating a new Workspace or Agent session." },
-  { name: "workbench_workspace_operation_status", description: "Read the durable status of a Workspace creation or runtime preparation operation by operationId." },
+  { name: "workbench_workspace_operation_status", description: "Read a journaled Workspace creation or runtime preparation by operationId. A create request rejected before journaling has no status." },
   connectionTool,
   { name: "workbench_review_preview", description: "Preview review context without starting a Reviewer." },
   { name: "workbench_review_execute", description: "Start or continue the Workspace Agent Review orchestration." },
@@ -83,6 +83,14 @@ function toolsFor(runtime) {
   ? independentWorkerTools
   : publicTools;
 }
+const repositorySelectorsSchema = {
+  type: "array", minItems: 1, items: { type: "string", minLength: 1 },
+  description: "Select repositories by configured ID, path, or unique display name. Exact IDs take priority. Use an absolute source checkout path such as /project/h5/compose to disambiguate.",
+};
+const repositoryBaseRefsSchema = {
+  type: "object", additionalProperties: { type: "string" },
+  description: 'Map selected repositories to Git refs. Use the same IDs or absolute source paths as in repositories, for example {"/project/h5/compose":"HEAD"}.',
+};
 const schema = {
   type: "object",
   required: ["requestId", "handoff"],
@@ -91,12 +99,12 @@ const schema = {
     requestId: { type: "string", minLength: 1 },
     workspaceId: { type: "string", minLength: 1 },
     name: { type: "string", minLength: 1 },
-    repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    repositories: repositorySelectorsSchema,
     parentWorkspaceId: { type: "string", minLength: 1, description: "Flat Workspace whose committed repository HEADs supply defaults for a derived Workspace. Does not copy uncommitted changes." },
     sourceWorkspaceId: { type: "string", minLength: 1, description: "Selected read-only Gitlink Workspace to use as a nested workspace source." },
     branchName: { type: "string", minLength: 1, description: "One branch name for the outer repository and every child repository." },
     rootBaseRef: { type: "string", minLength: 1, description: "Outer repository ref; child defaults come from its pinned Gitlink commits." },
-    baseRefs: { type: "object", additionalProperties: { type: "string" } },
+    baseRefs: repositoryBaseRefsSchema,
     handoff: {
       type: "object",
       required: ["goal"],
@@ -159,14 +167,14 @@ const workspaceStatusSchema = {
 const workspaceCreateSchema = {
   type: "object", required: ["name"], additionalProperties: false,
   properties: {
-    requestId: { type: "string", minLength: 1 },
+    requestId: { type: "string", minLength: 1, description: "Optional creation identity. After a timeout or lost response, query status using this ID and keep the same inputs for recovery." },
     name: { type: "string", minLength: 1 },
-    repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    repositories: { ...repositorySelectorsSchema, description: `${repositorySelectorsSchema.description} Omit for a Gitlink source. Flat creation defaults to the parent's scope or all enabled repositories.` },
     parentWorkspaceId: { type: "string", minLength: 1, description: "Flat Workspace whose committed repository HEADs supply defaults for a derived Workspace. Does not copy uncommitted changes." },
     sourceWorkspaceId: { type: "string", minLength: 1 },
     branchName: { type: "string", minLength: 1 },
     rootBaseRef: { type: "string", minLength: 1 },
-    baseRefs: { type: "object", additionalProperties: { type: "string" } },
+    baseRefs: { ...repositoryBaseRefsSchema, description: `${repositoryBaseRefsSchema.description} For flat creation, keys resolve within the selected repositories. For a Gitlink source, use child paths relative to the outer checkout.` },
   },
 };
 const workspaceDelegateSchema = {
@@ -181,24 +189,24 @@ const workspaceAddRepositoriesSchema = {
   type: "object", required: ["workspaceId", "repositories"], additionalProperties: false,
   properties: {
     workspaceId: { type: "string", minLength: 1 },
-    repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-    baseRefs: { type: "object", additionalProperties: { type: "string" } },
+    repositories: repositorySelectorsSchema,
+    baseRefs: repositoryBaseRefsSchema,
   },
 };
 const workspaceOperationStatusSchema = {
   type: "object", required: ["operationId"], additionalProperties: false,
-  properties: { operationId: { type: "string", minLength: 1 } },
+  properties: { operationId: { type: "string", minLength: 1, description: "Use the returned operationId or the original creation requestId if its result is uncertain. Correct explicit validation errors before resubmitting." } },
 };
 const workspaceSubmitSchema = {
   type: "object", required: ["task"], additionalProperties: false,
   properties: {
     requestId: { type: "string", minLength: 1 }, workspaceId: { type: "string", minLength: 1 },
-    name: { type: "string", minLength: 1 }, repositories: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    name: { type: "string", minLength: 1 }, repositories: repositorySelectorsSchema,
     parentWorkspaceId: { type: "string", minLength: 1, description: "Flat Workspace whose committed repository HEADs supply defaults for a derived Workspace. Does not copy uncommitted changes." },
     sourceWorkspaceId: { type: "string", minLength: 1, description: "Selected Gitlink Workspace source." },
     branchName: { type: "string", minLength: 1, description: "Shared outer and child branch name." },
     rootBaseRef: { type: "string", minLength: 1, description: "Outer repository base ref; children default to pinned commits." },
-    baseRefs: { type: "object", additionalProperties: { type: "string" } }, task: { type: "string", minLength: 1 },
+    baseRefs: repositoryBaseRefsSchema, task: { type: "string", minLength: 1 },
     references: { ...schema.properties.handoff.properties.reviewPacket.properties.references, maxItems: 128, description: "Original files/images to include, using registered assetId or source-repository paths. Every supplied reference must be readable before dispatch." },
     originalPaths: { type: "array", maxItems: 128, items: { type: "string", minLength: 1 } },
     startMode: { enum: ["adaptive", "plan-first"] }, relationship: { enum: ["independent", "child"] },

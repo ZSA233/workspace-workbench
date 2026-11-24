@@ -175,6 +175,22 @@ Agent 会话；Gitlink Workspace 的成员仍由外层指针固定。`workbench_
 handoff 的 `requestId`，不能用 `workspaceId` 单独代替；需要执行 Agent 时，再显式使用交接入口，子会话
 会固定在新 worktree 中，当前会话不会切换 cwd。审核默认关闭，只有用户主动启动时才运行。
 
+平铺 Workspace 的 `repositories` 接受已启用仓库的配置 ID、路径或唯一显示名，精确 ID 优先。
+`baseRefs` 的键在已选仓库中解析，值是 Git ref。遇到同名仓库，可以在两个字段中使用同一个
+绝对源仓库路径。例如，以下参数只为 `h5/compose` 创建 worktree。
+
+```json
+{
+  "name": "fix-h5-compose",
+  "repositories": ["/path/to/project/h5/compose"],
+  "baseRefs": { "/path/to/project/h5/compose": "HEAD" }
+}
+```
+
+创建在仓库校验阶段被拒绝时还没有操作记录，查询会返回 `operation_not_found`。收到这类
+校验错误后，修正参数再提交。遇到超时或断线、创建结果不确定时，先用原 `requestId` 作为
+`operationId` 查询。恢复同一次创建时沿用原请求 ID 和原参数。
+
 项目关联 Workbench 后，Paseo 交互式会话默认自动获得项目上下文和独立的 MCP 身份，无需配置
 `agent.provider`、桥接脚本或 Token。它使用插件级共享 HTTP MCP 网关，不会为每个
 会话创建独立的 `mcp.mjs` 进程。需要关闭自动注入时，在 `agent.bridge` 中显式设置

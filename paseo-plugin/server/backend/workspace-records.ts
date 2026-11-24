@@ -91,11 +91,8 @@ export class WorkspaceRecords {
             this.deps.storage.atomicJson(join(record.treePath, ".workspace/manifest.json"), record);
         return record;
     }
-    matches(repo: Json, ref: unknown) {
-        if (typeof ref !== "string" || !ref.trim())
-            return false;
+    private matchesAlias(repo: Json, ref: string) {
         return ([
-            repo.id,
             repo.name,
             repo.repoPath,
             repo.sourcePath,
@@ -105,8 +102,14 @@ export class WorkspaceRecords {
                 .filter(Boolean)
                 .some((path) => canonical(resolve(this.deps.config().sourceRoot, ref)) === canonical(path)));
     }
+    private matchingRepositories<T extends Json>(repositories: T[], ref: unknown, record: (repo: T) => Json = repo => repo): T[] {
+        if (typeof ref !== "string" || !ref.trim())
+            return [];
+        const exactIds = repositories.filter(repo => repo.id === ref);
+        return exactIds.length ? exactIds : repositories.filter(repo => this.matchesAlias(record(repo), ref));
+    }
     repository(workspace: Json, ref: unknown): Json {
-        const matches = workspace.repositories.filter((repo: Json) => this.matches(repo, ref));
+        const matches = this.matchingRepositories(workspace.repositories, ref);
         if (matches.length !== 1)
             throw new WorkbenchError(matches.length ? "repository_ambiguous" : "repository_missing", "repository reference is unavailable or ambiguous");
         return matches[0];
@@ -119,32 +122,43 @@ export class WorkspaceRecords {
         if (params.repositories !== undefined &&
             !Array.isArray(params.repositories))
             throw new WorkbenchError("request_invalid", "repositories must be an array");
+        const sourceRecord = (repo: Repository) => this.sourceRecord(repo);
+        const resolveReference = (repositories: Repository[], requested: unknown, field: "repositories" | "baseRefs") => {
+            const matches = this.matchingRepositories(repositories, requested, sourceRecord);
+            if (matches.length === 1)
+                return matches[0];
+            const code = field === "repositories" ? "repository_invalid" : "request_invalid";
+            if (matches.length > 1)
+                throw new WorkbenchError(code, `The ${field} reference ${JSON.stringify(requested)} is ambiguous. Use a configured repository ID or a unique absolute source path.`, {
+                    requested,
+                    matches: matches.map(repo => ({ id: repo.id, path: sourceRecord(repo).sourcePath })),
+                });
+            const message = field === "repositories" ? "Unknown or disabled repository. Use an enabled repository ID or absolute source path."
+                : "Each baseRefs key must identify a selected repository.";
+            throw new WorkbenchError(code, message, { requested });
+        };
         const selected: Repository[] = [];
         for (const requested of params.repositories ??
             candidates.map((repo) => repo.id)) {
-            const matches = candidates.filter((repo) => this.matches(this.sourceRecord(repo), requested));
-            if (matches.length !== 1)
-                throw new WorkbenchError("repository_invalid", "unknown, disabled or ambiguous repository");
-            if (!selected.includes(matches[0]))
-                selected.push(matches[0]);
+            const repo = resolveReference(candidates, requested, "repositories");
+            if (!selected.includes(repo))
+                selected.push(repo);
         }
         if (!selected.length)
             throw new WorkbenchError("repositories_empty", "select at least one repository");
         const bases = params.baseRefs ?? {};
         if (!bases || typeof bases !== "object" || Array.isArray(bases))
             throw new WorkbenchError("request_invalid", "baseRefs must be an object");
-        for (const [key, value] of Object.entries(bases))
-            if (typeof value !== "string" ||
-                !value.trim() ||
-                !selected.some((repo) => this.matches(this.sourceRecord(repo), key)))
-                throw new WorkbenchError("request_invalid", "invalid base ref mapping");
-        return selected.map((repo) => {
-            const refs = Object.entries(bases)
-                .filter(([key]) => this.matches(this.sourceRecord(repo), key))
-                .map(([, value]) => String(value));
-            if (new Set(refs).size > 1)
-                throw new WorkbenchError("request_invalid", "conflicting base refs");
-            return { repo, baseRef: refs[0] || null };
-        });
+        const baseRefByRepository = new Map<Repository, string>();
+        for (const [key, value] of Object.entries(bases)) {
+            if (typeof value !== "string" || !value.trim())
+                throw new WorkbenchError("request_invalid", "Each baseRefs value must be a non-empty Git ref.", { requested: key });
+            const repo = resolveReference(selected, key, "baseRefs");
+            const previous = baseRefByRepository.get(repo);
+            if (previous !== undefined && previous !== value)
+                throw new WorkbenchError("request_invalid", `Conflicting base refs for repository ${repo.id}.`);
+            baseRefByRepository.set(repo, value);
+        }
+        return selected.map(repo => ({ repo, baseRef: baseRefByRepository.get(repo) ?? null }));
     }
 }

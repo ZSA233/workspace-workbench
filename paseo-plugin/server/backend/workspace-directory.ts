@@ -128,7 +128,7 @@ export class WorkspaceDirectory {
             throw new WorkbenchError("operation_id_required", "operationId is required");
         const match = this.list().find(item => item.operationId === operationId || item.id === operationId);
         if (!match)
-            throw new WorkbenchError("operation_not_found", "Workspace operation was not found");
+            throw new WorkbenchError("operation_not_found", "No Workspace operation record found for this ID. A create request rejected before journaling has no operation status.");
         return {
             operationId,
             workspaceId: match.id,

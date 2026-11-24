@@ -319,11 +319,8 @@ export class WorkspaceCreation {
         if (id === "main")
             throw new WorkbenchError("workspace_id_reserved", "reserved workspace id");
         const path = this.deps.records.recordPath(id);
-        const saved = this.deps.records.read(path);
-        const selected = this.deps.records.select(params.parentWorkspaceId && params.repositories === undefined
-            ? { ...params, repositories: (() => { const source = saved || this.deps.directory.get(String(params.parentWorkspaceId)); return source.repositoryIds || source.repositories.map((repo: Json) => repo.id); })() }
-            : params);
         let workspace: Json;
+        let selected: ReturnType<WorkspaceRecords["select"]>;
         if (this.deps.files.existsSync(path)) {
             workspace = this.deps.directory.get(id);
             if (!["active", "creating", "create_failed"].includes(workspace.state))
@@ -339,8 +336,18 @@ export class WorkspaceCreation {
             }
             if (workspace.state === "active")
                 return { ...this.deps.records.save(workspace), operationId: workspace.operationId || params.requestId || id, reused: true };
+            const plannedIds = new Set(workspace.repositories.map((repo: Json) => repo.id));
+            const journaledIds = workspace.repositoryIds ?? (params.parentWorkspaceId && params.repositories === undefined ? [...plannedIds] : undefined);
+            // Complete journals already carry resolved bases. Reinterpreting aliases on
+            // retry can block recovery after a display name or the project catalog changes.
+            const complete = Array.isArray(journaledIds) && journaledIds.every(repositoryId => plannedIds.has(repositoryId));
+            selected = this.deps.records.select({ repositories: journaledIds ?? params.repositories, baseRefs: complete ? {} : params.baseRefs });
         }
         else {
+            const parent = params.parentWorkspaceId ? this.deps.directory.get(String(params.parentWorkspaceId)) : null;
+            selected = this.deps.records.select(parent && params.repositories === undefined
+                ? { ...params, repositories: parent.repositoryIds || parent.repositories.map((repo: Json) => repo.id) }
+                : params);
             const treePath = canonical(join(this.deps.config().treesRoot, id));
             if (!inside(treePath, this.deps.config().treesRoot) || this.deps.files.existsSync(treePath))
                 throw new WorkbenchError("path_invalid", "workspace target already exists");
@@ -362,7 +369,6 @@ export class WorkspaceCreation {
                 repositories: [],
                 createdAt: this.deps.storage.now(),
             };
-            const parent = params.parentWorkspaceId ? this.deps.directory.get(String(params.parentWorkspaceId)) : null;
             if (parent && (parent.id === 'main' || parent.layout === 'gitlink' || !['active','removed'].includes(parent.state)))
                 throw new WorkbenchError('workspace_source_invalid', 'Select an available flat Workspace as the parent');
             if (parent && params.parentInstanceKey && params.parentInstanceKey !== workspaceInstanceKey(parent as any)) throw new WorkbenchError('workspace_identity_changed', 'Source Workspace was replaced');

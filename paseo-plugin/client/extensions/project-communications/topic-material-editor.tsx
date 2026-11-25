@@ -2,30 +2,33 @@ import {useMemo,useState} from 'react';
 import {View} from 'react-native';
 import {Icon,ScrollView,TextInput} from '../../native-components';
 import type {TopicsClient} from '../../use-topics';
+import type {IssueBasket} from '../../issue-selection';
 import {basketContentEntries,type TopicBasket} from '../../topic-selection';
 import type {ArchiveMessage} from '../../../shared/extensions/project-communications/topics';
 import {messageText} from '../../../shared/extensions/project-communications/topics';
+import {issueMaterialText,type SelectedIssue} from '../../../shared/extensions/project-communications/issues';
 import {prepareTopicContent,topicBuiltInTemplates,topicContentOptions,topicTemplateError,TOPIC_TEXT_LIMIT,
   type TopicContentAlias,type TopicMaterialSettings,type TopicTemplate} from '../../../shared/extensions/project-communications/topic-content';
 import {Badge,Button,Dialog,Field,Label,useColors} from './ui';
 import {TopicAsset,TopicIcon} from './topic-ui';
 
-export function useTopicMaterialDraft(basket:TopicBasket,settings:TopicMaterialSettings,note:string,aliases:TopicContentAlias[]){
+export function useTopicMaterialDraft(basket:TopicBasket,issues:IssueBasket,settings:TopicMaterialSettings,note:string,aliases:TopicContentAlias[]){
   const timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone||'Asia/Shanghai';
   const options=useMemo(()=>({...topicContentOptions(settings,timeZone),aliases}),[settings,timeZone,aliases]);
   const draft=useMemo(()=>{
-    try{return {...prepareTopicContent(basketContentEntries(basket),options,note,Object.values(basket).filter(item=>item.includeAnalysis).map(item=>item.topic.lastAnswer||item.topic.summary||'')),error:''};}
+    const analysis=Object.values(basket).filter(item=>item.includeAnalysis).map(item=>item.topic.lastAnswer||item.topic.summary||'');
+    try{return {...prepareTopicContent(basketContentEntries(basket),options,note,[...analysis,...Object.values(issues).map(issueMaterialText)]),error:''};}
     catch(error){return {text:'',rows:[],people:[],conversation:false,unresolved:[],error:error instanceof Error?error.message:String(error)};}
-  },[basket,options,note]);
+  },[basket,issues,options,note]);
   return {draft,options};
 }
 
-type Props={client:TopicsClient;basket:TopicBasket;settings:TopicMaterialSettings;note:string;locked:boolean;
+type Props={client:TopicsClient;basket:TopicBasket;issues:IssueBasket;settings:TopicMaterialSettings;note:string;locked:boolean;
   onSettings(settings:TopicMaterialSettings):void;onEdit(message:ArchiveMessage,text:string|undefined):void;
   draft:ReturnType<typeof useTopicMaterialDraft>['draft']};
 const shortName=(name:string,length=18)=>Array.from(name).length>length?Array.from(name).slice(0,length).join('')+'…':name;
 
-export function TopicMaterialActions({basket,settings,note,locked,onSettings,draft,client}:Props){
+export function TopicMaterialActions({basket,issues,settings,note,locked,onSettings,draft,client}:Props){
   const [dialog,setDialog]=useState<'menu'|'people'|'preview'|''>(''),[editor,setEditor]=useState<TopicTemplate>();
   const templates=[...topicBuiltInTemplates,...settings.presets],preset=templates.find(item=>item.id===settings.presetId)||templates[0];
   const save=(value:TopicTemplate)=>{
@@ -79,6 +82,7 @@ export function TopicMaterialActions({basket,settings,note,locked,onSettings,dra
         <Label>{draft.text}</Label>
         {draft.rows.flatMap(row=>row.message.assets.filter(asset=>row.assetIds?.includes(asset.id)).map(asset=><TopicAsset key={row.key+asset.id}
           {...{client,asset,message:row.message}} topicId={row.topicId} contextOf={basket[row.topicId]?.contexts[row.message.id]} checked disabled onToggle={()=>undefined}/>))}
+        {Object.values(issues).map(item=><IssueOriginals key={item.issue.id} {...{client,item}} />)}
       </ScrollView>
     </Dialog>:null}
   </>;
@@ -99,7 +103,7 @@ function TemplateEditor({value,canSave,onSave,onClose}:{value:TopicTemplate;canS
   </Dialog>;
 }
 
-export function TopicMaterialRows({client,basket,settings,locked,onEdit,draft}:Props){
+export function TopicMaterialRows({client,basket,issues,settings,locked,onEdit,draft}:Props){
   const c=useColors(),[editing,setEditing]=useState('');
   return <View style={{gap:14}}>
     {draft.rows.map(row=><View key={row.key} testID={'topic-content-row-'+row.message.id} style={{gap:7,paddingLeft:12,borderLeftWidth:2,borderLeftColor:c.accent}}>
@@ -123,6 +127,16 @@ export function TopicMaterialRows({client,basket,settings,locked,onEdit,draft}:P
       </View>
     </View>)}
     {Object.values(basket).filter(item=>item.includeAnalysis).map(item=><View key={item.topic.id} style={{gap:6}}><Label muted>所选分析</Label><Label>{item.topic.lastAnswer||item.topic.summary}</Label></View>)}
+    {Object.values(issues).map(item=><View key={item.issue.id} testID={'tapd-material-'+item.issue.id} style={{gap:7,paddingLeft:12,borderLeftWidth:2,borderLeftColor:c.accent}}>
+      <Label>{issueMaterialText(item)}</Label><IssueOriginals {...{client,item}} />
+    </View>)}
     {draft.error?<Label warning>材料内容暂不可用，请检查预设</Label>:null}
   </View>;
+}
+
+function IssueOriginals({client,item}:{client:TopicsClient;item:SelectedIssue}){
+  const assets=item.issue.attachments.filter(asset=>item.selection.attachments.some(ref=>ref.id===asset.id&&ref.version===asset.version));
+  return assets.length ? <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>
+    {assets.map(asset=><TopicAsset key={asset.id} {...{client,asset}} issue={item.issue} checked disabled onToggle={()=>undefined}/>)}
+  </View> : null;
 }

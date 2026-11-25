@@ -48,7 +48,7 @@ const ready = new Promise((yes, no) => {
   });
   void exited.then(code => { clearTimeout(timer); no(Error('isolated host exited ' + code)); });
 });
-const report = { kind: 'actual-isolated-paseo-topics-ui', output, browser: 'Playwright: Browser runtime returned no browser',
+const report = { kind: 'actual-isolated-paseo-topics-ui', output, browser: 'Playwright: Browser plugin not available',
   checks: [], screenshots: [], pageErrors: [], console: [], fidelity: [] };
 const check = text => { report.checks.push(text); console.log(JSON.stringify({ check: text })); };
 function browserExecutable() {
@@ -128,6 +128,63 @@ try {
   check('a disabled project keeps its topic tab and followed groups; activation opens existing topics without changing scope');
   assert.equal(await panel.getByText(/DWS|模型与预算|需求台账|自动回复/).count(), 0);
   check('actual plugin renders the topics entry with no collection/model/requirements UI');
+  const chatTab = panel.getByRole('tab', { name: '钉钉话题', exact: true });
+  const tapdTab = panel.getByRole('tab', { name: 'TAPD 缺陷', exact: true });
+  assert.equal(await chatTab.getAttribute('aria-selected'), 'true');
+  assert.equal(fixture.state.requests.some(request => request.url.includes('/sources/tapd')), false);
+  fixture.state.issueMachineRead = false;
+  await tapdTab.click();
+  await panel.getByText('档案服务尚未开放 TAPD 读取', { exact: true }).waitFor();
+  await chatTab.click();
+  await page.getByTestId('topic-select-topic-2').click();
+  await page.getByTestId('topic-basket-topic-2').waitFor();
+  fixture.state.issueMachineRead = true;
+  await tapdTab.click();
+  await page.getByTestId('tapd-refresh').click();
+  const issue = fixture.state.issues[0];
+  await page.getByTestId('tapd-issue-' + issue.id).waitFor();
+  assert.equal(await tapdTab.getAttribute('aria-selected'), 'true');
+  const issueSearch = panel.getByRole('textbox', { name: '搜索缺陷标题或编号', exact: true });
+  await issueSearch.fill(fixture.state.issues[1].number);
+  await page.getByTestId('tapd-issue-' + fixture.state.issues[1].id).waitFor();
+  await issueSearch.fill(issue.number);
+  await page.getByTestId('tapd-select-' + issue.id).click();
+  const issueRow = page.getByTestId('tapd-issue-' + issue.id);
+  await issueRow.getByText(issue.body, { exact: true }).waitFor();
+  assert.equal(await issueRow.getByRole('checkbox', { name: '选择缺陷描述', exact: true }).getAttribute('aria-checked'), 'true');
+  assert.equal(await issueRow.getByRole('checkbox', { name: /选择评论/ }).getAttribute('aria-checked'), 'false');
+  await issueRow.getByRole('checkbox', { name: '选择 复现报告.pdf', exact: true }).click();
+  await issueRow.getByRole('button', { name: '查看 复现截图.png', exact: true }).click();
+  const issueImage = page.getByRole('dialog', { name: '复现截图.png', exact: true });
+  await issueImage.getByRole('img', { name: '复现截图.png', exact: true }).waitFor();
+  await issueImage.getByRole('button', { name: '关闭', exact: true }).click();
+  await shot('tapd-topics-desktop');
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.waitForFunction(() => {
+    const bounds = id => document.querySelector('[data-testid="' + id + '"]')?.getBoundingClientRect();
+    const panel = bounds('workbench-topics-panel'), tab = bounds('topics-source-tapd'), send = bounds('topics-send');
+    return panel && tab && send && panel.left >= -1 && panel.right <= innerWidth + 1 &&
+      tab.right <= panel.right + 1 && send.right <= panel.right + 1;
+  });
+  await shot('tapd-topics-phone');
+  await page.getByTestId('topics-send').click();
+  const mixed = page.getByTestId('topics-send-dialog');
+  await mixed.getByTestId('tapd-material-' + issue.id).waitFor();
+  const mixedText = await mixed.innerText();
+  assert.ok(mixedText.includes(issue.body) && mixedText.includes(fixture.state.topics[1].messages[0].text));
+  assert.equal(mixedText.includes(issue.comments[0].text) || mixedText.includes(issue.attachments[1].name), false);
+  const mixedScreenshot = join(output, 'tapd-topics-mixed-confirmation.png');
+  await mixed.screenshot({ path: mixedScreenshot });
+  report.screenshots.push(mixedScreenshot);
+  await mixed.getByRole('button', { name: '返回', exact: true }).click();
+  await page.setViewportSize({ width: 1448, height: 1120 });
+  issue.version = 'revision-2';
+  await page.getByTestId('tapd-refresh').click();
+  await issueRow.getByText('缺陷有更新，请重新选材', { exact: true }).waitFor();
+  await chatTab.click();
+  await page.getByTestId('tapd-basket-' + issue.id).waitFor();
+  await panel.getByRole('button', { name: '清空材料', exact: true }).click();
+  check('underlined source tabs support TAPD authorization status, versioned originals and mixed materials on desktop and phone');
   await page.getByTestId('topic-expand-topic-1').click();
   await page.getByTestId('topic-message-message-1').waitFor();
   await page.getByTestId('topic-original-message-message-1').getByRole('img',{name:'image-1.png',exact:true}).waitFor();
@@ -458,30 +515,41 @@ try {
   await page.screenshot({path:join(output,'new-conversation-images-after-reload.png')});
   check('a new native conversation keeps visible photo attachments after a full page reload');
   check('confirmation creates one new native session with the explicitly selected host model, original image bytes and per-send instructions, then opens it');
-  const pdfTopic = fixture.state.topics[3], pdfMessage = pdfTopic.messages[0];
+  const pdfTopic = fixture.state.topics[2], pdfMessage = pdfTopic.messages[0];
   pdfMessage.assets.push({ id: 'pdf-original', name: 'feedback.pdf', kind: 'file', mimeType: 'application/pdf', state: 'ready' });
   const currentConnection = await rpc('workspace.workbench.communications-connection', { action: 'read' });
   const deliver = request => rpc('workspace.workbench.archive-topics-delivery', { connectionRevision: currentConnection.revision, request });
-  const pdfPreview = await deliver({ action: 'preview', targetId: 'session:' + nativeSession.id, selections: [{
-    topicId: pdfTopic.id, revision: pdfTopic.revision, inputRevision: pdfTopic.inputRevision, messages: [], includeAnalysis: false,
+  const [issueImageAsset] = issue.attachments;
+  const mixedPreview = await deliver({ action: 'preview', targetId: 'session:' + nativeSession.id, selections: [{
+    topicId: pdfTopic.id, revision: pdfTopic.revision, inputRevision: pdfTopic.inputRevision,
+    messages: [{ id: pdfMessage.id, version: pdfMessage.version }], includeAnalysis: false,
     assets: [{ id: 'pdf-original', messageId: pdfMessage.id, messageVersion: pdfMessage.version }],
+  }], issueSelections: [{ issueId: issue.id, version: issue.version, body: true,
+    comments: issue.comments.map(({ id, version }) => ({ id, version })), attachments: [{ id: issueImageAsset.id, version: issueImageAsset.version }],
   }] });
-  assert.equal((await deliver({ action: 'send', id: pdfPreview.id })).state, 'accepted');
-  let deliveredPdf = false;
+  const expectedText = [pdfMessage.text, issue.body, issue.comments[0].text];
+  assert.ok(expectedText.every(original => mixedPreview.text.includes(original)), 'the frozen preview includes both sources');
+  assert.equal((await deliver({ action: 'send', id: mixedPreview.id })).state, 'accepted');
+  let deliveredMixed = false;
   for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
     for (const name of readdirSync(ui.topicsFixtureRoot).filter(name => name.endsWith('.json'))) {
       const record = JSON.parse(readFileSync(join(ui.topicsFixtureRoot, name), 'utf8'));
-      for (const item of (record.inputs || []).flat()) {
-        if (item.type !== 'text' || !item.text.includes('Uploaded file: feedback.pdf')) continue;
-        const path = /Path: ([^\n]+)/.exec(item.text)?.[1];
-        if (path && readFileSync(path).equals(fixture.pdf)) deliveredPdf = true;
+      for (const input of record.inputs || []) {
+        const texts = input.filter(item => item.type === 'text').map(item => item.text);
+        const text = texts.join('\n');
+        if (!expectedText.every(original => text.includes(original))) continue;
+        const file = texts.find(item => item.includes('Uploaded file: feedback.pdf'));
+        const path = file && /Path: ([^\n]+)/.exec(file)?.[1];
+        const hasImage = input.some(item => item.type === 'localImage' && item.path && readFileSync(item.path).equals(fixture.image) ||
+          item.type === 'image' && item.url?.startsWith('data:') && Buffer.from(item.url.split(',')[1], 'base64').equals(fixture.image));
+        if (path && readFileSync(path).equals(fixture.pdf) && hasImage) deliveredMixed = true;
       }
     }
-    if (deliveredPdf) break;
+    if (deliveredMixed) break;
     await page.waitForTimeout(100);
   }
-  assert.equal(deliveredPdf, true, 'the host must make the selected PDF original available to the target provider');
-  check('native non-image delivery retains original bytes through a typed host file attachment');
+  assert.equal(deliveredMixed, true, 'one native send must deliver the selected chat and TAPD originals, including the PDF and image bytes');
+  check('one native send delivers the selected chat text, TAPD description and comment, PDF file and image bytes');
   await openIsolatedWorkbench(page,ui.url,'a');
   await page.getByText('话题',{exact:true}).filter({visible:true}).first().click();
   await page.getByTestId('topic-row-topic-1').waitFor();

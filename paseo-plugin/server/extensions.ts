@@ -12,12 +12,14 @@ import { createExtensionHost } from './extension-host.ts';
 import type { AgentContext } from './agent-provider.ts';
 import { CommunicationsConnection, defaultServiceConnection, localServiceToken } from './communications-connection.ts';
 import { ArchiveTopics } from './archive-topics.ts';
+import { ArchiveIssues } from './archive-issues.ts';
 import { TopicMaterials } from './topic-materials.ts';
 import { assertTopicSession, deliverTopicSession, topicSessionReceipt, topicTargets } from './topic-targets.ts';
 import { assertTopicModel, createTopicSession, newTopicSessionReceipt, topicModels } from './topic-sessions.ts';
 import { appendTopicImages } from './topic-chat-media.ts';
 import { topicSessionPreferences } from './topic-session-preferences.ts';
 import type { TopicAction } from '../shared/extensions/project-communications/topics.ts';
+import type { IssueVersion } from '../shared/extensions/project-communications/issues.ts';
 
 type Settings={version:number;enabled:Record<string,boolean>;connections?:Record<string,{revision:number;config:ServiceConnection}>;[key:string]:unknown};
 type OwnedConnection={connection:CommunicationsConnection;revision:number;ready:Promise<unknown>};
@@ -72,7 +74,8 @@ export class WorkbenchExtensions {
     if(settings.revision!==revision)throw Error('project_connection_changed');
     if(request.action!=='directory'&&!this.settings(route).enabled[id])throw Error('extension_disabled');
     if(request.action==='preferences')return topicSessionPreferences(route,request.value);
-    const archive=new ArchiveTopics(await this.archiveClient(route,id));
+    const connection=await this.archiveClient(route,id);
+    const archive=new ArchiveTopics(connection), issues=new ArchiveIssues(connection);
     const materials=new TopicMaterials(route.stateRoot,createHash('sha256').update(JSON.stringify([route.configPath,settings.revision,settings.config])).digest('hex'));
     const targets=()=>topicTargets(route,context);
     switch(request.action){
@@ -82,6 +85,10 @@ export class WorkbenchExtensions {
       case 'messages':return archive.messages(request.topicId,request.offset);
       case 'context':return archive.context(request.topicId,request.messageId);
       case 'asset':return archive.asset(request.topicId,request.messageId,request.assetId,request.contextOf,request.part||request.view);
+      case 'issues.status':return issues.status();
+      case 'issues.list':return issues.list(request);
+      case 'issues.read':return issues.read(request.issueId,request.version);
+      case 'issues.asset':return issues.asset(request.issueId,request.version,request.attachmentId,request.part);
       case 'group.configure':return archive.configure(request);
       case 'targets':return targets();
       case 'models':{
@@ -89,21 +96,26 @@ export class WorkbenchExtensions {
         return topicModels(route,context);
       }
       case 'preview':{
+        const options={note:request.note,content:request.content,issueSelections:request.issueSelections};
         if(request.newSession){
           if(request.targetId||request.workspaceId)throw Error('topic_target_conflict');
           if(!context)throw Error('extension_host_delivery_unavailable');
           await assertTopicModel(route,context,request.newSession);
-          return withProject({projectConfig},()=>materials.preview(archive,'','',request.selections,undefined,{note:request.note,newSession:request.newSession,content:request.content}));
+          return withProject({projectConfig},()=>materials.preview(archive,'','',request.selections,undefined,{...options,newSession:request.newSession}));
         }
         const candidates=request.targetId?.startsWith('session:') ? await targets() : await topicTargets(route);
         const target=candidates.find(item=>request.targetId ? item.id===request.targetId : item.kind==='workspace'&&item.workspaceId===request.workspaceId);
         if(!target)throw Error('topic_target_unavailable');
-        return withProject({projectConfig},()=>materials.preview(archive,target.workspaceId,target.agentId,request.selections,target,{note:request.note,content:request.content}));
+        return withProject({projectConfig},()=>materials.preview(archive,target.workspaceId,target.agentId,request.selections,target,options));
       }
       case 'send':case 'receipt':{
         if(!context)throw Error('extension_host_delivery_unavailable');
         const preview=materials.read(request.id);
         const current=()=>{if(this.closed||this.connectionSettings(route,id).revision!==revision||!this.settings(route).enabled[id])throw Error('project_connection_changed');};
+        const checkIssues=async (refs:IssueVersion[])=>{
+          for(let offset=0;offset<refs.length;offset+=4) await Promise.all(refs.slice(offset,offset+4).map(ref=>issues.current(ref)));
+          current();
+        };
         if(preview.newSession){
           if(request.action==='send'&&preview.state==='preview')await assertTopicModel(route,context,preview.newSession);
           current();
@@ -116,7 +128,7 @@ export class WorkbenchExtensions {
             : materials.send(request.id,preview.agentId,value=>createTopicSession(route,context,{...value,newSession:preview.newSession!},current,(session,messageId)=>{
               materials.recordSession(value.id,session,messageId);
               Object.assign(value,{session,messageId,targetAgentId:session.agentId,workspaceId:session.hostWorkspaceId});
-            }));
+            }),checkIssues);
         }
         if(preview.session){
           await assertTopicSession(route,context,preview.session);
@@ -124,7 +136,7 @@ export class WorkbenchExtensions {
           if(request.action==='receipt'&&preview.state==='accepted')await appendTopicImages(route,context,preview.session.agentId,preview);
           return request.action==='receipt'
             ? materials.receipt(request.id,preview.session.agentId,value=>topicSessionReceipt(route,context,preview.session!,value.id))
-            : materials.send(request.id,preview.session.agentId,value=>deliverTopicSession(route,context,preview.session!,value,current));
+            : materials.send(request.id,preview.session.agentId,value=>deliverTopicSession(route,context,preview.session!,value,current),checkIssues);
         }
         const target=(await topicTargets(route)).find(item=>item.workspaceId===preview.workspaceId);
         if(!target)throw Error('topic_target_unavailable');
@@ -134,7 +146,7 @@ export class WorkbenchExtensions {
         return materials.send(request.id,target.agentId,async value=>{
           await appendTopicImages(route,context,target.agentId,value); current();
           return host.deliver({workspaceId:value.workspaceId,requestId:'archive-topic:'+value.id,text:value.dispatchText||value.text||'请查看图片。',attachments:value.references});
-        });
+        },checkIssues);
       }
     }
   }

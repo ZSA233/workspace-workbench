@@ -59,11 +59,20 @@ else process.exit(2);
     await until(async () => (await direct({ action: 'snapshot' })).source.authenticated);
     await direct({ action: 'groups.bind', groupId: 'group-one', name: '项目群' });
     await until(async () => (await direct({ action: 'snapshot' })).groups[0]?.stream.subscribed === true);
-    assert.equal((await direct({ action: 'snapshot' })).groups[0]?.stream.state, 'pending');
+    const initialStream = (await direct({ action: 'snapshot' })).groups[0].stream;
+    assert.ok(['pending', 'connected'].includes(initialStream.state));
+    assert.equal(initialStream.receivedCount ?? 0, 0);
     await host.setEnabled(config, 'project-communications', false); await host.close();
     writeFileSync(messages, JSON.stringify([{ message_id: 'ordinary-after-unload', conversation_id: 'group-one', create_time: Date.now(), content: '没有艾特的需求，界面关闭后仍继续采集', sender: '开发者' }]));
     await until(async () => (await direct({ action: 'snapshot' })).messageCount === 1);
-    assert.equal((await direct({ action: 'snapshot' })).groups[0]?.stream.state, 'verified');
+    const receivingStream = (await direct({ action: 'snapshot' })).groups[0].stream;
+    // Current Go services keep the connected state and count received events separately.
+    if (initialStream.state === 'connected') {
+      assert.equal(receivingStream.state, 'connected');
+      assert.ok(receivingStream.receivedCount > 0);
+    } else {
+      assert.equal(receivingStream.state, 'verified');
+    }
     assert.equal((await service.request('/health')).apiVersion, 1);
     host = new WorkbenchExtensions(); assert.equal((await host.setEnabled(config, 'project-communications', true)).state, 'ready');
     assert.equal((await host.request(config, 'project-communications', { action: 'snapshot' })).messageCount, 1);

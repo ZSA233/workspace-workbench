@@ -1,6 +1,7 @@
 import { defineRpc } from '@getpaseo/plugin';
 import { z } from 'zod';
 import {topicContentOptionsSchema,topicMaterialSettingsSchema} from './topic-content-settings.ts';
+import { issueAssetAction, issueListAction, issueReadAction, issueSelectionSchema, issueStatusAction } from './issues.ts';
 
 const id = z.string().min(1).max(512).refine(value => value !== '.' && value !== '..' && !/[\u0000-\u001f]/.test(value));
 export const watchedGroupSchema = z.object({ sourceId: id, channelId: id });
@@ -40,6 +41,7 @@ export type SelectedTopic = { topic: ArchiveTopicDetail; messages: ArchiveMessag
 export type TopicMaterialPreview = {
   id: string; workspaceId: string; text: string; createdAt: number; state: 'preview' | 'sending' | 'accepted' | 'uncertain';
   topics: Array<{ id: string; title: string; revision: number; inputRevision: number; messageCount: number; assetCount: number }>;
+  issues?: Array<{ id: string; title: string; number: string; version: string; messageCount: number; assetCount: number }>;
   assets: Array<{ id: string; name: string; mimeType: string; sha256: string; size: number }>;
   messageId?: string; readConfirmed: false;
   targetId?: string;
@@ -53,11 +55,14 @@ export const topicActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('context'), topicId: id, messageId: id }),
   z.object({ action: z.literal('asset'), topicId: id, messageId: id, assetId: id, contextOf: id.optional(), part: z.enum(['original','video-preview','thumbnail']).optional(), view: z.literal('thumbnail').optional() }),
   z.object({ action: z.literal('group.configure'), sourceId: id, channelId: id, revision: z.number().int().nonnegative(), collect: z.boolean().optional(), allowedTools: z.array(id).max(32), requestId: id }),
+  issueStatusAction, issueListAction, issueReadAction, issueAssetAction,
   z.object({ action: z.literal('targets') }),
   z.object({ action: z.literal('models') }),
   z.object({ action: z.literal('preferences'), value: topicSessionPreferencesSchema.optional() }),
-  z.object({ action: z.literal('preview'), workspaceId: id.optional(), targetId: id.optional(), newSession: topicNewSessionSchema.optional(), note: topicNoteSchema.optional(),content:topicContentOptionsSchema.optional(), selections: z.array(topicSelectionSchema).min(1).max(20) })
-    .refine(value => !value.newSession || !value.workspaceId && !value.targetId, 'topic_target_conflict'),
+  z.object({ action: z.literal('preview'), workspaceId: id.optional(), targetId: id.optional(), newSession: topicNewSessionSchema.optional(), note: topicNoteSchema.optional(), content: topicContentOptionsSchema.optional(),
+    selections: z.array(topicSelectionSchema).max(20), issueSelections: z.array(issueSelectionSchema).max(20).optional() })
+    .refine(value => !value.newSession || !value.workspaceId && !value.targetId, 'topic_target_conflict')
+    .refine(value => { const count = value.selections.length + (value.issueSelections?.length || 0); return count > 0 && count <= 20; }, 'topic_material_limit'),
   z.object({ action: z.enum(['send', 'receipt']), id }),
 ]);
 export type TopicAction = z.infer<typeof topicActionSchema>;

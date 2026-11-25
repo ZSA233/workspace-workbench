@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Icon, ScrollView, useToast } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
 import type { ArchiveAsset, ArchiveMessage } from '../../../shared/extensions/project-communications/topics';
+import type { IssueSummary } from '../../../shared/extensions/project-communications/issues';
 import { assetIsImage, assetIsVideo, messageText, senderName, topicTime } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, tint, useColors, useTouch } from './ui';
 import { supportedArtifact } from '../../../shared/artifact-limits.ts';
@@ -44,6 +45,10 @@ export function topicError(error: string) {
     topic_target_unavailable: '请选择目标会话', topic_target_changed: '目标会话已变化', topic_targets_incomplete: '会话列表未完整加载，请重试',
     topic_models_unavailable: '模型列表暂不可用', topic_model_unavailable: '所选模型暂不可用，请重新选择', topic_session_ambiguous: '新会话状态待核对，请勿重复发送',
     topic_material_scope_changed: '连接已变化，请重新预览', project_connection_changed: '连接已变化',
+    issue_selection_changed: '缺陷有更新，请重新选材', issue_outside_todo: '缺陷已移出我的待办，请重新选材',
+    issue_material_unavailable: '该缺陷材料暂不可用', issue_login_required: '请在档案服务重新授权 TAPD',
+    issue_project_not_authorized: 'TAPD 项目授权已变化，请重新选材', issue_record_missing: '缺陷已不可读取，请重新选材',
+    issue_query_too_long: '搜索文字过长',
     agent_revision_conflict: '配置有更新，请刷新', settings_revision_conflict: '配置有更新，请刷新',
     topic_material_limit: '材料数量超限', topic_material_bytes_limit: '附件合计超过 24 MB',
     service_response_too_large: '单个附件超过 8 MB', topic_material_text_limit: '原文过长，请分次带入',
@@ -70,17 +75,22 @@ export function TopicStatus({ error, state, onDetails, id = 'topics-status' }: {
     <Text numberOfLines={1} style={{ flex: 1, color: error ? c.statusWarning : c.foregroundMuted, fontSize: 10 }}>{error ? topicError(error) : state || ''}</Text>
   </Pressable>;
 }
-export function TopicAsset({ client, topicId, message, asset, contextOf, checked, onToggle, disabled, small = false, removable = false, tileWidth = 132 }: {
-  client: TopicsClient; topicId: string; message: ArchiveMessage; asset: ArchiveAsset; contextOf?: string; checked: boolean; onToggle: () => void; disabled?: boolean; small?: boolean; removable?: boolean; tileWidth?: number;
+type TopicAssetSource = { topicId: string; message: ArchiveMessage; contextOf?: string; issue?: undefined }
+  | { issue: Pick<IssueSummary, 'id' | 'version'>; topicId?: undefined; message?: undefined; contextOf?: undefined };
+export function TopicAsset({ client, topicId, message, issue, asset, contextOf, checked, onToggle, disabled, small = false, removable = false, tileWidth = 132 }: TopicAssetSource & {
+  client: TopicsClient; asset: ArchiveAsset; checked: boolean; onToggle: () => void; disabled?: boolean; small?: boolean; removable?: boolean; tileWidth?: number;
 }) {
   const c = useColors(), [open, setOpen] = useState(false), image = assetIsImage(asset), video = assetIsVideo(asset);
   const canSelect = supportedArtifact(asset.mimeType || '', asset.size), ready = client.active && asset.state === 'ready' && canSelect;
-  const data = useQuery({ queryKey: ['archive-image', client.scopeKey, topicId, message.id, message.version, asset.id],
-    queryFn: () => client.call<{ mimeType: string; base64: string }>({ action: 'asset', topicId, messageId: message.id, assetId: asset.id, contextOf }),
-    enabled: ready && (image || video && open), retry: false, staleTime: Infinity, gcTime: 60000, refetchOnWindowFocus: false });
-  const frames = useQuery({queryKey:['archive-video',client.scopeKey,topicId,message.id,message.version,asset.id],
-    queryFn:()=>client.call<TopicVideoPreview>({action:'asset',part:'video-preview',topicId,messageId:message.id,assetId:asset.id,contextOf}),
-    enabled:ready && video,retry:false,staleTime:Infinity,gcTime:60000,refetchOnWindowFocus:false});
+  const source = issue ? [issue.id, issue.version] : [topicId, message.id, message.version];
+  const read = <T,>(part: 'original' | 'video-preview') => issue
+    ? client.call<T>({ action: 'issues.asset', issueId: issue.id, version: issue.version, attachmentId: asset.id, part })
+    : client.call<T>({ action: 'asset', topicId, messageId: message.id, assetId: asset.id, contextOf, part });
+  const data = useQuery({ queryKey: [issue ? 'archive-issue-image' : 'archive-image', client.scopeKey, ...source, asset.id],
+    queryFn: () => read<{ mimeType: string; base64: string }>('original'),
+    enabled: ready && (image && (!issue || open) || video && open), retry: false, staleTime: Infinity, gcTime: 60000, refetchOnWindowFocus: false });
+  const frames = useQuery({queryKey:[issue ? 'archive-issue-video' : 'archive-video',client.scopeKey,...source,asset.id],
+    queryFn:()=>read<TopicVideoPreview>('video-preview'), enabled:ready && video && (!issue || open),retry:false,staleTime:Infinity,gcTime:60000,refetchOnWindowFocus:false});
   const uri = data.data ? 'data:' + data.data.mimeType + ';base64,' + data.data.base64 : undefined;
   const poster = frames.data?.frames[0], thumbnail = image ? uri : poster ? 'data:'+poster.mimeType+';base64,'+poster.base64 : undefined;
   const width = small ? 54 : tileWidth, height = small ? 42 : Math.round(tileWidth * 0.64);

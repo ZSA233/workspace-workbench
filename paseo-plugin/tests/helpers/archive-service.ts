@@ -2,9 +2,26 @@ import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { ArchiveMessage, ArchiveTopicDetail } from '../../shared/extensions/project-communications/topics.ts';
+import type { IssueDetail, IssueSource } from '../../shared/extensions/project-communications/issues.ts';
 
 export function archiveFixture() {
   const createdAt = Date.parse('2026-11-22T14:32:00+08:00');
+  const id = (name: string) => createHash('sha256').update(name).digest('hex');
+  const issue: IssueDetail = { id: id('tapd-1842'), version: 'revision-1', projectId: '10200001', number: '1010200001100001842',
+    title: '下载报告时保存文件名丢失', assignee: '小林', status: '处理中', priority: '高', updatedAt: createdAt, inTodo: true,
+    sourceUrl: 'https://www.tapd.cn/10200001/bugtrace/bugs/view?bug_id=1010200001100001842',
+    body: '下载报告后，保存弹窗的文件名为空。', bodyState: 'ready', commentsState: 'ready', attachmentsState: 'ready',
+    comments: [{ id: id('tapd-comment'), version: 'comment-1', author: '阿宁', text: '桌面和移动端都可以复现。', createdAt }],
+    attachments: [
+      { id: id('tapd-screenshot'), version: 'original-1', name: '复现截图.png', mimeType: 'image/png', state: 'ready' },
+      { id: id('tapd-report'), version: 'original-2', name: '复现报告.pdf', mimeType: 'application/pdf', state: 'ready' },
+      { id: id('tapd-pending'), version: 'original-3', name: '待归档.png', mimeType: 'image/png', state: 'pending' },
+    ],
+  };
+  const issueSource: IssueSource = { enabled: true, plugin: 'enabled', authorization: 'authorized', account: '小林', projects: [
+    { id: issue.projectId, label: '应用反馈', authorization: 'authorized', sync: 'ready', lastSuccessAt: createdAt },
+    { id: '10200002', label: '移动端', authorization: 'authorized', sync: 'ready', lastSuccessAt: createdAt },
+  ] };
   const message = (id: string, text: string, assets: ArchiveMessage['assets'] = []): ArchiveMessage => ({
     id, text, sender: id.endsWith('2') ? '阿宁' : '小林', createdAt, version: 'version-' + id,
     sourceId: 'dingtalk:fixture', channelId: 'feedback', sourceAccountId: 'account', assets,
@@ -30,6 +47,9 @@ export function archiveFixture() {
     groups: [{ id: 'followed', name: '产研反馈群', sourceId: 'dingtalk:fixture', channelId: 'feedback', revision: 1, enabled: false,
       analysisEnabled: true, autoDiscover: true, discoveryAction: 'collect', replyMode: 'off', allowedTools: ['messages.read'], customHistory: { retain: true } }],
     libraries: [{ id: 'default', name: '示例资料库' }],
+    issueSource, issueMachineRead: true,
+    issues: [issue, { ...issue, id: id('tapd-1812'), projectId: '10200002', number: '1010200002100001812', title: '移动端图片预览跳回顶部',
+      sourceUrl: undefined, status: '待处理', bodyState: 'empty', body: '', commentsState: 'empty', comments: [], attachmentsState: 'empty', attachments: [] }],
     failLists: false,
     unavailableAssets: new Set<string>(),
     originalMessages: new Map<string,ArchiveMessage>(),
@@ -53,6 +73,36 @@ export async function startArchiveFixture() {
     if (req.headers.authorization !== 'Bearer ' + token) return send('unauthorized', 401);
     if (url.pathname === '/health') return send({ product: 'project-communications-service', apiVersion: 1, version: 'fixture' });
     const path = url.pathname.replace(/^\/v2\/archive\//, '');
+    const issueRoute = /^libraries\/default\/sources\/tapd%3Aissues\/(.*)$/.exec(path);
+    if (issueRoute) {
+      if (!state.issueMachineRead || req.method !== 'GET') return send('archive_route_missing', 404);
+      const route = issueRoute[1];
+      if (route === 'issue-source') return send({ ...state.issueSource, hasArchive: true, intervalSeconds: 900, privateCredential: 'not-for-workbench' });
+      if (state.issueSource.authorization !== 'authorized') return send('issue_login_required', 401);
+      const validProject = (id: string) => state.issueSource.projects.some(item => item.id === id && item.authorization === 'authorized');
+      if (route === 'issues') {
+        if (url.searchParams.get('view') !== 'todo') return send('invalid_issue_request', 400);
+        const project = url.searchParams.get('projectId'), query = url.searchParams.get('query') || '', cursor = Number(url.searchParams.get('cursor') || 0);
+        if (project && !validProject(project)) return send('issue_project_not_authorized', 403);
+        const items = state.issues.filter(issue => issue.inTodo && validProject(issue.projectId) && (!project || project === issue.projectId) &&
+          (issue.title.includes(query) || issue.number.includes(query)));
+        return send({ items: items.slice(cursor, cursor + 1).map(({ body, bodyState, comments, commentsState, attachments, attachmentsState, ...summary }) => summary),
+          ...(items.length > cursor + 1 ? { next: String(cursor + 1) } : {}) });
+      }
+      const match = /^issues\/([^/]+)(?:\/versions\/([^/]+)\/attachments\/([^/]+))?$/.exec(route);
+      const issue = match && state.issues.find(item => item.id === match[1]);
+      if (!match || !issue) return send('issue_record_missing', 404);
+      if (!validProject(issue.projectId)) return send('issue_project_not_authorized', 403);
+      const version = match[2] || url.searchParams.get('version');
+      if (version && version !== issue.version) return send('issue_record_missing', 404);
+      if (!match[3]) return send({ ...issue, versions: [{ version: issue.version, observedAt: issue.updatedAt }], privatePayload: 'not-for-workbench' });
+      const asset = issue.attachments.find(item => item.id === match[3] && item.state === 'ready');
+      if (!asset) return send('issue_record_missing', 404);
+      const raster = asset.mimeType === 'image/png', preview = url.searchParams.get('view') === 'preview';
+      if (preview && !raster) return send('issue_record_missing', 404);
+      res.writeHead(200, { 'Content-Type': preview ? 'image/png' : 'application/octet-stream' });
+      return res.end(raster ? image : pdf);
+    }
     if (path === 'snapshot') return send({ libraries: state.libraries, channels: state.channels, settings: { secretFixture: 'must-not-reach-ui' }, runs: [{ raw: 'not-ui-data' }] });
     if (path === 'agent/tools') return send({ builtins: [{ id: 'messages.read', builtin: true, enabled: true, readOnly: true }], items: [
       { id: 'code.search', name: '代码检索', description: '查找项目代码', enabled: true, readOnly: true, endpoint: 'private-fixture', credentialRef: 'private' },

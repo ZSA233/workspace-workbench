@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { TopicMaterialPreview, TopicSelection, ArchiveMessage } from '../shared/extensions/project-communications/topics.ts';
+import type { TopicMaterialPreview, TopicSelection, ArchiveMessage, ArchiveAsset } from '../shared/extensions/project-communications/topics.ts';
 import { messageText, topicTitle, topicNoteSchema, type TopicTarget, type TopicNewSession } from '../shared/extensions/project-communications/topics.ts';
 import type { TopicSessionIdentity } from './topic-targets.ts';
 import type { ReviewArtifactReference } from '../shared/review-packet.ts';
@@ -10,10 +10,14 @@ import type { ArchiveTopics } from './archive-topics.ts';
 import {prepareTopicContent,topicMessageKey,type TopicContentEntry,type TopicContentOptions} from '../shared/extensions/project-communications/topic-content.ts';
 import {prepareTopicVideo} from './topic-video.ts';
 import {videoTime,type TopicStoredVideo} from '../shared/topic-video.ts';
+import { ArchiveIssues } from './archive-issues.ts';
+import { issueMaterialText, type IssueSelection, type IssueVersion } from '../shared/extensions/project-communications/issues.ts';
 
 type StoredPreview = TopicMaterialPreview & { scope: string; agentId: string; references: ReviewArtifactReference[]; dispatchText?: string;
+  issueVersions?: IssueVersion[];
   session?: TopicSessionIdentity;content?:TopicContentOptions;sessionTitle?:string;videoMaterials?:TopicStoredVideo[]; originalTexts?: Array<{ topicId: string; messageId: string; version: string; text: string; displayText?: string;editedText?:string;sender?:ArchiveMessage['sender'];createdAt?:number; quote?: unknown }> };
 type DeliveryResult = { delivery: string; messageId?: string; session?: TopicSessionIdentity };
+const maxMaterialText = 120_000;
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 function register(input: Parameters<typeof storeArtifactBytes>[0]) {
   try {
@@ -41,14 +45,19 @@ export class TopicMaterials {
     return value;
   }
   public(value: StoredPreview): TopicMaterialPreview {
-    const { scope, agentId, references, dispatchText, session, originalTexts, content, sessionTitle, videoMaterials, ...result } = value; return result;
+    const { scope, agentId, references, dispatchText, session, originalTexts, content, sessionTitle, videoMaterials, issueVersions, ...result } = value; return result;
   }
-  async preview(archive: ArchiveTopics, workspaceId: string, agentId: string, selections: TopicSelection[], target?: TopicTarget, options: {note?: string; newSession?: TopicNewSession;content?:TopicContentOptions} = {}) {
+  async preview(archive: ArchiveTopics, workspaceId: string, agentId: string, selections: TopicSelection[], target?: TopicTarget,
+    options: {note?: string; newSession?: TopicNewSession; content?: TopicContentOptions; issueSelections?: IssueSelection[]} = {}) {
     const note = topicNoteSchema.parse(options.note || '');
+    const issueSelections = options.issueSelections || [];
     if (new Set(selections.map(item => item.topicId)).size !== selections.length) throw Error('duplicate_topic_selection');
-    if (selections.reduce((n, item) => n + item.messages.length, 0) > 100 || selections.reduce((n, item) => n + item.assets.length, 0) > 20) throw Error('topic_material_limit');
-    if(selections.reduce((sum,item)=>sum+item.messages.reduce((count,message)=>count+(message.editedText?.length||0),0),0)>120000)throw Error('topic_material_text_limit');
-    if (!selections.some(item => item.messages.length || item.assets.length || item.includeAnalysis)) throw Error('topic_material_empty');
+    if (new Set(issueSelections.map(item => item.issueId)).size !== issueSelections.length) throw Error('duplicate_issue_selection');
+    if (selections.length + issueSelections.length > 20 ||
+      selections.reduce((n, item) => n + item.messages.length, 0) + issueSelections.reduce((n, item) => n + Number(item.body) + item.comments.length, 0) > 100 ||
+      selections.reduce((n, item) => n + item.assets.length, 0) + issueSelections.reduce((n, item) => n + item.attachments.length, 0) > 20) throw Error('topic_material_limit');
+    if(selections.reduce((sum,item)=>sum+item.messages.reduce((count,message)=>count+(message.editedText?.length||0),0),0)>maxMaterialText)throw Error('topic_material_text_limit');
+    if (!issueSelections.length && !selections.some(item => item.messages.length || item.assets.length || item.includeAnalysis)) throw Error('topic_material_empty');
     const value: StoredPreview = { id: randomUUID(), workspaceId, agentId, scope: this.scope, state: 'preview', createdAt: Date.now(), readConfirmed: false, text: '', topics: [], assets: [], references: [], originalTexts: [],
       ...(target?.id ? { targetId: target.id } : {}),
       ...(agentId ? { targetAgentId: agentId } : {}),
@@ -57,6 +66,47 @@ export class TopicMaterials {
     const sections: string[] = [],entries:TopicContentEntry[]=[];
     const files = new Map<string,string>(),contents=new Map<string,string>(),parents=new Map<string,Set<string>>(); let bytes = 0;
     const associate=(referenceId:string,message:ArchiveMessage)=>{const keys=parents.get(referenceId)||new Set<string>();keys.add(topicMessageKey(message));parents.set(referenceId,keys);};
+    const freezeAsset = async (key: string, asset: Pick<ArchiveAsset, 'id' | 'name' | 'mimeType' | 'sha256'>,
+      load: () => Promise<{ bytes: Buffer; mimeType: string }>, original?: ArchiveMessage) => {
+      let referenceId = files.get(key);
+      if (!referenceId) {
+        const data = await load(); bytes += data.bytes.length;
+        if (bytes > 24 * 1024 * 1024) throw Error('topic_material_bytes_limit');
+        const sha256 = hash(data.bytes);
+        if (asset.sha256 && asset.sha256 !== sha256) throw Error('topic_asset_version_changed');
+        const mimeType = (asset.mimeType || data.mimeType).toLowerCase();
+        if (mimeType.startsWith('video/') && mimeType !== data.mimeType.toLowerCase()) throw Error('topic_asset_version_changed');
+        const contentKey = mimeType + ':' + sha256;
+        referenceId = contents.get(contentKey);
+        if (!referenceId) {
+          const id = 'topic-' + hash(key + ':' + sha256);
+          const stored = register({ id, title: asset.name || '附件', mimeType, bytes: data.bytes, kind: mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('video/') ? 'file' : mimeType === 'application/pdf' ? 'pdf' : 'document' });
+          value.references.push({ id, assetId: id, title: stored.title, mimeType: stored.mimeType, kind: stored.kind, required: false });
+          contents.set(contentKey, id);
+          referenceId = id;
+          if (mimeType.startsWith('video/')) {
+            const video = await prepareTopicVideo(data.bytes, archive.connection.signal);
+            if ((value.videoMaterials || []).reduce((count, item) => count + item.frames.length, 0) + video.frames.length > 24) throw Error('topic_video_frame_limit');
+            const frozen: TopicStoredVideo = { assetId: id, name: stored.title, duration: video.duration, frames: [] };
+            for (const frame of video.frames) {
+              const frameBytes = Buffer.from(frame.base64, 'base64'); bytes += frameBytes.length;
+              if (bytes > 24 * 1024 * 1024) throw Error('topic_material_bytes_limit');
+              const frameId = 'topic-frame-' + hash(sha256 + ':' + frame.time + ':' + hash(frameBytes));
+              const image = register({ id: frameId, title: stored.title + ' · ' + videoTime(frame.time) + '.jpg', mimeType: frame.mimeType, bytes: frameBytes, kind: 'image' });
+              value.references.push({ id: frameId, assetId: frameId, title: image.title, mimeType: image.mimeType, kind: 'image', required: false });
+              frozen.frames.push({ assetId: frameId, time: frame.time });
+            }
+            (value.videoMaterials ||= []).push(frozen);
+          }
+        }
+        files.set(key, referenceId);
+        value.assets.push({ id: asset.id, name: asset.name || '附件', mimeType, sha256, size: data.bytes.length });
+      }
+      if (original) {
+        associate(referenceId, original);
+        for (const frame of value.videoMaterials?.find(item => item.assetId === referenceId)?.frames || []) associate(frame.assetId, original);
+      }
+    };
     for (const selection of selections) {
       const topic = await archive.read(selection.topicId);
       if (topic.revision !== selection.revision || topic.inputRevision !== selection.inputRevision) throw Error('topic_material_version_changed');
@@ -84,42 +134,7 @@ export class TopicMaterials {
         if (!asset || asset.state !== 'ready') throw Error('topic_asset_not_ready');
         if(!selection.messages.some(message=>message.id===original.id))entries.push({topicId:topic.id,message:original,includeText:false,
           assetIds:selection.assets.filter(asset=>asset.messageId===original.id).map(asset=>asset.id)});
-        const key = JSON.stringify([archive.libraryId, asset.id]);
-        if (files.has(key)){
-          const existing=files.get(key)!;associate(existing,original);
-          for(const frame of value.videoMaterials?.find(item=>item.assetId===existing)?.frames||[])associate(frame.assetId,original);
-          continue;
-        }
-        const data = await archive.original(asset); bytes += data.bytes.length;
-        if (bytes > 24 * 1024 * 1024) throw Error('topic_material_bytes_limit');
-        const sha256 = hash(data.bytes);
-        if (asset.sha256 && asset.sha256 !== sha256) throw Error('topic_asset_version_changed');
-        const mimeType = (asset.mimeType || data.mimeType).toLowerCase();
-        if(mimeType.startsWith('video/')&&mimeType!==data.mimeType.toLowerCase())throw Error('topic_asset_version_changed');
-        const contentKey = mimeType.toLowerCase() + ':' + sha256;
-        if (!contents.has(contentKey)) {
-          const id = 'topic-' + hash(key + ':' + sha256);
-          const stored = register({ id, title: asset.name || '附件', mimeType, bytes: data.bytes, kind: mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('video/') ? 'file' : mimeType === 'application/pdf' ? 'pdf' : 'document' });
-          value.references.push({ id, assetId: id, title: stored.title, mimeType: stored.mimeType, kind: stored.kind, required: false });
-          contents.set(contentKey,id);
-          if(mimeType.startsWith('video/')) {
-            const video=await prepareTopicVideo(data.bytes,archive.connection.signal);
-            if((value.videoMaterials||[]).reduce((count,item)=>count+item.frames.length,0)+video.frames.length>24)throw Error('topic_video_frame_limit');
-            const frozen:TopicStoredVideo={assetId:id,name:stored.title,duration:video.duration,frames:[]};
-            for(const frame of video.frames) {
-              const frameBytes=Buffer.from(frame.base64,'base64');bytes+=frameBytes.length;
-              if(bytes>24*1024*1024)throw Error('topic_material_bytes_limit');
-              const frameId='topic-frame-'+hash(sha256+':'+frame.time+':'+hash(frameBytes));
-              const image=register({id:frameId,title:stored.title+' · '+videoTime(frame.time)+'.jpg',mimeType:frame.mimeType,bytes:frameBytes,kind:'image'});
-              value.references.push({id:frameId,assetId:frameId,title:image.title,mimeType:image.mimeType,kind:'image',required:false});
-              frozen.frames.push({assetId:frameId,time:frame.time});
-            }
-            (value.videoMaterials||=[]).push(frozen);
-          }
-        }
-        files.set(key,contents.get(contentKey)!);associate(contents.get(contentKey)!,original);
-        for(const frame of value.videoMaterials?.find(item=>item.assetId===contents.get(contentKey))?.frames||[])associate(frame.assetId,original);
-        value.assets.push({ id: asset.id, name: asset.name || '附件', mimeType, sha256, size: data.bytes.length });
+        await freezeAsset(JSON.stringify([archive.libraryId, asset.id]), asset, () => archive.original(asset), original);
       }
       if (selection.includeAnalysis) sections.push(topic.lastAnswer || topic.summary || '');
       value.topics.push({ id: topic.id, title: topicTitle(topic), revision: topic.revision, inputRevision: topic.inputRevision, messageCount: selection.messages.length, assetCount: selection.assets.length });
@@ -127,6 +142,22 @@ export class TopicMaterials {
       // retrieval. Reject the mixed snapshot instead of silently expanding it.
       const current = await archive.read(topic.id);
       if (current.revision !== topic.revision || current.inputRevision !== topic.inputRevision) throw Error('topic_material_version_changed');
+    }
+    const issues = new ArchiveIssues(archive.connection);
+    let issueTextLength = 0;
+    for (const selection of issueSelections) {
+      const { issue, attachments } = await issues.selection(selection);
+      const text = issueMaterialText({ issue, selection });
+      issueTextLength += text.length;
+      if (issueTextLength > maxMaterialText) throw Error('topic_material_text_limit');
+      for (const attachment of attachments) {
+        await freezeAsset(JSON.stringify(['tapd', issues.libraryId, issue.id, issue.version, attachment.id]), attachment, () => issues.original(issue, attachment));
+      }
+      if (attachments.length) await issues.current(selection);
+      sections.push(text);
+      (value.issueVersions ||= []).push({ issueId: issue.id, version: issue.version });
+      (value.issues ||= []).push({ id: issue.id, title: issue.title, number: issue.number, version: issue.version,
+        messageCount: Number(selection.body) + selection.comments.length, assetCount: attachments.length });
     }
     const instruction = value.note ? value.note + '\n\n' : '';
     const rendered=prepareTopicContent(entries,options.content||{layout:'text',identity:'name'},value.note||'',sections);
@@ -141,9 +172,9 @@ export class TopicMaterials {
       value.text += (value.text.trim()?'\n\n':'')+value.videoMaterials.map((video,index)=>
         '视频 '+(index+1)+'：'+video.name+'（'+videoTime(video.duration)+'）。已附原视频和 '+video.frames.length+' 张时间点画面：'+video.frames.map(frame=>'附图 '+imageOrder.get(frame.assetId)+' = '+videoTime(frame.time)).join('、')+'。画面不含音频转写。').join('\n');
     }
-    value.sessionTitle=(rendered.noteText.split('\n').find(line=>line.trim())||rendered.rows.find(row=>row.text.trim())?.text.split('\n').find(line=>line.trim()))?.slice(0,80);
+    value.sessionTitle=(rendered.noteText.split('\n').find(line=>line.trim())||rendered.rows.find(row=>row.text.trim())?.text.split('\n').find(line=>line.trim())||value.issues?.[0]?.title)?.slice(0,80);
     if(!value.text.trim()&&!value.references.length)throw Error('topic_material_empty');
-    if (value.text.length > 120000 || value.originalTexts!.reduce((length, item) => length + item.text.length, 0) > 120000) throw Error('topic_material_text_limit');
+    if (value.text.length > maxMaterialText || value.originalTexts!.reduce((length, item) => length + item.text.length, 0) > maxMaterialText) throw Error('topic_material_text_limit');
     if (value.text.length > 32768 && target?.kind !== 'session' && !options.newSession) {
       if (value.references.length >= 20 || Buffer.byteLength(value.text) > 512 * 1024) throw Error('topic_material_text_limit');
       const id = 'topic-source-' + hash(value.text);
@@ -163,10 +194,21 @@ export class TopicMaterials {
     if (value.session && JSON.stringify(value.session) !== JSON.stringify(session)) throw Error('topic_target_changed');
     this.adoptSession(value,{delivery:value.state,session}); value.messageId=messageId; this.write(value);
   }
-  async send(id: string, agentId: string, deliver: (value: StoredPreview) => Promise<DeliveryResult>) {
-    const value = this.read(id);
+  async send(id: string, agentId: string, deliver: (value: StoredPreview) => Promise<DeliveryResult>, checkIssues?: (refs: IssueVersion[]) => Promise<void>) {
+    let value = this.read(id);
     if (value.agentId !== agentId) throw Error('topic_target_changed');
     if (value.state !== 'preview') return this.public(value);
+    if (value.issueVersions?.length) {
+      if (!checkIssues) throw Error('issue_material_unavailable');
+      try { await checkIssues(value.issueVersions); }
+      catch (error) {
+        const latest = this.read(id);
+        if (latest.state !== 'preview') return this.public(latest);
+        throw error;
+      }
+      value = this.read(id);
+      if (value.state !== 'preview') return this.public(value);
+    }
     // This durable claim is never removed: a crash before the receipt is
     // reconciled must not make this preview eligible for another dispatch.
     try { writeFileSync(this.file(id) + '.claim', '', { flag: 'wx', mode: 0o600 }); }

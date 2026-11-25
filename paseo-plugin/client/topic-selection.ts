@@ -1,6 +1,7 @@
 import type { ArchiveAsset, ArchiveMessage, ArchiveTopicDetail, SelectedTopic, TopicSelection } from '../shared/extensions/project-communications/topics.ts';
 import { supportedArtifact } from '../shared/artifact-limits.ts';
 import {topicMessageKey,type TopicContentEntry} from '../shared/extensions/project-communications/topic-content.ts';
+import type { IssueBasket } from './issue-selection';
 export type TopicBasket = Record<string, SelectedTopic>;
 export function selectTopic(basket: TopicBasket, topic: ArchiveTopicDetail): TopicBasket {
   if (basket[topic.id]) { const next = { ...basket }; delete next[topic.id]; return next; }
@@ -37,6 +38,17 @@ export function basketCounts(basket: TopicBasket) {
   const items = Object.values(basket);
   return { topics: items.length, messages: new Set(items.flatMap(item => item.messages.map(message => message.id))).size,
     assets: new Set(items.flatMap(item => item.assetIds)).size };
+}
+
+export function materialCounts(basket: TopicBasket, issues: IssueBasket) {
+  const topics = basketCounts(basket), selected = Object.values(issues);
+  return { topics: topics.topics, issues: selected.length, records: topics.topics + selected.length,
+    messages: topics.messages + selected.reduce((count, item) => count + Number(item.selection.body) + item.selection.comments.length, 0),
+    assets: topics.assets + selected.reduce((count, item) => count + item.selection.attachments.length, 0) };
+}
+
+export function materialLimitExceeded(counts: ReturnType<typeof materialCounts>) {
+  return counts.records > 20 || counts.messages > 100 || counts.assets > 20;
 }
 export function basketSelections(basket: TopicBasket): TopicSelection[] {
   return Object.values(basket).map(item => ({

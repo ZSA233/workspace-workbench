@@ -17,16 +17,17 @@ export function useTopics(projectConfig: string, foreground: boolean, visible: b
   const scopeKey = projectConfig + ':' + revision, current = useRef(scopeKey); current.current = scopeKey;
   const call = useCallback(async <T = unknown,>(request: TopicAction): Promise<T> => {
     const captured = scopeKey;
+    const issues = request.action.startsWith('issues.');
     try {
       const endpoint = ['targets', 'models', 'preview', 'send', 'receipt'].includes(request.action) ? deliveryRpc : rpc;
       const result = await endpoint({ projectConfig, extensionId: 'project-communications', connectionRevision: revision, request });
       if (current.current !== captured) throw Error('project_connection_changed');
-      setFailure(undefined);
+      if (!issues) setFailure(undefined);
       if (request.action === 'group.configure') void cache.invalidateQueries({ queryKey: ['archive-directory', scopeKey] });
       return result as T;
     } catch (error) {
       if (request.action === 'group.configure') void cache.invalidateQueries({ queryKey: ['archive-directory', scopeKey] });
-      if (current.current === captured) setFailure({ scope: captured, message: error instanceof Error ? error.message : String(error) });
+      if (!issues && current.current === captured) setFailure({ scope: captured, message: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }, [projectConfig, revision, scopeKey, rpc, deliveryRpc, cache]);

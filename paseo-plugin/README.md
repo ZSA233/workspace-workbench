@@ -479,3 +479,15 @@ Workbench 的简单设置只选择资料库与群，
 默认地址为 http://127.0.0.1:47191；默认 Token 由后端从 AI_ASSISTANT_HOME、COMMUNICATIONS_HOME
 或 ~/.project-communications 读取，自定义连接使用 HTTPS。凭据不返回浏览器，也不写进项目配置。
 服务和数据的生命周期独立于 Workbench。接口适配及实施说明见 [话题设计](../docs/design/archive-topics/README.md)。
+
+### TAPD 缺陷
+
+「话题」页的文字标签可切换到 **TAPD 缺陷**。列表读取当前资料库中分配给已授权 TAPD
+账号的待办，可按项目、标题或编号查找。勾选整条缺陷会带入就绪的描述和支持交接的附件，
+评论可逐条勾选。钉钉和 TAPD 的选择共用「已选材料」和发送确认，可在同一次发送中带入会话。
+
+档案服务需支持缺陷档案接口（Communication-Service 0.2.132），在所选资料库中添加 TAPD
+来源并完成授权。同一操作者管理的服务部署可启用 `AI_ASSISTANT_ISSUE_MACHINE_READ=1`，
+供 Workbench 使用现有服务 Token 读取。登录、重新授权及主动开始同步在档案服务完成。
+Workbench 的刷新只重读服务内的列表和版本，并在投递前复核所选缺陷仍在待办且版本一致。
+接入细节见 [两端接口说明](../docs/design/tapd-topics-handoff.md)。

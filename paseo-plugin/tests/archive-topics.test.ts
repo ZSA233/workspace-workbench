@@ -17,6 +17,8 @@ import { topicActionSchema, type ArchiveTopicDetail, type TopicMaterialPreview, 
 import type { AgentContext } from '../server/agent-provider.ts';
 import type { PaseoAgentCreateOptions } from '@getpaseo/client';
 import { startArchiveFixture } from './helpers/archive-service.ts';
+import type { IssueConnection, IssueDetail, IssuePage, IssueSelection } from '../shared/extensions/project-communications/issues.ts';
+import { changeIssuePart, selectIssue } from '../client/issue-selection.ts';
 
 async function setup() {
   const fixture = await startArchiveFixture(), root = mkdtempSync(join(tmpdir(), 'wb-archive-topics-'));
@@ -122,6 +124,97 @@ test('followed-group filtering keeps pagination and denies unbound topics and ar
     s.state.context.channelId = 'unfollowed';
     await assert.rejects(s.archive.message(topic, s.state.context.id, topic.messages[0].id), /context_outside_scope/);
     noGroups.connection.close();
+  } finally { await s.close(); }
+});
+
+test('TAPD topics read only the configured library, todo view and versioned originals', async () => {
+  const s = await setup();
+  try {
+    s.state.issueMachineRead = false;
+    const unavailable = await s.call({ action: 'issues.status' }) as IssueConnection;
+    assert.equal(unavailable.state, 'unavailable');
+    assert.equal(new URL(unavailable.manageUrl).origin, s.url);
+    assert.equal((await s.archive.list({ query: '', limit: 30 })).items.length, 2);
+
+    s.state.issueMachineRead = true;
+    const state = await s.call({ action: 'issues.status' }) as IssueConnection;
+    assert.equal(state.state, 'ready');
+    assert.equal(JSON.stringify(state).includes('not-for-workbench'), false);
+    assert.equal(new URL(state.manageUrl).searchParams.get('source'), 'tapd:issues');
+    const page = await s.call({ action: 'issues.list', query: '' }) as IssuePage;
+    const next = await s.call({ action: 'issues.list', query: '', cursor: page.next }) as IssuePage;
+    assert.notEqual(page.items[0].id, next.items[0].id);
+    const filtered = await s.call({ action: 'issues.list', query: page.items[0].number, projectId: page.items[0].projectId }) as IssuePage;
+    assert.deepEqual(filtered.items, page.items);
+    const issue = await s.call({ action: 'issues.read', issueId: page.items[0].id, version: page.items[0].version }) as IssueDetail;
+    assert.equal(issue.body, s.state.issues[0].body);
+    assert.equal(JSON.stringify(issue).includes('not-for-workbench'), false);
+    const original = await s.call({ action: 'issues.asset', issueId: issue.id, version: issue.version, attachmentId: issue.attachments[0].id }) as { mimeType: string; base64: string };
+    assert.equal(original.mimeType, 'image/png');
+    assert.deepEqual(Buffer.from(original.base64, 'base64'), s.image);
+    await assert.rejects(s.call({ action: 'issues.asset', issueId: issue.id, version: issue.version, attachmentId: issue.attachments[2].id }), /issue_material_unavailable/);
+    s.state.issues[0].inTodo = false;
+    await assert.rejects(s.call({ action: 'issues.read', issueId: issue.id, version: issue.version }), /issue_outside_todo/);
+    assert.ok(s.state.requests.filter(item => item.url.includes('/sources/tapd')).every(item => item.method === 'GET'));
+  } finally { await s.close(); }
+});
+
+test('mixed TAPD and DingTalk material freezes only selected parts and rechecks access before dispatch', async () => {
+  const s = await setup();
+  try {
+    const host = nativeSession(s.root), issue = s.state.issues[0], [screenshot, pdf] = issue.attachments;
+    const selected: IssueSelection = { issueId: issue.id, version: issue.version, body: true, comments: [], attachments: [{ id: pdf.id, version: pdf.version }] };
+    const topic = await s.archive.read('topic-1');
+    const request = { action: 'preview', targetId: 'session:' + host.agent.id, selections: [selection(topic)], issueSelections: [selected] } as const;
+    const prepare = () => s.host.topics(s.config, 'project-communications', 2, topicActionSchema.parse(request), host.context) as Promise<TopicMaterialPreview>;
+    const preview = await prepare();
+    assert.ok(preview.text.includes(issue.body));
+    assert.ok(preview.text.includes(issue.number));
+    assert.ok(preview.text.includes(topic.messages[0].text));
+    assert.equal(preview.text.includes(issue.comments[0].text), false);
+    assert.deepEqual(preview.assets.map(item => item.mimeType), ['application/pdf']);
+    assert.equal(s.state.requests.some(item => item.url.includes('/attachments/' + screenshot.id)), false);
+    assert.equal('issueVersions' in preview, false);
+
+    const send = (id: string) => s.host.topics(s.config, 'project-communications', 2, { action: 'send', id }, host.context) as Promise<TopicMaterialPreview>;
+    const receipt = (id: string) => s.host.topics(s.config, 'project-communications', 2, { action: 'receipt', id }, host.context) as Promise<TopicMaterialPreview>;
+    s.state.issueSource.projects[0].authorization = 'expired';
+    await assert.rejects(send(preview.id), /issue_project_not_authorized/);
+    assert.equal(host.state.sent.length, 0);
+    assert.equal((await receipt(preview.id)).state, 'preview');
+    s.state.issueSource.projects[0].authorization = 'authorized';
+    issue.version = 'revision-2';
+    await assert.rejects(send(preview.id), /issue_selection_changed/);
+    selected.version = issue.version;
+    const next = await prepare();
+    host.state.uncertain = true;
+    assert.equal((await send(next.id)).state, 'uncertain');
+    assert.equal(host.state.sent[0].options.attachments?.[0].fileName, '复现报告.pdf');
+    s.state.issueSource.projects[0].authorization = 'expired';
+    assert.equal((await receipt(next.id)).state, 'accepted');
+    assert.equal(host.state.sent.length, 1);
+  } finally { await s.close(); }
+});
+
+test('a TAPD-only draft opens the shared new-session path and keeps selected versions when a defect refreshes', async () => {
+  const s = await setup();
+  try {
+    const issue = s.state.issues[0], host = nativeCreation(s.root);
+    const basket = selectIssue({}, issue), pinned = basket[issue.id].selection;
+    const updated = { ...issue, version: 'revision-2' };
+    assert.equal(changeIssuePart(basket, updated, { kind: 'body' }), basket);
+    assert.equal(pinned.comments.length, 0);
+    assert.deepEqual(pinned.attachments.map(item => item.id), issue.attachments.slice(0, 2).map(item => item.id));
+    const preview = await s.host.topics(s.config, 'project-communications', 2, {
+      action: 'preview', selections: [], issueSelections: [pinned], newSession: { provider: 'codex', model: 'analysis-model' },
+    }, host.context) as TopicMaterialPreview;
+    assert.equal(preview.issues?.[0].id, issue.id);
+    const sent = await s.host.topics(s.config, 'project-communications', 2, { action: 'send', id: preview.id }, host.context) as TopicMaterialPreview;
+    assert.equal(sent.state, 'accepted');
+    assert.equal(host.creation.created.length, 1);
+    assert.equal(host.state.sent.length, 1);
+    assert.equal(host.state.sent[0].options.images.length, 1);
+    assert.equal(host.state.sent[0].options.attachments?.[0].mimeType, 'application/pdf');
   } finally { await s.close(); }
 });
 test('only chosen originals are frozen; repeated previews reuse verified image bytes', async () => {

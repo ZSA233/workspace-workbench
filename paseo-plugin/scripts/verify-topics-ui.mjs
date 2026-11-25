@@ -186,6 +186,9 @@ try {
   await description.waitFor();
   const descriptionStyle = await renderedText(description);
   const detailLabel = await renderedText(issueDetail.getByText('缺陷描述', { exact: true }));
+  const detailFrame = await issueDetail.getByTestId('topic-detail-content').evaluate(element => {
+    const css = getComputedStyle(element); return { border: css.borderLeftWidth, padding: css.paddingLeft };
+  });
   assert.ok(tapdTitle.size > descriptionStyle.size && descriptionStyle.size > detailLabel.size);
   assert.ok(detailLabel.x > tapdTitle.x && detailLabel.color !== tapdTitle.color);
   await shot('tapd-issue-hierarchy-desktop');
@@ -241,6 +244,9 @@ try {
   const chatBody = chatRow.getByText(fixture.state.topics[0].messages[0].displayText, { exact: true });
   assert.equal((await renderedText(chatTitle)).size, tapdTitle.size);
   assert.equal((await renderedText(chatBody)).size, descriptionStyle.size);
+  assert.deepEqual(await chatRow.getByTestId('topic-detail-content').evaluate(element => {
+    const css = getComputedStyle(element); return { border: css.borderLeftWidth, padding: css.paddingLeft };
+  }), detailFrame);
   await chatRow.getByText('跟进中', { exact: true }).waitFor();
   await shot('dingtalk-topic-hierarchy-desktop');
   check('DingTalk and TAPD share title/body proportions; expanded details indent and TAPD resolved and closed labels remain distinct');
@@ -680,6 +686,58 @@ try {
   await chatVideoDialog.getByRole('button',{name:'关闭',exact:true}).click();
   assert.equal((await deliver({action:'preferences'})).material.identity,'name');
   check('the actual local provider receives video bytes plus four native frame images; the conversation video still plays after reload and the visible identity choice is remembered');
+  const largeVideo = Buffer.alloc(21 * 1024 * 1024, 9);
+  const largeId = createHash('sha256').update('unified-large-movie').digest('hex');
+  const recording = { id: largeId, name: '屏幕录制.mov', mimeType: 'video/quicktime', kind: 'video', state: 'ready', size: largeVideo.length, version: 'recording-1' };
+  fixture.state.assetBytes.set(largeId, { bytes: largeVideo, mimeType: recording.mimeType });
+  videoMessage.assets = [recording];
+  issue.attachments = [recording]; issue.version = 'revision-3';
+  await openIsolatedWorkbench(page, ui.url, 'a');
+  await page.getByText('话题', { exact: true }).filter({ visible: true }).first().click();
+  await page.getByTestId('topic-row-topic-1').waitFor();
+  await panel.getByPlaceholder('搜索话题').fill('视频播放');
+  await page.getByTestId('topic-expand-topic-4').click();
+  await videoSource.getByRole('button', { name: '查看 屏幕录制.mov', exact: true }).getByText('可选择并发送原视频', { exact: true }).waitFor();
+  await videoSource.getByRole('button', { name: '查看 屏幕录制.mov', exact: true }).click();
+  const recordingDialog = page.getByRole('dialog', { name: '屏幕录制.mov', exact: true });
+  await recordingDialog.getByTestId('topic-video-file').getByText('21.0 MiB', { exact: true }).waitFor();
+  await recordingDialog.getByRole('button', { name: '选择原视频', exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 900 });
+  await shot('dingtalk-shared-video-fallback-phone');
+  await tapdTab.click();
+  await page.getByTestId('tapd-expand-' + issue.id).click();
+  const issueRecording = page.getByTestId('tapd-detail-' + issue.id);
+  await issueRecording.getByRole('button', { name: '查看 屏幕录制.mov', exact: true }).getByText('可选择并发送原视频', { exact: true }).waitFor();
+  await issueRecording.getByRole('button', { name: '查看 屏幕录制.mov', exact: true }).click();
+  await recordingDialog.getByTestId('topic-video-file').getByText('21.0 MiB', { exact: true }).waitFor();
+  await recordingDialog.getByRole('button', { name: '选择原视频', exact: true }).click();
+  await shot('tapd-shared-video-fallback-phone');
+  await page.getByTestId('topics-send').click();
+  await page.getByTestId('topics-send-dialog').getByRole('button', { name: '已有会话', exact: true }).click();
+  await page.getByTestId('topics-target').click();
+  await page.getByRole('dialog', { name: '目标会话', exact: true }).getByRole('button', { name: '档案材料验收会话', exact: true }).click();
+  const fallbackNote = '核对这两条材料所附的屏幕录制。';
+  await page.getByTestId('topics-send-note').fill(fallbackNote);
+  await page.getByTestId('topics-confirm').click();
+  await page.getByTestId('topics-send').getByText('打开会话', { exact: true }).waitFor();
+  let largeOriginalReceived = false;
+  for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
+    for (const file of readdirSync(ui.topicsFixtureRoot).filter(name => name.endsWith('.json'))) {
+      const record = JSON.parse(readFileSync(join(ui.topicsFixtureRoot, file), 'utf8'));
+      for (const input of record.inputs || []) {
+        if (!input.some(part => part.type === 'text' && part.text.includes(fallbackNote))) continue;
+        const attached = input.find(part => part.type === 'text' && part.text.includes('Uploaded file: 屏幕录制.mov'));
+        const path = attached && /Path: ([^\n]+)/.exec(attached.text)?.[1];
+        if (path && readFileSync(path).equals(largeVideo)) largeOriginalReceived = true;
+      }
+    }
+    if (largeOriginalReceived) break;
+    await page.waitForTimeout(100);
+  }
+  assert.equal(largeOriginalReceived, true);
+  await page.getByTestId('topics-send').click();
+  await page.getByTestId('topic-chat-video').filter({ visible: true }).last().getByText('屏幕录制.mov', { exact: true }).waitFor();
+  check('DingTalk and TAPD share video fallback cards and one actual native send delivers the larger MOV original when decoding is unavailable');
   assert.equal(fixture.state.requests.some(request => request.url.startsWith('/v1/projects')), false);
   assert.equal(report.pageErrors.length, 0, JSON.stringify(report.pageErrors));
   report.fidelity.push('same flat topic-list + bottom-basket architecture as refined C',

@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Text, View } from 'react-native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { TopicsClient } from '../../use-topics';
 import { uniqueMessages } from '../../topic-selection';
-import { topicTime, topicTitle } from '../../../shared/extensions/project-communications/topics';
+import { topicTitle } from '../../../shared/extensions/project-communications/topics';
 import type { ArchiveAsset, ArchiveMessage, ArchiveTopic, ArchiveTopicDetail, SelectedTopic } from '../../../shared/extensions/project-communications/topics';
-import { Button, Label, ignoreFailure, shortTime, tint, useColors } from './ui';
-import { Check, ContextDialog, MediaCount, OriginalMessage, TopicIcon, TopicRowStatus, topicError, topicTypography } from './topic-ui';
+import { Button, Label, ignoreFailure, useColors } from './ui';
+import { Check, ContextDialog, MediaCount, OriginalMessage, TopicIcon, TopicRecord, topicError, topicTypography } from './topic-ui';
 import { pendingTopicAssets, topicDisplayMessages, TOPIC_ASSET_REFRESH_MS } from '../../topic-asset-state';
 
 const topicStates = new Map([['open', '跟进中'], ['closed', '已关闭'], ['paused', '已暂停']]);
@@ -35,7 +35,6 @@ export function TopicRow(p: TopicRowProps) {
   const changed = Boolean(data && (data.inputRevision !== p.topic.inputRevision || data.revision !== p.topic.revision));
   const closed = p.topic.status === 'closed';
   const status = topicStates.get(p.topic.status) || p.topic.status;
-  const updated = topicTime(p.topic.updatedAt);
   const more = async () => {
     const page = await p.client.call<{ items: ArchiveMessage[]; hasMore: boolean }>({
       action: 'messages', topicId: p.topic.id, offset: detail.data?.messages.length || 0,
@@ -45,37 +44,21 @@ export function TopicRow(p: TopicRowProps) {
     } : current);
   };
   const messages = topicDisplayMessages(detail.data?.messages || [], data?.messages);
-  return <View testID={'topic-row-' + p.topic.id} style={{ borderBottomWidth: 1, borderBottomColor: c.border }}>
-    <View style={{ flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 4, gap: 5, alignItems: 'center', backgroundColor: p.selected ? tint(c.accent, '18') : undefined }}>
-      <Check id={'topic-select-' + p.topic.id} checked={Boolean(p.selected)} disabled={p.busy || p.loading}
-        label={'选择话题 ' + topicTitle(p.topic)} onPress={p.onSelect} />
-      <Pressable testID={'topic-expand-' + p.topic.id} accessibilityRole="button" accessibilityLabel={topicTitle(p.topic)}
-        accessibilityState={{ expanded: p.expanded }} onPress={p.onExpand}
-        style={{ flex: 1, minWidth: 0, paddingVertical: 4, gap: 2 }}>
-        <Text numberOfLines={2} style={[topicTypography.title, { color: closed ? c.foregroundMuted : c.foreground }]}>{topicTitle(p.topic)}</Text>
-        <Text numberOfLines={1} style={[topicTypography.metadata, { color: c.foregroundMuted }]}>{p.groupName}</Text>
-      </Pressable>
-      {!p.narrow ? <>
-        <MediaCount icon="MessageSquare" count={data?.messageCount || p.topic.messageCount} label="原文" />
-        <MediaCount icon="Image" count={data ? data.messages.reduce((n, m) => n + m.assets.length, 0) : undefined} label="附件" />
-      </> : null}
-      <View style={{ alignItems: 'flex-end', gap: 2 }}>
-        {status ? <TopicRowStatus label={status} tone={p.topic.status === 'open' ? 'active' : 'neutral'} /> : null}
-        {changed || updated ? <Text style={[topicTypography.metadata, { color: changed ? c.statusWarning : c.foregroundMuted }]}>
-          {changed ? '有更新' : '更新于 ' + updated}
-        </Text> : null}
-      </View>
-      {changed ? <TopicIcon icon="RefreshCw" label="重新读取并清除此话题选择" disabled={p.busy}
-        onPress={() => { p.onReload(); void detail.refetch(); }} /> : null}
-      <TopicIcon icon={p.expanded ? 'ChevronUp' : 'ChevronDown'} label={p.expanded ? '收起话题' : '展开话题'}
-        onPress={p.onExpand} busy={p.loading} />
-    </View>
-    {p.expanded ? <View testID={'topic-detail-' + p.topic.id}
-      style={{ paddingLeft: p.narrow ? 12 : 43, paddingRight: 12, backgroundColor: tint(c.foregroundMuted, '05') }}>
+  return <TopicRecord id={'topic-row-' + p.topic.id} selectId={'topic-select-' + p.topic.id}
+    expandId={'topic-expand-' + p.topic.id} detailId={'topic-detail-' + p.topic.id}
+    title={topicTitle(p.topic)} metadata={p.groupName} updatedAt={p.topic.updatedAt} recordLabel="话题"
+    {...{ status, closed }} tone={p.topic.status === 'open' ? 'active' : 'neutral'}
+    selected={Boolean(p.selected)} expanded={p.expanded} disabled={p.busy} loading={p.loading}
+    onSelect={p.onSelect} onExpand={p.onExpand}
+    onReload={changed ? () => { p.onReload(); void detail.refetch(); } : undefined}
+    extra={!p.narrow ? <>
+      <MediaCount icon="MessageSquare" count={data?.messageCount || p.topic.messageCount} label="原文" />
+      <MediaCount icon="Image" count={data ? data.messages.reduce((n, m) => n + m.assets.length, 0) : undefined} label="附件" />
+    </> : undefined}>
       {detail.isLoading && !data ? <ActivityIndicator style={{ padding: 15 }} /> : null}
       {detail.error ? <Label warning>{topicError(detail.error.message)}</Label> : null}
       {data ? <>
-        {messages.map(message => <OriginalMessage key={message.id} client={p.client} topicId={data.id} message={message} mediaWidth={p.narrow ? 144 : 200}
+        {messages.map(message => <OriginalMessage key={message.id} client={p.client} topicId={data.id} message={message}
           disabled={p.busy || changed} selected={p.selected?.messages.some(item => item.id === message.id) || false}
           selectedAssets={p.selected?.assetIds || []}
           onMessage={() => p.onMessage(data, message, p.selected?.contexts[message.id])}
@@ -100,6 +83,5 @@ export function TopicRow(p: TopicRowProps) {
         selected={p.selected?.messages.map(message => message.id) || []} selectedAssets={p.selected?.assetIds || []}
         onClose={() => setContext('')} onMessage={message => p.onMessage(data, message, context)}
         onAsset={(message, asset) => p.onAsset(data, message, asset, context)} /> : null}
-    </View> : null}
-  </View>;
+  </TopicRecord>;
 }

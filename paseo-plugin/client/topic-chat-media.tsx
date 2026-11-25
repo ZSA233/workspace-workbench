@@ -1,11 +1,11 @@
 import {useEffect,useState} from 'react';
-import {ActivityIndicator,Image,Pressable,View,useWindowDimensions} from 'react-native';
+import {ActivityIndicator,Image,Pressable,Text,View,useWindowDimensions} from 'react-native';
 import {useRpc,type PluginTimelineItemProps} from '@getpaseo/plugin/client';
 import {type TopicChatMedia,type TopicChatImage,type TopicChatVideo} from '../shared/topic-chat-media';
 import {topicChatMediaRpc} from '../shared/topic-chat-media-rpc';
 import {Icon,ScrollView} from './native-components';
-import {TopicVideoPlayer,TopicVideoFrames} from './topic-video';
-import {videoTime} from '../shared/topic-video';
+import {TopicVideoPlayer,TopicVideoFrames,TopicVideoFile} from './topic-video';
+import {videoTime,videoFileSize,MAX_INLINE_VIDEO_BYTES} from '../shared/topic-video';
 import {CommunicationsTheme,Dialog,Button,Label} from './extensions/project-communications/ui';
 
 /** The host's user-message transcript is text-only; this row preserves the
@@ -37,7 +37,8 @@ export function TopicChatImages({agentId,item,theme}:PluginTimelineItemProps<Top
     if(!video)return;
     let active=true;
     void (async()=>{
-      for(const assetId of [video.assetId,...video.frames.map(frame=>frame.assetId)]) {
+      const original = (video.size ?? 0) <= MAX_INLINE_VIDEO_BYTES ? [video.assetId] : [];
+      for(const assetId of [...original,...video.frames.map(frame=>frame.assetId)]) {
         if(uris[assetId])continue;
         const data=await rpc({projectConfig,materialId,agentId,assetId}) as {mimeType:string;base64:string};
         if(!active)return;setUris(current=>({...current,[assetId]:'data:'+data.mimeType+';base64,'+data.base64}));
@@ -56,16 +57,20 @@ export function TopicChatImages({agentId,item,theme}:PluginTimelineItemProps<Top
       {videos.map((video,index)=><Pressable key={video.assetId} testID="topic-chat-video" accessibilityRole="button" accessibilityLabel={'查看所选视频 '+(index+1)}
         onPress={()=>setOpen(video.assetId)} style={{width,height:180,borderRadius:8,overflow:'hidden',backgroundColor:theme.colors.surface1,alignItems:'center',justifyContent:'center'}}>
         {uris[video.frames[0]?.assetId]?<Image source={{uri:uris[video.frames[0].assetId]}} accessibilityLabel={'所选视频 '+(index+1)} resizeMode="contain" style={{width:'100%',height:'100%'}}/>:null}
-        <View style={{position:'absolute',padding:8,borderRadius:24,backgroundColor:'#0009'}}><Icon name="Play" size={28} color="#fff"/></View>
-        <View style={{position:'absolute',bottom:6,right:6}}><Label>{videoTime(video.duration)}</Label></View>
+        <View style={{position:'absolute',padding:8,borderRadius:24,backgroundColor:'#0009'}}><Icon name={video.frames.length ? 'Play' : 'Video'} size={28} color="#fff"/></View>
+        <View style={{position:'absolute',bottom:6,left:6,right:6,gap:2}}>
+          <Text numberOfLines={2} style={{fontSize:11,color:theme.colors.foreground}}>{video.name}</Text>
+          <Label muted>{[videoFileSize(video.size),video.duration>0 ? videoTime(video.duration) : '原视频'].filter(Boolean).join(' · ')}</Label>
+        </View>
       </Pressable>)}
       {!images.length&&!videos.length&&!failed?<ActivityIndicator color={theme.colors.foregroundMuted}/>:null}
     </View>
     {failed?<Button icon="RefreshCw" onPress={()=>setRevision(value=>value+1)}>重新加载附件</Button>:null}
     {open?<Dialog title={video?'视频':'图片'} onClose={()=>setOpen('')} width={900} height={760}>
       {video?<ScrollView contentContainerStyle={{padding:16,gap:14}}>
-        {uris[open]?<TopicVideoPlayer uri={uris[open]} poster={uris[video.frames[0]?.assetId]}/>:<ActivityIndicator/>}
-        <TopicVideoFrames video={{duration:video.duration,frames:video.frames.filter(frame=>uris[frame.assetId]).map(frame=>({time:frame.time,mimeType:'image/jpeg',base64:uris[frame.assetId].split(',')[1]}))}}/>
+        {uris[open]?<TopicVideoPlayer uri={uris[open]} poster={uris[video.frames[0]?.assetId]}/>
+          : video.size && video.size>MAX_INLINE_VIDEO_BYTES || !video.frames.length ? <TopicVideoFile name={video.name} size={video.size} message="原视频已随材料发送"/> : <ActivityIndicator/>}
+        <TopicVideoFrames video={{duration:video.duration,error:video.error,frames:video.frames.filter(frame=>uris[frame.assetId]).map(frame=>({time:frame.time,mimeType:'image/jpeg',base64:uris[frame.assetId].split(',')[1]}))}}/>
       </ScrollView>:<Image source={{uri:uris[open]}} accessibilityLabel="所选原图" resizeMode="contain" style={{flex:1,width:'100%'}}/>}
     </Dialog>:null}
   </View></CommunicationsTheme>;

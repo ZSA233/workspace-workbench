@@ -11,7 +11,7 @@ import { TopicMaterials } from '../server/topic-materials.ts';
 import { withProject, resolveProject } from '../server/projects.ts';
 import { readTopicChatMedia } from '../server/topic-chat-media.ts';
 import { putAgentBinding } from '../server/agent-store.ts';
-import { prepareTopicVideo } from '../server/topic-video.ts';
+import { prepareTopicVideo, topicVideoPreview } from '../server/topic-video.ts';
 import { readStoredArtifact } from '../server/artifacts.ts';
 import { topicActionSchema, type ArchiveTopicDetail, type TopicMaterialPreview, type TopicSelection, type TopicTarget } from '../shared/extensions/project-communications/topics.ts';
 import type { AgentContext } from '../server/agent-provider.ts';
@@ -19,6 +19,7 @@ import type { PaseoAgentCreateOptions } from '@getpaseo/client';
 import { startArchiveFixture } from './helpers/archive-service.ts';
 import type { IssueConnection, IssueDetail, IssuePage, IssueSelection } from '../shared/extensions/project-communications/issues.ts';
 import { changeIssuePart, selectIssue } from '../client/issue-selection.ts';
+import { supportedArtifact, MAX_VIDEO_BYTES } from '../shared/artifact-limits.ts';
 
 async function setup() {
   const fixture = await startArchiveFixture(), root = mkdtempSync(join(tmpdir(), 'wb-archive-topics-'));
@@ -875,6 +876,51 @@ test('decoding rejects invalid files and aborted work without leaving a sendable
   await assert.rejects(prepareTopicVideo(Buffer.from('not a video')),/video_decode_failed/);
   const controller=new AbortController();controller.abort();
   await assert.rejects(prepareTopicVideo(Buffer.from('a different clip'),controller.signal),/extension_host_unloaded/);
+  await assert.rejects(topicVideoPreview(Buffer.from('a cancelled preview'),controller.signal),/extension_host_unloaded/);
+});
+
+test('DingTalk and TAPD deliver larger video originals when optional preview decoding fails', async () => {
+  const s = await setup();
+  try {
+    const bytes = Buffer.alloc(13 * 1024 * 1024, 9), host = nativeSession(s.root);
+    const id = createHash('sha256').update('larger-recording').digest('hex');
+    const asset = { id, name: '屏幕录制.mov', mimeType: 'video/quicktime', kind: 'video', state: 'ready', size: bytes.length, version: 'recording-1' };
+    assert.equal(supportedArtifact(asset.mimeType, bytes.length), true);
+    assert.equal(supportedArtifact(asset.mimeType, MAX_VIDEO_BYTES + 1), false);
+    assert.equal(supportedArtifact('image/png', bytes.length), false);
+    s.state.assetBytes.set(id, { bytes, mimeType: asset.mimeType });
+    const source = s.state.topics[0], message = source.messages[0], issue = s.state.issues[0];
+    message.assets = [asset]; issue.attachments = [asset];
+    await assert.rejects(s.archive.asset(source.id, message.id, id), /topic_video_inline_unavailable/);
+    await assert.rejects(s.call({ action: 'issues.asset', issueId: issue.id, version: issue.version, attachmentId: id }), /topic_video_inline_unavailable/);
+    const selected = { ...selection(await s.archive.read(source.id)), assets: [{ id, messageId: message.id, messageVersion: message.version }] };
+    for (const material of [
+      { selections: [selected] },
+      { selections: [], issueSelections: [{ issueId: issue.id, version: issue.version, body: false, comments: [], attachments: [{ id, version: asset.version }] }] },
+    ]) {
+      const preview = await s.host.topics(s.config, 'project-communications', 2,
+        { action: 'preview', targetId: 'session:' + host.agent.id, ...material }, host.context) as TopicMaterialPreview;
+      assert.equal(preview.assets[0].size, bytes.length);
+      assert.ok(preview.text.includes('已附原视频文件'));
+      const send = () => s.host.topics(s.config, 'project-communications', 2, { action: 'send', id: preview.id }, host.context) as Promise<TopicMaterialPreview>;
+      assert.equal((await send()).state, 'accepted');
+      assert.equal((await send()).state, 'accepted');
+      const received = host.state.sent.at(-1)!;
+      assert.deepEqual(received.options.images, []);
+      assert.deepEqual(readFileSync(received.options.attachments![0].path), bytes);
+      const manifest = readTopicChatMedia(resolveProject({ projectConfig: s.config }),
+        { projectConfig: s.config, materialId: preview.id, agentId: host.agent.id }) as { videos: Array<{ frames: unknown[]; size: number }> };
+      assert.equal(manifest.videos[0].size, bytes.length);
+      assert.deepEqual(manifest.videos[0].frames, []);
+    }
+    const mixed = await s.host.topics(s.config, 'project-communications', 2, {
+      action: 'preview', targetId: 'session:' + host.agent.id, selections: [selected],
+      issueSelections: [{ issueId: issue.id, version: issue.version, body: false, comments: [], attachments: [{ id, version: asset.version }] }],
+    }, host.context) as TopicMaterialPreview;
+    assert.equal((await s.host.topics(s.config, 'project-communications', 2, { action: 'send', id: mixed.id }, host.context) as TopicMaterialPreview).state, 'accepted');
+    assert.equal(host.state.sent.at(-1)!.options.attachments?.length, 1);
+    assert.equal(host.state.sent.length, 3);
+  } finally { await s.close(); }
 });
 
 

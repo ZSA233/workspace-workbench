@@ -4,7 +4,7 @@ import {existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node
 import {tmpdir} from 'node:os';
 import {delimiter, join} from 'node:path';
 import type {TopicVideoPreview} from '../shared/topic-video.ts';
-import {MAX_REGISTERED_BYTES} from '../shared/artifact-limits.ts';
+import {MAX_VIDEO_BYTES} from '../shared/artifact-limits.ts';
 
 const cache = new Map<string, TopicVideoPreview>();
 const waiting: Array<() => void> = [];
@@ -42,7 +42,8 @@ function run(command: string, args: string[], signal?: AbortSignal): Promise<Buf
 }
 
 export async function prepareTopicVideo(bytes: Buffer, signal?: AbortSignal): Promise<TopicVideoPreview> {
-  if (!bytes.length || bytes.length > MAX_REGISTERED_BYTES) throw Error('artifact_size_exceeded');
+  if (signal?.aborted) throw Error('extension_host_unloaded');
+  if (!bytes.length || bytes.length > MAX_VIDEO_BYTES) throw Error('artifact_size_exceeded');
   const key = createHash('sha256').update(bytes).digest('hex');
   if (cache.has(key)) return cache.get(key)!;
   if (running >= 2) {
@@ -79,4 +80,21 @@ export async function prepareTopicVideo(bytes: Buffer, signal?: AbortSignal): Pr
     cache.set(key, result); while (cache.size > 6) cache.delete(cache.keys().next().value!);
     return result;
   } finally {if (root) rmSync(root, {recursive:true, force:true}); const next=waiting.shift(); if(next)next();else running--;}
+}
+
+/** Original delivery remains available when optional decoding cannot produce frames. */
+export async function topicVideoPreview(bytes: Buffer, signal?: AbortSignal, timeoutMs = 8000): Promise<TopicVideoPreview> {
+  if (signal?.aborted) throw Error('extension_host_unloaded');
+  if (!bytes.length || bytes.length > MAX_VIDEO_BYTES) throw Error('artifact_size_exceeded');
+  if (timeoutMs <= 0) return { duration: 0, frames: [], size: bytes.length, error: 'topic_video_decode_timeout' };
+  const decoding = new AbortController(), cancel = () => decoding.abort();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; cancel(); }, timeoutMs);
+  signal?.addEventListener('abort', cancel, { once: true });
+  try { return { ...await prepareTopicVideo(bytes, decoding.signal), size: bytes.length }; }
+  catch (error) {
+    const code = timedOut ? 'topic_video_decode_timeout' : error instanceof Error ? error.message : '';
+    if (signal?.aborted || !/^topic_video_(tools_unavailable|decode_failed|decode_timeout|frame_too_large|busy)$/.test(code)) throw error;
+    return { duration: 0, frames: [], size: bytes.length, error: code };
+  } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
 }

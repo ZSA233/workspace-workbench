@@ -6,6 +6,7 @@ import type {ProjectRoute} from './projects.ts';
 import type {ReviewArtifactReference} from '../shared/review-packet.ts';
 import {topicChatMediaKind, type TopicChatMedia, type TopicChatImage, type TopicChatVideo} from '../shared/topic-chat-media.ts';
 import type {TopicStoredVideo} from '../shared/topic-video.ts';
+import {MAX_INLINE_VIDEO_BYTES} from '../shared/topic-video.ts';
 import {readStoredArtifact} from './artifacts.ts';
 import {withProject} from './projects.ts';
 
@@ -32,6 +33,7 @@ export function readTopicChatMedia(route:ProjectRoute,input:TopicChatMedia&{agen
     return withProject({projectConfig:route.configPath},()=>{
       const asset=readStoredArtifact(input.assetId!);
       if(!asset.metadata.mimeType.startsWith('image/')&&!asset.metadata.mimeType.startsWith('video/'))throw Error('topic_media_not_media');
+      if(asset.metadata.mimeType.startsWith('video/')&&asset.metadata.size>MAX_INLINE_VIDEO_BYTES)throw Error('topic_video_inline_unavailable');
       return {mimeType:asset.metadata.mimeType,base64:asset.bytes.toString('base64')};
     });
   }

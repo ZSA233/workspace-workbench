@@ -54,6 +54,7 @@ export function archiveFixture() {
     unavailableAssets: new Set<string>(),
     originalMessages: new Map<string,ArchiveMessage>(),
     assetInfo: new Map<string,Record<string,unknown>>(),
+    assetBytes: new Map<string,{bytes: Buffer; mimeType: string}>(),
     requests: [] as Array<{ method: string; url: string }>,
   };
 }
@@ -101,7 +102,7 @@ export async function startArchiveFixture() {
       const raster = asset.mimeType === 'image/png', preview = url.searchParams.get('view') === 'preview';
       if (preview && !raster) return send('issue_record_missing', 404);
       res.writeHead(200, { 'Content-Type': preview ? 'image/png' : 'application/octet-stream' });
-      return res.end(raster ? image : pdf);
+      return res.end(state.assetBytes.get(asset.id)?.bytes || (raster ? image : pdf));
     }
     if (path === 'snapshot') return send({ libraries: state.libraries, channels: state.channels, settings: { secretFixture: 'must-not-reach-ui' }, runs: [{ raw: 'not-ui-data' }] });
     if (path === 'agent/tools') return send({ builtins: [{ id: 'messages.read', builtin: true, enabled: true, readOnly: true }], items: [
@@ -144,6 +145,12 @@ export async function startArchiveFixture() {
     }
     const info = /^libraries\/default\/assets\/([^/]+)\/info$/.exec(path);
     if (info) return state.assetInfo.has(info[1]) ? send(state.assetInfo.get(info[1])) : send('asset_info_unavailable', 404);
+    const binary = /^libraries\/default\/assets\/([^/]+)$/.exec(path);
+    const saved = binary && state.assetBytes.get(binary[1]);
+    if (saved) {
+      res.writeHead(200, { 'Content-Type': saved.mimeType, 'Content-Length': saved.bytes.length });
+      return res.end(saved.bytes);
+    }
     if (path === 'libraries/default/assets/pdf-original') {
       res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length });
       return res.end(pdf);

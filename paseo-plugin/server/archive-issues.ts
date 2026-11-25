@@ -1,11 +1,12 @@
-import { MAX_REGISTERED_BYTES, supportedArtifact } from '../shared/artifact-limits.ts';
+import { artifactByteLimit, supportedArtifact } from '../shared/artifact-limits.ts';
 import { archivePublicUrl, serviceConnectionSchema } from '../shared/extensions.ts';
 import {
   issueDetailSchema, issuePageSchema, issueSourceSchema, tapdSourceUrl,
   type IssueAttachment, type IssueConnection, type IssueDetail, type IssueSelection, type IssueVersion,
 } from '../shared/extensions/project-communications/issues.ts';
 import type { CommunicationsConnection } from './communications-connection.ts';
-import { prepareTopicVideo } from './topic-video.ts';
+import { topicVideoPreview } from './topic-video.ts';
+import { MAX_INLINE_VIDEO_BYTES } from '../shared/topic-video.ts';
 
 // Communication-Service registers one TAPD issue source in its owning library.
 const sourceId = 'tapd:issues';
@@ -93,7 +94,7 @@ export class ArchiveIssues {
     const image = mimeType.startsWith('image/');
     const path = this.path(`issues/${encodeURIComponent(issue.id)}/versions/${encodeURIComponent(issue.version)}/attachments/${encodeURIComponent(item.id)}`);
     // Preview returns the same raster bytes with a validated type. Other originals use octet-stream.
-    const result = await this.connection.bytes('/v2/archive/' + path + (image ? '?view=preview' : ''), 'GET', undefined, MAX_REGISTERED_BYTES);
+    const result = await this.connection.bytes('/v2/archive/' + path + (image ? '?view=preview' : ''), 'GET', undefined, artifactByteLimit(mimeType));
     if (!result.bytes.length || (item.size !== undefined && result.bytes.length !== item.size) ||
       (result.mimeType !== mimeType && (image || result.mimeType !== 'application/octet-stream'))) throw Error('issue_material_unavailable');
     return { bytes: result.bytes, mimeType };
@@ -104,6 +105,7 @@ export class ArchiveIssues {
     const item = this.attachment(issue, attachmentId);
     if (part === 'video-preview' && !item.mimeType?.startsWith('video/')) throw Error('topic_video_not_video');
     const data = await this.original(issue, item);
-    return part === 'video-preview' ? prepareTopicVideo(data.bytes, this.connection.signal) : { mimeType: data.mimeType, base64: data.bytes.toString('base64') };
+    if (part !== 'video-preview' && data.mimeType.startsWith('video/') && data.bytes.length > MAX_INLINE_VIDEO_BYTES) throw Error('topic_video_inline_unavailable');
+    return part === 'video-preview' ? topicVideoPreview(data.bytes, this.connection.signal) : { mimeType: data.mimeType, base64: data.bytes.toString('base64') };
   }
 }

@@ -8,7 +8,7 @@ import type { ReviewArtifactReference } from '../shared/review-packet.ts';
 import { readStoredArtifact, storeArtifactBytes } from './artifacts.ts';
 import type { ArchiveTopics } from './archive-topics.ts';
 import {prepareTopicContent,topicMessageKey,type TopicContentEntry,type TopicContentOptions} from '../shared/extensions/project-communications/topic-content.ts';
-import {prepareTopicVideo} from './topic-video.ts';
+import {topicVideoPreview} from './topic-video.ts';
 import {videoTime,type TopicStoredVideo} from '../shared/topic-video.ts';
 import { ArchiveIssues } from './archive-issues.ts';
 import { issueMaterialText, type IssueSelection, type IssueVersion } from '../shared/extensions/project-communications/issues.ts';
@@ -64,14 +64,14 @@ export class TopicMaterials {
       ...(note.trim() ? { note } : {}), ...(options.newSession ? { newSession: options.newSession } : {}),
       ...(target?.kind === 'session' ? { session: { agentId, cwd: target.cwd!, hostWorkspaceId: target.hostWorkspaceId || '' } } : {}) };
     const sections: string[] = [],entries:TopicContentEntry[]=[];
-    const files = new Map<string,string>(),contents=new Map<string,string>(),parents=new Map<string,Set<string>>(); let bytes = 0;
+    const videoPreviewDeadline = Date.now() + 8000;
+    const files = new Map<string,string>(),contents=new Map<string,string>(),parents=new Map<string,Set<string>>(); let bytes = 0, videoFrameBytes = 0;
     const associate=(referenceId:string,message:ArchiveMessage)=>{const keys=parents.get(referenceId)||new Set<string>();keys.add(topicMessageKey(message));parents.set(referenceId,keys);};
     const freezeAsset = async (key: string, asset: Pick<ArchiveAsset, 'id' | 'name' | 'mimeType' | 'sha256'>,
       load: () => Promise<{ bytes: Buffer; mimeType: string }>, original?: ArchiveMessage) => {
       let referenceId = files.get(key);
       if (!referenceId) {
-        const data = await load(); bytes += data.bytes.length;
-        if (bytes > 24 * 1024 * 1024) throw Error('topic_material_bytes_limit');
+        const data = await load();
         const sha256 = hash(data.bytes);
         if (asset.sha256 && asset.sha256 !== sha256) throw Error('topic_asset_version_changed');
         const mimeType = (asset.mimeType || data.mimeType).toLowerCase();
@@ -79,18 +79,21 @@ export class TopicMaterials {
         const contentKey = mimeType + ':' + sha256;
         referenceId = contents.get(contentKey);
         if (!referenceId) {
+          bytes += data.bytes.length;
+          if (bytes > 24 * 1024 * 1024) throw Error('topic_material_bytes_limit');
           const id = 'topic-' + hash(key + ':' + sha256);
           const stored = register({ id, title: asset.name || '附件', mimeType, bytes: data.bytes, kind: mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('video/') ? 'file' : mimeType === 'application/pdf' ? 'pdf' : 'document' });
           value.references.push({ id, assetId: id, title: stored.title, mimeType: stored.mimeType, kind: stored.kind, required: false });
           contents.set(contentKey, id);
           referenceId = id;
           if (mimeType.startsWith('video/')) {
-            const video = await prepareTopicVideo(data.bytes, archive.connection.signal);
-            if ((value.videoMaterials || []).reduce((count, item) => count + item.frames.length, 0) + video.frames.length > 24) throw Error('topic_video_frame_limit');
-            const frozen: TopicStoredVideo = { assetId: id, name: stored.title, duration: video.duration, frames: [] };
-            for (const frame of video.frames) {
-              const frameBytes = Buffer.from(frame.base64, 'base64'); bytes += frameBytes.length;
-              if (bytes > 24 * 1024 * 1024) throw Error('topic_material_bytes_limit');
+            const video = await topicVideoPreview(data.bytes, archive.connection.signal, videoPreviewDeadline - Date.now());
+            const frozen: TopicStoredVideo = { assetId: id, name: stored.title, size: stored.size, duration: video.duration, frames: [], ...(video.error ? { error: video.error } : {}) };
+            const frameBytes = video.frames.reduce((size, frame) => size + Buffer.byteLength(frame.base64, 'base64'), 0);
+            const frameCount = (value.videoMaterials || []).reduce((count, item) => count + item.frames.length, 0);
+            const frames = bytes + videoFrameBytes + frameBytes <= 24 * 1024 * 1024 && frameCount + video.frames.length <= 24 ? video.frames : [];
+            for (const frame of frames) {
+              const frameBytes = Buffer.from(frame.base64, 'base64'); videoFrameBytes += frameBytes.length;
               const frameId = 'topic-frame-' + hash(sha256 + ':' + frame.time + ':' + hash(frameBytes));
               const image = register({ id: frameId, title: stored.title + ' · ' + videoTime(frame.time) + '.jpg', mimeType: frame.mimeType, bytes: frameBytes, kind: 'image' });
               value.references.push({ id: frameId, assetId: frameId, title: image.title, mimeType: image.mimeType, kind: 'image', required: false });
@@ -159,6 +162,11 @@ export class TopicMaterials {
       (value.issues ||= []).push({ id: issue.id, title: issue.title, number: issue.number, version: issue.version,
         messageCount: Number(selection.body) + selection.comments.length, assetCount: attachments.length });
     }
+    if (bytes + videoFrameBytes > 24 * 1024 * 1024) {
+      const frames = new Set(value.videoMaterials?.flatMap(video => video.frames.map(frame => frame.assetId)));
+      value.references = value.references.filter(reference => !frames.has(reference.assetId!));
+      for (const video of value.videoMaterials || []) video.frames = [];
+    }
     const instruction = value.note ? value.note + '\n\n' : '';
     const rendered=prepareTopicContent(entries,options.content||{layout:'text',identity:'name'},value.note||'',sections);
     value.text=rendered.text;if(options.content)value.content={...rendered.options,aliases:rendered.people.map(({key,label})=>({key,label}))};
@@ -170,7 +178,8 @@ export class TopicMaterials {
       const imageOrder=new Map(value.references.filter(reference=>reference.mimeType?.startsWith('image/')).map((reference,index)=>[reference.assetId,index+1]));
       value.videoMaterials.sort((left,right)=>(referenceOrder.get(left.assetId)??Infinity)-(referenceOrder.get(right.assetId)??Infinity));
       value.text += (value.text.trim()?'\n\n':'')+value.videoMaterials.map((video,index)=>
-        '视频 '+(index+1)+'：'+video.name+'（'+videoTime(video.duration)+'）。已附原视频和 '+video.frames.length+' 张时间点画面：'+video.frames.map(frame=>'附图 '+imageOrder.get(frame.assetId)+' = '+videoTime(frame.time)).join('、')+'。画面不含音频转写。').join('\n');
+        video.frames.length ? '视频 '+(index+1)+'：'+video.name+'（'+videoTime(video.duration)+'）。已附原视频和 '+video.frames.length+' 张时间点画面：'+video.frames.map(frame=>'附图 '+imageOrder.get(frame.assetId)+' = '+videoTime(frame.time)).join('、')+'。画面不含音频转写。'
+          : '视频 '+(index+1)+' '+video.name+'。已附原视频文件，可直接读取。').join('\n');
     }
     value.sessionTitle=(rendered.noteText.split('\n').find(line=>line.trim())||rendered.rows.find(row=>row.text.trim())?.text.split('\n').find(line=>line.trim())||value.issues?.[0]?.title)?.slice(0,80);
     if(!value.text.trim()&&!value.references.length)throw Error('topic_material_empty');

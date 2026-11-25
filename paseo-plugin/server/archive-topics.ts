@@ -1,8 +1,9 @@
 import type { ArchiveAsset, ArchiveChannel, ArchiveDirectory, ArchiveGroup, ArchiveMessage, ArchiveTopic, ArchiveTopicDetail, ArchiveTool, TopicContext, TopicPage, WatchedGroup } from '../shared/extensions/project-communications/topics.ts';
 import { assetIsVideo, groupKey } from '../shared/extensions/project-communications/topics.ts';
 import type { CommunicationsConnection } from './communications-connection.ts';
-import { MAX_REGISTERED_BYTES } from '../shared/artifact-limits.ts';
-import {prepareTopicVideo} from './topic-video.ts';
+import { MAX_REGISTERED_BYTES, artifactByteLimit } from '../shared/artifact-limits.ts';
+import {topicVideoPreview} from './topic-video.ts';
+import {MAX_INLINE_VIDEO_BYTES} from '../shared/topic-video.ts';
 
 const segment = (value: string) => encodeURIComponent(value);
 function topicHeader(topic: ArchiveTopic): ArchiveTopic {
@@ -194,12 +195,13 @@ export class ArchiveTopics {
     if(part==='thumbnail'&&!data.mimeType.startsWith('image/'))throw Error('topic_video_thumbnail_unavailable');
     if(part==='video-preview') {
       if(!assetIsVideo(asset)||!data.mimeType.startsWith('video/'))throw Error('topic_video_not_video');
-      return prepareTopicVideo(data.bytes,this.connection.signal);
+      return topicVideoPreview(data.bytes,this.connection.signal);
     }
+    if(data.mimeType.startsWith('video/')&&data.bytes.length>MAX_INLINE_VIDEO_BYTES)throw Error('topic_video_inline_unavailable');
     return { mimeType: data.mimeType, base64: data.bytes.toString('base64') };
   }
   private originalPath(id: string) {return '/v2/archive/' + this.path('assets/' + segment(id));}
-  original(asset: ArchiveAsset) { return this.connection.bytes(this.originalPath(asset.id), 'GET', undefined, MAX_REGISTERED_BYTES); }
+  original(asset: ArchiveAsset) { return this.connection.bytes(this.originalPath(asset.id), 'GET', undefined, artifactByteLimit(asset.mimeType || '')); }
   async configure(input: {sourceId: string; channelId: string; revision: number; collect?: boolean; allowedTools: string[]; requestId: string}): Promise<ArchiveGroup> {
     const groups = await this.connection.archive<{items: ArchiveGroup[]}>(this.path('agent/groups'));
     const current = groups.items.find(group => groupKey(group) === groupKey(input));

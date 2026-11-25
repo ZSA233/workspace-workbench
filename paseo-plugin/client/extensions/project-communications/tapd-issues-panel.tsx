@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Text, View } from 'react-native';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { openExternalUrl } from '@getpaseo/plugin/client';
-import { Icon, ScrollView } from '../../native-components';
+import { ScrollView } from '../../native-components';
 import { changeIssuePart, issueAttachmentSelectable, removeIssue, selectIssue, type IssueBasket, type IssuePart } from '../../issue-selection';
 import type { TopicsClient } from '../../use-topics';
 import { archivePublicUrl } from '../../../shared/extensions';
 import { type IssueConnection, type IssueDetail, type IssuePage, type IssueSource, type IssueSummary } from '../../../shared/extensions/project-communications/issues';
 import { topicTime } from '../../../shared/extensions/project-communications/topics';
-import { Button, Dialog, Label, Search, ignoreFailure, tint, useColors } from './ui';
-import { Check, TopicAsset, TopicIcon, TopicRowStatus, topicError, topicTypography } from './topic-ui';
+import { Button, Dialog, Label, Search, ignoreFailure, useColors } from './ui';
+import { TopicAsset, TopicAssetGrid, TopicIcon, TopicMaterial, TopicRecord, topicError, topicTypography } from './topic-ui';
 
 type EditIssues = (change: (current: IssueBasket) => IssueBasket) => void;
 const detailKey = (scope: string, issue: IssueSummary) => ['archive-issue', scope, issue.id, issue.version];
@@ -130,42 +130,23 @@ function TapdIssueRow({ client, issue, selected, projectLabel, locked, edit, exp
   };
   const value = selected?.issue || detail.data;
   const disabled = locked || selecting || changed;
-  return <View testID={'tapd-issue-' + issue.id} style={{ borderBottomWidth: 1, borderBottomColor: c.border }}>
-    <View style={{ flexDirection: 'row', gap: 5, alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, backgroundColor: selected ? tint(c.accent, '18') : undefined }}>
-      <Check id={'tapd-select-' + issue.id} checked={Boolean(selected)} disabled={locked || selecting} label={'选择缺陷 ' + issue.title} onPress={() => ignoreFailure(toggle())} />
-      <Pressable testID={'tapd-expand-' + issue.id} accessibilityRole="button" accessibilityLabel={[issue.title, status].filter(Boolean).join(' · ')} accessibilityState={{ expanded }} onPress={onExpand}
-        style={{ flex: 1, minWidth: 0, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-          <Text numberOfLines={2} style={[topicTypography.title, { color: closed ? c.foregroundMuted : c.foreground }]}>{issue.title}</Text>
-          <View style={{ flexDirection: 'row', gap: 6 }}>
-            <Text numberOfLines={1} style={[topicTypography.metadata, { flexShrink: 1, minWidth: 0, color: c.foregroundMuted }]}>
-              {[issue.number, projectLabel].filter(Boolean).join(' · ')}
-            </Text>
-            {issue.updatedAt ? <Text numberOfLines={1} style={[topicTypography.metadata, { color: c.foregroundMuted }]}>
-              更新于 {topicTime(issue.updatedAt)}
-            </Text> : null}
-          </View>
-        </View>
-        {status ? <TopicRowStatus label={status} tone={tone} /> : null}
-        <Icon name={expanded ? 'ChevronUp' : 'ChevronDown'} size={14} color={c.foregroundMuted} />
-      </Pressable>
-    </View>
-    {error || changed ? <View style={{ paddingHorizontal: 16, paddingVertical: 5 }}><Label warning>{changed ? '缺陷有更新，请重新选材' : topicError(error)}</Label></View> : null}
-    {expanded ? <View testID={'tapd-detail-' + issue.id}
-      style={{ paddingLeft: 24, paddingRight: 12, paddingVertical: 7, backgroundColor: tint(c.foregroundMuted, '05') }}>
-      <View style={{ borderLeftWidth: 1, borderColor: c.border, paddingLeft: 10, gap: 5 }}>
-        {detail.error ? <Label warning>{topicError(detail.error.message)}</Label> : value ? <>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-            <Text style={[topicTypography.metadata, { flex: 1, minWidth: 110, color: c.foregroundMuted }]}>
-              {[value.assignee ? '处理人 ' + value.assignee : '', value.priority].filter(Boolean).join(' · ')}
-            </Text>
-            {value.sourceUrl ? <Button variant="link" icon="ArrowUpRight" onPress={() => { void openExternalUrl(value.sourceUrl!).catch(() => setError('TAPD 原记录暂未打开')); }}>在 TAPD 查看</Button> : null}
-          </View>
-          <IssueParts {...{ client, disabled }} issue={value} selection={selected?.selection} onToggle={part => edit(current => changeIssuePart(current, value, part))} />
-        </> : <ActivityIndicator color={c.accent} />}
+  return <TopicRecord id={'tapd-issue-' + issue.id} selectId={'tapd-select-' + issue.id}
+    expandId={'tapd-expand-' + issue.id} detailId={'tapd-detail-' + issue.id}
+    title={issue.title} metadata={[issue.number, projectLabel].filter(Boolean).join(' · ')} updatedAt={issue.updatedAt}
+    {...{ status, tone, closed, expanded }} recordLabel="缺陷" selected={Boolean(selected)} disabled={locked} loading={selecting}
+    onSelect={() => ignoreFailure(toggle())} onExpand={onExpand}
+    onReload={changed ? () => { edit(current => removeIssue(current, issue.id)); ignoreFailure(detail.refetch()); } : undefined}
+    warning={changed ? '缺陷有更新，请重新选材' : error ? topicError(error) : undefined}>
+    {detail.error ? <Label warning>{topicError(detail.error.message)}</Label> : value ? <>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+        <Text style={[topicTypography.metadata, { flex: 1, minWidth: 110, color: c.foregroundMuted }]}>
+          {[value.assignee ? '处理人 ' + value.assignee : '', value.priority].filter(Boolean).join(' · ')}
+        </Text>
+        {value.sourceUrl ? <Button variant="link" icon="ArrowUpRight" onPress={() => { void openExternalUrl(value.sourceUrl!).catch(() => setError('TAPD 原记录暂未打开')); }}>在 TAPD 查看</Button> : null}
       </View>
-    </View> : null}
-  </View>;
+      <IssueParts {...{ client, disabled }} issue={value} selection={selected?.selection} onToggle={part => edit(current => changeIssuePart(current, value, part))} />
+    </> : <ActivityIndicator color={c.accent} />}
+  </TopicRecord>;
 }
 
 function IssueParts({ client, issue, selection, disabled, onToggle }: {
@@ -173,27 +154,25 @@ function IssueParts({ client, issue, selection, disabled, onToggle }: {
 }) {
   const c = useColors();
   return <>
-    {issue.body.trim() ? <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 4 }}>
-      <Check checked={Boolean(selection?.body)} disabled={disabled || issue.bodyState !== 'ready'} label="选择缺陷描述" onPress={() => onToggle({ kind: 'body' })} />
-      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Text style={[topicTypography.detailLabel, { color: c.foregroundMuted }]}>缺陷描述</Text>
-        <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{issue.body}</Text>
-      </View>
-    </View> : issue.bodyState === 'empty' ? <Label muted>暂无缺陷描述</Label> : null}
+    {issue.body.trim() ? <TopicMaterial label="选择缺陷描述" selected={Boolean(selection?.body)}
+      disabled={disabled || issue.bodyState !== 'ready'} onSelect={() => onToggle({ kind: 'body' })}
+      header={<Text style={[topicTypography.detailLabel, { color: c.foregroundMuted }]}>缺陷描述</Text>}>
+      <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{issue.body}</Text>
+    </TopicMaterial> : issue.bodyState === 'empty' ? <Label muted>暂无缺陷描述</Label> : null}
     {statusLabels[issue.bodyState] ? <Label muted>{'描述 · ' + statusLabels[issue.bodyState]}</Label> : null}
-    {issue.comments.map(comment => <View key={comment.id} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 4 }}>
-      <Check checked={Boolean(selection?.comments.some(item => item.id === comment.id))} disabled={disabled || issue.commentsState !== 'ready' || !comment.text.trim()}
-        label={'选择评论 ' + (comment.author || '') + ' ' + comment.text.slice(0, 24)} onPress={() => onToggle({ kind: 'comments', id: comment.id, version: comment.version })} />
-      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Text style={[topicTypography.detailLabel, { color: c.foregroundMuted }]}>{['评论', comment.author, comment.createdAt ? topicTime(comment.createdAt) : ''].filter(Boolean).join(' · ')}</Text>
-        <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{comment.text}</Text>
-      </View>
-    </View>)}
+    {issue.comments.map(comment => <TopicMaterial key={comment.id}
+      label={'选择评论 ' + (comment.author || '') + ' ' + comment.text.slice(0, 24)}
+      selected={Boolean(selection?.comments.some(item => item.id === comment.id))}
+      disabled={disabled || issue.commentsState !== 'ready' || !comment.text.trim()}
+      onSelect={() => onToggle({ kind: 'comments', id: comment.id, version: comment.version })}
+      header={<Text style={[topicTypography.detailLabel, { color: c.foregroundMuted }]}>{['评论', comment.author, comment.createdAt ? topicTime(comment.createdAt) : ''].filter(Boolean).join(' · ')}</Text>}>
+      <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{comment.text}</Text>
+    </TopicMaterial>)}
     {statusLabels[issue.commentsState] ? <Label muted>{'评论 · ' + statusLabels[issue.commentsState]}</Label> : null}
-    {issue.attachments.length ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 9, paddingLeft: 12 }}>
+    {issue.attachments.length ? <TopicAssetGrid>
       {issue.attachments.map(asset => <TopicAsset key={asset.id} {...{ client, issue, asset }} checked={Boolean(selection?.attachments.some(item => item.id === asset.id))}
         disabled={disabled || !issueAttachmentSelectable(issue, asset)} onToggle={() => onToggle({ kind: 'attachments', id: asset.id, version: asset.version })} />)}
-    </View> : null}
+    </TopicAssetGrid> : null}
     {statusLabels[issue.attachmentsState] ? <Label muted>{'附件 · ' + statusLabels[issue.attachmentsState]}</Label> : null}
   </>;
 }

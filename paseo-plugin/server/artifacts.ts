@@ -8,7 +8,7 @@ import { liveAgentIdentity } from "./agent-identity.ts";
 import type { ReviewArtifactReference, ReviewArtifactKind } from "../shared/review-packet.ts";
 import type { ArtifactListResponse, ArtifactRegisterResponse } from "../shared/artifacts.ts";
 
-import { MAX_REGISTERED_BYTES, supportedArtifact } from '../shared/artifact-limits.ts';
+import { MAX_REGISTERED_BYTES, artifactByteLimit, supportedArtifact } from '../shared/artifact-limits.ts';
 export { MAX_REGISTERED_BYTES } from '../shared/artifact-limits.ts';
 export const MAX_TEXT_BYTES = 512 * 1024;
 const ASSET_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
@@ -118,7 +118,7 @@ function inferArtifactKind(mimeType: string): ReviewArtifactKind {
 
 function readStoredMetadata(id: string): StoredWorkbenchArtifact {
   const parsed = JSON.parse(readFileSync(metadataPath(id), "utf8")) as StoredWorkbenchArtifact;
-  if (parsed.version !== 1 || parsed.id !== id || !Number.isSafeInteger(parsed.size) || parsed.size <= 0 || parsed.size > MAX_REGISTERED_BYTES || typeof parsed.mimeType !== "string" || !isAllowedMimeType(parsed.mimeType)) throw new Error("artifact_metadata_invalid");
+  if (parsed.version !== 1 || parsed.id !== id || !Number.isSafeInteger(parsed.size) || parsed.size <= 0 || typeof parsed.mimeType !== "string" || !supportedArtifact(parsed.mimeType, parsed.size)) throw new Error("artifact_metadata_invalid");
   return parsed;
 }
 
@@ -152,7 +152,7 @@ export function storeArtifactBytes(input: { id: string; title: string; purpose?:
   const id = safeAssetId(input.id);
   const mimeType = input.mimeType.toLowerCase();
   if (!isAllowedMimeType(mimeType)) throw new Error("artifact_type_not_allowed");
-  if (!input.bytes.length || input.bytes.length > MAX_REGISTERED_BYTES) throw new Error("artifact_size_exceeded");
+  if (!input.bytes.length || input.bytes.length > artifactByteLimit(mimeType)) throw new Error("artifact_size_exceeded");
   if (existsSync(metadataPath(id)) || existsSync(bytesPath(id))) {
     throw new Error("artifact_id_conflict");
   }

@@ -48,14 +48,27 @@ jobs:
       - name: Verify artifact checksums
         run: cd dist && sha256sum -c SHA256SUMS
       - name: Publish GitHub Release
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/* --clobber
-          else
-            gh release create "$RELEASE_TAG" dist/* --title "$RELEASE_TAG" --verify-tag --generate-notes
-          fi
+          set -euo pipefail
+          publish_release() {
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              gh release upload "$RELEASE_TAG" dist/* --clobber || return
+            else
+              gh release create "$RELEASE_TAG" dist/* --title "$RELEASE_TAG" --verify-tag --generate-notes --draft || return
+            fi
+            gh release edit "$RELEASE_TAG" --draft=false || return
+            [[ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" == false ]]
+          }
+          for attempt in 1 2 3; do
+            if publish_release; then exit 0; fi
+            if [[ "$attempt" != 3 ]]; then sleep "$((attempt * 3))"; fi
+          done
+          echo "::error title=Release publication failed::Could not publish $RELEASE_TAG after three attempts; stable was not promoted"
+          exit 1
       - name: Promote released commit to stable
         if: github.event_name == 'push' || inputs.promote_stable == true
         shell: bash

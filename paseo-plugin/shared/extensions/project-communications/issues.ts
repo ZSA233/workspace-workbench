@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { issueAssets } from './issue-assets.ts';
 
 const archiveId = z.string().regex(/^[0-9a-f]{64}$/);
 const version = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
@@ -13,10 +14,14 @@ export const issueSummarySchema = z.object({
 export const issueAttachmentSchema = materialRef.extend({
   name: z.string().min(1).max(512), state: z.string(), mimeType: z.string().optional(), size: timestamp.optional(),
 });
+export const issueInlineImageSchema = z.object({
+  id: archiveId, name: z.string().min(1).max(512), state: z.string(), offset: timestamp, commentId: archiveId.optional(),
+});
 export const issueDetailSchema = issueSummarySchema.extend({
   sourceUrl: z.string().max(2048).optional(), body: z.string().max(2 * 1024 * 1024), bodyState: z.string(),
   comments: z.array(materialRef.extend({ text: z.string().max(512 * 1024), author: z.string().optional(), createdAt: timestamp.optional() })).max(300),
   commentsState: z.string(), attachments: z.array(issueAttachmentSchema).max(300), attachmentsState: z.string(),
+  inlineImages: z.array(issueInlineImageSchema).max(128).optional(),
 });
 export const issuePageSchema = z.object({ items: z.array(issueSummarySchema).max(100), next: z.string().min(1).max(2048).optional() });
 export const issueSourceSchema = z.object({
@@ -27,6 +32,7 @@ export const issueSourceSchema = z.object({
 export type IssueSummary = z.infer<typeof issueSummarySchema>;
 export type IssueDetail = z.infer<typeof issueDetailSchema>;
 export type IssueAttachment = z.infer<typeof issueAttachmentSchema>;
+export type IssueInlineImage = z.infer<typeof issueInlineImageSchema>;
 export type IssuePage = z.infer<typeof issuePageSchema>;
 export type IssueSource = z.infer<typeof issueSourceSchema>;
 export type IssueConnection = { manageUrl?: string } & (
@@ -57,7 +63,7 @@ export function tapdSourceUrl(raw?: string): string | undefined {
 export function issueMaterialText({ issue, selection }: SelectedIssue): string {
   const source = tapdSourceUrl(issue.sourceUrl);
   const comments = issue.comments.filter(comment => selection.comments.some(ref => ref.id === comment.id && ref.version === comment.version));
-  const attachments = issue.attachments.filter(asset => selection.attachments.some(ref => ref.id === asset.id && ref.version === asset.version));
+  const attachments = issueAssets(issue).filter(asset => selection.attachments.some(ref => ref.id === asset.id && ref.version === asset.version));
   return [
     [`TAPD ${issue.number} · ${issue.title}`, source].filter(Boolean).join('\n'),
     selection.body ? issue.body : '',

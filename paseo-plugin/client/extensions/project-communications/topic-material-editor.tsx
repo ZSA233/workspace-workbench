@@ -7,6 +7,7 @@ import {basketContentEntries,type TopicBasket} from '../../topic-selection';
 import type {ArchiveMessage} from '../../../shared/extensions/project-communications/topics';
 import {messageText} from '../../../shared/extensions/project-communications/topics';
 import {issueMaterialText,type SelectedIssue} from '../../../shared/extensions/project-communications/issues';
+import {issueAssets} from '../../../shared/extensions/project-communications/issue-assets';
 import {prepareTopicContent,topicBuiltInTemplates,topicContentOptions,topicTemplateError,TOPIC_TEXT_LIMIT,
   type TopicContentAlias,type TopicMaterialSettings,type TopicTemplate} from '../../../shared/extensions/project-communications/topic-content';
 import {Badge,Button,Dialog,Field,Label,useColors} from './ui';
@@ -135,7 +136,7 @@ export function TopicMaterialRows({client,basket,issues,settings,locked,onEdit,d
 }
 
 function IssueOriginals({client,item}:{client:TopicsClient;item:SelectedIssue}){
-  const assets=item.issue.attachments.filter(asset=>item.selection.attachments.some(ref=>ref.id===asset.id&&ref.version===asset.version));
+  const assets=issueAssets(item.issue).filter(asset=>item.selection.attachments.some(ref=>ref.id===asset.id&&ref.version===asset.version));
   return assets.length ? <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>
     {assets.map(asset=><TopicAsset key={asset.id} {...{client,asset}} issue={item.issue} checked disabled onToggle={()=>undefined}/>)}
   </View> : null;

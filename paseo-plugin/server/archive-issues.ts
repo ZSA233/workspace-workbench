@@ -1,8 +1,9 @@
-import { artifactByteLimit, supportedArtifact } from '../shared/artifact-limits.ts';
+import { MAX_REGISTERED_BYTES, artifactByteLimit, supportedArtifact } from '../shared/artifact-limits.ts';
+import { issueAssets, issueAssetSelectable, type IssueAsset } from '../shared/extensions/project-communications/issue-assets.ts';
 import { archivePublicUrl, serviceConnectionSchema } from '../shared/extensions.ts';
 import {
   issueDetailSchema, issuePageSchema, issueSourceSchema, tapdSourceUrl,
-  type IssueAttachment, type IssueConnection, type IssueDetail, type IssueSelection, type IssueVersion,
+  type IssueConnection, type IssueDetail, type IssueSelection, type IssueVersion,
 } from '../shared/extensions/project-communications/issues.ts';
 import type { CommunicationsConnection } from './communications-connection.ts';
 import { topicVideoPreview } from './topic-video.ts';
@@ -83,21 +84,27 @@ export class ArchiveIssues {
   }
 
   private attachment(issue: IssueDetail, id: string) {
-    const item = issue.attachments.find(attachment => attachment.id === id);
-    if (issue.attachmentsState !== 'ready' || !item || item.state !== 'ready') throw Error('issue_material_unavailable');
-    if (!supportedArtifact(item.mimeType || '', item.size)) throw Error('artifact_type_not_allowed');
+    const item = issueAssets(issue).find(attachment => attachment.id === id);
+    if (item && item.kind !== 'image' && issue.attachmentsState === 'ready' && item.state === 'ready' && !supportedArtifact(item.mimeType || '', item.size)) throw Error('artifact_type_not_allowed');
+    if (!item || !issueAssetSelectable(issue, item)) throw Error('issue_material_unavailable');
     return item;
   }
 
-  async original(issue: IssueDetail, item: IssueAttachment) {
-    const mimeType = item.mimeType!.toLowerCase();
-    const image = mimeType.startsWith('image/');
+  async original(issue: IssueDetail, item: IssueAsset) {
+    const mimeType = item.mimeType?.toLowerCase();
+    const inline = item.kind === 'image', image = inline || Boolean(mimeType?.startsWith('image/'));
     const path = this.path(`issues/${encodeURIComponent(issue.id)}/versions/${encodeURIComponent(issue.version)}/attachments/${encodeURIComponent(item.id)}`);
     // Preview returns the same raster bytes with a validated type. Other originals use octet-stream.
-    const result = await this.connection.bytes('/v2/archive/' + path + (image ? '?view=preview' : ''), 'GET', undefined, artifactByteLimit(mimeType));
+    const result = await this.connection.bytes('/v2/archive/' + path + (image ? '?view=preview' : ''), 'GET', undefined, inline ? MAX_REGISTERED_BYTES : artifactByteLimit(mimeType!));
+    if (inline) {
+      const type = result.mimeType.toLowerCase();
+      if (!type.startsWith('image/') || !supportedArtifact(type, result.bytes.length)) throw Error('artifact_type_not_allowed');
+      if (!result.bytes.length) throw Error('issue_material_unavailable');
+      return { bytes: result.bytes, mimeType: type };
+    }
     if (!result.bytes.length || (item.size !== undefined && result.bytes.length !== item.size) ||
       (result.mimeType !== mimeType && (image || result.mimeType !== 'application/octet-stream'))) throw Error('issue_material_unavailable');
-    return { bytes: result.bytes, mimeType };
+    return { bytes: result.bytes, mimeType: mimeType! };
   }
 
   async asset(issueId: string, version: string, attachmentId: string, part?: 'original' | 'video-preview') {

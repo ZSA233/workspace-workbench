@@ -87,7 +87,7 @@ export async function startArchiveFixture() {
         if (project && !validProject(project)) return send('issue_project_not_authorized', 403);
         const items = state.issues.filter(issue => issue.inTodo && validProject(issue.projectId) && (!project || project === issue.projectId) &&
           (issue.title.includes(query) || issue.number.includes(query)));
-        return send({ items: items.slice(cursor, cursor + 1).map(({ body, bodyState, comments, commentsState, attachments, attachmentsState, ...summary }) => summary),
+        return send({ items: items.slice(cursor, cursor + 1).map(({ body, bodyState, comments, commentsState, attachments, attachmentsState, inlineImages, ...summary }) => summary),
           ...(items.length > cursor + 1 ? { next: String(cursor + 1) } : {}) });
       }
       const match = /^issues\/([^/]+)(?:\/versions\/([^/]+)\/attachments\/([^/]+))?$/.exec(route);
@@ -97,12 +97,14 @@ export async function startArchiveFixture() {
       const version = match[2] || url.searchParams.get('version');
       if (version && version !== issue.version) return send('issue_record_missing', 404);
       if (!match[3]) return send({ ...issue, versions: [{ version: issue.version, observedAt: issue.updatedAt }], privatePayload: 'not-for-workbench' });
-      const asset = issue.attachments.find(item => item.id === match[3] && item.state === 'ready');
+      const asset = [...issue.attachments, ...(issue.inlineImages || [])].find(item => item.id === match[3] && item.state === 'ready');
       if (!asset) return send('issue_record_missing', 404);
-      const raster = asset.mimeType === 'image/png', preview = url.searchParams.get('view') === 'preview';
+      const data = state.assetBytes.get(asset.id);
+      const mimeType = data?.mimeType || ('mimeType' in asset ? asset.mimeType : 'image/png');
+      const raster = Boolean(mimeType?.startsWith('image/')), preview = url.searchParams.get('view') === 'preview';
       if (preview && !raster) return send('issue_record_missing', 404);
-      res.writeHead(200, { 'Content-Type': preview ? 'image/png' : 'application/octet-stream' });
-      return res.end(state.assetBytes.get(asset.id)?.bytes || (raster ? image : pdf));
+      res.writeHead(200, { 'Content-Type': preview ? mimeType! : 'application/octet-stream' });
+      return res.end(data?.bytes || (raster ? image : pdf));
     }
     if (path === 'snapshot') return send({ libraries: state.libraries, channels: state.channels, settings: { secretFixture: 'must-not-reach-ui' }, runs: [{ raw: 'not-ui-data' }] });
     if (path === 'agent/tools') return send({ builtins: [{ id: 'messages.read', builtin: true, enabled: true, readOnly: true }], items: [

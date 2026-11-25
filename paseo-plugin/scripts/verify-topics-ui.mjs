@@ -777,6 +777,77 @@ try {
   await page.getByTestId('topics-send').click();
   await page.getByTestId('topic-chat-video').filter({ visible: true }).last().getByText('屏幕录制.mov', { exact: true }).waitFor();
   check('DingTalk and TAPD share video fallback cards and one actual native send delivers the larger MOV original when decoding is unavailable');
+
+  const inlineBodyBefore = '🚀 正文截图前。', inlineBodyAfter = '正文截图后，继续检查文件名。';
+  const inlineCommentBefore = '评论截图前。', inlineCommentAfter = '评论截图后，再核对移动端。';
+  const inlineBodyId = createHash('sha256').update('tapd-inline-body').digest('hex');
+  const inlineCommentId = createHash('sha256').update('tapd-inline-comment').digest('hex');
+  issue.version = 'inline-revision-1'; issue.attachments = []; issue.attachmentsState = 'empty';
+  issue.body = inlineBodyBefore + inlineBodyAfter;
+  issue.comments[0].version = 'inline-comment-1';
+  issue.comments[0].text = inlineCommentBefore + inlineCommentAfter;
+  issue.inlineImages = [
+    { id: inlineBodyId, name: '正文截图.png', state: 'ready', offset: Array.from(inlineBodyBefore).length },
+    { id: inlineCommentId, name: '评论截图.png', state: 'ready', offset: Array.from(inlineCommentBefore).length, commentId: issue.comments[0].id },
+  ];
+  await page.setViewportSize({ width: 1448, height: 1120 });
+  await openIsolatedWorkbench(page, ui.url, 'a');
+  await page.getByText('话题', { exact: true }).filter({ visible: true }).first().click();
+  await page.getByTestId('topic-row-topic-1').waitFor();
+  await tapdTab.click();
+  await page.getByTestId('tapd-expand-' + issue.id).click();
+  const inlineDetail = page.getByTestId('tapd-detail-' + issue.id);
+  const inlineBody = page.getByTestId('tapd-body-content-' + issue.id);
+  const inlineComment = page.getByTestId('tapd-comment-content-' + issue.comments[0].id);
+  await inlineBody.getByRole('img', { name: '正文截图.png', exact: true }).waitFor();
+  await inlineComment.getByRole('img', { name: '评论截图.png', exact: true }).waitFor();
+  const beforeImage = await inlineBody.getByText(inlineBodyBefore, { exact: true }).boundingBox();
+  const placedImage = await inlineBody.getByRole('img', { name: '正文截图.png', exact: true }).boundingBox();
+  const afterImage = await inlineBody.getByText(inlineBodyAfter, { exact: true }).boundingBox();
+  assert.ok(beforeImage.y < placedImage.y && placedImage.y < afterImage.y);
+  await inlineDetail.getByRole('checkbox', { name: '选择缺陷描述', exact: true }).click();
+  await inlineBody.getByRole('checkbox', { name: '选择 正文截图.png', exact: true, checked: true }).waitFor();
+  await inlineComment.getByRole('checkbox', { name: '选择 评论截图.png', exact: true, checked: false }).waitFor();
+  await inlineDetail.getByRole('checkbox', { name: /^选择评论 / }).click();
+  await inlineComment.getByRole('checkbox', { name: '选择 评论截图.png', exact: true, checked: true }).waitFor();
+  await inlineBody.getByRole('checkbox', { name: '选择 正文截图.png', exact: true }).click();
+  assert.equal(await inlineDetail.getByRole('checkbox', { name: '选择缺陷描述', exact: true }).getAttribute('aria-checked'), 'true');
+  await inlineBody.getByRole('button', { name: '查看 正文截图.png', exact: true }).click();
+  const inlineImageDialog = page.getByRole('dialog', { name: '正文截图.png', exact: true });
+  await inlineImageDialog.getByRole('img', { name: '正文截图.png', exact: true }).waitFor();
+  await inlineImageDialog.getByRole('button', { name: '选择附件', exact: true }).click();
+  await shot('tapd-inline-images-desktop');
+  await page.setViewportSize({ width: 390, height: 900 });
+  await shot('tapd-inline-images-phone');
+  await page.getByTestId('topics-send').click();
+  const inlinePreview = page.getByTestId('topics-send-dialog');
+  await inlinePreview.getByRole('img', { name: '正文截图.png', exact: true }).waitFor();
+  await inlinePreview.getByRole('img', { name: '评论截图.png', exact: true }).waitFor();
+  await inlinePreview.getByRole('button', { name: '已有会话', exact: true }).click();
+  await page.getByTestId('topics-target').click();
+  await page.getByRole('dialog', { name: '目标会话', exact: true }).getByRole('button', { name: '档案材料验收会话', exact: true }).click();
+  const inlineNote = '核对 TAPD 正文和评论中的图片。';
+  await page.getByTestId('topics-send-note').fill(inlineNote);
+  await page.getByTestId('topics-confirm').click();
+  await page.getByTestId('topics-send').getByText('打开会话', { exact: true }).waitFor();
+  let inlineReceived = false;
+  for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
+    for (const file of readdirSync(ui.topicsFixtureRoot).filter(name => name.endsWith('.json'))) {
+      const record = JSON.parse(readFileSync(join(ui.topicsFixtureRoot, file), 'utf8'));
+      for (const input of record.inputs || []) {
+        if (!input.some(part => part.type === 'text' && part.text.includes(inlineNote) && part.text.includes(issue.body) && part.text.includes(issue.comments[0].text))) continue;
+        const images = input.flatMap(part => part.type === 'localImage' && part.path ? [readFileSync(part.path)]
+          : part.type === 'image' && part.url?.startsWith('data:') ? [Buffer.from(part.url.split(',')[1], 'base64')] : []);
+        if (images.length === 1 && images[0].equals(fixture.image)) inlineReceived = true;
+      }
+    }
+    if (inlineReceived) break;
+    await page.waitForTimeout(100);
+  }
+  assert.equal(inlineReceived, true, 'selected inline originals must reach the native session with their body and comment text, deduplicated by bytes');
+  await page.getByTestId('topics-send').click();
+  await page.getByTestId('topic-chat-images').filter({ visible: true }).last().getByRole('img').first().waitFor();
+  check('TAPD body and comment images retain Unicode placement on desktop and phone, share original-image selection and previews, and reach an actual native session with exact bytes');
   assert.equal(fixture.state.requests.some(request => request.url.startsWith('/v1/projects')), false);
   assert.equal(report.pageErrors.length, 0, JSON.stringify(report.pageErrors));
   report.fidelity.push('same flat topic-list + bottom-basket architecture as refined C',

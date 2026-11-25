@@ -183,6 +183,62 @@ test('TAPD opens the configured HTTPS gateway and a browser-only edit preserves 
   } finally { await s.close(); }
 });
 
+test('TAPD inline body and comment images remain versioned originals through preview and native delivery', async () => {
+  const s = await setup();
+  try {
+    const issue = s.state.issues[0], comment = issue.comments[0], host = nativeSession(s.root);
+    const bodyId = createHash('sha256').update('inline-body').digest('hex');
+    const commentId = createHash('sha256').update('inline-comment').digest('hex');
+    issue.attachments = []; issue.attachmentsState = 'empty';
+    issue.inlineImages = [
+      { id: bodyId, name: '正文截图.png', state: 'ready', offset: 0 },
+      { id: commentId, name: '评论截图.png', state: 'ready', offset: 0, commentId: comment.id },
+    ];
+    const read = await s.call({ action: 'issues.read', issueId: issue.id, version: issue.version }) as IssueDetail;
+    assert.deepEqual(read.inlineImages, issue.inlineImages);
+    const asset = () => s.call({ action: 'issues.asset', issueId: issue.id, version: issue.version, attachmentId: bodyId }) as Promise<{ mimeType: string; base64: string }>;
+    assert.equal((await asset()).mimeType, 'image/png');
+    assert.deepEqual(Buffer.from((await asset()).base64, 'base64'), s.image);
+    let basket = changeIssuePart({}, read, { kind: 'body' });
+    basket = changeIssuePart(basket, read, { kind: 'comments', id: comment.id, version: comment.version });
+    const prepare = () => s.host.topics(s.config, 'project-communications', 2, {
+      action: 'preview', targetId: 'session:' + host.agent.id, selections: [], issueSelections: [basket[issue.id].selection],
+    }, host.context) as Promise<TopicMaterialPreview>;
+    const preview = await prepare();
+    assert.equal(preview.assets.length, 2, 'both selected source images remain visible in confirmation');
+    assert.equal(new Set(preview.assets.map(asset => asset.sha256)).size, 1);
+    assert.equal(preview.assets[0].mimeType, 'image/png');
+    assert.ok(preview.text.includes(issue.body) && preview.text.includes(comment.text));
+    assert.ok(preview.text.includes('正文截图.png') && preview.text.includes('评论截图.png'));
+    const send = (id: string) => s.host.topics(s.config, 'project-communications', 2, { action: 'send', id }, host.context) as Promise<TopicMaterialPreview>;
+    assert.equal((await send(preview.id)).state, 'accepted');
+    assert.equal((await send(preview.id)).state, 'accepted');
+    assert.equal(host.state.sent.length, 1);
+    assert.equal(host.state.sent[0].options.images.length, 1, 'identical inline originals are delivered once');
+    assert.deepEqual(Buffer.from(host.state.sent[0].options.images[0].data, 'base64'), s.image);
+    assert.equal(host.state.sent[0].options.attachments?.length || 0, 0);
+    const stale = await prepare(); issue.version = 'revision-2';
+    await assert.rejects(send(stale.id), /issue_selection_changed/);
+    assert.equal(host.state.sent.length, 1);
+    issue.body = ''; issue.bodyState = 'empty'; comment.text = ''; comment.version = 'empty-comment';
+    const imageOnly = await s.call({ action: 'issues.read', issueId: issue.id, version: issue.version }) as IssueDetail;
+    basket = selectIssue({}, imageOnly);
+    assert.equal(basket[issue.id].selection.body, false);
+    assert.deepEqual(basket[issue.id].selection.comments, []);
+    const imageOnlyPreview = await prepare();
+    assert.equal((await send(imageOnlyPreview.id)).state, 'accepted');
+    assert.equal(host.state.sent.length, 2);
+    assert.deepEqual(Buffer.from(host.state.sent[1].options.images[0].data, 'base64'), s.image);
+    assert.ok(s.state.requests.filter(request => request.url.includes('/attachments/' + bodyId)).every(request => request.url.endsWith('?view=preview')));
+    s.state.assetBytes.set(bodyId, { bytes: Buffer.from('<svg/>'), mimeType: 'image/svg+xml' });
+    await assert.rejects(asset(), /artifact_type_not_allowed/);
+    s.state.assetBytes.set(bodyId, { bytes: Buffer.alloc(9 * 1024 * 1024), mimeType: 'image/png' });
+    await assert.rejects(asset(), /service_response_too_large/);
+    issue.commentsState = 'unavailable';
+    await assert.rejects(s.call({ action: 'issues.asset', issueId: issue.id, version: issue.version, attachmentId: commentId }), /issue_material_unavailable/);
+  } finally { await s.close(); }
+});
+
 test('mixed TAPD and DingTalk material freezes only selected parts and rechecks access before dispatch', async () => {
   const s = await setup();
   try {

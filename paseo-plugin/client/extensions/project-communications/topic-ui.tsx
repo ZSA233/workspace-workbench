@@ -80,8 +80,8 @@ export function TopicRecord({ id, selectId, expandId, detailId, title, metadata,
   </View>;
 }
 
-export function TopicAssetGrid({ children }: { children: ReactNode }) {
-  return <View style={{ paddingLeft: 37, flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>{children}</View>;
+export function TopicAssetGrid({ children, inset = true }: { children: ReactNode; inset?: boolean }) {
+  return <View style={{ paddingLeft: inset ? 37 : 0, flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>{children}</View>;
 }
 
 export function TopicMaterial({ id, selectId, label, selected, disabled, onSelect, header, actions, assets, children }: {
@@ -149,7 +149,9 @@ export function TopicAsset({ client, topicId, message, issue, asset, contextOf, 
   client: TopicsClient; asset: ArchiveAsset; checked: boolean; onToggle: () => void; disabled?: boolean; small?: boolean; removable?: boolean; tileWidth?: number;
 }) {
   const c = useColors(), [open, setOpen] = useState(false), image = assetIsImage(asset), video = assetIsVideo(asset);
-  const canSelect = supportedArtifact(asset.mimeType || '', asset.size), ready = client.active && asset.state === 'ready' && canSelect;
+  // Inline archive images declare their kind; the versioned preview validates the returned raster type.
+  const canSelect = supportedArtifact(asset.mimeType || '', asset.size) || image && !asset.mimeType;
+  const ready = client.active && asset.state === 'ready' && canSelect;
   const source = issue ? [issue.id, issue.version] : [topicId, message.id, message.version];
   const read = <T,>(part: 'original' | 'video-preview') => issue
     ? client.call<T>({ action: 'issues.asset', issueId: issue.id, version: issue.version, attachmentId: asset.id, part })

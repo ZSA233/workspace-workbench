@@ -62,6 +62,8 @@ Communication-Service 0.2.132 已提供缺陷接口。Workbench 后端沿用项�
 
 列表用 `status` 显示 TAPD 原状态，用 `updatedAt` 标出更新时间。`inTodo` 表示记录仍在该账号的待办范围，改派也可能让记录移出待办。线上待办可以包含「已解决」。若后续需要跨项目准确识别已结束记录，可由 Communication-Service 根据项目工作流提供可选的 `isTerminal` 字段，和现有 `status` 一起返回。
 
+详情的可选 `inlineImages` 保存正文及评论的图片位置。每项含 `id`、`name`、`state`、`offset` 及可选 `commentId`，`offset` 为图片之前的 Unicode 字符数。内嵌图片沿用当前缺陷版本及同一个原件接口，以 `view=preview` 读取并验证栅格图像类型。Workbench 保留该字段并在原位置渲染，共用原件选择、预览、冻结及发送链路。旧服务未返回该字段时继续显示普通正文和附件。
+
 登录授权、重新授权、解除绑定及手动开始同步走档案服务的同源浏览器流程。通过 Access 等网关发布档案服务时，在 Workbench 连接设置的「档案服务公网地址」填写带路径前缀的 HTTPS 入口。来源设置通过该入口打开当前资料库的 TAPD 页面，刷新按钮更新服务内已有的结果。
 
 ## 共用发送流程

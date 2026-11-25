@@ -3,13 +3,14 @@ import { ActivityIndicator, Text, View } from 'react-native';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { openExternalUrl } from '@getpaseo/plugin/client';
 import { ScrollView } from '../../native-components';
-import { changeIssuePart, issueAttachmentSelectable, removeIssue, selectIssue, type IssueBasket, type IssuePart } from '../../issue-selection';
+import { changeIssuePart, issueAttachmentSelectable, issuePartSelectable, issuePartSelected, removeIssue, selectIssue, type IssueBasket, type IssuePart } from '../../issue-selection';
 import type { TopicsClient } from '../../use-topics';
 import { archivePublicUrl } from '../../../shared/extensions';
 import { type IssueConnection, type IssueDetail, type IssuePage, type IssueSource, type IssueSummary } from '../../../shared/extensions/project-communications/issues';
 import { topicTime } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, Search, ignoreFailure, useColors } from './ui';
 import { TopicAsset, TopicAssetGrid, TopicIcon, TopicMaterial, TopicRecord, topicError, topicTypography } from './topic-ui';
+import { IssueText } from './issue-text';
 
 type EditIssues = (change: (current: IssueBasket) => IssueBasket) => void;
 const detailKey = (scope: string, issue: IssueSummary) => ['archive-issue', scope, issue.id, issue.version];
@@ -148,20 +149,23 @@ function IssueParts({ client, issue, selection, disabled, onToggle }: {
   client: TopicsClient; issue: IssueDetail; selection?: IssueBasket[string]['selection']; disabled: boolean; onToggle(part: IssuePart): void;
 }) {
   const c = useColors();
+  const bodyImages = issue.inlineImages?.filter(image => !image.commentId) || [];
+  const onAsset = (asset: { id: string; version: string }) => onToggle({ kind: 'attachments', id: asset.id, version: asset.version });
   return <>
-    {issue.body.trim() ? <TopicMaterial label="选择缺陷描述" selected={Boolean(selection?.body)}
-      disabled={disabled || issue.bodyState !== 'ready'} onSelect={() => onToggle({ kind: 'body' })}
+    {issue.body.trim() || bodyImages.length ? <TopicMaterial label="选择缺陷描述" selected={issuePartSelected(issue, selection, { kind: 'body' })}
+      disabled={disabled || !issuePartSelectable(issue, { kind: 'body' })} onSelect={() => onToggle({ kind: 'body' })}
       header={<Text style={[topicTypography.detailLabel, { color: c.foregroundMuted }]}>缺陷描述</Text>}>
-      <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{issue.body}</Text>
+      <IssueText id={'tapd-body-content-' + issue.id} {...{ client, issue, selection, disabled, onAsset }} text={issue.body} images={bodyImages} />
     </TopicMaterial> : issue.bodyState === 'empty' ? <Label muted>暂无缺陷描述</Label> : null}
     {statusLabels[issue.bodyState] ? <Label muted>{'描述 · ' + statusLabels[issue.bodyState]}</Label> : null}
     {issue.comments.map(comment => <TopicMaterial key={comment.id}
       label={'选择评论 ' + (comment.author || '') + ' ' + comment.text.slice(0, 24)}
-      selected={Boolean(selection?.comments.some(item => item.id === comment.id))}
-      disabled={disabled || issue.commentsState !== 'ready' || !comment.text.trim()}
+      selected={issuePartSelected(issue, selection, { kind: 'comments', id: comment.id, version: comment.version })}
+      disabled={disabled || !issuePartSelectable(issue, { kind: 'comments', id: comment.id, version: comment.version })}
       onSelect={() => onToggle({ kind: 'comments', id: comment.id, version: comment.version })}
       header={<Text style={[topicTypography.detailLabel, { color: c.foregroundMuted }]}>{['评论', comment.author, comment.createdAt ? topicTime(comment.createdAt) : ''].filter(Boolean).join(' · ')}</Text>}>
-      <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{comment.text}</Text>
+      <IssueText id={'tapd-comment-content-' + comment.id} {...{ client, issue, selection, disabled, onAsset }} text={comment.text}
+        images={issue.inlineImages?.filter(image => image.commentId === comment.id) || []} />
     </TopicMaterial>)}
     {statusLabels[issue.commentsState] ? <Label muted>{'评论 · ' + statusLabels[issue.commentsState]}</Label> : null}
     {issue.attachments.length ? <TopicAssetGrid>

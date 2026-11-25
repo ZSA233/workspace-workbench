@@ -14,6 +14,7 @@ export function TopicSettings({ client, open, onClose, initialPage }: {
   const c = useColors();
   const [page, setPage] = useState<'connection' | 'groups'>(initialPage === '连接与来源' ? 'groups' : 'connection');
   const [endpoint, setEndpoint] = useState(''), [libraryId, setLibraryId] = useState('default'), [token, setToken] = useState<string>();
+  const [publicUrl, setPublicUrl] = useState('');
   const [watched, setWatched] = useState<WatchedGroup[]>([]), [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [connected, setConnected] = useState(false);
   const [tools, setTools] = useState<ToolDraft>(), [toolQuery, setToolQuery] = useState('');
@@ -21,6 +22,7 @@ export function TopicSettings({ client, open, onClose, initialPage }: {
   useEffect(() => {
     if (!client.connection) return;
     setEndpoint(client.connection.connection.endpoint);
+    setPublicUrl(client.connection.connection.publicUrl || '');
     setLibraryId(client.connection.connection.libraryId || 'default');
     setWatched(client.connection.connection.watchedGroups || []);
     setToken(undefined);
@@ -37,6 +39,7 @@ export function TopicSettings({ client, open, onClose, initialPage }: {
     if (!client.connection) return;
     await client.updateConnection({
       ...client.connection.connection, endpoint: connection ? endpoint : client.connection.connection.endpoint,
+      publicUrl: connection ? publicUrl.trim() || undefined : client.connection.connection.publicUrl,
       libraryId: connection ? libraryId : client.connection.connection.libraryId || 'default',
       watchedGroups: connection && libraryId !== (client.connection.connection.libraryId || 'default') ? [] : watched,
     }, client.connection.revision, connection ? token : undefined);
@@ -52,7 +55,8 @@ export function TopicSettings({ client, open, onClose, initialPage }: {
   const draftIds = new Set(tools?.ids);
   const availableTools = (client.directory?.tools || []).filter(tool => !toolQuery || (tool.name || tool.id).toLowerCase().includes(toolQuery.toLowerCase()));
   const dirty = JSON.stringify(watched) !== JSON.stringify(client.connection?.connection.watchedGroups || []);
-  const connectionDirty = endpoint !== client.connection?.connection.endpoint || libraryId !== (client.connection?.connection.libraryId || 'default') || token !== undefined;
+  const connectionDirty = endpoint !== client.connection?.connection.endpoint || publicUrl !== (client.connection?.connection.publicUrl || '') ||
+    libraryId !== (client.connection?.connection.libraryId || 'default') || token !== undefined;
   return <Dialog open={open} id="communications-settings-dialog" title="话题设置" onClose={onClose} width={900} height={690}
     footer={<>
       <View style={{ flex: 1 }}><Button icon={client.enabled ? 'Pause' : 'Power'} disabled={busy || client.changing || !client.connection?.hasToken}
@@ -70,6 +74,7 @@ export function TopicSettings({ client, open, onClose, initialPage }: {
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 18, gap: 18 }}>
       {page === 'connection' ? <>
         <Field id="communications-service-endpoint" label="服务地址" value={endpoint} onChange={setEndpoint} />
+        <Field id="communications-public-url" label="档案服务公网地址" value={publicUrl} placeholder="https://archive.example.com/communications/" onChange={setPublicUrl} />
         <Field id="communications-service-token" label="API Token" value={token || ''} secret placeholder={client.connection?.hasToken ? '已保存' : '服务端 Token'} onChange={setToken} />
         <Field id="topics-library" label="资料库" value={libraryId} onChange={value => { setLibraryId(value); setWatched([]); }} />
         {client.directory?.libraries.length ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>

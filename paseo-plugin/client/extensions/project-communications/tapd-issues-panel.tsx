@@ -5,6 +5,7 @@ import { openExternalUrl } from '@getpaseo/plugin/client';
 import { Icon, ScrollView } from '../../native-components';
 import { changeIssuePart, issueAttachmentSelectable, removeIssue, selectIssue, type IssueBasket, type IssuePart } from '../../issue-selection';
 import type { TopicsClient } from '../../use-topics';
+import { archivePublicUrl } from '../../../shared/extensions';
 import { type IssueConnection, type IssueDetail, type IssuePage, type IssueSource, type IssueSummary } from '../../../shared/extensions/project-communications/issues';
 import { topicTime } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, Search, ignoreFailure, tint, useColors } from './ui';
@@ -41,8 +42,10 @@ export function TapdIssuesPanel({ client, basket, edit, locked, onSettings }: {
     refetchInterval: connected && ready && !tooLong ? 20000 : false,
   });
   const items = [...new Map((list.data?.pages.flatMap(page => page.items) || []).map(issue => [issue.id, issue])).values()];
+  const manageUrl = archivePublicUrl(info?.manageUrl)?.href;
   const manage = () => {
-    if (info?.manageUrl) void openExternalUrl(info.manageUrl).catch(() => setError('档案服务暂未打开，请重试'));
+    if (manageUrl) void openExternalUrl(manageUrl).catch(() => setError('档案服务暂未打开，请重试'));
+    else onSettings();
   };
   const refresh = () => {
     setError('');
@@ -62,7 +65,7 @@ export function TapdIssuesPanel({ client, basket, edit, locked, onSettings }: {
       <View style={{ flex: 1, minWidth: 112 }}><Search value={query} onChange={setQuery} placeholder="搜索缺陷标题或编号" /></View>
       {projects.length > 1 || project ? <Button label={currentProject?.label || '全部授权项目'} icon="ListFilter" onPress={() => setPicker(true)} /> : null}
       <TopicIcon id="tapd-refresh" icon="RefreshCw" label="刷新缺陷列表" busy={status.isFetching || list.isFetching} onPress={refresh} />
-      <TopicIcon id="tapd-settings" icon="Settings" label="TAPD 来源设置" onPress={info ? manage : onSettings} />
+      <TopicIcon id="tapd-settings" icon="Settings" label="TAPD 来源设置" onPress={manage} />
     </View>
     {ready ? <View style={{ paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderColor: c.border }}>
       <View style={{ flex: 1 }}><Label muted lines={1}>{['分配给我', currentProject?.label || source?.account].filter(Boolean).join(' · ')}</Label></View>
@@ -72,7 +75,7 @@ export function TapdIssuesPanel({ client, basket, edit, locked, onSettings }: {
       {status.isLoading || ready && list.isLoading ? <ActivityIndicator style={{ padding: 20 }} color={c.accent} />
         : status.error ? <View style={{ alignItems: 'center', padding: 24, gap: 8 }}><Label warning>{topicError(status.error.message)}</Label><Button onPress={refresh}>重试</Button></View>
         : !ready ? <View style={{ alignItems: 'center', padding: 24, gap: 8 }}><Label muted>{message}</Label>
-          <Button icon={info ? 'ArrowUpRight' : 'Link'} onPress={info ? manage : onSettings}>{info ? '打开档案服务' : '连接档案服务'}</Button>
+          <Button icon={manageUrl ? 'ArrowUpRight' : 'Link'} onPress={manage}>{manageUrl ? '打开档案服务' : info ? '配置档案服务公网地址' : '连接档案服务'}</Button>
         </View> : tooLong || list.error ? <View style={{ padding: 14 }}><Label warning>{tooLong ? '搜索文字过长' : topicError(list.error!.message)}</Label></View>
         : !items.length ? <View style={{ alignItems: 'center', padding: 26 }}><Label muted>{search ? '没有匹配的缺陷' : '暂无分配给你的缺陷'}</Label></View>
         : items.map(issue => <TapdIssueRow key={issue.id} {...{ client, issue, edit, locked }} selected={basket[issue.id]} projectLabel={projects.find(item => item.id === issue.projectId)?.label || issue.projectId}

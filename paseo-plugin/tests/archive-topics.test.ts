@@ -133,14 +133,14 @@ test('TAPD topics read only the configured library, todo view and versioned orig
     s.state.issueMachineRead = false;
     const unavailable = await s.call({ action: 'issues.status' }) as IssueConnection;
     assert.equal(unavailable.state, 'unavailable');
-    assert.equal(new URL(unavailable.manageUrl).origin, s.url);
+    assert.equal(unavailable.manageUrl, undefined);
     assert.equal((await s.archive.list({ query: '', limit: 30 })).items.length, 2);
 
     s.state.issueMachineRead = true;
     const state = await s.call({ action: 'issues.status' }) as IssueConnection;
     assert.equal(state.state, 'ready');
     assert.equal(JSON.stringify(state).includes('not-for-workbench'), false);
-    assert.equal(new URL(state.manageUrl).searchParams.get('source'), 'tapd:issues');
+    assert.equal(state.manageUrl, undefined);
     const page = await s.call({ action: 'issues.list', query: '' }) as IssuePage;
     const next = await s.call({ action: 'issues.list', query: '', cursor: page.next }) as IssuePage;
     assert.notEqual(page.items[0].id, next.items[0].id);
@@ -156,6 +156,29 @@ test('TAPD topics read only the configured library, todo view and versioned orig
     s.state.issues[0].inTodo = false;
     await assert.rejects(s.call({ action: 'issues.read', issueId: issue.id, version: issue.version }), /issue_outside_todo/);
     assert.ok(s.state.requests.filter(item => item.url.includes('/sources/tapd')).every(item => item.method === 'GET'));
+  } finally { await s.close(); }
+});
+
+test('TAPD opens the configured HTTPS gateway and a browser-only edit preserves delivery receipts', async () => {
+  const s = await setup();
+  try {
+    const extension = 'project-communications';
+    const previous = await s.host.connection(s.config, extension, 'read');
+    const host = nativeSession(s.root), topic = await s.archive.read('topic-1');
+    const prepared = await s.host.topics(s.config, extension, previous.revision, {
+      action: 'preview', targetId: 'session:' + host.agent.id, selections: [selection(topic)],
+    }, host.context) as TopicMaterialPreview;
+    const configure = (publicUrl: string) => s.host.connection(s.config, extension, 'configure', {
+      revision: previous.revision, connection: { ...previous.connection, publicUrl },
+    });
+    await assert.rejects(configure('https://127.0.0.1/communications'), /HTTPS 公网地址/);
+    await assert.rejects(configure('https://access.example.test/communications/?token=example'), /HTTPS 公网地址/);
+    const updated = await configure('https://access.example.test/communications');
+    assert.equal(updated.connection.endpoint, previous.connection.endpoint);
+    assert.equal(updated.hasToken, true);
+    const issue = await s.call({ action: 'issues.status' }, updated.revision) as IssueConnection;
+    assert.equal(issue.manageUrl, 'https://access.example.test/communications/?view=plugin&provider=tapd&page=issues&library=default&source=tapd%3Aissues');
+    assert.equal((await s.host.topics(s.config, extension, updated.revision, { action: 'receipt', id: prepared.id }, host.context) as TopicMaterialPreview).id, prepared.id);
   } finally { await s.close(); }
 });
 

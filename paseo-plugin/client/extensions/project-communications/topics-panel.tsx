@@ -17,7 +17,7 @@ import {defaultTopicMaterialSettings,topicContentPeople,type TopicContentAlias} 
 import {useTopicMaterialDraft} from './topic-material-editor';
 
 type TopicsPanelProps = {
-  client: TopicsClient; width: number; onSettings(): void; workspaceNames: Record<string, string>; currentWorkspaceId?: string;
+  client: TopicsClient; width: number; onSettings(page?: '连接'): void; workspaceNames: Record<string, string>; currentWorkspaceId?: string;
   currentAgentId?: string; onOpenSession?(agentId: string): void | Promise<void>;
 };
 const targetKey = (target: TopicTarget) => target.id || 'workspace:' + target.workspaceId;
@@ -184,7 +184,7 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
   };
   return <View testID="workbench-topics-panel" style={{ flex: 1, minHeight: 0, backgroundColor: c.surface1 }}>
     <SourceTabs {...{source,chatLabel}} onChange={value => { setSource(value); client.clearError(); }} />
-    {source === 'tapd' ? <TapdIssuesPanel {...{client,locked,onSettings}} basket={issues} edit={editIssues} /> : <>
+    {source === 'tapd' ? <TapdIssuesPanel {...{client,locked}} onSettings={() => onSettings('连接')} basket={issues} edit={editIssues} /> : <>
     <View style={{ padding: 10, gap: 6, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: c.border }}>
       <View style={{ flex: 1, minWidth: 80 }}><Search value={query} onChange={setQuery} placeholder="搜索话题" /></View>
       <Button icon="Users" label={!watched.length ? '选择关注群' : group ? groupName(group) : '全部关注群'}

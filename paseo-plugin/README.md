@@ -489,5 +489,7 @@ Workbench 的简单设置只选择资料库与群，
 档案服务需支持缺陷档案接口（Communication-Service 0.2.132），在所选资料库中添加 TAPD
 来源并完成授权。同一操作者管理的服务部署可启用 `AI_ASSISTANT_ISSUE_MACHINE_READ=1`，
 供 Workbench 使用现有服务 Token 读取。登录、重新授权及主动开始同步在档案服务完成。
+若服务地址是本机连接，在「话题设置 → 连接」填写「档案服务公网地址」，使用 Access 等
+网关发布的 HTTPS 地址并保留路径前缀。「打开档案服务」通过该地址进入当前资料库的 TAPD 页面。
 Workbench 的刷新只重读服务内的列表和版本，并在投递前复核所选缺陷仍在待办且版本一致。
 接入细节见 [两端接口说明](../docs/design/tapd-topics-handoff.md)。

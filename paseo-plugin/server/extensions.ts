@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { builtinExtensionRegistry } from './backend/extensions/registry.ts';
 import { serviceConnectionSchema, type ServiceConnection, type ServiceConnectionStatus, type ExtensionState } from '../shared/extensions.ts';
 import type { CommunicationsAction, Delivery } from '../shared/extensions/project-communications/shared.ts';
@@ -21,8 +22,10 @@ import { topicSessionPreferences } from './topic-session-preferences.ts';
 import type { TopicAction } from '../shared/extensions/project-communications/topics.ts';
 import type { IssueVersion } from '../shared/extensions/project-communications/issues.ts';
 
-type Settings={version:number;enabled:Record<string,boolean>;connections?:Record<string,{revision:number;config:ServiceConnection}>;[key:string]:unknown};
+type ProjectConnection={revision:number;config:ServiceConnection;materialsRevision?:number};
+type Settings={version:number;enabled:Record<string,boolean>;connections?:Record<string,ProjectConnection>;[key:string]:unknown};
 type OwnedConnection={connection:CommunicationsConnection;revision:number;ready:Promise<unknown>};
+const archiveApiConfig = ({ publicUrl, ...config }: ServiceConnection) => config;
 /** A UI connector only. It never starts, owns or stops the independent service. */
 export class WorkbenchExtensions {
   readonly registry=builtinExtensionRegistry();
@@ -34,7 +37,7 @@ export class WorkbenchExtensions {
   private write(route:ProjectRoute,value:Settings){const path=this.settingsPath(route);mkdirSync(dirname(path),{recursive:true,mode:0o700});const temp=path+'.'+randomUUID();writeFileSync(temp,JSON.stringify(value),{mode:0o600});renameSync(temp,path);}
   private credentialFile(route:ProjectRoute){const home=process.env.PASEO_HOME?.replace(/^~(?=\/|$)/,homedir())||join(homedir(),'.paseo');return join(home,'secrets','workspace-workbench',createHash('sha256').update(route.configPath).digest('hex'),'communications-service-token');}
   private token(route:ProjectRoute,config:ServiceConnection){const file=this.credentialFile(route);if(!existsSync(file))return localServiceToken(config);const stat=lstatSync(file);if(!stat.isFile()||stat.isSymbolicLink()||(stat.mode&0o077)!==0)throw Error('service_token_storage_invalid');return readFileSync(file,'utf8').trim()||localServiceToken(config);}
-  private connectionSettings(route:ProjectRoute,id:string){return this.settings(route).connections?.[id]||{revision:1,config:defaultServiceConnection(route.configPath)};}
+  private connectionSettings(route:ProjectRoute,id:string):ProjectConnection{return this.settings(route).connections?.[id]||{revision:1,config:defaultServiceConnection(route.configPath)};}
   restore(){/* Collection is owned by the service; visible status requests reconnect. */}
   async connection(projectConfig:string,id:string,action:'read'|'configure'|'check',input?:{revision?:number;connection?:ServiceConnection;token?:string}):Promise<ServiceConnectionStatus>{
     this.registry.get(id);const route=resolveProject({projectConfig});
@@ -42,7 +45,13 @@ export class WorkbenchExtensions {
       const old=this.settings(route),current=this.connectionSettings(route,id);if(input?.revision!==current.revision)throw Error('settings_revision_conflict');
       const config=serviceConnectionSchema.parse(input?.connection),file=this.credentialFile(route);
       if(input?.token!==undefined||current.config.endpoint!==config.endpoint){mkdirSync(dirname(file),{recursive:true,mode:0o700});const temporary=file+'.'+randomUUID();writeFileSync(temporary,input?.token||'',{mode:0o600});renameSync(temporary,file);}
-      this.write(route,{...old,connections:{...old.connections,[id]:{revision:current.revision+1,config}}});this.clients.get(this.key(route,id))?.connection.close();this.clients.delete(this.key(route,id));this.archives.get(this.key(route,id))?.connection.close();this.archives.delete(this.key(route,id));
+      const revision = current.revision + 1;
+      // A browser-only address change keeps prepared materials and delivery receipts in scope.
+      const browserOnly = input?.token === undefined && current.config.publicUrl !== config.publicUrl &&
+        isDeepStrictEqual(archiveApiConfig(current.config), archiveApiConfig(config));
+      const next: ProjectConnection = { revision, config };
+      if (browserOnly) next.materialsRevision = current.materialsRevision ?? current.revision;
+      this.write(route,{...old,connections:{...old.connections,[id]:next}});this.clients.get(this.key(route,id))?.connection.close();this.clients.delete(this.key(route,id));this.archives.get(this.key(route,id))?.connection.close();this.archives.delete(this.key(route,id));
     }
     const current=this.connectionSettings(route,id),file=this.credentialFile(route),hasStored=existsSync(file)&&Boolean(readFileSync(file,'utf8').trim());
     const result:ServiceConnectionStatus={revision:current.revision,connection:current.config,hasToken:Boolean(this.token(route,current.config)),localToken:!hasStored&&Boolean(localServiceToken(current.config))};
@@ -76,7 +85,8 @@ export class WorkbenchExtensions {
     if(request.action==='preferences')return topicSessionPreferences(route,request.value);
     const connection=await this.archiveClient(route,id);
     const archive=new ArchiveTopics(connection), issues=new ArchiveIssues(connection);
-    const materials=new TopicMaterials(route.stateRoot,createHash('sha256').update(JSON.stringify([route.configPath,settings.revision,settings.config])).digest('hex'));
+    const materialScope = [route.configPath, settings.materialsRevision ?? settings.revision, archiveApiConfig(settings.config)];
+    const materials=new TopicMaterials(route.stateRoot,createHash('sha256').update(JSON.stringify(materialScope)).digest('hex'));
     const targets=()=>topicTargets(route,context);
     switch(request.action){
       case 'directory':return archive.directory(request.libraryId);

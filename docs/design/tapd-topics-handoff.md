@@ -60,7 +60,7 @@ Communication-Service 0.2.132 已提供缺陷接口。Workbench 后端沿用项�
 | `issues/{id}?version={version}` | 展开时读取列表上对应的版本，核对选择时读取当前版本。 |
 | `issues/{id}/versions/{version}/attachments/{attachmentId}` | 读取所选版本的原件。栅格图片使用 `view=preview` 取得原图和检查后的媒体类型。 |
 
-登录授权、重新授权、解除绑定及手动开始同步走档案服务的同源浏览器流程。Workbench 的来源设置打开该服务的 TAPD 页面，刷新按钮更新服务内已有的结果。
+登录授权、重新授权、解除绑定及手动开始同步走档案服务的同源浏览器流程。通过 Access 等网关发布档案服务时，在 Workbench 连接设置的「档案服务公网地址」填写带路径前缀的 HTTPS 入口。来源设置通过该入口打开当前资料库的 TAPD 页面，刷新按钮更新服务内已有的结果。
 
 ## 共用发送流程
 

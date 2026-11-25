@@ -1,5 +1,5 @@
 import { MAX_REGISTERED_BYTES, supportedArtifact } from '../shared/artifact-limits.ts';
-import { serviceConnectionSchema } from '../shared/extensions.ts';
+import { archivePublicUrl, serviceConnectionSchema } from '../shared/extensions.ts';
 import {
   issueDetailSchema, issuePageSchema, issueSourceSchema, tapdSourceUrl,
   type IssueAttachment, type IssueConnection, type IssueDetail, type IssueSelection, type IssueVersion,
@@ -21,19 +21,21 @@ export class ArchiveIssues {
   }
 
   async status(): Promise<IssueConnection> {
-    const { endpoint } = serviceConnectionSchema.parse(this.connection.config);
-    const url = new URL(endpoint);
-    if (!url.pathname.endsWith('/')) url.pathname += '/';
-    url.search = new URLSearchParams({ view: 'plugin', provider: 'tapd', page: 'issues', library: this.libraryId }).toString();
+    const { endpoint, publicUrl } = serviceConnectionSchema.parse(this.connection.config);
+    const url = archivePublicUrl(publicUrl ?? endpoint);
+    if (url) {
+      if (!url.pathname.endsWith('/')) url.pathname += '/';
+      url.search = new URLSearchParams({ view: 'plugin', provider: 'tapd', page: 'issues', library: this.libraryId }).toString();
+    }
     try {
       const source = issueSourceSchema.parse(await this.connection.archive(this.path('issue-source')));
-      url.searchParams.set('source', sourceId);
-      return { state: 'ready', source, manageUrl: url.href };
+      url?.searchParams.set('source', sourceId);
+      return { state: 'ready', source, manageUrl: url?.href };
     } catch (error) {
       const code = error instanceof Error ? error.message : '';
-      if (code === 'issue_source_missing') return { state: 'missing', manageUrl: url.href };
+      if (code === 'issue_source_missing') return { state: 'missing', manageUrl: url?.href };
       if (['archive_route_missing', 'route_missing', 'service_http_404', 'service_empty_response'].includes(code))
-        return { state: 'unavailable', manageUrl: url.href };
+        return { state: 'unavailable', manageUrl: url?.href };
       throw error;
     }
   }

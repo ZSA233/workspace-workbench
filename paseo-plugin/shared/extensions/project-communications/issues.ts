@@ -29,7 +29,7 @@ export type IssueDetail = z.infer<typeof issueDetailSchema>;
 export type IssueAttachment = z.infer<typeof issueAttachmentSchema>;
 export type IssuePage = z.infer<typeof issuePageSchema>;
 export type IssueSource = z.infer<typeof issueSourceSchema>;
-export type IssueConnection = { manageUrl: string } & (
+export type IssueConnection = { manageUrl?: string } & (
   { state: 'ready'; source: IssueSource } | { state: 'missing' | 'unavailable' }
 );
 

@@ -16,11 +16,26 @@ export const extensionsRpc = defineRpc({
   output: z.custom<ExtensionState>(),
 });
 
+export function archivePublicUrl(value?: string): URL | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    const host = url.hostname.replace(/\.$/, '');
+    const local = host === 'localhost' || host.endsWith('.localhost') || host.startsWith('127.') ||
+      ['0.0.0.0', '[::]', '[::1]'].includes(host);
+    if (url.protocol === 'https:' && !url.username && !url.password && !local) return url;
+  } catch { return undefined; }
+}
+
 export const serviceConnectionSchema = z.object({
   endpoint: z.string().url().max(2048).superRefine((value, ctx) => {
     let url:URL;try{url=new URL(value);}catch{return;}
     if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1','localhost','[::1]'].includes(url.hostname)))) ctx.addIssue({ code:'custom', message:'服务地址需使用 HTTPS；本机可使用 HTTP，地址中不能包含凭证或查询参数' });
   }),
+  publicUrl: z.string().trim().max(2048).refine(value => {
+    const url = archivePublicUrl(value);
+    return Boolean(url && !url.search && !url.hash);
+  }, '请填写档案服务的 HTTPS 公网地址，地址中不能包含凭证、查询参数或片段').optional(),
   projectId: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/),
   libraryId: z.string().min(1).max(128).optional(),
   watchedGroups: z.array(watchedGroupSchema).max(100).optional(),

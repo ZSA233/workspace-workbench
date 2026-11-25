@@ -9,7 +9,7 @@ import { Button, Label, ignoreFailure, useColors } from './ui';
 import { Check, ContextDialog, MediaCount, OriginalMessage, TopicIcon, TopicRecord, topicError, topicTypography } from './topic-ui';
 import { pendingTopicAssets, topicDisplayMessages, TOPIC_ASSET_REFRESH_MS } from '../../topic-asset-state';
 
-const topicStates = new Map([['open', '跟进中'], ['closed', '已关闭'], ['paused', '已暂停']]);
+const topicStates = new Map([['open', '跟进中'], ['closed', '已关闭'], ['paused', '已暂停'], ['resolved', '已解决'], ['completed', '已完成'], ['done', '已完成']]);
 
 export type TopicRowProps = {
   topic: ArchiveTopic; client: TopicsClient; groupName: string; selected?: SelectedTopic;
@@ -33,7 +33,6 @@ export function TopicRow(p: TopicRowProps) {
   });
   const data = p.selected?.topic || detail.data;
   const changed = Boolean(data && (data.inputRevision !== p.topic.inputRevision || data.revision !== p.topic.revision));
-  const closed = p.topic.status === 'closed';
   const status = topicStates.get(p.topic.status) || p.topic.status;
   const more = async () => {
     const page = await p.client.call<{ items: ArchiveMessage[]; hasMore: boolean }>({
@@ -47,7 +46,7 @@ export function TopicRow(p: TopicRowProps) {
   return <TopicRecord id={'topic-row-' + p.topic.id} selectId={'topic-select-' + p.topic.id}
     expandId={'topic-expand-' + p.topic.id} detailId={'topic-detail-' + p.topic.id}
     title={topicTitle(p.topic)} metadata={p.groupName} updatedAt={p.topic.updatedAt} recordLabel="话题"
-    {...{ status, closed }} tone={p.topic.status === 'open' ? 'active' : 'neutral'}
+    status={status}
     selected={Boolean(p.selected)} expanded={p.expanded} disabled={p.busy} loading={p.loading}
     onSelect={p.onSelect} onExpand={p.onExpand}
     onReload={changed ? () => { p.onReload(); void detail.refetch(); } : undefined}

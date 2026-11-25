@@ -14,9 +14,6 @@ import { TopicAsset, TopicAssetGrid, TopicIcon, TopicMaterial, TopicRecord, topi
 type EditIssues = (change: (current: IssueBasket) => IssueBasket) => void;
 const detailKey = (scope: string, issue: IssueSummary) => ['archive-issue', scope, issue.id, issue.version];
 const statusLabels: Record<string, string> = { pending: '同步中', unavailable: '没有读取权限', stale: '等待更新', 'too-large': '原件超过大小上限' };
-const closedIssueStates = new Set(['closed', '已关闭', '已结束']);
-const activeIssueStates = new Set(['in_progress', '处理中', '进行中']);
-const resolvedIssueStates = new Set(['resolved', 'verified', '已解决', '已验证']);
 
 export function TapdIssuesPanel({ client, basket, edit, locked, onSettings }: {
   client: TopicsClient; basket: IssueBasket; edit: EditIssues; locked: boolean; onSettings(): void;
@@ -112,9 +109,7 @@ function TapdIssueRow({ client, issue, selected, projectLabel, locked, edit, exp
 }) {
   const c = useColors(), cache = useQueryClient(), [selecting, setSelecting] = useState(false), [error, setError] = useState('');
   const changed = Boolean(selected && selected.issue.version !== issue.version);
-  const status = issue.status?.trim() || '', statusKey = status.toLowerCase();
-  const closed = closedIssueStates.has(statusKey);
-  const tone = activeIssueStates.has(statusKey) ? 'active' : resolvedIssueStates.has(statusKey) ? 'resolved' : 'neutral';
+  const status = issue.status?.trim() || '';
   const input = { queryKey: detailKey(client.scopeKey, issue), queryFn: () => client.call<IssueDetail>({ action: 'issues.read', issueId: issue.id, version: issue.version }) };
   const detail = useQuery({ ...input, enabled: expanded && client.active, retry: false, staleTime: 20000, refetchOnWindowFocus: false });
   const toggle = async () => {
@@ -133,7 +128,7 @@ function TapdIssueRow({ client, issue, selected, projectLabel, locked, edit, exp
   return <TopicRecord id={'tapd-issue-' + issue.id} selectId={'tapd-select-' + issue.id}
     expandId={'tapd-expand-' + issue.id} detailId={'tapd-detail-' + issue.id}
     title={issue.title} metadata={[issue.number, projectLabel].filter(Boolean).join(' · ')} updatedAt={issue.updatedAt}
-    {...{ status, tone, closed, expanded }} recordLabel="缺陷" selected={Boolean(selected)} disabled={locked} loading={selecting}
+    {...{ status, expanded }} recordLabel="缺陷" selected={Boolean(selected)} disabled={locked} loading={selecting}
     onSelect={() => ignoreFailure(toggle())} onExpand={onExpand}
     onReload={changed ? () => { edit(current => removeIssue(current, issue.id)); ignoreFailure(detail.refetch()); } : undefined}
     warning={changed ? '缺陷有更新，请重新选材' : error ? topicError(error) : undefined}>

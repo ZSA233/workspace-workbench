@@ -76,4 +76,4 @@ export function groupKey(group: WatchedGroup) { return JSON.stringify([group.sou
 export function senderName(message: ArchiveMessage) { return typeof message.sender === 'string' ? message.sender : message.sender?.displayName || message.sender?.name || message.sender?.id || '未知作者'; }
 export function assetIsImage(asset: ArchiveAsset) { return asset.kind === 'image' || Boolean(asset.mimeType?.startsWith('image/')); }
 export function assetIsVideo(asset: ArchiveAsset) { return asset.kind === 'video' || asset.mimeType === 'video' || Boolean(asset.mimeType?.startsWith('video/')); }
-export { messageText, topicTime, topicTitle } from './topic-presentation.ts';
+export { messageText, topicTime, topicTitle, recordAttention, type RecordAttention } from './topic-presentation.ts';

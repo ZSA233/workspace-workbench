@@ -5,6 +5,26 @@ const mediaLine = /^[ \t]*\[(?:图片|视频|媒体|文件|附件)(?:消息)?\][
 const mediaEnvelope = /\[(?:图片|视频|媒体|文件|附件)消息\]\s*\(\s*(?:mediaId|fileId|assetId)\s*=([^\r\n)]*)\)\s*fileName=[^\r\n]*?\s+url[:：][ \t]*([^\s]+)(?:[ \t]*注意[:：][ \t]*如需下载[ \t]*使用[ \t]*dws[ \t]+chat[ \t]+message[ \t]+download-media[ \t]*命令下载[。.]?)?/g;
 const genericTitles = new Set(['群反馈', '反馈排查', '新话题', '单聊问题', '问题排查', '附件反馈']);
 
+export type RecordAttention = 'active' | 'settled' | 'neutral';
+const settledStates = new Set([
+  'closed', 'resolved', 'completed', 'done', 'finished', 'verified', 'archived', 'cancelled', 'canceled',
+  '已关闭', '已解决', '已完成', '已结束', '已验证', '已归档', '已取消',
+]);
+const activeStates = new Set([
+  'open', 'new', 'active', 'assigned', 'inprogress', 'reopen', 'reopened', 'unresolved', 'todo',
+  '新建', '待处理', '处理中', '进行中', '跟进中', '继续跟进', '待修复', '待解决',
+  '未解决', '未完成', '未关闭', '重新打开', '重新开启', '重新激活',
+]);
+
+/** Both sources share visual attention levels while retaining their original status labels. */
+export function recordAttention(status?: string): RecordAttention {
+  const key = (status || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (settledStates.has(key)) return 'settled';
+  if (activeStates.has(key)) return 'active';
+  // Unknown project workflow labels remain visible until their meaning is known.
+  return 'neutral';
+}
+
 /** A display projection only: source text and its version remain untouched. */
 export function messageText(message: Pick<ArchiveMessage, 'text' | 'displayText'> & Partial<Pick<ArchiveMessage, 'assets'>>) {
   const text = typeof message.displayText === 'string' ? message.displayText : message.text || '';

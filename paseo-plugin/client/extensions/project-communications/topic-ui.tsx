@@ -5,7 +5,7 @@ import { Icon, ScrollView, useToast } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
 import type { ArchiveAsset, ArchiveMessage } from '../../../shared/extensions/project-communications/topics';
 import type { IssueSummary } from '../../../shared/extensions/project-communications/issues';
-import { assetIsImage, assetIsVideo, messageText, senderName, topicTime } from '../../../shared/extensions/project-communications/topics';
+import { assetIsImage, assetIsVideo, messageText, senderName, topicTime, recordAttention, type RecordAttention } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, tint, useColors, useTouch } from './ui';
 import { MAX_VIDEO_BYTES, supportedArtifact } from '../../../shared/artifact-limits.ts';
 import {TopicVideoPlayer,TopicVideoFrames,TopicVideoFile} from '../../topic-video';
@@ -19,8 +19,8 @@ export const topicTypography = StyleSheet.create({
   body: { fontSize: 11.5, lineHeight: 18 },
 });
 
-export function TopicRowStatus({ label, tone = 'neutral' }: { label: string; tone?: 'neutral' | 'active' | 'resolved' }) {
-  const c = useColors(), color = tone === 'active' ? c.accent : tone === 'resolved' ? c.statusSuccess : c.foregroundMuted;
+export function TopicRowStatus({ label, attention }: { label: string; attention: RecordAttention }) {
+  const c = useColors(), color = attention === 'active' ? c.accent : c.foregroundMuted;
   return <Text numberOfLines={1} {...(Platform.OS === 'web' ? { title: label } : {})} style={[topicTypography.metadata, {
     color, backgroundColor: tint(color, '14'), borderRadius: 4, maxWidth: 86, paddingHorizontal: 5, paddingVertical: 1,
   }]}>{label}</Text>;
@@ -46,26 +46,27 @@ export function Check({ checked, onPress, label, disabled = false, id }: { check
   </Pressable>;
 }
 
-export function TopicRecord({ id, selectId, expandId, detailId, title, metadata, updatedAt, status, tone, closed, selected, expanded,
+export function TopicRecord({ id, selectId, expandId, detailId, title, metadata, updatedAt, status, selected, expanded,
   disabled, loading, onSelect, onExpand, onReload, extra, warning, recordLabel, children }: {
   id: string; selectId: string; expandId: string; detailId: string; title: string; metadata: string; updatedAt: number;
-  status: string; tone?: 'neutral' | 'active' | 'resolved'; closed?: boolean; selected: boolean; expanded: boolean;
+  status: string; selected: boolean; expanded: boolean;
   disabled: boolean; loading?: boolean; onSelect(): void; onExpand(): void; onReload?(): void;
   extra?: ReactNode; warning?: string; recordLabel: string; children: ReactNode;
 }) {
   const c = useColors(), changed = Boolean(onReload), updated = topicTime(updatedAt);
+  const attention = recordAttention(status), settled = attention === 'settled';
   return <View testID={id} style={{ borderBottomWidth: 1, borderBottomColor: c.border }}>
     <View style={{ flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 4, gap: 5, alignItems: 'center', backgroundColor: selected ? tint(c.accent, '18') : undefined }}>
       <Check id={selectId} checked={selected} disabled={disabled || loading} label={'选择' + recordLabel + ' ' + title} onPress={onSelect} />
       <Pressable testID={expandId} accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ expanded }} onPress={onExpand}
         style={{ flex: 1, minWidth: 0, paddingVertical: 4, gap: 2 }}>
-        <Text numberOfLines={2} style={[topicTypography.title, { color: closed ? c.foregroundMuted : c.foreground }]}>{title}</Text>
+        <Text numberOfLines={2} style={[topicTypography.title, { color: settled ? c.foregroundMuted : c.foreground, fontWeight: settled ? '400' : '600' }]}>{title}</Text>
         <Text numberOfLines={1} style={[topicTypography.metadata, { color: c.foregroundMuted }]}>{metadata}</Text>
       </Pressable>
       {extra}
       <View style={{ alignItems: 'flex-end', gap: 2 }}>
-        {status ? <TopicRowStatus label={status} tone={tone} /> : null}
-        {changed || updated ? <Text style={[topicTypography.metadata, { color: changed ? c.statusWarning : c.foregroundMuted }]}>
+        {status ? <TopicRowStatus label={status} attention={attention} /> : null}
+        {changed || updated ? <Text style={[topicTypography.metadata, { color: changed && !settled ? c.statusWarning : c.foregroundMuted }]}>
           {changed ? '有更新' : '更新于 ' + updated}
         </Text> : null}
       </View>

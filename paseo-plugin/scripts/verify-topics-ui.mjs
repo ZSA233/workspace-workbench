@@ -29,6 +29,7 @@ fixture.state.context.text = '[图片消息](mediaId=$context-image)' + fixture.
 fixture.state.context.assets = [{ id: 'context-image', kind: 'image', mimeType: 'image/png', state: 'ready', name: 'context.png' }];
 fixture.state.issues[0].title = '【后台-附件管理】下载报告后，保存弹窗的文件名显示为空，无法区分不同版本';
 fixture.state.issues[1].status = '已解决';
+fixture.state.topics[1].status = 'closed';
 const videoTopic=fixture.state.topics[3],videoMessage=videoTopic.messages[0];
 videoTopic.title='视频播放与镜像反馈';
 videoMessage.text='fileName=mmexport123.mp4\nurl: @opaque-native-video';
@@ -70,7 +71,7 @@ async function shot(name) {
 }
 const renderedText = locator => locator.evaluate(element => {
   const style = getComputedStyle(element);
-  return { size: parseFloat(style.fontSize), color: style.color, x: element.getBoundingClientRect().left };
+  return { size: parseFloat(style.fontSize), weight: Number(style.fontWeight), color: style.color, x: element.getBoundingClientRect().left };
 });
 try {
   ui = await ready; report.url = ui.url;
@@ -175,7 +176,27 @@ try {
   await secondRow.getByText('已解决', { exact: true }).waitFor();
   const tapdTitle = await renderedText(issueRow.getByText(issue.title, { exact: true }));
   const secondTitle = secondRow.getByText(secondIssue.title, { exact: true });
-  assert.equal((await renderedText(secondTitle)).color, tapdTitle.color);
+  const settledTitle = await renderedText(secondTitle);
+  const activeStatus = await renderedText(issueRow.getByText('处理中', { exact: true }));
+  assert.notEqual(settledTitle.color, tapdTitle.color);
+  assert.ok(settledTitle.weight < tapdTitle.weight);
+  assert.equal((await renderedText(secondRow.getByText('已解决', { exact: true }))).color, settledTitle.color);
+  for (const label of ['已关闭', '已完成']) {
+    secondIssue.status = label;
+    await page.getByTestId('tapd-refresh').click();
+    await secondRow.getByText(label, { exact: true }).waitFor();
+    assert.equal((await renderedText(secondTitle)).color, settledTitle.color);
+    assert.equal((await renderedText(secondTitle)).weight, settledTitle.weight);
+    assert.equal((await renderedText(secondRow.getByText(label, { exact: true }))).color, settledTitle.color);
+  }
+  for (const label of ['新建', '重新打开']) {
+    secondIssue.status = label;
+    await page.getByTestId('tapd-refresh').click();
+    await secondRow.getByText(label, { exact: true }).waitFor();
+    assert.equal((await renderedText(secondTitle)).color, tapdTitle.color);
+    assert.equal((await renderedText(secondTitle)).weight, tapdTitle.weight);
+    assert.equal((await renderedText(secondRow.getByText(label, { exact: true }))).color, activeStatus.color);
+  }
   secondIssue.status = '已关闭';
   await page.getByTestId('tapd-refresh').click();
   await secondRow.getByText('已关闭', { exact: true }).waitFor();
@@ -248,8 +269,26 @@ try {
     const css = getComputedStyle(element); return { border: css.borderLeftWidth, padding: css.paddingLeft };
   }), detailFrame);
   await chatRow.getByText('跟进中', { exact: true }).waitFor();
+  const finishedTopic = fixture.state.topics[1], finishedRow = page.getByTestId('topic-row-topic-2');
+  const finishedTitle = finishedRow.getByText(finishedTopic.title, { exact: true });
+  for (const [status, label] of [['closed', '已关闭'], ['resolved', '已解决'], ['completed', '已完成']]) {
+    finishedTopic.status = status;
+    await page.getByTestId('topics-refresh').click();
+    await finishedRow.getByText(label, { exact: true }).waitFor();
+    assert.equal((await renderedText(finishedTitle)).color, settledTitle.color);
+    assert.equal((await renderedText(finishedTitle)).weight, settledTitle.weight);
+    assert.equal((await renderedText(finishedRow.getByText(label, { exact: true }))).color, settledTitle.color);
+  }
+  finishedTopic.status = 'open';
+  await page.getByTestId('topics-refresh').click();
+  await finishedRow.getByText('跟进中', { exact: true }).waitFor();
+  assert.equal((await renderedText(finishedTitle)).color, tapdTitle.color);
+  assert.equal((await renderedText(finishedTitle)).weight, tapdTitle.weight);
+  finishedTopic.status = 'closed';
+  await page.getByTestId('topics-refresh').click();
+  await finishedRow.getByText('已关闭', { exact: true }).waitFor();
   await shot('dingtalk-topic-hierarchy-desktop');
-  check('DingTalk and TAPD share title/body proportions; expanded details indent and TAPD resolved and closed labels remain distinct');
+  check('DingTalk and TAPD share hierarchy and attention: resolved, closed and completed work is muted and lighter; new and reopened work regains attention without changing original status labels');
   assert.equal((await panel.innerText()).includes('mediaId='), false);
   assert.ok((await page.getByTestId('topic-row-topic-1').innerText()).includes('11-19 16:20'));
   await page.getByTestId('topic-message-message-1').click();

@@ -1,8 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { messageText, topicTime, topicTitle } from '../shared/extensions/project-communications/topics.ts';
+import { messageText, topicTime, topicTitle, recordAttention } from '../shared/extensions/project-communications/topics.ts';
 import { archiveFixture } from './helpers/archive-service.ts';
 import { basketCounts, basketSelections, changeAsset, changeMessage } from '../client/topic-selection.ts';
+
+test('both sources lower attention for ended work and retain attention for new or reopened work', () => {
+  for (const status of ['closed', 'resolved', 'completed', 'done', 'verified', '已关闭', '已解决', '已完成', '已结束', '已验证']) {
+    assert.equal(recordAttention(status), 'settled', status);
+  }
+  for (const status of ['open', 'new', 'in_progress', 'IN-PROGRESS', 'in progress', 'reopened', '新建', '处理中', '跟进中', '重新打开', '未解决', '未关闭', '未完成']) {
+    assert.equal(recordAttention(status), 'active', status);
+  }
+  for (const status of [undefined, '', 'paused', '待产品确认', 'not resolved', '待验证已解决情况']) {
+    assert.equal(recordAttention(status), 'neutral', status);
+  }
+  assert.equal(recordAttention('  Resolved  '), 'settled');
+});
 
 test('archive display text and captions replace media transport markers without changing originals', () => {
   const message = archiveFixture().topics[0].messages[0];

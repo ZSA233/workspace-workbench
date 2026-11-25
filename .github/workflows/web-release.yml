@@ -68,6 +68,12 @@ jobs:
       - run: python3 -m unittest discover -s web-assets/test -p 'test_*.py'
       - run: python3 web-assets/src/build-release.py --lock .local/web-release/lock.json --work .local/web-release/source --output .local/web-release/output
       - run: npm --prefix paseo-plugin ci --ignore-scripts
+      - name: Prepare video test tools
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
       - run: npm --prefix paseo-plugin run typecheck
       - run: npm --prefix paseo-plugin test
       - name: Verify actual plugin in an isolated compatible daemon

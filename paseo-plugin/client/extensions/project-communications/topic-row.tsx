@@ -1,13 +1,15 @@
 import { useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { TopicsClient } from '../../use-topics';
 import { uniqueMessages } from '../../topic-selection';
 import { topicTime, topicTitle } from '../../../shared/extensions/project-communications/topics';
 import type { ArchiveAsset, ArchiveMessage, ArchiveTopic, ArchiveTopicDetail, SelectedTopic } from '../../../shared/extensions/project-communications/topics';
 import { Button, Label, ignoreFailure, shortTime, tint, useColors } from './ui';
-import { Check, ContextDialog, MediaCount, OriginalMessage, TopicIcon, topicError } from './topic-ui';
+import { Check, ContextDialog, MediaCount, OriginalMessage, TopicIcon, TopicRowStatus, topicError, topicTypography } from './topic-ui';
 import { pendingTopicAssets, topicDisplayMessages, TOPIC_ASSET_REFRESH_MS } from '../../topic-asset-state';
+
+const topicStates = new Map([['open', '跟进中'], ['closed', '已关闭'], ['paused', '已暂停']]);
 
 export type TopicRowProps = {
   topic: ArchiveTopic; client: TopicsClient; groupName: string; selected?: SelectedTopic;
@@ -31,6 +33,9 @@ export function TopicRow(p: TopicRowProps) {
   });
   const data = p.selected?.topic || detail.data;
   const changed = Boolean(data && (data.inputRevision !== p.topic.inputRevision || data.revision !== p.topic.revision));
+  const closed = p.topic.status === 'closed';
+  const status = topicStates.get(p.topic.status) || p.topic.status;
+  const updated = topicTime(p.topic.updatedAt);
   const more = async () => {
     const page = await p.client.call<{ items: ArchiveMessage[]; hasMore: boolean }>({
       action: 'messages', topicId: p.topic.id, offset: detail.data?.messages.length || 0,
@@ -41,24 +46,27 @@ export function TopicRow(p: TopicRowProps) {
   };
   const messages = topicDisplayMessages(detail.data?.messages || [], data?.messages);
   return <View testID={'topic-row-' + p.topic.id} style={{ borderBottomWidth: 1, borderBottomColor: c.border }}>
-    <View style={{ flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 5, gap: 5, alignItems: 'center', backgroundColor: p.selected ? tint(c.accent, '18') : undefined }}>
+    <View style={{ flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 4, gap: 5, alignItems: 'center', backgroundColor: p.selected ? tint(c.accent, '18') : undefined }}>
       <Check id={'topic-select-' + p.topic.id} checked={Boolean(p.selected)} disabled={p.busy || p.loading}
         label={'选择话题 ' + topicTitle(p.topic)} onPress={p.onSelect} />
-      <View {...(Platform.OS === 'web' ? { title: changed ? '有新材料，已选范围保持原样' : p.topic.status === 'closed' ? '已关闭' : '跟进中' } : {})}
-        style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: changed ? c.statusWarning : p.selected ? c.accent : c.foregroundMuted }} />
       <Pressable testID={'topic-expand-' + p.topic.id} accessibilityRole="button" accessibilityLabel={topicTitle(p.topic)}
         accessibilityState={{ expanded: p.expanded }} onPress={p.onExpand}
-        style={{ flex: 1, minWidth: 0, paddingHorizontal: 5, paddingVertical: 5, gap: 2 }}>
-        <Text numberOfLines={2} style={{ color: c.foreground, fontSize: 13, lineHeight: 20, fontWeight: '600' }}>{topicTitle(p.topic)}</Text>
-        <Text numberOfLines={1} style={{ fontSize: 10, color: c.foregroundMuted }}>{p.groupName}</Text>
+        style={{ flex: 1, minWidth: 0, paddingVertical: 4, gap: 2 }}>
+        <Text numberOfLines={2} style={[topicTypography.title, { color: closed ? c.foregroundMuted : c.foreground }]}>{topicTitle(p.topic)}</Text>
+        <Text numberOfLines={1} style={[topicTypography.metadata, { color: c.foregroundMuted }]}>{p.groupName}</Text>
       </Pressable>
       {!p.narrow ? <>
         <MediaCount icon="MessageSquare" count={data?.messageCount || p.topic.messageCount} label="原文" />
         <MediaCount icon="Image" count={data ? data.messages.reduce((n, m) => n + m.assets.length, 0) : undefined} label="附件" />
       </> : null}
+      <View style={{ alignItems: 'flex-end', gap: 2 }}>
+        {status ? <TopicRowStatus label={status} tone={p.topic.status === 'open' ? 'active' : 'neutral'} /> : null}
+        {changed || updated ? <Text style={[topicTypography.metadata, { color: changed ? c.statusWarning : c.foregroundMuted }]}>
+          {changed ? '有更新' : '更新于 ' + updated}
+        </Text> : null}
+      </View>
       {changed ? <TopicIcon icon="RefreshCw" label="重新读取并清除此话题选择" disabled={p.busy}
-        onPress={() => { p.onReload(); void detail.refetch(); }} />
-        : <Text style={{ color: c.foregroundMuted, fontSize: 10 }}>{topicTime(p.topic.updatedAt)}</Text>}
+        onPress={() => { p.onReload(); void detail.refetch(); }} /> : null}
       <TopicIcon icon={p.expanded ? 'ChevronUp' : 'ChevronDown'} label={p.expanded ? '收起话题' : '展开话题'}
         onPress={p.onExpand} busy={p.loading} />
     </View>
@@ -77,14 +85,14 @@ export function TopicRow(p: TopicRowProps) {
         {data.lastAnswer || data.summary ? <View style={{ paddingVertical: 8, gap: 6 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <TopicIcon icon={analysis ? 'ChevronDown' : 'ChevronRight'} label="查看已有分析" onPress={() => setAnalysis(value => !value)} />
-            <Label muted>分析</Label>
+            <Text style={[topicTypography.detailLabel, { color: c.foregroundMuted }]}>分析</Text>
           </View>
           {analysis ? <View style={{ gap: 6 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Check checked={p.selected?.includeAnalysis || false} disabled={p.busy || changed}
                 label="选择已有分析" onPress={() => p.onAnalysis(data)} /><Label muted>带入分析</Label>
             </View>
-            <Label>{data.lastAnswer || data.summary}</Label>
+            <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{data.lastAnswer || data.summary}</Text>
           </View> : null}
         </View> : null}
       </> : null}

@@ -7,7 +7,7 @@ import { basketContentEntries, materialCounts, materialLimitExceeded, basketSele
 import { removeIssue, type IssueBasket } from '../../issue-selection';
 import { groupKey, type ArchiveTopic, type ArchiveTopicDetail, type TopicMaterialPreview, type TopicPage, type TopicTarget, type WatchedGroup } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, Search, ignoreFailure, useColors, useTouch } from './ui';
-import { Check, MediaCount, TopicIcon, TopicStatus, topicError } from './topic-ui';
+import { Check, MediaCount, TopicIcon, TopicStatus, topicError, topicTypography } from './topic-ui';
 import { TopicRow } from './topic-row';
 import { TopicMaterialBasket } from './topic-basket';
 import { TopicSendDialog } from './topic-send-dialog';
@@ -30,7 +30,7 @@ function SourceTabs({ source, chatLabel, onChange }: { source: TopicSource; chat
     {([['chat', chatLabel], ['tapd', 'TAPD 缺陷']] as const).map(([key, label]) => <Pressable key={key} testID={'topics-source-' + key}
       accessibilityRole="tab" aria-selected={source === key} accessibilityState={{ selected: source === key }} accessibilityLabel={label} onPress={() => onChange(key)}
       style={{ minHeight: touch ? 44 : 33, justifyContent: 'center', paddingHorizontal: 2, borderBottomWidth: 2, borderBottomColor: source === key ? c.accent : 'transparent' }}>
-      <Text style={{ fontSize: 13, color: source === key ? c.accent : c.foregroundMuted, fontWeight: source === key ? '600' : '400' }}>{label}</Text>
+      <Text style={[topicTypography.title, { color: source === key ? c.accent : c.foregroundMuted, fontWeight: source === key ? '600' : '400' }]}>{label}</Text>
     </Pressable>)}
   </View>;
 }

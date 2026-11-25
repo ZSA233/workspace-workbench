@@ -27,6 +27,8 @@ fixture.state.topics[0].messages[0].createdAt = fixture.state.topics[0].updatedA
 fixture.state.context.displayText = fixture.state.context.text;
 fixture.state.context.text = '[图片消息](mediaId=$context-image)' + fixture.state.context.text;
 fixture.state.context.assets = [{ id: 'context-image', kind: 'image', mimeType: 'image/png', state: 'ready', name: 'context.png' }];
+fixture.state.issues[0].title = '【后台-附件管理】下载报告后，保存弹窗的文件名显示为空，无法区分不同版本';
+fixture.state.issues[1].status = '已解决';
 const videoTopic=fixture.state.topics[3],videoMessage=videoTopic.messages[0];
 videoTopic.title='视频播放与镜像反馈';
 videoMessage.text='fileName=mmexport123.mp4\nurl: @opaque-native-video';
@@ -66,6 +68,10 @@ async function shot(name) {
   await page.getByTestId('workbench-topics-panel').screenshot({ path: file });
   report.screenshots.push(file);
 }
+const renderedText = locator => locator.evaluate(element => {
+  const style = getComputedStyle(element);
+  return { size: parseFloat(style.fontSize), color: style.color, x: element.getBoundingClientRect().left };
+});
 try {
   ui = await ready; report.url = ui.url;
   client = new DaemonClient({ url: ui.url.replace('http:', 'ws:') + '/ws', clientId: 'topics-ui', clientType: 'mcp', reconnect: { enabled: false },
@@ -159,17 +165,39 @@ try {
   fixture.state.issueMachineRead = true;
   await tapdTab.click();
   await page.getByTestId('tapd-refresh').click();
-  const issue = fixture.state.issues[0];
-  await page.getByTestId('tapd-issue-' + issue.id).waitFor();
-  assert.equal(await tapdTab.getAttribute('aria-selected'), 'true');
-  const issueSearch = panel.getByRole('textbox', { name: '搜索缺陷标题或编号', exact: true });
-  await issueSearch.fill(fixture.state.issues[1].number);
-  await page.getByTestId('tapd-issue-' + fixture.state.issues[1].id).waitFor();
-  await issueSearch.fill(issue.number);
-  await page.getByTestId('tapd-select-' + issue.id).click();
+  const [issue, secondIssue] = fixture.state.issues;
   const issueRow = page.getByTestId('tapd-issue-' + issue.id);
+  const secondRow = page.getByTestId('tapd-issue-' + secondIssue.id);
+  await issueRow.getByText('处理中', { exact: true }).waitFor();
+  await issueRow.getByText(/^更新于 /).waitFor();
+  assert.equal(await tapdTab.getAttribute('aria-selected'), 'true');
+  await panel.getByRole('button', { name: '更多缺陷', exact: true }).click();
+  await secondRow.getByText('已解决', { exact: true }).waitFor();
+  const tapdTitle = await renderedText(issueRow.getByText(issue.title, { exact: true }));
+  const secondTitle = secondRow.getByText(secondIssue.title, { exact: true });
+  assert.equal((await renderedText(secondTitle)).color, tapdTitle.color);
+  secondIssue.status = '已关闭';
+  await page.getByTestId('tapd-refresh').click();
+  await secondRow.getByText('已关闭', { exact: true }).waitFor();
+  assert.notEqual((await renderedText(secondTitle)).color, tapdTitle.color);
+  await page.getByTestId('tapd-expand-' + issue.id).click();
+  const issueDetail = page.getByTestId('tapd-detail-' + issue.id);
+  const description = issueDetail.getByText(issue.body, { exact: true });
+  await description.waitFor();
+  const descriptionStyle = await renderedText(description);
+  const detailLabel = await renderedText(issueDetail.getByText('缺陷描述', { exact: true }));
+  assert.ok(tapdTitle.size > descriptionStyle.size && descriptionStyle.size > detailLabel.size);
+  assert.ok(detailLabel.x > tapdTitle.x && detailLabel.color !== tapdTitle.color);
+  await shot('tapd-issue-hierarchy-desktop');
+  const issueSearch = panel.getByRole('textbox', { name: '搜索缺陷标题或编号', exact: true });
+  await issueSearch.fill(secondIssue.number);
+  await issueRow.waitFor({ state: 'hidden' });
+  await secondRow.waitFor();
+  await issueSearch.fill(issue.number);
+  await secondRow.waitFor({ state: 'hidden' });
+  await page.getByTestId('tapd-select-' + issue.id).click();
   await issueRow.getByText(issue.body, { exact: true }).waitFor();
-  assert.equal(await issueRow.getByRole('checkbox', { name: '选择缺陷描述', exact: true }).getAttribute('aria-checked'), 'true');
+  await issueRow.getByRole('checkbox', { name: '选择缺陷描述', exact: true, checked: true }).waitFor();
   assert.equal(await issueRow.getByRole('checkbox', { name: /选择评论/ }).getAttribute('aria-checked'), 'false');
   await issueRow.getByRole('checkbox', { name: '选择 复现报告.pdf', exact: true }).click();
   await issueRow.getByRole('button', { name: '查看 复现截图.png', exact: true }).click();
@@ -208,7 +236,14 @@ try {
   await page.getByTestId('topic-original-message-message-1').getByRole('img',{name:'image-1.png',exact:true}).waitFor();
   await page.getByTestId('topic-original-message-message-2').getByRole('img',{name:'image-2.png',exact:true}).waitFor();
   check('each original message renders its own media below the text, before the next speaker');
-  assert.ok((await page.getByTestId('topic-row-topic-1').innerText()).includes('文件列表错误提示挤压布局'));
+  const chatRow = page.getByTestId('topic-row-topic-1');
+  const chatTitle = chatRow.getByText('文件列表错误提示挤压布局', { exact: true });
+  const chatBody = chatRow.getByText(fixture.state.topics[0].messages[0].displayText, { exact: true });
+  assert.equal((await renderedText(chatTitle)).size, tapdTitle.size);
+  assert.equal((await renderedText(chatBody)).size, descriptionStyle.size);
+  await chatRow.getByText('跟进中', { exact: true }).waitFor();
+  await shot('dingtalk-topic-hierarchy-desktop');
+  check('DingTalk and TAPD share title/body proportions; expanded details indent and TAPD resolved and closed labels remain distinct');
   assert.equal((await panel.innerText()).includes('mediaId='), false);
   assert.ok((await page.getByTestId('topic-row-topic-1').innerText()).includes('11-19 16:20'));
   await page.getByTestId('topic-message-message-1').click();

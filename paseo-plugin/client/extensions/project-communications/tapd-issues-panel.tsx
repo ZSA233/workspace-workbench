@@ -9,11 +9,14 @@ import { archivePublicUrl } from '../../../shared/extensions';
 import { type IssueConnection, type IssueDetail, type IssuePage, type IssueSource, type IssueSummary } from '../../../shared/extensions/project-communications/issues';
 import { topicTime } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, Search, ignoreFailure, tint, useColors } from './ui';
-import { Check, TopicAsset, TopicIcon, topicError } from './topic-ui';
+import { Check, TopicAsset, TopicIcon, TopicRowStatus, topicError, topicTypography } from './topic-ui';
 
 type EditIssues = (change: (current: IssueBasket) => IssueBasket) => void;
 const detailKey = (scope: string, issue: IssueSummary) => ['archive-issue', scope, issue.id, issue.version];
 const statusLabels: Record<string, string> = { pending: '同步中', unavailable: '没有读取权限', stale: '等待更新', 'too-large': '原件超过大小上限' };
+const closedIssueStates = new Set(['closed', '已关闭', '已结束']);
+const activeIssueStates = new Set(['in_progress', '处理中', '进行中']);
+const resolvedIssueStates = new Set(['resolved', 'verified', '已解决', '已验证']);
 
 export function TapdIssuesPanel({ client, basket, edit, locked, onSettings }: {
   client: TopicsClient; basket: IssueBasket; edit: EditIssues; locked: boolean; onSettings(): void;
@@ -68,8 +71,10 @@ export function TapdIssuesPanel({ client, basket, edit, locked, onSettings }: {
       <TopicIcon id="tapd-settings" icon="Settings" label="TAPD 来源设置" onPress={manage} />
     </View>
     {ready ? <View style={{ paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderColor: c.border }}>
-      <View style={{ flex: 1 }}><Label muted lines={1}>{['分配给我', currentProject?.label || source?.account].filter(Boolean).join(' · ')}</Label></View>
-      {syncNote ? <Label muted lines={1}>{syncNote}</Label> : null}
+      <Text numberOfLines={1} style={[topicTypography.metadata, { flex: 1, minWidth: 0, color: c.foregroundMuted }]}>
+        {['分配给我', currentProject?.label || source?.account].filter(Boolean).join(' · ')}
+      </Text>
+      {syncNote ? <Text numberOfLines={1} style={[topicTypography.metadata, { color: c.foregroundMuted }]}>{syncNote}</Text> : null}
     </View> : null}
     <ScrollView testID="tapd-issues-list" style={{ flex: 1, minHeight: 70 }}>
       {status.isLoading || ready && list.isLoading ? <ActivityIndicator style={{ padding: 20 }} color={c.accent} />
@@ -107,6 +112,9 @@ function TapdIssueRow({ client, issue, selected, projectLabel, locked, edit, exp
 }) {
   const c = useColors(), cache = useQueryClient(), [selecting, setSelecting] = useState(false), [error, setError] = useState('');
   const changed = Boolean(selected && selected.issue.version !== issue.version);
+  const status = issue.status?.trim() || '', statusKey = status.toLowerCase();
+  const closed = closedIssueStates.has(statusKey);
+  const tone = activeIssueStates.has(statusKey) ? 'active' : resolvedIssueStates.has(statusKey) ? 'resolved' : 'neutral';
   const input = { queryKey: detailKey(client.scopeKey, issue), queryFn: () => client.call<IssueDetail>({ action: 'issues.read', issueId: issue.id, version: issue.version }) };
   const detail = useQuery({ ...input, enabled: expanded && client.active, retry: false, staleTime: 20000, refetchOnWindowFocus: false });
   const toggle = async () => {
@@ -123,24 +131,39 @@ function TapdIssueRow({ client, issue, selected, projectLabel, locked, edit, exp
   const value = selected?.issue || detail.data;
   const disabled = locked || selecting || changed;
   return <View testID={'tapd-issue-' + issue.id} style={{ borderBottomWidth: 1, borderBottomColor: c.border }}>
-    <View style={{ flexDirection: 'row', gap: 5, alignItems: 'center', paddingHorizontal: 8, paddingVertical: 5, backgroundColor: selected ? tint(c.accent, '18') : undefined }}>
+    <View style={{ flexDirection: 'row', gap: 5, alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, backgroundColor: selected ? tint(c.accent, '18') : undefined }}>
       <Check id={'tapd-select-' + issue.id} checked={Boolean(selected)} disabled={locked || selecting} label={'选择缺陷 ' + issue.title} onPress={() => ignoreFailure(toggle())} />
-      <Pressable testID={'tapd-expand-' + issue.id} accessibilityRole="button" accessibilityLabel={issue.title} accessibilityState={{ expanded }} onPress={onExpand}
-        style={{ flex: 1, minWidth: 0, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <View style={{ flex: 1, minWidth: 0, gap: 2 }}><Label strong lines={2}>{issue.title}</Label><Label muted lines={1}>{[issue.number, projectLabel, issue.updatedAt ? topicTime(issue.updatedAt) : ''].filter(Boolean).join(' · ')}</Label></View>
-        {issue.status ? <Label muted lines={1}>{issue.status}</Label> : null}
+      <Pressable testID={'tapd-expand-' + issue.id} accessibilityRole="button" accessibilityLabel={[issue.title, status].filter(Boolean).join(' · ')} accessibilityState={{ expanded }} onPress={onExpand}
+        style={{ flex: 1, minWidth: 0, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+          <Text numberOfLines={2} style={[topicTypography.title, { color: closed ? c.foregroundMuted : c.foreground }]}>{issue.title}</Text>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <Text numberOfLines={1} style={[topicTypography.metadata, { flexShrink: 1, minWidth: 0, color: c.foregroundMuted }]}>
+              {[issue.number, projectLabel].filter(Boolean).join(' · ')}
+            </Text>
+            {issue.updatedAt ? <Text numberOfLines={1} style={[topicTypography.metadata, { color: c.foregroundMuted }]}>
+              更新于 {topicTime(issue.updatedAt)}
+            </Text> : null}
+          </View>
+        </View>
+        {status ? <TopicRowStatus label={status} tone={tone} /> : null}
         <Icon name={expanded ? 'ChevronUp' : 'ChevronDown'} size={14} color={c.foregroundMuted} />
       </Pressable>
     </View>
     {error || changed ? <View style={{ paddingHorizontal: 16, paddingVertical: 5 }}><Label warning>{changed ? '缺陷有更新，请重新选材' : topicError(error)}</Label></View> : null}
-    {expanded ? <View style={{ paddingHorizontal: 12, paddingBottom: 10, gap: 8 }}>
-      {detail.error ? <Label warning>{topicError(detail.error.message)}</Label> : value ? <>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingLeft: 8 }}>
-          <View style={{ flex: 1, minWidth: 110 }}><Label muted>{[value.assignee ? '处理人 ' + value.assignee : '', value.priority].filter(Boolean).join(' · ')}</Label></View>
-          {value.sourceUrl ? <Button variant="link" icon="ArrowUpRight" onPress={() => { void openExternalUrl(value.sourceUrl!).catch(() => setError('TAPD 原记录暂未打开')); }}>在 TAPD 查看</Button> : null}
-        </View>
-        <IssueParts {...{ client, disabled }} issue={value} selection={selected?.selection} onToggle={part => edit(current => changeIssuePart(current, value, part))} />
-      </> : <ActivityIndicator color={c.accent} />}
+    {expanded ? <View testID={'tapd-detail-' + issue.id}
+      style={{ paddingLeft: 24, paddingRight: 12, paddingVertical: 7, backgroundColor: tint(c.foregroundMuted, '05') }}>
+      <View style={{ borderLeftWidth: 1, borderColor: c.border, paddingLeft: 10, gap: 5 }}>
+        {detail.error ? <Label warning>{topicError(detail.error.message)}</Label> : value ? <>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+            <Text style={[topicTypography.metadata, { flex: 1, minWidth: 110, color: c.foregroundMuted }]}>
+              {[value.assignee ? '处理人 ' + value.assignee : '', value.priority].filter(Boolean).join(' · ')}
+            </Text>
+            {value.sourceUrl ? <Button variant="link" icon="ArrowUpRight" onPress={() => { void openExternalUrl(value.sourceUrl!).catch(() => setError('TAPD 原记录暂未打开')); }}>在 TAPD 查看</Button> : null}
+          </View>
+          <IssueParts {...{ client, disabled }} issue={value} selection={selected?.selection} onToggle={part => edit(current => changeIssuePart(current, value, part))} />
+        </> : <ActivityIndicator color={c.accent} />}
+      </View>
     </View> : null}
   </View>;
 }
@@ -152,13 +175,19 @@ function IssueParts({ client, issue, selection, disabled, onToggle }: {
   return <>
     {issue.body.trim() ? <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 4 }}>
       <Check checked={Boolean(selection?.body)} disabled={disabled || issue.bodyState !== 'ready'} label="选择缺陷描述" onPress={() => onToggle({ kind: 'body' })} />
-      <View style={{ flex: 1, minWidth: 0, gap: 2 }}><Label strong>缺陷描述</Label><Text selectable style={{ color: c.foreground, fontSize: 13, lineHeight: 21 }}>{issue.body}</Text></View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text style={[topicTypography.detailLabel, { color: c.foregroundMuted }]}>缺陷描述</Text>
+        <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{issue.body}</Text>
+      </View>
     </View> : issue.bodyState === 'empty' ? <Label muted>暂无缺陷描述</Label> : null}
     {statusLabels[issue.bodyState] ? <Label muted>{'描述 · ' + statusLabels[issue.bodyState]}</Label> : null}
     {issue.comments.map(comment => <View key={comment.id} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 4 }}>
       <Check checked={Boolean(selection?.comments.some(item => item.id === comment.id))} disabled={disabled || issue.commentsState !== 'ready' || !comment.text.trim()}
         label={'选择评论 ' + (comment.author || '') + ' ' + comment.text.slice(0, 24)} onPress={() => onToggle({ kind: 'comments', id: comment.id, version: comment.version })} />
-      <View style={{ flex: 1, minWidth: 0 }}><Label muted>{['评论', comment.author, comment.createdAt ? topicTime(comment.createdAt) : ''].filter(Boolean).join(' · ')}</Label><Label>{comment.text}</Label></View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text style={[topicTypography.detailLabel, { color: c.foregroundMuted }]}>{['评论', comment.author, comment.createdAt ? topicTime(comment.createdAt) : ''].filter(Boolean).join(' · ')}</Text>
+        <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{comment.text}</Text>
+      </View>
     </View>)}
     {statusLabels[issue.commentsState] ? <Label muted>{'评论 · ' + statusLabels[issue.commentsState]}</Label> : null}
     {issue.attachments.length ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 9, paddingLeft: 12 }}>

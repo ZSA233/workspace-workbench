@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Image, Platform, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { Icon, ScrollView, useToast } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
@@ -11,6 +11,20 @@ import { supportedArtifact } from '../../../shared/artifact-limits.ts';
 import {TopicVideoPlayer,TopicVideoFrames} from '../../topic-video';
 import {videoTime,type TopicVideoPreview} from '../../../shared/topic-video';
 import { pendingTopicAssets, TOPIC_ASSET_REFRESH_MS } from '../../topic-asset-state';
+
+export const topicTypography = StyleSheet.create({
+  title: { fontSize: 12, lineHeight: 18, fontWeight: '600' },
+  metadata: { fontSize: 10, lineHeight: 15 },
+  detailLabel: { fontSize: 10, lineHeight: 15, fontWeight: '500' },
+  body: { fontSize: 11.5, lineHeight: 18 },
+});
+
+export function TopicRowStatus({ label, tone = 'neutral' }: { label: string; tone?: 'neutral' | 'active' | 'resolved' }) {
+  const c = useColors(), color = tone === 'active' ? c.accent : tone === 'resolved' ? c.statusSuccess : c.foregroundMuted;
+  return <Text numberOfLines={1} {...(Platform.OS === 'web' ? { title: label } : {})} style={[topicTypography.metadata, {
+    color, backgroundColor: tint(color, '14'), borderRadius: 4, maxWidth: 86, paddingHorizontal: 5, paddingVertical: 1,
+  }]}>{label}</Text>;
+}
 
 export function TopicIcon({ icon, label, onPress, disabled = false, active = false, busy = false, id, compact = false }: {
   icon: string; label: string; onPress: () => void; disabled?: boolean; active?: boolean; busy?: boolean; id?: string; compact?: boolean;
@@ -127,8 +141,11 @@ export function OriginalMessage({ client, topicId, message, contextOf, selected,
     <View style={{ flexDirection: 'row', gap: 5, alignItems: 'flex-start' }}>
       <Check checked={selected} label={'选择消息：' + (text.slice(0,24) || '附件消息')} id={'topic-message-' + message.id} onPress={onMessage} disabled={disabled} />
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-        <View style={{ flexDirection: 'row', gap: 9, alignItems: 'center' }}><Text style={{ color: c.foreground, fontSize: 12, fontWeight: '600' }}>{senderName(message)}</Text><Text style={{ fontSize: 10, color: c.foregroundMuted }}>{topicTime(message.createdAt)}</Text></View>
-        {text ? <Text selectable style={{ color: c.foreground, fontSize: 13, lineHeight: 21 }}>{text}</Text> : null}
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          <Text style={[topicTypography.detailLabel, { color: c.foregroundMuted }]}>{senderName(message)}</Text>
+          <Text style={[topicTypography.metadata, { color: c.foregroundMuted }]}>{topicTime(message.createdAt)}</Text>
+        </View>
+        {text ? <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{text}</Text> : null}
       </View>
       {onContext ? <TopicIcon icon="MessagesSquare" label="查看上下文" onPress={onContext} /> : null}
     </View>

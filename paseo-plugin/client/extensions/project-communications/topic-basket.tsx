@@ -1,13 +1,13 @@
 import { useState } from 'react';
-import { View } from 'react-native';
+import { Text, View } from 'react-native';
 import { Icon, ScrollView } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
 import { materialCounts, materialLimitExceeded, changeAsset, changeMessage, selectedAssets, type TopicBasket } from '../../topic-selection';
 import type { IssueBasket } from '../../issue-selection';
 import type { TopicMaterialPreview } from '../../../shared/extensions/project-communications/topics';
 import { messageText, senderName, topicTitle } from '../../../shared/extensions/project-communications/topics';
-import { Button, Label, useColors } from './ui';
-import { MediaCount, TopicAsset, TopicIcon } from './topic-ui';
+import { Button, useColors } from './ui';
+import { MediaCount, TopicAsset, TopicIcon, topicTypography } from './topic-ui';
 
 export function TopicMaterialBasket({ client, basket, issues, edit, busy, narrow, preview, hasNote, onSend, onOpenSession,onEdit,onClear,onRemoveIssue }: {
   client: TopicsClient; basket: TopicBasket; issues: IssueBasket; edit(change: (current: TopicBasket) => TopicBasket): void;
@@ -20,7 +20,8 @@ export function TopicMaterialBasket({ client, basket, issues, edit, busy, narrow
   const locked = busy || uncertain;
   return <View testID="topics-basket" style={{ borderTopWidth: 1, borderTopColor: c.border, backgroundColor: c.surface2, maxHeight: 310 }}>
     <View style={{ paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-      <Label strong>已选</Label>{counts.topics || !counts.issues ? <MediaCount icon="Layers" count={counts.topics} label="话题" /> : null}
+      <Text style={[topicTypography.title, { color: c.foreground }]}>已选</Text>
+      {counts.topics || !counts.issues ? <MediaCount icon="Layers" count={counts.topics} label="话题" /> : null}
       {counts.issues ? <MediaCount icon="Bug" count={counts.issues} label="缺陷" /> : null}
       <MediaCount icon="MessageSquare" count={counts.messages} label="原文" /><MediaCount icon="Image" count={counts.assets} label="附件" />
       <View style={{ flex: 1 }} /><TopicIcon icon={collapsed ? 'ChevronUp' : 'ChevronDown'} label={collapsed ? '展开材料' : '收起材料'} disabled={!counts.records} onPress={() => setCollapsed(value => !value)} />
@@ -31,14 +32,14 @@ export function TopicMaterialBasket({ client, basket, issues, edit, busy, narrow
         style={{ paddingVertical: 7, gap: 8, flexDirection: narrow ? 'column' : 'row', alignItems: narrow ? undefined : 'center', borderTopWidth: 1, borderTopColor: c.border }}>
         <View style={{ flexDirection: 'row', gap: 7, alignItems: 'center', flexBasis: narrow ? undefined : '30%', maxWidth: narrow ? undefined : 300 }}>
           <Icon name="Layers" size={13} color={c.accent} />
-          <View style={{ flex: 1 }}><Label lines={1} strong>{topicTitle(selected.topic)}</Label></View>
+          <Text selectable numberOfLines={1} style={[topicTypography.title, { flex: 1, minWidth: 0, color: c.foreground }]}>{topicTitle(selected.topic)}</Text>
           <TopicIcon compact icon="X" label={'移除话题 ' + topicTitle(selected.topic)} disabled={locked}
             onPress={() => edit(current => { const next = { ...current }; delete next[selected.topic.id]; return next; })} />
         </View>
         <View style={{ flexDirection: 'row', gap: 9, alignItems: 'center', flex: narrow ? undefined : 1 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
             {selected.messages.map(message => <View key={message.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-              <View style={{ flex: 1 }}><Label muted lines={1}>{senderName(message) + ((selected.editedTexts?.[message.id]??messageText(message)) ? '：' + (selected.editedTexts?.[message.id]??messageText(message)) : '')}</Label></View>
+              <Text selectable numberOfLines={1} style={[topicTypography.metadata, { flex: 1, minWidth: 0, color: c.foregroundMuted }]}>{senderName(message) + ((selected.editedTexts?.[message.id]??messageText(message)) ? '：' + (selected.editedTexts?.[message.id]??messageText(message)) : '')}</Text>
               <TopicIcon compact icon="PenLine" label="编辑所选材料" disabled={locked} onPress={onEdit}/>
               <TopicIcon compact id={'topic-remove-message-' + message.id} icon="X" label={'移除原文：' + (messageText(message).slice(0,24) || '附件消息')} disabled={locked}
                 onPress={() => edit(current => changeMessage(current, selected.topic, message, selected.contexts[message.id]))} />
@@ -55,7 +56,10 @@ export function TopicMaterialBasket({ client, basket, issues, edit, busy, narrow
       {Object.values(issues).map(({issue,selection}) => <View key={issue.id} testID={'tapd-basket-'+issue.id}
         style={{ paddingVertical: 7, gap: 7, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: c.border }}>
         <Icon name="Bug" size={13} color={c.accent} />
-        <View style={{ flex: 1, minWidth: 0 }}><Label strong lines={2}>{issue.title}</Label><Label muted lines={1}>{'TAPD · ' + issue.number}</Label></View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text selectable numberOfLines={2} style={[topicTypography.title, { color: c.foreground }]}>{issue.title}</Text>
+          <Text selectable numberOfLines={1} style={[topicTypography.metadata, { color: c.foregroundMuted }]}>{'TAPD · ' + issue.number}</Text>
+        </View>
         <MediaCount icon="FileText" count={Number(selection.body) + selection.comments.length} label="原文" />
         <MediaCount icon="Paperclip" count={selection.attachments.length} label="附件" />
         <TopicIcon compact icon="X" label={'移除缺陷 ' + issue.title} disabled={locked} onPress={() => onRemoveIssue(issue.id)} />

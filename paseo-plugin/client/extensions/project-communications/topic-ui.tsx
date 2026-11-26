@@ -109,6 +109,7 @@ export function topicError(error: string) {
   const messages: Record<string, string> = {
     topic_material_version_changed: '话题有更新，请重新选材', topic_message_version_changed: '原文有更新，请重新选材',
     topic_asset_version_changed: '原件有更新，请重新选材', topic_asset_not_ready: '附件尚未就绪',
+    topic_media_display_unavailable: '材料已发送，附件显示暂不可用；请查回执重试显示',
     topic_target_unavailable: '请选择目标会话', topic_target_changed: '目标会话已变化', topic_targets_incomplete: '会话列表未完整加载，请重试',
     topic_models_unavailable: '模型列表暂不可用', topic_model_unavailable: '所选模型暂不可用，请重新选择', topic_session_ambiguous: '新会话状态待核对，请勿重复发送',
     topic_material_scope_changed: '连接已变化，请重新预览', project_connection_changed: '连接已变化',

@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { tryAccessDownload } from '../client/access-download.ts';
 
 const token = '00000000-1111-2222-3333-444444444444';
-function fixture(ua = 'AccessPocket/0.2.9', options: { missing?: boolean; hostile?: boolean } = {}) {
+function fixture(ua = 'AccessPocket/0.2.9', options: { missing?: boolean; hostile?: boolean; spa?: boolean } = {}) {
   const requests: any[] = [], clicks: string[] = [];
   const web = { URL, location: { href: 'https://paseo.test/', origin: 'https://paseo.test' }, navigator: { userAgent: ua },
     document: { body: { appendChild() {} }, createElement() { return { href: '', download: '', rel: '', click() { clicks.push(this.href); }, remove() {} }; } },
     async fetch(path: string, init: any) {
       requests.push({ path, init });
-      if (path.endsWith('capabilities')) return { ok: !options.missing, status: options.missing ? 404 : 200, json: async () => ({ download_handoff_version: 1, entry_server_id: 'mini' }) };
+      if (path.endsWith('capabilities')) return { ok: !options.missing, status: options.missing ? 404 : 200,
+        headers: { get: () => options.spa ? 'text/html; charset=utf-8' : 'application/json' },
+        json: async () => { if (options.spa) throw Error('SPA HTML is not JSON'); return { download_handoff_version: 1, entry_server_id: 'mini' }; } };
       return { ok: true, status: 201, json: async () => ({ download_url: options.hostile ? 'https://evil.test/file' : '/__access/paseo/downloads/' + 'a'.repeat(64) + (ua.includes('AccessPocket') ? '/start' : '/content') }) };
     } };
   return { web, requests, clicks };
@@ -22,6 +24,7 @@ test('routed host uses its identity and an opaque same-origin handoff', async ()
 test('ordinary browser consumes content directly and absent adapter preserves legacy path', async () => {
   const browser = fixture('Chrome'); assert.equal(await tryAccessDownload('/api/files/download?token=' + token, 'studio', 'x', browser.web), true); assert.ok(browser.clicks[0].endsWith('/content'));
   const missing = fixture('Chrome', { missing: true }); assert.equal(await tryAccessDownload('/api/files/download?token=' + token, 'studio', 'x', missing.web), false); assert.equal(missing.requests.length, 1);
+  const spa = fixture('Chrome', { spa: true }); assert.equal(await tryAccessDownload('/api/files/download?token=' + token, 'studio', 'x', spa.web), false); assert.equal(spa.requests.length, 1); assert.equal(spa.clicks.length, 0);
 });
 test('rejects origin escape and unknown native downloader before creating a ticket', async () => {
   for (const url of ['https://evil.test/api/files/download?token=' + token, '/api/files/download?token=' + token + '&token=' + token, '/api/files/download?token=' + token + '&url=http://evil']) {

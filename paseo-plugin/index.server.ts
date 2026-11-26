@@ -6,7 +6,10 @@ import { creationSource } from './server/workspace-creator';
 import { defineRpc } from "@getpaseo/plugin";
 import { archiveTopicsRpc, archiveTopicsDeliveryRpc } from './shared/extensions/project-communications/topics.ts';
 import { topicChatMediaRpc } from './shared/topic-chat-media-rpc.ts';
-import { readTopicChatMedia } from './server/topic-chat-media.ts';
+import { readTopicChatMedia, readTopicChatFile } from './server/topic-chat-media.ts';
+import { chatMediaRpc } from './shared/chat-media.ts';
+import { chatMediaDownloadPath, describeChatMediaFile, readChatMediaFileChunk, readChatMediaImage, readChatMediaReceipt } from './server/backend/chat-media.ts';
+import { basename, dirname } from 'node:path';
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import { handleHandoffMaterials } from "./server/handoff-access";
@@ -153,7 +156,39 @@ export default function contribute(server: PluginServerContext) {
   measured.handle(extensionsRpc, input => input.action === 'status' ? extensions.state(input.projectConfig,input.extensionId) : extensions.setEnabled(input.projectConfig,input.extensionId,input.action==='enable'));
   measured.handle(communicationsRpc, input => extensions.request(input.projectConfig,input.extensionId,input.request));
   measured.handle(archiveTopicsRpc,input=>extensions.topics(input.projectConfig,input.extensionId,input.connectionRevision,input.request));
-  measured.handle(topicChatMediaRpc,input=>readTopicChatMedia(resolveProject(input),input));
+  measured.handle(topicChatMediaRpc,async input=>{
+    const route=resolveProject(input);
+    if(input.action==='read')return readTopicChatMedia(route,input);
+    if(!input.assetId)throw Error('topic_media_outside_selection');
+    const file=readTopicChatFile(route,{...input,assetId:input.assetId});
+    const selected=await describeChatMediaFile(file.path,file.size);
+    if(input.action==='chunk')return readChatMediaFileChunk(selected,input.offset,input.revision);
+    return host.run(async(_api,client)=>{
+      if(!client.requestDownloadToken||!client.getLastServerInfoMessage)throw Error('chat_media_download_unavailable');
+      const token=await client.requestDownloadToken(dirname(file.path),basename(file.path));
+      const serverId=client.getLastServerInfoMessage()?.serverId;
+      if(!token.token||token.error||!serverId)throw Error('chat_media_download_unavailable');
+      return {url:'/api/files/download?token='+encodeURIComponent(token.token),serverId,name:file.fileName,size:selected.size,revision:selected.revision};
+    });
+  });
+  measured.handle(chatMediaRpc, async input => {
+    const receipt = await readChatMediaReceipt(input.agentId, input.messageId, input.receiptId);
+    if (input.action !== 'read') {
+      if (!input.assetId) throw Error('chat_media_outside_selection');
+      const { path, file } = await chatMediaDownloadPath(receipt, input.assetId);
+      const selected=await describeChatMediaFile(path,file.size);
+      if(input.action==='chunk')return readChatMediaFileChunk(selected,input.offset,input.revision);
+      return host.run(async (_api, client) => {
+        if (!client.requestDownloadToken || !client.getLastServerInfoMessage) throw Error('chat_media_download_unavailable');
+        const token = await client.requestDownloadToken(dirname(path), basename(path));
+        const serverId = client.getLastServerInfoMessage()?.serverId;
+        if (!token.token || token.error || !serverId) throw Error('chat_media_download_unavailable');
+        return { url: '/api/files/download?token=' + encodeURIComponent(token.token), serverId, name: file.name,size:selected.size,revision:selected.revision };
+      });
+    }
+    if (input.assetId) return readChatMediaImage(receipt, input.assetId);
+    return { images: receipt.images, videos: [], files: receipt.files.map(({ uploadId, uploadName, modifiedAt, ...file }) => ({ ...file, available: Boolean(uploadId) })) };
+  });
   withHost.handle(archiveTopicsDeliveryRpc,(input,context)=>extensions.topics(input.projectConfig,input.extensionId,input.connectionRevision,input.request,context));
   // Delivery alone needs the host connection. Other extension operations remain usable while it reconnects.
   withHost.handle(communicationsDeliveryRpc,(input,context)=>extensions.request(input.projectConfig,input.extensionId,input.request,context));

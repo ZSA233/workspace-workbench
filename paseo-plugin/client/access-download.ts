@@ -12,6 +12,8 @@ export async function tryAccessDownload(url: string, serverId: string, filename:
   if (capability.status === 404 || capability.status === 405) return false;
   if (capability.status === 401 || capability.status === 403) throw new Error('请重新打开工作台完成登录，再下载文件');
   if (!capability.ok) throw new Error('下载入口暂时不可用');
+  // An ordinary Paseo web server can return its SPA shell for unknown paths.
+  if (/^text\/html(?:;|$)/i.test(capability.headers?.get?.('content-type') || '')) return false;
   const caps = await capability.json();
   if (caps.download_handoff_version !== 1 || typeof caps.entry_server_id !== 'string') return false;
   const ua = web.navigator?.userAgent || '';

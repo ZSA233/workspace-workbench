@@ -297,6 +297,13 @@ export function storedArtifactFileAttachment(id: string) {
     mimeType: metadata.mimeType, size: metadata.size, path: bytesPath(id) };
 }
 
+/** Metadata-only capability for bounded reads of a registered original. */
+export function storedArtifactFileDescriptor(id: string) {
+  const metadata=readStoredMetadata(id),path=bytesPath(id),stat=lstatSync(path);
+  if(!stat.isFile()||stat.isSymbolicLink()||stat.size!==metadata.size)throw Error('artifact_integrity_failed');
+  return {type:'uploaded_file' as const,id:metadata.id,fileName:metadata.title,mimeType:metadata.mimeType,size:metadata.size,path};
+}
+
 export async function authorizeArtifactCaller(input: { token: string }, context: { paseo: PaseoApi }): Promise<{ cwd?: string }> {
   const identity = await liveAgentIdentity(input.token, context.paseo);
   if (!identity) throw new Error("artifact_caller_context_invalid");

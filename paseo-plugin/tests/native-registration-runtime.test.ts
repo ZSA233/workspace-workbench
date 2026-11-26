@@ -47,9 +47,9 @@ test("Hermes evaluates the actual client entry, registers, unloads and reloads w
     function setInterval(){intervals++;return intervals;}function clearInterval(){intervals--;}
     function component(){}
     function schema(fields){var value,hasDefault=false;var s={parse:function(v){if(v===undefined&&hasDefault)return value;if(fields){var out={};Object.keys(fields).forEach(function(k){out[k]=fields[k].parse(v&&v[k]);});return out;}return v;}};
-      ['min','max','int','nonnegative','trim','nullable','optional'].forEach(function(k){s[k]=function(){return s;};});s.default=function(v){value=v;hasDefault=true;return s;};return s;}
+      ['min','max','int','nonnegative','trim','nullable','optional','regex'].forEach(function(k){s[k]=function(){return s;};});s.extend=function(f){return schema(Object.assign({},fields,f));};s.default=function(v){value=v;hasDefault=true;return s;};return s;}
     var z={object:function(f){return schema(f);}};
-    ['string','number','boolean','enum','record','discriminatedUnion','literal','array','json'].forEach(function(k){z[k]=function(){return schema();};});
+    ['string','number','boolean','enum','record','discriminatedUnion','literal','array','json','unknown'].forEach(function(k){z[k]=function(){return schema();};});
     function require(name){
       if(name==='react')return {createContext:function(v){return {Provider:component,value:v};},createElement:component,memo:function(v){return v;}};
       if(name==='react/jsx-runtime')return {jsx:component,jsxs:component};

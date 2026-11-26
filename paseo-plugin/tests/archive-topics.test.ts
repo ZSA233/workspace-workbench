@@ -57,13 +57,18 @@ function nativeSession(root: string) {
   const agent = { id: 'native-codex', cwd: root, workspaceId: 'native-host-workspace', title: '现有反馈分析会话', provider: 'codex',
     status: 'idle', archivedAt: null as string | null, labels: {}, currentModeId: 'full-access', features: [{ id: 'plan_mode', type: 'toggle', value: true }] };
   const workspace = { id: agent.workspaceId, name: '默认工作区名称', title: null as string | null };
-  const state = { uncertain: false, appended: [] as unknown[], sent: [] as Array<{ text: string; options: { messageId: string; images: Array<{ data: string; mimeType: string }>; attachments?: Array<{ type: string; fileName: string; mimeType: string; size: number; path: string }> } }> };
+  type TimelineItem = { type: string; id?: string; messageId?: string; [key: string]: unknown };
+  const state = { uncertain: false, failDisplay: false, appended: [] as unknown[], events: [] as Array<{item:TimelineItem}>, sent: [] as Array<{ text: string; options: { messageId: string; images: Array<{ data: string; mimeType: string }>; attachments?: Array<{ type: string; fileName: string; mimeType: string; size: number; path: string }> } }> };
   const context = { paseo: { workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) }, agents: {
     list: async () => ({ entries: [{ agent }], pageInfo: { hasMore: false } }),
     ref: (id: string) => ({ refresh: async () => ({ agent: id === agent.id ? agent : null }),
-      send: async (text: string, options: typeof state.sent[number]['options']) => { assert.equal(id, agent.id); state.sent.push({ text, options }); if (state.uncertain) throw Error('connection lost after dispatch'); },
-      timeline: { append: async (item:unknown)=>{state.appended.push(item);return {seq:state.appended.length,epoch:'fixture'};},
-        refetch: async () => ({ entries: [...state.sent.map(item => ({ item: { type: 'user_message', messageId: item.options.messageId } })),...state.appended.map(item=>({item}))] }) },
+      send: async (text: string, options: typeof state.sent[number]['options']) => { assert.equal(id, agent.id); state.sent.push({ text, options }); state.events.push({item:{type:'user_message',messageId:options.messageId}}); if (state.uncertain) throw Error('connection lost after dispatch'); },
+      timeline: { append: async (item:TimelineItem)=>{
+        if(state.failDisplay)throw Error('display unavailable');
+        const existing=state.events.find(event=>event.item.type==='plugin'&&event.item.id===item.id&&state.appended.includes(event.item));
+        state.appended.push(item);if(existing)existing.item=item;else state.events.push({item});return {seq:state.appended.length,epoch:'fixture'};
+      },
+        refetch: async () => ({ entries: state.events.filter(event=>event.item.type==='user_message'||state.appended.includes(event.item)) }) },
     }),
   } } } as unknown as AgentContext;
   return { agent, workspace, state, context };
@@ -577,6 +582,49 @@ test('an uncertain ordinary-session send checks the same receipt and never dispa
     const receipt = await s.host.topics(s.config, 'project-communications', 2, { action: 'receipt', id: preview.id }, native.context) as TopicMaterialPreview;
     assert.equal(receipt.state, 'accepted'); assert.equal((await send()).state, 'accepted'); assert.equal(native.state.sent.length, 1);
   } finally { await s.close(); }
+});
+
+test('DingTalk and TAPD media follows its accepted message; display retries never dispatch another task', async () => {
+  const s=await setup();
+  try {
+    const native=nativeSession(s.root),topic=await s.archive.read('topic-1'),selected=selection(topic),issue=s.state.issues[0];
+    selected.assets=[{id:'image-1',messageId:topic.messages[0].id,messageVersion:topic.messages[0].version}];
+    const call=(request:Parameters<WorkbenchExtensions['topics']>[3])=>s.host.topics(s.config,'project-communications',2,request,native.context) as Promise<TopicMaterialPreview>;
+    const chat=await call({action:'preview',targetId:'session:'+native.agent.id,selections:[selected]});
+    await call({action:'send',id:chat.id});
+    assert.deepEqual(native.state.events.map(event=>event.item.type),['user_message','plugin']);
+    const tapd=await call({action:'preview',targetId:'session:'+native.agent.id,selections:[],issueSelections:[{issueId:issue.id,version:issue.version,body:true,comments:[],attachments:[{id:issue.attachments[0].id,version:issue.attachments[0].version}]}]});
+    native.state.failDisplay=true;
+    await assert.rejects(call({action:'send',id:tapd.id}),/topic_media_display_unavailable/);
+    assert.equal(native.state.sent.length,2);
+    const file=join(s.root,'state/extensions/topic-materials',createHash('sha256').update(tapd.id).digest('hex')+'.json');
+    assert.equal(JSON.parse(readFileSync(file,'utf8')).state,'accepted');
+    native.state.failDisplay=false;
+    assert.equal((await call({action:'receipt',id:tapd.id})).state,'accepted');
+    assert.deepEqual(native.state.events.map(event=>event.item.type),['user_message','plugin','user_message','plugin']);
+    await call({action:'receipt',id:tapd.id});
+    assert.equal(native.state.sent.length,2);assert.equal(native.state.appended.length,2);
+  } finally {await s.close();}
+});
+
+test('a historical media row before a long message is repaired after it without replacing its identity or resending',async()=>{
+  const s=await setup();
+  try {
+    const native=nativeSession(s.root),topic=await s.archive.read('topic-1'),selected=selection(topic);
+    selected.assets=[{id:'image-1',messageId:topic.messages[0].id,messageVersion:topic.messages[0].version}];
+    const call=(request:Parameters<WorkbenchExtensions['topics']>[3])=>s.host.topics(s.config,'project-communications',2,request,native.context) as Promise<TopicMaterialPreview>;
+    const preview=await call({action:'preview',targetId:'session:'+native.agent.id,selections:[selected]});
+    const legacyId='topic-images:'+preview.id;
+    await native.context.paseo.agents.ref(native.agent.id).timeline.append({type:'plugin',id:legacyId,kind:'workbench-topic-images',version:1,data:{projectConfig:s.config,materialId:preview.id,legacyHistory:'retain'}});
+    await call({action:'send',id:preview.id});
+    const legacy=native.state.events[0].item;
+    assert.equal(legacy.id,legacyId);assert.equal((legacy.data as {hidden:boolean}).hidden,true);
+    assert.equal((legacy.data as {legacyHistory:string}).legacyHistory,'retain');
+    assert.equal(native.state.events[1].item.type,'user_message');
+    assert.equal(native.state.events[2].item.id,legacyId+':after');
+    await call({action:'receipt',id:preview.id});
+    assert.equal(native.state.sent.length,1);assert.equal(native.state.events.length,3);
+  } finally {await s.close();}
 });
 
 test('ordinary sessions receive registered non-image originals as host file attachments', async () => {

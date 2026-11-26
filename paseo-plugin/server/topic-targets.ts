@@ -10,7 +10,7 @@ import { withProject } from './projects.ts';
 import { actualPlanningState } from './execution-policy.ts';
 import { digest } from './orchestration-state.ts';
 import { resolveArtifactReference, resolvedArtifactImageAttachments, storedArtifactFileAttachment } from './artifacts.ts';
-import { appendTopicImages } from './topic-chat-media.ts';
+import { reserveTopicChatMedia } from './backend/chat-media.ts';
 
 export type TopicSessionIdentity = { agentId: string; cwd: string; hostWorkspaceId: string };
 function inside(root: string, path: string) {
@@ -92,7 +92,7 @@ export async function deliverTopicSession(route: ProjectRoute, context: AgentCon
     const assets = value.references.map(reference => resolveArtifactReference(reference, { repositories: [] }));
     const id = topicMessageId(value.id, target);
     beforeSend?.();
-    await appendTopicImages(route,context,target.agentId,value);
+    await reserveTopicChatMedia(target.agentId, id);
     await assertTopicSession(route,context,target);
     beforeSend?.();
     try {

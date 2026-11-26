@@ -7,6 +7,7 @@ if (process.argv.includes("--version")) { console.log("codex-cli 0.161.0"); proc
 const root = process.env.WORKBENCH_RECOVERY_FIXTURE_ROOT;
 if (!root) throw new Error("isolated_fixture_root_required");
 mkdirSync(root, { recursive: true });
+if(process.env.WORKBENCH_LIVE_CHAT_MEDIA==='1')writeFileSync(join(root,'native-media-child-env'),JSON.stringify({mediaPreloadInherited:(process.env.NODE_OPTIONS||'').includes('native-chat-media.mjs')}));
 const models = [{ id: "recovery-fixture", model: "recovery-fixture", displayName: "Recovery fixture", isDefault: true, defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low" }] }];
 if (process.env.WORKBENCH_RECOVERY_FIXTURE_SUCCEED === '1') models.push({ ...models[0], id: 'topic-alternate', model: 'topic-alternate', displayName: 'Topic analysis fixture', isDefault: false,
   supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'high'}] });

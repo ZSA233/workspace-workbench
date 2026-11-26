@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import WebSocket from 'ws';
 import { backendRequest } from '../server/backend-supervisor.ts';
 import { startArchiveFixture } from '../tests/helpers/archive-service.ts';
+import { fixturePng } from '../tests/helpers/raster.ts';
 import { openIsolatedWorkbench, selectGlobalWorkbenchProject } from './ui-project-selection.mjs';
 
 const plugin = resolve(import.meta.dirname, '..');
@@ -37,7 +38,7 @@ videoMessage.assets=[{id:'video-original',name:'attachment',mimeType:'video',sta
 for(let index=1;index<=8;index++)videoTopic.messages.push({...videoMessage,id:'video-followup-'+index,version:'video-followup-version-'+index,createdAt:videoMessage.createdAt+index*60000,text:'后续讨论 '+index,assets:[]});
 videoTopic.messageCount=videoTopic.messages.length;
 const host = spawn(process.execPath, [join(plugin, 'scripts/verify-live.mjs')], {
-  env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_LIVE_TOPICS: '1', WORKBENCH_VERIFY_OUTPUT: output },
+  env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_LIVE_TOPICS: '1', WORKBENCH_LIVE_CHAT_MEDIA: '1', WORKBENCH_VERIFY_OUTPUT: output },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let logs = '', ui, browser, page, client;
@@ -890,6 +891,97 @@ try {
   await page.getByTestId('topics-send').click();
   await page.getByTestId('topic-chat-images').filter({ visible: true }).last().getByRole('img').first().waitFor();
   check('TAPD body and comment images retain Unicode placement on desktop and phone, share original-image selection and previews, and reach an actual native session with exact bytes');
+  const threeOriginals=[fixturePng(220,80,80),fixturePng(80,180,120),fixturePng(80,120,220)];
+  const threeIds=threeOriginals.map((bytes,index)=>createHash('sha256').update('distinct-tapd-'+index).digest('hex'));
+  issue.version='three-originals-revision';issue.body='三张原图随长正文发送。\n'+'原始缺陷内容，保留全部文字。\n'.repeat(100);
+  issue.comments=[];issue.commentsState='empty';
+  issue.inlineImages=threeIds.map((id,index)=>({id,name:'TAPD 图片 '+(index+1),state:'ready',offset:10+index*20}));
+  threeIds.forEach((id,index)=>fixture.state.assetBytes.set(id,{bytes:threeOriginals[index],mimeType:'image/png'}));
+  const threeNote='TAPD 三张原图与长正文回显验收';
+  const waitForIdle=async()=>{
+    for(const deadline=Date.now()+10000;;){
+      if((await nativeSession.refresh())?.agent.status==='idle')return;
+      if(Date.now()>deadline)throw Error('media_fixture_turn_not_idle');
+      await page.waitForTimeout(25);
+    }
+  };
+  await waitForIdle();
+  const threePreview=await deliver({action:'preview',targetId:'session:'+nativeSession.id,note:threeNote,selections:[],issueSelections:[{
+    issueId:issue.id,version:issue.version,body:true,comments:[],attachments:threeIds.map(id=>({id,version:issue.version})),
+  }]});
+  const threeSent=await deliver({action:'send',id:threePreview.id});assert.equal(threeSent.state,'accepted');
+  const threeGallery=page.getByTestId('topic-chat-images').filter({visible:true}).last();
+  await threeGallery.getByTestId('chat-media-receipt-status').getByText('已发送 · 3 张图片',{exact:true}).waitFor();
+  await threeGallery.getByRole('img').nth(2).waitFor();
+  const threeTimeline=await client.fetchAgentTimeline(nativeSession.id,{limit:100});
+  const threeMessage=threeTimeline.entries.findIndex(entry=>entry.item.type==='user_message'&&(entry.item.messageId===threeSent.messageId||entry.item.clientMessageId===threeSent.messageId));
+  const threeMedia=threeTimeline.entries.findIndex(entry=>entry.item.type==='plugin'&&entry.item.id==='topic-images:'+threePreview.id);
+  assert.ok(threeMessage>=0&&threeMedia>threeMessage,'TAPD photos must follow their accepted original message');
+  await page.screenshot({path:join(output,'tapd-three-images-after-message.png')});
+  report.screenshots.push(join(output,'tapd-three-images-after-message.png'));
+  check('three distinct TAPD originals stay after their long accepted message with an explicit sent-image count');
+
+  const pocketSender=new DaemonClient({url:ui.url.replace('http:','ws:')+'/ws',clientId:'independent-pocket-sender',clientType:'browser',reconnect:{enabled:false},
+    webSocketFactory:(url,options)=>new WebSocket(url,options?.protocols,{headers:options?.headers})});
+  let peer;
+  try {
+    await pocketSender.connect();
+    const uploaded=await pocketSender.uploadFile({fileName:'跨端附件.pdf',mimeType:'application/pdf',bytes:fixture.pdf});
+    assert.ok(uploaded.file&&!uploaded.error,JSON.stringify(uploaded.error));
+    const pocketMessage='pocket-media-'+Date.now(),pocketText='来自另一个 Pocket 客户端的三张图片和 PDF 附件';
+    await waitForIdle();
+    await pocketSender.sendAgentMessage(nativeSession.id,pocketText,{messageId:pocketMessage,images:threeOriginals.map(bytes=>({data:bytes.toString('base64'),mimeType:'image/png'})),attachments:[uploaded.file]});
+    let nativeReceipt;
+    for(const deadline=Date.now()+10000;;){
+      const timeline=await client.fetchAgentTimeline(nativeSession.id,{limit:100});
+      const marker=timeline.entries.find(entry=>entry.item.type==='plugin'&&entry.item.kind==='workbench-chat-media'&&entry.item.data.messageId===pocketMessage);
+      if(marker){nativeReceipt=marker.item.data;break;}
+      if(Date.now()>deadline)throw Error('native_media_receipt_not_recorded');
+      await page.waitForTimeout(50);
+    }
+    const nativeManifest=await client.invokePluginRpc('workspace-workbench-paseo','workspace.workbench.chat-media',{...nativeReceipt,agentId:nativeSession.id});
+    assert.equal(nativeManifest.images.length,3);assert.equal(nativeManifest.files.length,1);assert.equal(nativeManifest.files[0].name,'跨端附件.pdf');
+    for(const [index,image] of nativeManifest.images.entries()){
+      const bytes=await client.invokePluginRpc('workspace-workbench-paseo','workspace.workbench.chat-media',{...nativeReceipt,agentId:nativeSession.id,assetId:image.assetId});
+      assert.ok(Buffer.from(bytes.base64,'base64').equals(threeOriginals[index]));
+    }
+    // Connection preferences are shared; attachment IndexedDB is deliberately absent.
+    const receiver=await browser.newContext({storageState:await page.context().storageState(),viewport:{width:1448,height:1120},locale:'zh-CN',colorScheme:'dark'});
+    // Exercise the ordinary browser download fallback (e.g. Safari), rather than
+    // opening Chromium's OS file chooser in this headless UI run.
+    await receiver.addInitScript(()=>Object.defineProperty(window,'showSaveFilePicker',{value:undefined,configurable:true}));
+    peer=await receiver.newPage();peer.on('pageerror',error=>report.pageErrors.push(error.message));
+    await peer.goto(page.url());
+    const gallery=peer.getByTestId('topic-chat-images').filter({visible:true}).last();
+    await gallery.getByText('已发送 · 3 张图片 · 1 个附件',{exact:true}).waitFor();
+    await gallery.getByRole('img',{name:/^所选图片 [1-3]$/}).nth(2).waitFor();
+    assert.equal(await gallery.getByRole('img',{name:/^所选图片 [1-3]$/}).count(),3);
+    await gallery.getByTestId('chat-media-file').getByText('跨端附件.pdf',{exact:true}).waitFor();
+    await peer.screenshot({path:join(output,'pocket-independent-receiver-desktop.png')});report.screenshots.push(join(output,'pocket-independent-receiver-desktop.png'));
+    await gallery.getByRole('button',{name:'查看所选图片 2',exact:true}).click();
+    await peer.getByRole('dialog',{name:'图片',exact:true}).getByRole('img',{name:'所选原图',exact:true}).waitFor();
+    await peer.getByRole('dialog',{name:'图片',exact:true}).getByRole('button',{name:'关闭',exact:true}).click();
+    const downloadPromise=peer.waitForEvent('download');
+    await gallery.getByTestId('chat-media-file').getByRole('button',{name:'保存附件',exact:true}).click();
+    const download=await downloadPromise;assert.ok(readFileSync(await download.path()).equals(fixture.pdf));
+    await peer.reload();await gallery.getByRole('img',{name:/^所选图片 [1-3]$/}).nth(2).waitFor();
+    await peer.setViewportSize({width:390,height:900});
+    await gallery.getByText('已发送 · 3 张图片 · 1 个附件',{exact:true}).waitFor();
+    const phoneImages=gallery.getByRole('img',{name:/^所选图片 [1-3]$/});
+    await phoneImages.nth(2).waitFor();
+    for(const deadline=Date.now()+10000;;){
+      const ready=await phoneImages.evaluateAll(elements=>elements.length===3&&elements.every(element=>{
+        const image=element instanceof HTMLImageElement?element:element.querySelector('img');
+        return image?.complete&&image.naturalWidth>0;
+      }));
+      if(ready)break;if(Date.now()>deadline)throw Error('cross_client_phone_images_not_loaded');await peer.waitForTimeout(25);
+    }
+    await gallery.scrollIntoViewIfNeeded();
+    await peer.screenshot({path:join(output,'pocket-independent-receiver-phone.png')});report.screenshots.push(join(output,'pocket-independent-receiver-phone.png'));
+    await receiver.close();peer=undefined;
+    assert.equal(JSON.parse(readFileSync(join(ui.topicsFixtureRoot,'native-media-child-env'),'utf8')).mediaPreloadInherited,false);
+    check('the native host retains images and uploaded files from another Pocket-protocol client; a fresh browser receiver without attachment IndexedDB or a native file picker previews all originals, downloads the exact PDF, and retains them after reload on desktop and phone');
+  } finally {await peer?.close();await pocketSender.close();}
   assert.equal(fixture.state.requests.some(request => request.url.startsWith('/v1/projects')), false);
   assert.equal(report.pageErrors.length, 0, JSON.stringify(report.pageErrors));
   report.fidelity.push('same flat topic-list + bottom-basket architecture as refined C',

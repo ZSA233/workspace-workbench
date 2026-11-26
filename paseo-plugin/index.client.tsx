@@ -17,15 +17,24 @@ import { createAndroidWorkspaceContext } from "./client/android-workspace-contex
 import { observeDesktopWorkspaceContext, type DesktopWorkspaceDirectoryApi } from "./client/desktop-workspace-context";
 import { workspaceDirectorySnapshot } from "./client/workspace-directory";
 import {topicChatMediaKind,topicChatMediaSchema,type TopicChatMedia} from './shared/topic-chat-media';
+import {chatMediaKind,chatMediaSchema,type ChatMedia} from './shared/chat-media';
 
 const observerSurfaceId = "workbench";
 const loadTopicChatImages=()=>import('./client/topic-chat-media');
 function TopicChatImageEntry(props:PluginTimelineItemProps<TopicChatMedia>){
   const [Component,setComponent]=useState<ComponentType<typeof props>>(),[failed,setFailed]=useState(false);
-  useEffect(()=>{let active=true;void loadTopicChatImages().then(module=>{if(active)setComponent(()=>module.TopicChatImages);})
-    .catch(()=>{if(active)setFailed(true);});return ()=>{active=false;};},[]);
+  useEffect(()=>{if(props.item.data.hidden)return;let active=true;void loadTopicChatImages().then(module=>{if(active)setComponent(()=>module.TopicChatImages);})
+    .catch(()=>{if(active)setFailed(true);});return ()=>{active=false;};},[props.item.data.hidden]);
+  if(props.item.data.hidden)return null;
   return Component?<Component {...props}/>:<View style={{alignSelf:'flex-end',width:180,height:120,justifyContent:'center',alignItems:'center'}}>
     {failed?<Text style={{color:props.theme.colors.foregroundMuted,fontSize:12}}>图片暂不可用</Text>:<ActivityIndicator color={props.theme.colors.foregroundMuted}/>}</View>;
+}
+function ChatMediaEntry(props:PluginTimelineItemProps<ChatMedia>){
+  const [Component,setComponent]=useState<ComponentType<typeof props>>(),[failed,setFailed]=useState(false);
+  useEffect(()=>{let active=true;void loadTopicChatImages().then(module=>{if(active)setComponent(()=>module.SessionChatMedia);})
+    .catch(()=>{if(active)setFailed(true);});return()=>{active=false;};},[]);
+  return Component?<Component {...props}/>:<View style={{alignSelf:'flex-end',padding:12}}>
+    {failed?<Text style={{color:props.theme.colors.foregroundMuted,fontSize:12}}>附件预览暂不可用</Text>:<ActivityIndicator color={props.theme.colors.foregroundMuted}/>}</View>;
 }
 
 // Paseo 0.8 exposes workspace actions on the injected API. Older desktop
@@ -66,6 +75,7 @@ export default function contribute(client: PluginClientContext) {
 function contributeClient(client: PluginClientContext, scope: RegistrationScope, platform: string) {
   if(typeof client.addTimelineRenderer==='function')scope.optional('topic-chat-images',()=>client.addTimelineRenderer({kind:topicChatMediaKind,version:1,schema:topicChatMediaSchema,
     Component:TopicChatImageEntry}));
+  if(typeof client.addTimelineRenderer==='function')scope.optional('chat-media',()=>client.addTimelineRenderer({kind:chatMediaKind,version:1,schema:chatMediaSchema,Component:ChatMediaEntry}));
   const workspaceApi = ((client as unknown as { paseo?: { workspaces?: WorkspaceApiCompatibility } }).paseo)?.workspaces;
   const androidContext = platform === "android" ? createAndroidWorkspaceContext(workspaceApi) : null;
   if (androidContext) scope.own("android-workspace-context", androidContext.close);

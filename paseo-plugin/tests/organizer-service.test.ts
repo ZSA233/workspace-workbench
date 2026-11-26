@@ -113,16 +113,16 @@ test('legacy task retries require reselecting scope rather than guessing whether
   await assert.rejects(f.request({action:'resume',jobId:'legacy'}),/legacy_job_reselect/);assert.equal(f.counts().modelCalls,0);
  }finally{await f.close();}
 });
-test('enabling only enrolls future linked work; automatic refresh does not analyze historical previews',async()=>{
+test('legacy project enablement no longer enrolls historical or newly created sessions',async()=>{
   const f=await fixture();try {
     let settings=f.settings.response(f.route);f.settings.save('project',settings.revision,{enabled:true},[],f.route);
     await done(f,await f.request({action:'refresh',forceFetch:false}));
-    assert.equal(f.counts().modelCalls,0);assert.equal(f.counts().materialReads,0);assert.equal(f.counts().writes,0);
+    assert.equal(f.counts().modelCalls,0);assert.equal(f.counts().writes,0);
     f.material.createdAt=new Date(Date.now()+1000).toISOString();
-    // A newly observed target from the enabled generation is eligible; the existing historical target remains preview.
+    // Even future records require a new session-level confirmation.
     f.service.store(f.route).update(l=>{delete l.targets.native;});
     await done(f,await f.request({action:'refresh',forceFetch:false}));
-    const snapshot=await f.request({action:'snapshot'});assert.equal(snapshot.targets[0].policy,'auto');assert.equal(f.counts().writes,1);assert.equal(f.title(),'○ 登录异常修复');
+    const snapshot=await f.request({action:'snapshot'});assert.equal(snapshot.targets[0].policy,'preview');assert.equal(f.counts().writes,0);assert.equal(f.title(),'原始会话');
   }finally{await f.close();}
 });
 test('pending representative wins over newer shipped work; production changes update only markers and preserve manual body',async()=>{
@@ -195,11 +195,11 @@ test('historical selection reads only the selected Workspace conversations, incl
   assert.equal((await done(f,await f.request({action:'analyze',workspaceIds:['one'],conversation:true,regenerate:false}))).state,'complete');assert.deepEqual(f.historyReads,['agent']);assert.equal(f.counts().modelCalls,1);
  }finally{await f.close();}
 });
-test('automatic selected scope does not send an unselected associated Workspace to the model',async()=>{
+test('legacy selected project scope cannot enable either associated Workspace',async()=>{
  const f=await fixture();try{
   const at=new Date(Date.now()+1000).toISOString();f.material.createdAt=at;const other=structuredClone(f.material);other.workspaceId='other';other.instance='other:instance';other.fingerprint='other-source';f.extra.push(other);
   const settings=f.settings.response(f.route);f.settings.save('project',settings.revision,{enabled:true,mode:'selected',selectedIds:['one']},[],f.route);
-  assert.equal((await done(f,await f.request({action:'refresh',forceFetch:false}))).state,'complete');assert.equal(f.counts().modelCalls,1);
+  assert.equal((await done(f,await f.request({action:'refresh',forceFetch:false}))).state,'complete');assert.equal(f.counts().modelCalls,0);
   const snapshot=await f.request({action:'snapshot'});assert.equal(snapshot.workspaces.find((w:any)=>w.material.workspaceId==='other').fingerprint,undefined);
  }finally{await f.close();}
 });

@@ -1,126 +1,69 @@
-/** Actual isolated Paseo + protocol Agent fixture + local HTTP model fixture. */
+/** Actual isolated Paseo, temporary Git workspaces and an audited HTTP model fixture. */
 import assert from 'node:assert/strict';
-import { spawn, execFileSync } from 'node:child_process';
-import { createInterface } from 'node:readline';
-import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
-import { tmpdir, homedir } from 'node:os';
-import { chromium } from 'playwright';
-import { DaemonClient } from '@getpaseo/client/internal/daemon-client';
-import { createPaseoApi } from '@getpaseo/client';
+import {spawn,execFileSync} from 'node:child_process';
+import {createInterface} from 'node:readline';
+import {createServer} from 'node:http';
+import {mkdtempSync,mkdirSync,writeFileSync,existsSync,readdirSync,readFileSync} from 'node:fs';
+import {join,resolve} from 'node:path';
+import {tmpdir,homedir} from 'node:os';
+import {chromium} from 'playwright';
+import {DaemonClient} from '@getpaseo/client/internal/daemon-client';
+import {createPaseoApi} from '@getpaseo/client';
 import WebSocket from 'ws';
-import { openIsolatedWorkbench } from './ui-project-selection.mjs';
-import {observerSettingsRpc} from '../shared/settings.ts';
-const plugin=resolve(import.meta.dirname,'..'),output=process.env.WORKBENCH_VERIFY_OUTPUT||mkdtempSync(join(tmpdir(),'wb-organizer-ui-'));
-mkdirSync(output,{recursive:true});
-let calls=0,modelDelay=0;
-const model=createServer(async(req,res)=>{
-  res.setHeader('content-type','application/json');
-  if(req.method==='GET'){res.end(JSON.stringify({data:[{id:'organizer-fixture',owned_by:'fixture'}]}));return;}
-  const parts=[];for await(const part of req)parts.push(part);const input=JSON.parse(JSON.parse(Buffer.concat(parts).toString()).messages[1].content);calls++;if(modelDelay)await new Promise(r=>setTimeout(r,modelDelay));
-  res.end(JSON.stringify({choices:[{finish_reason:'stop',message:{content:JSON.stringify({title:'仓库登录异常修复',brief:'修复登录异常，补充错误处理。',items:[{text:'修复登录错误处理',evidenceIds:[input.evidence[0].id],completed:true}]})}}],usage:{prompt_tokens:100,completion_tokens:40}}));
-});
+import {openIsolatedWorkbench} from './ui-project-selection.mjs';
+const plugin=resolve(import.meta.dirname,'..'),output=process.env.WORKBENCH_VERIFY_OUTPUT||mkdtempSync(join(tmpdir(),'wb-session-ui-'));
+mkdirSync(output,{recursive:true});const replay=process.env.WORKBENCH_SESSION_MODEL_REPLAY?JSON.parse(readFileSync(process.env.WORKBENCH_SESSION_MODEL_REPLAY,'utf8')):undefined;let calls=0,modelDelay=0;const inputs=[];
+const model=createServer(async(req,res)=>{res.setHeader('content-type','application/json');if(req.method==='GET'){res.end(JSON.stringify({data:[{id:'session-fixture'}]}));return;}const parts=[];for await(const p of req)parts.push(p);const input=JSON.parse(JSON.parse(Buffer.concat(parts).toString()).messages[1].content);inputs.push(input);calls++;if(modelDelay)await new Promise(r=>setTimeout(r,modelDelay));
+const digest=key=>replay?.workspaces.find(w=>w.material.workspaceId===input.workspaces.find(row=>row.key===key)?.name)?.digest;
+const titles=key=>{if(digest(key))return digest(key).title;key=input.workspaces.find(w=>w.key===key)?.name||key;return key.includes('clock')?'统计时间边界修复':key.includes('sync')?'统计主线同步':key.includes('whitelist')?'充值白名单配置':'小时统计查询优化';};
+res.end(JSON.stringify({choices:[{finish_reason:'stop',message:{content:JSON.stringify({workspaces:input.changedWorkspaces.map(w=>({key:w.key,title:titles(w.key),brief:digest(w.key)?.brief||(input.workspaces.find(row=>row.key===w.key)?.name.includes('clock')?'区分活动时钟与数据截止，避免统计遗漏。':'按小时汇总礼物流水，减少统计重复扫描。'),evidenceIds:[w.evidence[0].id]})),conversations:input.conversations.filter(c=>c.evidence.length).map(c=>({agentId:c.agentId,brief:'优化统计慢查询。',evidenceIds:[c.evidence[0].id]})),...(input.wantTitle?{title:{text:replay?.targets[0]?.session?.preview?.body||'公会小时统计查询优化',evidenceIds:['summary:'+(input.changedWorkspaces[0]?.key||input.workspaces.find(w=>w.summary)?.key)]}}:{})})}}],usage:{prompt_tokens:900,completion_tokens:250}}));});
 await new Promise(r=>model.listen(0,'127.0.0.1',r));
-const child=spawn(process.execPath,[join(plugin,'scripts/verify-live.mjs')],{env:{...process.env,WORKBENCH_LIVE_UI:'1',WORKBENCH_LIVE_TOPICS:'1'},stdio:['ignore','pipe','pipe']});
-let logs='',ui,browser,page,client;
+const child=spawn(process.execPath,[join(plugin,'scripts/verify-live.mjs')],{env:{...process.env,WORKBENCH_LIVE_UI:'1',WORKBENCH_LIVE_TOPICS:'1'},stdio:['ignore','pipe','pipe']});let logs='',ui,browser,page,client;
 const exited=new Promise(r=>child.once('exit',r));child.stderr.on('data',b=>{logs+=b;});
 const ready=new Promise((yes,no)=>{const timer=setTimeout(()=>no(Error('isolated host readiness timeout')),120000);createInterface({input:child.stdout}).on('line',line=>{logs+=line+'\n';try{const value=JSON.parse(line);if(value.kind==='ui-ready'){clearTimeout(timer);yes(value);}}catch{}});void exited.then(code=>{clearTimeout(timer);no(Error('isolated host exited '+code));});});
-const report={kind:'actual-isolated-paseo-organizer',browser:'Playwright: Browser plugin not available',output,checks:[],screenshots:[],pageErrors:[],console:[]};
-const pause=ms=>new Promise(r=>setTimeout(r,ms));
-const wait=async(fn,timeout=30000)=>{const until=Date.now()+timeout;let last;while(Date.now()<until){try{const result=await fn();if(result)return result;}catch(e){last=e;}await pause(100);}throw last||Error('verification timeout');};
+const report={kind:'actual-isolated-paseo-session-ui',browser:'Playwright; Browser/IAB tools unavailable',output,checks:[],screenshots:[],pageErrors:[],console:[]};
+const pause=ms=>new Promise(r=>setTimeout(r,ms)),wait=async(fn,timeout=30000)=>{const until=Date.now()+timeout;let last;while(Date.now()<until){try{const value=await fn();if(value)return value;}catch(e){last=e;}await pause(100);}throw last||Error('verification timeout');};
 const check=text=>{report.checks.push(text);console.log(JSON.stringify({check:text}));};
 function executable(){if(existsSync(chromium.executablePath()))return chromium.executablePath();const cache=process.platform==='darwin'?join(homedir(),'Library/Caches/ms-playwright'):join(homedir(),'.cache/ms-playwright');for(const name of readdirSync(cache).filter(n=>n.startsWith('chromium_headless_shell-')).sort().reverse()){const file=join(cache,name,process.platform==='darwin'?'chrome-headless-shell-mac-arm64/chrome-headless-shell':'chrome-headless-shell-linux64/chrome-headless-shell');if(existsSync(file))return file;}throw Error('No installed Playwright browser');}
-try {
-  ui=await ready;
-  client=new DaemonClient({url:`ws://${new URL(ui.url).host}/ws`,clientId:'organizer-verification',clientType:'mcp',reconnect:{enabled:false},webSocketFactory:(url,options)=>new WebSocket(url,options?.protocols,{headers:options?.headers})});await client.connect();
-  const api=createPaseoApi(client),config=join(ui.project,'project.json'),pluginId='workspace-workbench-paseo';
-  const invoke=(method,input)=>client.invokePluginRpc(pluginId,method,input);
-  const organize=async request=>{const value=await invoke('workspace.workbench.organizer',{projectConfig:config,request});assert.ok(value.ok,JSON.stringify(value));return value.result;};
-  const settings=await organize({action:'settings.get'});assert.equal(settings.effective.enabled,false);
-  const profile={id:'fixture',name:'隔离本地模型',baseUrl:`http://127.0.0.1:${model.address().port}/v1`,model:'organizer-fixture',contextTokens:16384,outputTokens:2048,timeoutMs:120000};
-  let saved=await organize({action:'profile.save',revision:settings.revision,profile});
-  await organize({action:'settings.save',scope:'project',revision:saved.revision,patch:{profileId:'fixture',analysisIntervalSeconds:0,productionBranches:{one:'production'}}});
-  const agent=await client.createAgent({config:{provider:'codex',cwd:ui.project,modeId:'auto'},title:'原始会话标题',initialPrompt:'Discuss login errors without modifying files.'});
-  await wait(async()=>{const snapshot=await client.fetchAgent({agentId:agent.id});return snapshot.agent.status!=='running'&&snapshot.agent.workspaceId;});
-  const nativeId=(await client.fetchAgent({agentId:agent.id})).agent.workspaceId;
-  await api.workspaces.ref(nativeId).setTitle('原始会话标题');
-  const created=await invoke('workspace.workbench.query',{projectConfig:config,method:'workspace.create',params:{name:'organizer-history',repositories:['one'],contextAgentId:agent.id,taskBrief:'修复仓库登录异常',taskKind:'bug'}});assert.ok(created.ok,JSON.stringify(created));
-  const worktree=join(created.result.treePath,'one');const git=(path,...args)=>execFileSync('git',['-C',path,...args],{encoding:'utf8'}).trim();
-  const base=git(worktree,'rev-parse','HEAD');git(worktree,'branch','production',base);writeFileSync(join(worktree,'README'),'login errors handled\n');git(worktree,'add','README');git(worktree,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Fix login errors');
-  const preferences=await invoke(observerSettingsRpc.read.name,{});assert.equal(preferences.status,'ready');const branchKey=JSON.stringify([config,'one']);const branches={...preferences.values.productionBranches,[branchKey]:'production'};
-  assert.equal((await invoke(observerSettingsRpc.write.name,{revision:preferences.revision,values:{...preferences.values,productionBranches:branches}})).status,'saved');assert.equal((await organize({action:'settings.get'})).effective.productionBranches.one,'production');
-  check('legacy Compare production settings are read by the actual plugin backend');
-  const job=await organize({action:'analyze',workspaceIds:['organizer-history'],conversation:true,regenerate:false});
-  await wait(async()=>{const j=await organize({action:'job',jobId:job.id});if(['failed','cancelled'].includes(j.state))throw Error(j.error);return j.state==='complete';});
-  let snapshot=await organize({action:'snapshot'});const workspace=snapshot.workspaces.find(w=>w.material.workspaceId==='organizer-history');assert.ok(workspace,JSON.stringify(snapshot));assert.equal(workspace.title,'仓库登录异常修复');assert.equal(workspace.material.state,'pending');assert.equal(workspace.items[0].state,'confirm');
-  assert.equal((await api.workspaces.ref(nativeId).refresh()).title,'原始会话标题');assert.ok(snapshot.targets.find(t=>t.id===nativeId));
-  check('actual plugin stores the optional goal, binds through explicit creator identity, summarizes with local HTTP fixture, and historical analysis leaves the native title unchanged');
-  const applied=await organize({action:'apply',targetIds:[nativeId],revision:snapshot.revision,maintain:true});assert.ok(!applied[0].error,JSON.stringify(applied));assert.equal((await api.workspaces.ref(nativeId).refresh()).title,'○ 仓库登录异常修复');
-  await organize({action:'restore',targetId:nativeId});assert.equal((await api.workspaces.ref(nativeId).refresh()).title,'原始会话标题');
-  check('native Workspace title accepts Chinese and status characters; explicit apply and guarded restore keep Workspace and Agent IDs');
-  browser=await chromium.launch({headless:true,executablePath:executable()});page=await browser.newPage({viewport:{width:1440,height:1000}});page.on('pageerror',e=>report.pageErrors.push(e.message));page.on('console',m=>{if(['error','warning'].includes(m.type()))report.console.push(m.text());});
-  await openIsolatedWorkbench(page,ui.url,'a');
-  await wait(async()=>!(await organize({action:'snapshot'})).jobs.some(j=>['running','queued'].includes(j.state)));
-  snapshot=await organize({action:'snapshot'});const visibleApply=await organize({action:'apply',targetIds:[nativeId],revision:snapshot.revision,maintain:false});assert.ok(!visibleApply[0].error,JSON.stringify(visibleApply));
-  const nativeTitle=page.getByText('○ 仓库登录异常修复',{exact:true}).filter({visible:true}).first();await nativeTitle.waitFor();const nativeShot=join(output,'native-title-characters.png');await nativeTitle.screenshot({path:nativeShot});report.screenshots.push(nativeShot);await organize({action:'restore',targetId:nativeId});await page.getByText('原始会话标题',{exact:true}).filter({visible:true}).first().waitFor();check('actual native Workspace list renders the status character within its title and then restores the original title');
-  await page.getByRole('tab',{name:'设置',exact:true}).filter({visible:true}).last().click();
-  const panel=page.getByTestId('workbench-settings-tab');
-  await panel.getByTestId('settings-model-entry').getByText(profile.baseUrl,{exact:true}).waitFor();
-  for(const label of ['扩展管理','项目存储与缓存','审核配置'])await panel.getByRole('button',{name:label,exact:true}).waitFor();
-  assert.equal(await panel.getByText(/Diff 字号|Diff 自动换行|常用与显示/).count(),0);
-  const category=async label=>{
-    const menu=panel.getByRole('button',{name:'设置分类',exact:true}).filter({visible:true});
-    if(await menu.count()){await menu.click();await panel.getByRole('button',{name:new RegExp('^(?:✓ )?'+label+'$')}).filter({visible:true}).click();}
-    else await panel.getByRole('button',{name:label==='模型连接'?'配置地址与模型':label==='自动整理'?'范围与命名规则':label,exact:true}).filter({visible:true}).click();
-  };
-  const home=async()=>{const back=panel.getByRole('button',{name:'全部设置',exact:true}).filter({visible:true});if(await back.count())await back.click();};
-  const automatic=panel.getByRole('switch',{name:'自动整理',exact:true}).filter({visible:true});await automatic.click();await wait(async()=> (await organize({action:'settings.get'})).effective.enabled===true);await automatic.click();await wait(async()=> (await organize({action:'settings.get'})).effective.enabled===false);
-  check('settings home exposes the current model address, real automatic switch, extensions, storage and review; duplicate Diff controls are absent');
-  const jobsBefore=(await organize({action:'snapshot'})).jobs.length;
-  await category('自动整理');await panel.getByText('提示词与更新频率',{exact:true}).filter({visible:true}).click();await panel.getByLabel('整理提示词',{exact:true}).fill('草稿：保持模块与具体行为');
-  await category('生产与上线');await category('自动整理');assert.equal(await panel.getByLabel('整理提示词',{exact:true}).inputValue(),'草稿：保持模块与具体行为');
-  await panel.getByRole('button',{name:'自动维护范围',exact:true}).filter({visible:true}).click();await panel.getByRole('button',{name:'仅指定范围',exact:true}).filter({visible:true}).click();await panel.getByText('选择 Workspace 范围',{exact:true}).filter({visible:true}).click();await panel.getByRole('switch',{name:'organizer-history',exact:true}).filter({visible:true}).click();await wait(async()=> (await panel.getByLabel('指定 ID（每行一个 Workspace 或 PASEO 条目 ID）',{exact:true}).inputValue()).split('\n').join('\n').includes('organizer-history'));
-  await panel.getByRole('button',{name:'切换',exact:true}).filter({visible:true}).click();await panel.getByRole('button',{name:'编辑项目（固定，不跟随会话焦点）',exact:true}).click();await panel.getByRole('button',{name:'b',exact:true}).filter({visible:true}).click();await panel.getByText('切换目标前，请处理未保存设置。',{exact:true}).waitFor();await panel.getByRole('button',{name:'继续编辑',exact:true}).click();
-  await panel.getByRole('button',{name:'放弃草稿',exact:true}).click();
-  assert.equal((await organize({action:'snapshot'})).jobs.length,jobsBefore,'category changes do not create background jobs');
-  check('category changes retain drafts and start no jobs; target switching guards unsaved changes; selected scope uses real Workspace IDs');
-  for(const width of [320,360,480,680]) {
-    await home();await panel.evaluate((element,width)=>{element.style.width=width+'px';element.style.maxWidth=width+'px';element.style.flex='none';element.style.height='800px';},width);
-    const overflow=await panel.evaluate(element=>({width:element.clientWidth,scroll:element.scrollWidth}));assert.ok(overflow.scroll<=overflow.width+2,JSON.stringify(overflow));
-    const file=join(output,`settings-${width}.png`);await panel.screenshot({path:file});report.screenshots.push(file);
-    for(const label of ['模型连接','自动整理','扩展管理','项目存储与缓存','审核配置']){await category(label);const size=await panel.evaluate(e=>({width:e.clientWidth,scroll:e.scrollWidth}));assert.ok(size.scroll<=size.width+2,JSON.stringify({label,...size}));}
-  }
-  check('settings home and model/rule/extension/storage/review pages fit 320/360/480/680px allocations');
-  await category('模型连接');assert.equal(await panel.getByLabel('接口地址',{exact:true}).inputValue(),profile.baseUrl);assert.equal(await panel.getByLabel('模型 ID',{exact:true}).inputValue(),profile.model);
-  await panel.getByRole('button',{name:'检测连接',exact:true}).filter({visible:true}).click();await panel.getByText('模型已就绪',{exact:true}).filter({visible:true}).waitFor();
-  await panel.getByText('不写标题的生成测试',{exact:true}).filter({visible:true}).click();await panel.getByLabel('测试材料',{exact:true}).fill('修复登录失败时未显示错误消息的问题');await panel.getByRole('button',{name:'运行测试',exact:true}).click();await panel.getByText('实际输入与来源',{exact:true}).filter({visible:true}).waitFor();
-  assert.equal((await api.workspaces.ref(nativeId).refresh()).title,'原始会话标题');
-  await panel.getByText('测试记录',{exact:true}).filter({visible:true}).click();await panel.getByTestId('model-test-history').getByRole('button').first().click();await panel.getByTestId('model-test-history').getByText('实际输入与来源',{exact:true}).waitFor();
-  check('model editor selects the configured connection by default and runs a non-writing model test with inspectable input/output');
-  await category('会话与执行');await panel.getByText('会话与执行默认值',{exact:true}).filter({visible:true}).waitFor();await category('审核配置');await panel.getByText('代码评审',{exact:true}).filter({visible:true}).last().waitFor();await category('环境与工具链');await panel.getByLabel('mise 路径',{exact:true}).filter({visible:true}).waitFor();await category('自动恢复');await panel.getByLabel('继续消息',{exact:true}).filter({visible:true}).waitFor();
-  await category('扩展管理');const extBefore=await invoke('workspace.workbench.extensions',{projectConfig:config,extensionId:'project-communications',action:'status'});await panel.getByRole('switch',{name:'档案话题',exact:true}).filter({visible:true}).click();await wait(async()=> (await invoke('workspace.workbench.extensions',{projectConfig:config,extensionId:'project-communications',action:'status'})).enabled!==extBefore.enabled);await panel.getByRole('switch',{name:'档案话题',exact:true}).filter({visible:true}).click();await wait(async()=> (await invoke('workspace.workbench.extensions',{projectConfig:config,extensionId:'project-communications',action:'status'})).enabled===extBefore.enabled);
-  check('session, review, runtime and recovery reuse existing settings RPCs; extension toggles change and restore actual service state');
-  await organize({action:'target.policy',targetId:nativeId,policy:'preview'});
-  await page.getByRole('tab',{name:'摘要',exact:true}).filter({visible:true}).last().click();const summary=page.getByTestId('workbench-summary-tab');await summary.evaluate(e=>{e.style.width='360px';e.style.maxWidth='360px';e.style.height='800px';e.style.flex='none';});await summary.getByRole('button',{name:'查看材料与预览',exact:true}).first().click();
-  await summary.getByText('修复登录异常，补充错误处理。',{exact:true}).first().waitFor();
-  writeFileSync(join(worktree,'README'),'login errors handled and retries checked\n');git(worktree,'add','README');git(worktree,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Handle login retries');
-  modelDelay=3000;const beforeCalls=calls;await summary.getByTestId('organizer-generate-preview').click();await wait(()=>calls>beforeCalls);await summary.getByTestId('organizer-task').getByText('模型生成',{exact:true}).waitFor();assert.equal(await summary.getByRole('button',{name:'取消生成',exact:true}).count(),1);
-  await summary.evaluate(e=>{e.scrollTop=0;for(const child of e.querySelectorAll('*'))if(child.scrollHeight>child.clientHeight)child.scrollTop=0;});const runningShot=join(output,'model-running.png');await summary.screenshot({path:runningShot});report.screenshots.push(runningShot);
-  await summary.getByRole('button',{name:'取消生成',exact:true}).click();await wait(async()=>{const s=await organize({action:'snapshot'});return s.jobs.some(j=>j.kind==='analysis'&&j.state==='cancelled');});await wait(async()=> !(await organize({action:'snapshot'})).jobs.some(j=>['queued','running'].includes(j.state)));
-  modelDelay=900;await summary.getByTestId('organizer-generate-preview').click();await wait(async()=>{const s=await organize({action:'snapshot'}),w=s.workspaces.find(w=>w.material.workspaceId==='organizer-history');return w?.fingerprint===w?.material.fingerprint&&!s.jobs.some(j=>['queued','running'].includes(j.state));});
-  await summary.getByTestId('organizer-title-preview').waitFor();
-  check('Summary starts a scoped real model request, exposes current Workspace/progress, has exactly one cancel action, and retries a cancelled generation');
-  const item=summary.getByTestId('organizer-workspace-items').getByRole('checkbox',{name:'完成事项：修复登录错误处理',exact:true});await item.click();await wait(async()=>{const w=(await organize({action:'snapshot'})).workspaces.find(w=>w.material.workspaceId==='organizer-history');return w.items[0].manual&&w.items[0].state==='done';});
-  await summary.getByTestId('organizer-workspace-items').getByRole('button',{name:'事项筛选',exact:true}).click();await summary.getByTestId('organizer-workspace-items').getByRole('button',{name:'已完成',exact:true}).click();
-  await summary.getByRole('button',{name:'核对并应用标题',exact:true}).click();await page.getByTestId('organizer-confirm-apply').waitFor();assert.equal((await api.workspaces.ref(nativeId).refresh()).title,'原始会话标题');await page.getByTestId('organizer-confirm-apply').click();await wait(async()=> (await api.workspaces.ref(nativeId).refresh()).title==='○ 仓库登录异常修复');
-  await summary.evaluate(e=>{e.scrollTop=0;for(const child of e.querySelectorAll('*'))if(child.scrollHeight>child.clientHeight)child.scrollTop=0;});const summaryShot=join(output,'summary.png');await summary.screenshot({path:summaryShot});report.screenshots.push(summaryShot);
-  await organize({action:'restore',targetId:nativeId});assert.equal((await api.workspaces.ref(nativeId).refresh()).title,'原始会话标题');
-  check('manual checklist edits persist; preview and explicit confirmation are separate; actual native title changes only after confirmation and guarded restore succeeds');
-  assert.deepEqual(report.pageErrors,[]);report.ok=true;report.modelCalls=calls;console.log(JSON.stringify(report,null,2));
-} catch(error) {
-  if(page){await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});writeFileSync(join(output,'failure-dom.txt'),await page.locator('body').innerText().catch(()=>''));}
-  writeFileSync(join(output,'host.log'),logs,{mode:0o600});report.error=error.stack;report.ok=false;console.error(JSON.stringify(report,null,2));process.exitCode=1;
-} finally {
-  await browser?.close();await client?.close().catch(()=>{});await new Promise(r=>model.close(r));if(ui){writeFileSync(ui.continueFile,'continue');await Promise.race([exited,pause(30000)]);}if(child.exitCode===null)child.kill('SIGTERM');
-}
+try{
+ ui=await ready;client=new DaemonClient({url:`ws://${new URL(ui.url).host}/ws`,clientId:'session-verification',clientType:'mcp',reconnect:{enabled:false},webSocketFactory:(url,options)=>new WebSocket(url,options?.protocols,{headers:options?.headers})});await client.connect();const api=createPaseoApi(client),config=join(ui.project,'project.json'),pluginId='workspace-workbench-paseo';
+ const organize=async(request,projectConfig=config)=>{const r=await client.invokePluginRpc(pluginId,'workspace.workbench.organizer',{projectConfig,request});assert.ok(r.ok,r.error);return r.result;};
+ const query=async(method,params)=>{const r=await client.invokePluginRpc(pluginId,'workspace.workbench.query',{projectConfig:config,method,params});assert.ok(r.ok,JSON.stringify(r));return r.result;};
+ const profile={id:'local',name:'本机模型',baseUrl:`http://127.0.0.1:${model.address().port}/v1`,model:'session-fixture',contextTokens:16384,outputTokens:2048,timeoutMs:120000};let settings=await organize({action:'settings.get'});settings=await organize({action:'profile.save',revision:settings.revision,profile});await organize({action:'settings.save',scope:'project',revision:settings.revision,patch:{profileId:profile.id,analysisIntervalSeconds:0,productionBranches:{one:'production'}}});
+ const makeAgent=async(title,directory=ui.project)=>{const agent=await client.createAgent({config:{provider:'codex',cwd:directory,modeId:'auto'},title,initialPrompt:'Discuss statistics query optimization without editing files.'});await wait(async()=>{const row=await client.fetchAgent({agentId:agent.id});return row.agent.status!=='running'&&row.agent.workspaceId;});const id=(await client.fetchAgent({agentId:agent.id})).agent.workspaceId;await api.workspaces.ref(id).setTitle(title);return{agent,id,title};};
+ const a=await makeAgent(replay?.targets[0]?.currentTitle||'【公会每小时统计】慢查询排查与优化'),b=await makeAgent('充值白名单维护');
+ const names=['shared-hourly-gift-statistics-production-20261124','shared-hourly-gift-statistics-main-sync-20261124','shared-hourly-gift-statistics-main-baseline-20261124','shared-hourly-gift-statistics-clock-fix-20261124'];const paths=[];
+ for(let i=0;i<names.length;i++){const created=await query('workspace.create',{name:names[i],repositories:['one'],contextAgentId:a.agent.id,taskBrief:i===2?'':'优化统计慢查询'}),path=join(created.treePath,'one');paths.push(path);if(i!==2){writeFileSync(join(path,'README'),names[i]+'\n');execFileSync('git',['-C',path,'add','README']);execFileSync('git',['-C',path,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','fix(stats): reduce hourly statistics scans'],{env:{...process.env,GIT_AUTHOR_DATE:`2026-11-${26-i}T12:00:00Z`,GIT_COMMITTER_DATE:`2026-11-${26-i}T12:00:00Z`}});}}
+ execFileSync('git',['-C',paths[3],'branch','production','HEAD']);
+ const other=await query('workspace.create',{name:'recharge-whitelist',repositories:['one'],contextAgentId:b.agent.id});writeFileSync(join(other.treePath,'one','README'),'whitelist\n');execFileSync('git',['-C',join(other.treePath,'one'),'add','README']);execFileSync('git',['-C',join(other.treePath,'one'),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','fix: recharge whitelist']);
+ const secondConfig=join(ui.project,'..','b','project.json'),second=await makeAgent('跨项目会话',join(ui.project,'..','b'));const secondWorkspace=await client.invokePluginRpc(pluginId,'workspace.workbench.query',{projectConfig:secondConfig,method:'workspace.create',params:{name:'other-project-work',repositories:['one'],contextAgentId:second.agent.id}});assert.ok(secondWorkspace.ok);
+ await query('workspace.activity',{action:'start',scope:'project',scanId:'session-ui-activity',force:true});await wait(async()=>{const value=await query('workspace.list',{includeRemoved:false});return value.workspaces.find(w=>w.id===names[0])?.latestCommitAt;});
+ browser=await chromium.launch({headless:true,executablePath:executable()});page=await browser.newPage({viewport:{width:1440,height:1000},colorScheme:'dark'});page.on('pageerror',e=>report.pageErrors.push(e.message));page.on('console',m=>{if(['warning','error'].includes(m.type()))report.console.push(m.text());});await openIsolatedWorkbench(page,ui.url,'a');
+ const nativeOpen=async title=>{await page.getByText(title,{exact:true}).filter({visible:true}).first().click();const header=page.getByRole('button',{name:/^(?:Workbench|Open Workspace Workbench)$/,exact:true}).filter({visible:true}).first();await header.waitFor();await header.click();};
+ await nativeOpen(a.title);let panel=page.getByTestId('workbench-project-panel').filter({visible:true}).last();await panel.waitFor();
+ assert.equal(await panel.getByRole('tab',{name:'设置',exact:true}).count(),0);assert.equal(await panel.getByRole('tab',{name:'摘要',exact:true}).count(),0);
+ await panel.getByRole('tab',{name:/^(会话|Session)$/,exact:true}).click();let session=page.getByTestId('workbench-session-tab').filter({visible:true}).last();await session.getByRole('button',{name:'打开工作区：'+names[0],exact:true}).waitFor();await wait(async()=>{const snapshot=await organize({action:'snapshot',hostWorkspaceId:a.id});return snapshot.workspaces.filter(w=>w.digest).length===3&&!snapshot.jobs.some(j=>['running','queued'].includes(j.state));});
+ assert.equal(await session.getByRole('button',{name:/^打开工作区：/}).count(),4);assert.equal(await session.getByText('recharge-whitelist',{exact:true}).count(),0);assert.equal((await api.workspaces.ref(a.id).refresh()).title,a.title);check('opening Session automatically summarizes only its four linked workspaces; the empty baseline remains without a digest and native title is unchanged');
+ await session.getByRole('button',{name:'打开工作区：'+names[3],exact:true}).click();await panel.getByRole('tab',{name:'Git',exact:true}).waitFor();assert.equal(await panel.getByRole('tab',{name:'Git',exact:true}).getAttribute('aria-selected'),'true');await panel.getByText(names[3],{exact:true}).filter({visible:true}).first().waitFor();await panel.getByRole('tab',{name:/^(会话|Session)$/,exact:true}).click();
+ check('one workspace-row click selects that workspace in the existing selector and immediately opens its Git tab');
+ const nativeBefore=(await api.workspaces.ref(a.id).refresh()).title;
+ await session.getByRole('button',{name:'预览标题',exact:true}).click();let preview=page.getByTestId('session-title-preview');await page.getByTestId('session-confirm-title').waitFor();await wait(async()=>!(await page.getByTestId('session-confirm-title').isDisabled()));assert.equal((await api.workspaces.ref(a.id).refresh()).title,nativeBefore);
+ const shot=async(name,target=panel)=>{const file=join(output,name+'.png');await target.screenshot({path:file});report.screenshots.push(file);};await shot('title-preview',preview);await preview.getByRole('button',{name:'取消',exact:true}).click();assert.equal((await organize({action:'snapshot',hostWorkspaceId:a.id})).targets[0].session.enabled,false);
+ await session.getByRole('switch',{name:'自动更新标题',exact:true}).click();await wait(async()=>!(await page.getByTestId('session-confirm-title').isDisabled()));await page.getByTestId('session-confirm-title').click();await wait(async()=>(await organize({action:'snapshot',hostWorkspaceId:a.id})).targets[0].session.enabled);assert.notEqual((await api.workspaces.ref(a.id).refresh()).title,nativeBefore);await session.getByRole('switch',{name:'自动更新标题',exact:true}).click();await wait(async()=>!(await organize({action:'snapshot',hostWorkspaceId:a.id})).targets[0].session.enabled);
+ check('preview/cancel leaves title and switch unchanged; Apply and enable writes the actual isolated native title; switching off stops maintenance without restoring the title');
+ await api.workspaces.ref(a.id).setTitle(a.title);
+ await panel.getByRole('button',{name:/^(Open Workbench layout menu|打开 Workbench 布局菜单)$/}).click();await page.getByRole('button',{name:'模型设置',exact:true}).filter({visible:true}).click();const modelDialog=page.getByTestId('session-model-settings');await modelDialog.getByLabel('接口地址',{exact:true}).waitFor();assert.equal(await modelDialog.getByLabel('接口地址',{exact:true}).inputValue(),profile.baseUrl);await modelDialog.getByRole('button',{name:'检测连接',exact:true}).click();await modelDialog.getByText('模型已就绪',{exact:true}).waitFor();await modelDialog.getByRole('button',{name:'最新工作优先',exact:true}).click();await modelDialog.getByRole('button',{name:'整体需求概括',exact:true}).click();await page.getByTestId('session-save-model').click();await wait(async()=>(await organize({action:'settings.get'})).effective.namingMode==='overall');
+ check('the original ellipsis menu opens one model dialog with address/model/auth and naming preference; connection testing and saving use actual RPCs');
+ for(const item of [/^(Project storage|项目存储位置)$/,/^(Project runtime settings|项目运行时设置)$/,/^(Review settings|审核配置|评审设置)$/,'扩展管理']){
+  await panel.getByRole('button',{name:/^(Open Workbench layout menu|打开 Workbench 布局菜单)$/}).click();const option=typeof item==='string'?page.getByRole('button',{name:item,exact:true}).filter({visible:true}):page.getByRole('button',{name:item}).filter({visible:true});if(await option.count()){await option.first().click();await page.keyboard.press('Escape');}else{await page.keyboard.press('Escape');throw Error('missing original menu '+String(item));}}
+ check('storage, runtime, review and extension settings are reachable through their restored original menu/dialog entries');
+ await nativeOpen(b.title);panel=page.getByTestId('workbench-project-panel').filter({visible:true}).last();await panel.getByRole('tab',{name:/^(会话|Session)$/,exact:true}).waitFor();assert.equal(await panel.getByRole('tab',{name:/^(会话|Session)$/,exact:true}).getAttribute('aria-selected'),'true');session=page.getByTestId('workbench-session-tab').filter({visible:true}).last();await session.getByRole('button',{name:'打开工作区：recharge-whitelist',exact:true}).waitFor();assert.equal(await session.getByRole('button',{name:'打开工作区：'+names[0],exact:true}).count(),0);await panel.getByText(names[3],{exact:true}).filter({visible:true}).first().waitFor();
+ check('switching native sessions replaces only the linked Session data; manually selected Workbench workspace and active tab stay fixed');
+ await nativeOpen(a.title);panel=page.getByTestId('workbench-project-panel').filter({visible:true}).last();session=page.getByTestId('workbench-session-tab').filter({visible:true}).last();await session.getByRole('button',{name:'打开工作区：'+names[0],exact:true}).waitFor();
+ await nativeOpen(second.title);let otherPanel=page.getByTestId('workbench-project-panel').filter({visible:true}).last();await otherPanel.getByRole('tab',{name:/^(会话|Session)$/,exact:true}).click();await page.getByTestId('workbench-session-tab').filter({visible:true}).last().getByRole('button',{name:'打开工作区：other-project-work',exact:true}).click();await otherPanel.getByText('other-project-work',{exact:true}).filter({visible:true}).first().waitFor();await nativeOpen(a.title);panel=page.getByTestId('workbench-project-panel').filter({visible:true}).last();session=page.getByTestId('workbench-session-tab').filter({visible:true}).last();await session.getByText(a.title,{exact:true}).waitFor();await panel.getByText(names[3],{exact:true}).filter({visible:true}).first().waitFor();check('another project keeps its own workspace choice, and returning restores the original project selection and Session tab');
+ await wait(async()=>!(await organize({action:'snapshot'})).jobs.some(j=>['running','queued'].includes(j.state)));await session.getByText(a.title,{exact:true}).waitFor();
+ for(const scheme of ['dark','light']){await page.emulateMedia({colorScheme:scheme});for(const width of [320,360,480,680]){await panel.evaluate((e,width)=>{let node=e;while(node&&node.clientWidth<=Math.max(width,700)){node.style.width=width+'px';node.style.minWidth=width+'px';node.style.maxWidth=width+'px';node.style.flexShrink='0';node=node.parentElement;if(node&&node.clientWidth>700)break;}e.style.height='800px';e.style.flex='none';},width);const size=await session.evaluate(e=>({width:e.clientWidth,scroll:e.scrollWidth}));assert.ok(size.scroll<=size.width+2,JSON.stringify({scheme,width,...size}));const visible=await panel.boundingBox();assert.ok(visible.x+visible.width<=1442,JSON.stringify(visible));await shot('session-'+scheme+'-'+width);}}
+ check('the flat Session list fits 320/360/480/680px in both host themes without content overflow or another navigation layer');
+ assert.deepEqual(report.pageErrors,[]);report.ok=true;report.modelCalls=calls;report.modelData=replay?'real YUVA output replay in HTTP fixture':'HTTP fixture';console.log(JSON.stringify(report,null,2));writeFileSync(join(output,'report.json'),JSON.stringify(report,null,2));
+}catch(error){if(page){await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});writeFileSync(join(output,'failure-dom.txt'),await page.locator('body').innerText().catch(()=>''));}writeFileSync(join(output,'host.log'),logs,{mode:0o600});report.ok=false;report.error=error.stack;console.error(JSON.stringify(report,null,2));process.exitCode=1;
+}finally{await browser?.close();await client?.close().catch(()=>{});await new Promise(r=>model.close(r));if(ui){writeFileSync(ui.continueFile,'continue');await Promise.race([exited,pause(30000)]);}if(child.exitCode===null)child.kill('SIGTERM');}

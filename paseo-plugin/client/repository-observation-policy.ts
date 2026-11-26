@@ -1,7 +1,7 @@
 /** Read subscriptions follow selection and visibility, never their own partial results. */
 export function repositoryObservationActive(input: {
   foreground: boolean;
-  tab: 'workspace' | 'review' | 'files' | 'cache' | 'communications' | 'summary' | 'settings';
+  tab: 'workspace' | 'review' | 'files' | 'cache' | 'communications' | 'session';
   backendReady: boolean;
   listReady: boolean;
   workspaceUnavailable: boolean;

@@ -72,12 +72,12 @@ export function Count({ value }: { value: number }) {
     <Text style={{ color: '#fff', fontSize: 11, lineHeight: 16 }}>{value}</Text>
   </View>;
 }
-export function Toggle({ label, checked, onChange, disabled = false }: { label: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
+export function Toggle({ label, checked, onChange, disabled = false,hideLabel=false }: { label: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean;hideLabel?:boolean }) {
   const c = useColors(), touch = useTouch();
   return <Pressable accessibilityRole="switch" accessibilityLabel={label} aria-checked={checked} accessibilityState={{ checked, disabled }} disabled={disabled} onPress={() => onChange(!checked)}
     style={{ minHeight: touch ? 44 : 32, flexDirection: 'row', alignItems: 'center', gap: 9, alignSelf: 'flex-start', opacity: disabled ? 0.45 : 1 }}>
     <View style={{ width: 35, height: 21, borderRadius: 11, backgroundColor: checked ? c.accent : c.foregroundMuted }}><View style={{ position: 'absolute', left: checked ? 16 : 2, top: 2, width: 17, height: 17, borderRadius: 9, backgroundColor: '#fff' }} /></View>
-    <Label>{label}</Label>
+    {!hideLabel?<Label>{label}</Label>:null}
   </Pressable>;
 }
 export function Row({ children, end = false }: { children: ReactNode; end?: boolean }) {
@@ -125,8 +125,8 @@ export function Footer({ children }: { children: ReactNode }) {
 }
 
 /** Bounded plugin dialogs; settings can embed the shared form in their own tab. */
-export function Dialog({ open = true, title, onClose, children, footer, width = 800, height = 700, id, embedded = false }: {
-  open?: boolean; title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; width?: number; height?: number; id?: string; embedded?:boolean;
+export function Dialog({ open = true, title, onClose, children, footer, width = 800, height = 700, id, embedded = false,compact=false }: {
+  open?: boolean; title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; width?: number; height?: number; id?: string; embedded?:boolean;compact?:boolean;
 }) {
   const c = useColors(), window = useWindowDimensions(), [keyboardTop, setKeyboardTop] = useState<number | null>(null);
   const container = useRef<View>(null), close = useRef(onClose), childrenCount = useRef(0); close.current = onClose;
@@ -169,12 +169,12 @@ export function Dialog({ open = true, title, onClose, children, footer, width = 
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 12, paddingBottom: 12 + Math.max(0, window.height - (keyboardTop ?? window.height)) }}>
       <Pressable accessibilityRole="button" accessibilityLabel="关闭浮层" onPress={() => { if (!childrenCount.current) onClose(); }} style={{ position: 'absolute', inset: 0, backgroundColor: '#0006' }} />
       <View ref={container} testID={id} role="dialog" aria-modal={true} accessibilityLabel={title} accessibilityViewIsModal
-        style={{ width: Math.min(width, window.width - 24), height: Math.min(height, available), maxHeight: available, borderWidth: 1, borderColor: c.border,
+        style={{ width: Math.min(width, window.width - 24), height: compact?undefined:Math.min(height, available), maxHeight: Math.min(height,available), borderWidth: 1, borderColor: c.border,
           backgroundColor: c.surface1, borderRadius: 10, overflow: 'hidden', shadowColor: '#000', shadowRadius: 20, shadowOpacity: 0.2, elevation: 20 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, gap: 12, borderBottomWidth: 1, borderBottomColor: c.border }}>
           <View style={{ flex: 1 }}><Label strong>{title}</Label></View><Button icon="X" variant="ghost" label="关闭" onPress={onClose} />
         </View>
-        <View style={{ flex: 1, minHeight: 0 }}>{children}</View>
+        <View style={{ ...(compact?{flexShrink:1}:{flex:1}), minHeight: 0 }}>{children}</View>
         {footer ? <Footer>{footer}</Footer> : null}
       </View>
     </View>

@@ -22,6 +22,7 @@ type PreferenceEvent =
   | { scope: string; kind: "reset" }
   | { scope: string; kind: "resize"; layout: ObserverSectionLayout };
 const preferenceListeners = new Set<(event: PreferenceEvent) => void>();
+const rememberedSelections=new Map<string,string>();
 function publishPreference(event: PreferenceEvent): void {
   for (const listener of preferenceListeners) listener(event);
 }
@@ -81,7 +82,7 @@ export type ObserverPreferences = {
  * preferences. Git data remains owned by Observer; only small UI choices are
  * persisted here.
  */
-export function useObserverPreferences(scopeKey: string): ObserverPreferences {
+export function useObserverPreferences(scopeKey: string,selectionScopeKey=scopeKey): ObserverPreferences {
   const readSettings = useRpc(observerSettingsRpc.read);
   const writeSettings = useRpc(observerSettingsRpc.write);
   const settingsRef = useRef<SettingsSnapshot>({ status: "loading" });
@@ -96,12 +97,12 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
 
   useEffect(() => {
     const receive = (event: PreferenceEvent) => {
+      if(event.kind==='selection'){
+        if(event.scope===selectionScopeKey){setSelectedWorkspaceId(event.id);setSavedWorkspaceId(event.id);}return;
+      }
       if (event.scope !== scopeKey) return;
       if (event.kind === 'workspaceView') {
         setWorkspaceView(event.view);
-      } else if (event.kind === "selection") {
-        setSelectedWorkspaceId(event.id);
-        setSavedWorkspaceId(event.id);
       } else if (event.kind === "section") {
         setSectionLayout((current) => ({ ...current, [event.id]: { ...current[event.id], ...event.patch } }));
       } else if (event.kind === "resize") {
@@ -114,7 +115,7 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
     };
     preferenceListeners.add(receive);
     return () => { preferenceListeners.delete(receive); };
-  }, [scopeKey]);
+  }, [scopeKey,selectionScopeKey]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -168,7 +169,7 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
     if (!ready) return;
     if (hydratedKey === currentHydrationKey) return;
     const values = settings.status === "ready" ? settings.values : emptySettingsValues();
-    const saved = values.selectedWorkspaceByPaseoWorkspace[scopeKey] || "";
+    const saved = rememberedSelections.get(selectionScopeKey)??values.selectedWorkspaceByPaseoWorkspace[selectionScopeKey]??values.selectedWorkspaceByPaseoWorkspace[scopeKey]??'';
     setSavedWorkspaceId(saved);
     setSelectedWorkspaceId(saved);
     setWorkspaceView(values.workspaceViewByScope[scopeKey] || 'list');
@@ -176,7 +177,7 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
       normalizeObserverSectionLayout(values.sectionLayoutByPaseoWorkspace[scopeKey]),
     );
     setHydratedKey(currentHydrationKey);
-  }, [currentHydrationKey, ready, scopeKey, settings.status]);
+  }, [currentHydrationKey, ready, scopeKey, selectionScopeKey,settings.status]);
 
   const persist = useCallback((update: (values: ObserverSettingsValues) => ObserverSettingsValues): void => {
     writeQueue.current = writeQueue.current.then(async () => {
@@ -213,17 +214,18 @@ export function useObserverPreferences(scopeKey: string): ObserverPreferences {
   }, [persist, scopeKey]);
 
   const selectWorkspace = useCallback((id: string): void => {
-    publishPreference({ scope: scopeKey, kind: "selection", id });
+    rememberedSelections.set(selectionScopeKey,id);
+    publishPreference({ scope: selectionScopeKey, kind: "selection", id });
     setSelectedWorkspaceId(id);
     setSavedWorkspaceId(id);
     persist((values) => ({
       ...values,
       selectedWorkspaceByPaseoWorkspace: {
         ...values.selectedWorkspaceByPaseoWorkspace,
-        [scopeKey]: id,
+        [selectionScopeKey]: id,
       },
     }));
-  }, [persist, scopeKey]);
+  }, [persist, selectionScopeKey]);
 
   const updateSection = useCallback((id: ObserverSectionId, patch: Partial<SectionLayoutPreference>): void => {
     publishPreference({ scope: scopeKey, kind: "section", id, patch });

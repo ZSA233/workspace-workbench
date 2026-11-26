@@ -1,4 +1,5 @@
 const messages:Record<string,string>={
+ organizer_session_no_commits:'尚无独立提交材料，暂不生成标题',organizer_session_context_too_large:'关联材料超出当前模型预算，请调整上下文预算',organizer_model_workspace_invalid:'模型工作区对应关系校验失败',organizer_model_conversation_missing:'模型未返回会话增量摘要',organizer_model_brief_too_long:'模型摘要过长，请重试',organizer_model_title_invalid:'模型标题格式不符合要求',
  organizer_model_required:'请选择模型连接',organizer_source_changed:'材料已变化，请重新生成',organizer_preview_changed:'预览已变化，请重新核对',organizer_external_title_change:'标题已被修改，需人工核对',settings_revision_conflict:'设置已更新，请重新保存',organizer_model_evidence_invalid:'模型来源引用未通过校验',organizer_sushi_model_not_loaded:'指定模型未就绪',organizer_model_output_incomplete:'模型输出不完整',organizer_context_budget_too_small:'输入预算不足',organizer_queue_full:'任务队列已满',organizer_model_queue_full:'模型队列已满',organizer_job_missing:'任务记录已不存在',organizer_legacy_job_reselect:'请重新选择处理范围',organizer_restore_unavailable:'当前标题无法恢复，请核对维护记录',
 };
 export function organizerErrorLabel(value:string){const code=Object.keys(messages).find(code=>value===code);if(code)return messages[code];if(value.startsWith('organizer_model_http_'))return '模型接口返回 HTTP '+value.slice('organizer_model_http_'.length);return value;}

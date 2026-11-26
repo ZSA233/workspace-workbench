@@ -80,6 +80,7 @@ export function LayoutMenu({
   onOpenStorage,
   fullActivity,
   onOpenExtensions,
+  onOpenModelSettings,
   onOpenRuntimeSettings,
   onOpenExecution,
   runtimeNotice,
@@ -103,6 +104,7 @@ export function LayoutMenu({
   onOpenStorage?: () => void;
   fullActivity?: { scan: WorkspaceActivityScan | null; busy: boolean; start(): void; cancel(): void };
   onOpenExtensions?: () => void;
+  onOpenModelSettings?:()=>void;
   onOpenRuntimeSettings?: () => void;
   runtimeNotice?: ReactNode;
   onOpenExecution?: ()=>void;
@@ -148,6 +150,7 @@ export function LayoutMenu({
     {onCreate ? <LayoutMenuItem label={localizedCopy.text_1623afda9e} onPress={onCreate} styles={styles} /> : null}
     {onSwitchProject ? <LayoutMenuItem label={localizedCopy.switchProject} onPress={onSwitchProject} styles={styles} /> : null}
     {onOpenExtensions ? <LayoutMenuItem label="扩展管理" onPress={onOpenExtensions} styles={styles} /> : null}
+    {onOpenModelSettings?<LayoutMenuItem label="模型设置" onPress={onOpenModelSettings} styles={styles}/>:null}
     {onOpenStorage ? <LayoutMenuItem label={localizedCopy.storageMenu} onPress={onOpenStorage} styles={styles} /> : null}
     {onOpenExecution?<LayoutMenuItem label={localizedCopy.executionMenu} onPress={onOpenExecution} styles={styles}/>:null}
     {runtimeNotice}

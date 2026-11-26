@@ -53,10 +53,10 @@ export async function checkOrganizerModel(profile: ModelProfile, secret: string,
   const models: Array<{ id: string; loaded?: boolean; state?: string }> = (value.data || []).filter((m: { id?: unknown }) => typeof m.id === 'string').map((m: { id: string; loaded?: boolean; state?: string }) => ({ id: m.id, ...(m.loaded === undefined ? {} : { loaded: m.loaded }), ...(m.state ? { state: m.state } : {}) }));
   return { models, sushi, selectedAvailable: models.some(m => m.id === profile.model&&(!sushi||m.loaded===true&&m.state==='ready')) };
 }
-export async function callOrganizerModel(profile: ModelProfile, secret: string, policy: OrganizerPolicy, evidence: OrganizerEvidence[], previous: Parameters<typeof organizerInput>[1], kind: 'workspace' | 'conversation', owner: string, signal: AbortSignal, record: (run: OrganizerRun) => void, observe?:(phase:OrganizerModelPhase,run:OrganizerRun)=>void): Promise<{ value: ModelResult; truncated: boolean; consumedIds: string[] }> {
-  const material = organizerInput(evidence, previous, profile), prompt = organizerSystem(policy, kind);
-  if (Buffer.byteLength(prompt) > profile.contextTokens / 2 || !material.evidence.length) throw Error('organizer_context_budget_too_small');
-  const run: OrganizerRun = { id: randomUUID(), kind, owner, at: new Date().toISOString(), profileId: profile.id,model:profile.model,endpoint:profile.baseUrl, prompt, input: material.input, truncated: material.truncated };
+export async function requestOrganizerJson<T>(profile:ModelProfile,secret:string,request:{kind:OrganizerRun['kind'];owner:string;prompt:string;input:string;truncated:boolean;references?:Record<string,string>},signal:AbortSignal,validate:(value:unknown)=>T,record:(run:OrganizerRun)=>void,observe?:(phase:OrganizerModelPhase,run:OrganizerRun)=>void):Promise<T> {
+  const {kind,owner,prompt,input,truncated}=request;
+  if(Buffer.byteLength(prompt)+Buffer.byteLength(input)>profile.contextTokens-profile.outputTokens)throw Error('organizer_context_budget_too_small');
+  const run: OrganizerRun = { id: randomUUID(), kind, owner, at: new Date().toISOString(), profileId: profile.id,model:profile.model,endpoint:profile.baseUrl,references:request.references, prompt, input, truncated };
   const started = Date.now();
   const phase=(state:OrganizerModelPhase)=>{run.state=state;run.elapsedMs=Date.now()-started;observe?.(state,{...run});};
   try {
@@ -66,21 +66,28 @@ export async function callOrganizerModel(profile: ModelProfile, secret: string, 
     if(availability.sushi&&!availability.selectedAvailable)throw Error('organizer_sushi_model_not_loaded');
     const url = new URL(profile.baseUrl); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw Error('organizer_model_url_invalid');
     if(requestSignal.aborted)throw Error('organizer_cancelled');run.requestedAt=new Date().toISOString();phase('requesting');
-    const response = await fetch(profile.baseUrl.replace(/\/$/, '') + '/chat/completions', { method: 'POST', redirect: 'error', signal: requestSignal, headers: { 'Content-Type': 'application/json', ...(secret ? { Authorization: 'Bearer ' + secret } : {}) }, body: JSON.stringify({ model: profile.model, messages: [{ role: 'system', content: prompt }, { role: 'user', content: material.input }], temperature: 0.1, max_tokens: profile.outputTokens, enable_thinking: false, response_format: { type: 'json_object' }, stream: false }) });
+    const response = await fetch(profile.baseUrl.replace(/\/$/, '') + '/chat/completions', { method: 'POST', redirect: 'error', signal: requestSignal, headers: { 'Content-Type': 'application/json', ...(secret ? { Authorization: 'Bearer ' + secret } : {}) }, body: JSON.stringify({ model: profile.model, messages: [{ role: 'system', content: prompt }, { role: 'user', content: input }], temperature: 0.1, max_tokens: profile.outputTokens, enable_thinking: false, response_format: { type: 'json_object' }, stream: false }) });
     if (!response.ok) throw Error(`organizer_model_http_${response.status}`);
     const result = await boundedJson(response, 256 * 1024);
     run.output = String(result.choices?.[0]?.message?.content || ''); run.usage = result.usage;
     phase('validating');
     if (result.choices?.[0]?.finish_reason === 'length') throw Error('organizer_model_output_incomplete');
     const clean = run.output.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
-    const value = responseSchema.parse(JSON.parse(clean));
+    return validate(JSON.parse(clean));
+  } catch (error) { run.error = error instanceof Error ? error.message.slice(0, 500) : 'organizer_model_failed'; throw error; }
+  finally { run.elapsedMs = Date.now() - started;run.finishedAt=new Date().toISOString();run.state=run.error?'failed':'complete';record(run);observe?.(run.state,{...run}); }
+}
+export async function callOrganizerModel(profile: ModelProfile, secret: string, policy: OrganizerPolicy, evidence: OrganizerEvidence[], previous: Parameters<typeof organizerInput>[1], kind: 'workspace' | 'conversation', owner: string, signal: AbortSignal, record: (run: OrganizerRun) => void, observe?:(phase:OrganizerModelPhase,run:OrganizerRun)=>void): Promise<{ value: ModelResult; truncated: boolean; consumedIds: string[] }> {
+  const material=organizerInput(evidence,previous,profile),prompt=organizerSystem(policy,kind);
+  if(Buffer.byteLength(prompt)>profile.contextTokens/2||!material.evidence.length)throw Error('organizer_context_budget_too_small');
+  return requestOrganizerJson(profile,secret,{kind,owner,prompt,input:material.input,truncated:material.truncated},signal,raw=>{
+    const value = responseSchema.parse(raw);
     const sources = new Set([...material.evidence.map(e => e.id), ...(material.previous?.items.flatMap(i => i.evidenceIds) || [])]);
     if (value.items.some(item => !item.evidenceIds.length || item.evidenceIds.some(id => !sources.has(id)))) throw Error('organizer_model_evidence_invalid');
     value.title = stripOrganizerMarker(value.title.replace(/[\u0000-\u001f\u007f]/g, ' ').trim(),policy);
     if(!value.title)throw Error('organizer_model_title_invalid');
     return { value, truncated: material.truncated, consumedIds: material.evidence.map(e => e.id) };
-  } catch (error) { run.error = error instanceof Error ? error.message.slice(0, 500) : 'organizer_model_failed'; throw error; }
-  finally { run.elapsedMs = Date.now() - started;run.finishedAt=new Date().toISOString();run.state=run.error?'failed':'complete';record(run);observe?.(run.state,{...run}); }
+  },record,observe);
 }
 export function mergeOrganizerItems(previous: OrganizerItem[], result: ModelResult, owner: string): OrganizerItem[] {
   const items = [...previous];

@@ -10,6 +10,7 @@ import { OrganizerSettings, OrganizerStore, OrganizerTestStore, organizerHash, t
 import { callOrganizerModel, checkOrganizerModel, mergeOrganizerItems, retainOrganizerSources } from './model.ts';
 import { conversationBatch } from './conversation.ts';
 import {organizerProgress,type OrganizerProgress} from './jobs.ts';
+import {SessionOrganizer} from './session-service.ts';
 
 type Dependencies = { api(): Promise<PaseoApi>; query?: typeof queryObserver; settings?: OrganizerSettings;legacyBranches?():Promise<Record<string,string>> };
 type JobOptions = OrganizerJobOptions;
@@ -31,7 +32,8 @@ export class OrganizerService {
   private projectTails = new Map<string, Promise<unknown>>();
   private tests = new Map<string,AbortController>();
   private closed = false;
-  constructor(deps: Dependencies) { this.deps = deps; this.query = deps.query || queryObserver; this.settings = deps.settings || new OrganizerSettings();this.modelQueue=new OrganizerModelQueue(()=>this.settings.response().effective.modelConcurrency);this.testStore=new OrganizerTestStore(this.settings.root);this.testStore.recover(); }
+  private sessions:SessionOrganizer;
+  constructor(deps: Dependencies) { this.deps = deps; this.query = deps.query || queryObserver; this.settings = deps.settings || new OrganizerSettings();this.modelQueue=new OrganizerModelQueue(()=>this.settings.response().effective.modelConcurrency);this.testStore=new OrganizerTestStore(this.settings.root);this.testStore.recover();this.sessions=new SessionOrganizer({settings:this.settings,api:deps.api,store:route=>this.store(route),read:(route,method,params)=>this.read(route,method,params),materials:(route,id,key,policy)=>this.materials(route,id,key,policy),model:work=>this.model(work)}); }
   store(route: ProjectRoute) {
     let value = this.stores.get(route.configPath);
     if (!value) { value = new OrganizerStore(route, this.settings.root); value.recover(); this.stores.set(route.configPath, value); }
@@ -58,11 +60,13 @@ export class OrganizerService {
         const result = this.settings.save(request.scope, request.revision, request.patch, request.reset, route);
         // Requests already in flight must not publish a result made with old settings.
         for (const run of this.running.values()) if (!route || run.project === route.configPath) run.abort.abort();
+        this.sessions.abort(route?.configPath);
         return { ok: true, result };
       }
-      if (request.action === 'profile.save') { this.settings.saveProfile(request.revision, request.profile, request.secret); for (const run of this.running.values()) run.abort.abort(); return { ok: true, result: this.settings.response(route) }; }
-      if (request.action === 'profile.delete') { this.settings.deleteProfile(request.revision, request.profileId); for (const run of this.running.values()) run.abort.abort(); return { ok: true, result: this.settings.response(route) }; }
+      if (request.action === 'profile.save') { this.settings.saveProfile(request.revision, request.profile, request.secret); for (const run of this.running.values()) run.abort.abort();this.sessions.abort(); return { ok: true, result: this.settings.response(route) }; }
+      if (request.action === 'profile.delete') { this.settings.deleteProfile(request.revision, request.profileId); for (const run of this.running.values()) run.abort.abort();this.sessions.abort(); return { ok: true, result: this.settings.response(route) }; }
       if (request.action === 'profile.check') return { ok: true, result: await checkOrganizerModel(this.settings.profile(request.profileId), this.settings.secret(request.profileId)) };
+      if(request.action==='profile.probe')return{ok:true,result:await checkOrganizerModel(request.profile,request.secret??this.settings.secret(request.profile.id))};
       if(request.action==='profile.tests')return{ok:true,result:this.testStore.list()};
       if(request.action==='profile.test.result')return{ok:true,result:this.testStore.get(request.testId)};
       if(request.action==='profile.test.cancel'){this.tests.get(request.testId)?.abort();return{ok:true,result:this.testStore.get(request.testId)};}
@@ -82,12 +86,13 @@ export class OrganizerService {
       }
       if (!route) throw Error('project_context_required');
       const store = this.store(route);
+      if(request.action==='session.refresh'||request.action==='session.apply'||request.action==='session.automatic')return{ok:true,result:await this.sessions.request(route,request)};
       if (request.action === 'snapshot') return { ok: true, result: this.snapshot(route, request.hostWorkspaceId) };
       if(request.action==='status'){const ledger=store.read();return{ok:true,result:{revision:ledger.revision,active:ledger.jobs.some(job=>job.state==='running'||job.state==='queued')}};}
       if (request.action === 'run') return { ok: true, result: store.run(request.runId) };
       if (request.action === 'refresh') {
         if(request.productionBranches)await this.syncLegacy(route,request.productionBranches);
-        const productionOnly=request.productionOnly||request.forceFetch;
+        const productionOnly=true; // Legacy project refresh is read-only; session opt-in is the sole automation owner.
         return { ok: true, result: this.enqueue(route, { workspaceIds:request.workspaceIds,hostWorkspaceId:request.hostWorkspaceId, analyze: !productionOnly, conversation: !productionOnly, regenerate: false, automatic: true, fetch: true, forceFetch: request.forceFetch, productionOnly }) };
       }
       if (request.action === 'analyze') return { ok: true, result: this.enqueue(route, { workspaceIds: request.workspaceIds, hostWorkspaceId:request.hostWorkspaceId, analyze: true, conversation: request.conversation, regenerate: request.regenerate, automatic: false, fetch: false }) };
@@ -96,7 +101,7 @@ export class OrganizerService {
         if(!old.options)throw Error('organizer_legacy_job_reselect');
         return { ok: true, result: this.enqueue(route, { ...old.options,workspaceIds:old.total?old.workspaceIds:old.options.workspaceIds }) };
       }
-      if (request.action === 'cancel') { const running = this.running.get(request.jobId); if (running?.project === route.configPath) {running.abort.abort();organizerProgress(store,request.jobId).update(job=>{job.cancelRequestedAt=now();if(job.state==='queued')job.state='cancelled';});} return { ok: true, result: this.snapshot(route) }; }
+      if (request.action === 'cancel') { this.sessions.cancel(route,request.jobId);const running = this.running.get(request.jobId); if (running?.project === route.configPath) {running.abort.abort();organizerProgress(store,request.jobId).update(job=>{job.cancelRequestedAt=now();if(job.state==='queued')job.state='cancelled';});} return { ok: true, result: this.snapshot(route) }; }
       if (request.action === 'job') return { ok: true, result: store.read().jobs.find(j => j.id === request.jobId) || null };
       if (request.action === 'apply') {
         const frozen=store.read();
@@ -239,7 +244,6 @@ export class OrganizerService {
           else { target.policy = 'paused'; target.reason = '此前标题写入结果未确认，请核对后恢复自动维护'; }
         }
         if (target.lastWritten !== undefined && currentTitle !== target.lastWritten && !target.pendingWrite && ['auto', 'symbols'].includes(target.policy)) { target.policy = 'paused'; target.reason = '检测到外部改名，已保留当前标题并暂停自动维护'; }
-        if (!previous && policy.enabled && visible(policy, target) && link.fresh && options.automatic) target.policy = 'auto';
         l.targets[id] = target;
       }
       // No stale target may keep writing after its explicit association disappears.
@@ -323,7 +327,6 @@ export class OrganizerService {
       for (const id of new Set(targets.flatMap(t => t.agentIds).filter(id=>selectedAgents.has(id)))) { assertCurrent();progress.stage('conversation',{agentId:id,name:agents.get(id)?.title||id}); await this.analyzeConversation(route, id, api, policy, signal, assertCurrent, !options.automatic,progress).catch(error => { if (signal.aborted) throw error;progress.count('failed'); store.update(l => { const c = l.conversations[id]; if (c) c.error = failure(error); }); }); }
     }
     assertCurrent();
-    if (options.automatic && policy.enabled) for (const t of Object.values(store.read().targets)) if ((!options.hostWorkspaceId||t.id===options.hostWorkspaceId)&&['auto', 'symbols'].includes(t.policy) && visible(policy, t)) {progress.stage('titles',{name:t.currentTitle||t.id});const before=t.history.length;await this.writeTarget(route, t.id, false, true).catch(error => { store.update(l => { l.targets[t.id].reason = failure(error); }); });progress.count('titleWrites',store.read().targets[t.id].history.length-before);}
     store.update(l => { l.refreshedAt = now(); });progress.stage('finished'); updateJob({ state: 'complete',current:undefined });
   }
   private model<T>(work: () => Promise<T>): Promise<T> {return this.modelQueue.run(work);}
@@ -400,20 +403,14 @@ export class OrganizerService {
     await api.workspaces.ref(id).setTitle(target.originalTitle);
     store.update(l => { const t = l.targets[id]; t.currentTitle = target.originalTitle!; t.lastWritten = target.originalTitle; delete t.pendingWrite; t.reason = '已恢复原标题并排除自动维护'; });
   }
-  changed(route: ProjectRoute) {
-    if (this.closed) return;
-    const policy = this.settings.response(route).effective; if (!policy.enabled) return;
-    const previous = this.timers.get(route.configPath); if (previous) clearTimeout(previous);
-    const timer = setTimeout(() => { this.timers.delete(route.configPath); try { this.enqueue(route, { analyze: true, conversation: true, regenerate: false, automatic: true, fetch: false }); } catch {} }, policy.debounceSeconds * 1000);
-    timer.unref(); this.timers.set(route.configPath, timer);
-  }
-  async close() { this.closed = true; for (const timer of this.timers.values()) clearTimeout(timer); this.timers.clear(); for(const test of this.tests.values())test.abort();for (const job of this.running.values()) job.abort.abort(); await Promise.allSettled([...this.running.values()].map(j => j.promise));await this.modelQueue.idle(); }
+  changed(route: ProjectRoute,agentId?:string) {if(!this.closed)this.sessions.changed(route,agentId);}
+  async close() { this.closed = true;for(const test of this.tests.values())test.abort();for (const job of this.running.values()) job.abort.abort();await this.sessions.close(); for (const timer of this.timers.values()) clearTimeout(timer); this.timers.clear();await Promise.allSettled([...this.running.values()].map(j => j.promise));await this.modelQueue.idle(); }
 }
 
 export function registerOrganizer(server: PluginServerContext, service: OrganizerService) {
   server.handle(organizerRpc, input => service.request(input));
   const cleanup = server.on('agent.turn_ended', ({ agent }) => {
-    try { service.changed(resolveProject({ directory: agent.cwd })); } catch {}
+    try { service.changed(resolveProject({ directory: agent.cwd }),agent.id); } catch {}
   });
   return async () => { cleanup(); await service.close(); };
 }

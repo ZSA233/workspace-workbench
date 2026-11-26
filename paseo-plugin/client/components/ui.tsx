@@ -413,7 +413,7 @@ export function ChangeCounts({
 
 export function TabButton({ active, label, badge, onPress, theme, styles }: { active: boolean; label: string; badge?: number; onPress: () => void; theme: PanelProps["theme"]; styles: ReturnType<typeof makeStyles> }) {
   return (
-    <Pressable accessibilityRole="tab" accessibilityLabel={badge ? `${label} ${badge} 条未读` : label} accessibilityState={{ selected: active }} onPress={onPress} style={[styles.tabButton, active && styles.tabButtonActive, { flexDirection: 'row', alignItems: 'center', gap: 5 }]}>
+    <Pressable accessibilityRole="tab" aria-selected={active} accessibilityLabel={badge ? `${label} ${badge} 条未读` : label} accessibilityState={{ selected: active }} onPress={onPress} style={[styles.tabButton, active && styles.tabButtonActive, { flexDirection: 'row', alignItems: 'center', gap: 5 }]}>
       <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
       {badge ? <View style={{ minWidth: 16, height: 16, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center', borderRadius: 8, backgroundColor: theme.colors.statusDanger }}><Text style={{ fontSize: 10, lineHeight: 14, color: '#fff' }}>{badge}</Text></View> : null}
     </Pressable>

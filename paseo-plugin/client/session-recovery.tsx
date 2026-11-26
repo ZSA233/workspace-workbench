@@ -2,7 +2,7 @@ import type { PluginClientContext, PluginSurfaceProps, PluginButtonRegistration,
 import { resolveWorkbenchLocale } from "../shared/copy";
 import { recoveryStatusLabel } from "../shared/session-recovery";
 import { createRecoveryClientStore, type RecoveryClientStore } from "./recovery-store";
-import { DeferredPanel, WorkbenchSettingsScreen } from "./entry-panels";
+import { DeferredPanel } from "./entry-panels";
 import { createRegistrationScope } from "./initialization";
 import { reportNativeDiagnostic } from "./native-diagnostics";
 import { useEffect, useSyncExternalStore } from "react";
@@ -44,7 +44,7 @@ export function registerRecoveryClient(client: PluginClientContext): () => void 
     const openAll = () => client.openSurface(surfaceId);
     scope.register("recovery:surface", () => client.addSurface(surfaceId, props => <RecoveryPanelEntry store={store} props={props} openAll={openAll} />));
     scope.register("recovery:sidebar", () => client.addSidebarItem({ id: surfaceId, title: english ? "Session auto recovery" : "会话自动恢复", icon: "RotateCw", surface: surfaceId }));
-    scope.register("recovery:settings", () => client.addSettingsScreen({ id: "workbench-session-recovery-settings", title: english ? "Session auto recovery" : "会话自动恢复", icon: "RotateCw", Component: props => <WorkbenchSettingsScreen {...props} initialCategory="recovery"/> }));
+    scope.register("recovery:settings", () => client.addSettingsScreen({ id: "workbench-session-recovery-settings", title: english ? "Session auto recovery" : "会话自动恢复", icon: "RotateCw", Component: props => <RecoveryPanelEntry store={store} props={props} openAll={openAll} /> }));
     if (native) {
       // Per-session composer contributions share a host-wide registry. Keep
       // mobile recovery UI independent of every conversation's render path.

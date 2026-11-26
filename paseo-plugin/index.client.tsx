@@ -6,7 +6,7 @@ import { contextSurfacePrefix, createOpenGuard, workbenchDestination } from "./c
 
 import { clearFileReviews, configureFileReviewOpener, openFileReview } from "./client/file-review-store";
 import { copy, getWorkbenchCopy } from "./shared/copy";
-import { DocumentPanel, FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel, WorkbenchSettingsScreen } from "./client/entry-panels";
+import { DocumentPanel, FileReviewPanel, WorkbenchPanel, WorkbenchSurfacePanel } from "./client/entry-panels";
 import { atInitializationStage, createRegistrationScope, INITIALIZATION_REVISION, type RegistrationScope } from "./client/initialization";
 import { localeFromHostProps } from "./client/i18n";
 import { configureNativeDiagnosticReporter, installNativeRenderErrorHook, reportNativeDiagnostic } from "./client/native-diagnostics";
@@ -73,7 +73,6 @@ export default function contribute(client: PluginClientContext) {
 }
 
 function contributeClient(client: PluginClientContext, scope: RegistrationScope, platform: string) {
-  scope.optional('settings:workbench',()=>client.addSettingsScreen({id:'workbench-settings',title:'Workbench 设置',icon:'Settings',Component:WorkbenchSettingsScreen}));
   if(typeof client.addTimelineRenderer==='function')scope.optional('topic-chat-images',()=>client.addTimelineRenderer({kind:topicChatMediaKind,version:1,schema:topicChatMediaSchema,
     Component:TopicChatImageEntry}));
   if(typeof client.addTimelineRenderer==='function')scope.optional('chat-media',()=>client.addTimelineRenderer({kind:chatMediaKind,version:1,schema:chatMediaSchema,Component:ChatMediaEntry}));

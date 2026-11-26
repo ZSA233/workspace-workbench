@@ -143,7 +143,7 @@ const env = {
   WORKSPACE_WORKBENCH_PLUGIN_ROOT: plugin,
   WORKBENCH_TEST_HOST_DROP: "1",
 };
-if (process.env.WORKBENCH_LIVE_CHAT_MEDIA === '1') env.NODE_OPTIONS += ' --import=' + new URL('../server/native-chat-media.mjs', import.meta.url).href;
+if (process.env.WORKBENCH_LIVE_CHAT_MEDIA === '1') env.NODE_OPTIONS += ' --import=' + new URL('../tests/fixtures/native-chat-media.mjs', import.meta.url).href;
 if (process.env.WORKBENCH_LIVE_SLOW_GIT === "1") {
   const bin=join(root,"git-injection");mkdirSync(bin);
   const actualGit=execFileSync("which",["git"],{encoding:"utf8"}).trim();

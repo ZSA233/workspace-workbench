@@ -14,9 +14,14 @@ import {withProject} from './projects.ts';
 export async function appendTopicImages(route:ProjectRoute,context:AgentContext,agentId:string,value:{id:string;messageId?:string;references:ReviewArtifactReference[]}) {
   if (!value.references.some(item=>item.assetId)) return;
   const id='topic-images:'+value.id;
-  const current=await context.paseo.agents.ref(agentId).timeline.refetch({limit:100});
-  if(current.error)throw Error('topic_media_history_unavailable');
   const api=context.pluginPaseo||context.paseo;
+  const timeline=api.agents.ref(agentId).timeline;
+  const current=await timeline.refetch({limit:100});
+  if(current.error)throw Error('topic_media_history_unavailable');
+  const append=async(item:Parameters<typeof timeline.append>[0])=>{
+    const acknowledgement=await timeline.append(item);
+    if(!Number.isSafeInteger(acknowledgement?.seq)||!acknowledgement?.epoch)throw Error('topic_media_history_unavailable');
+  };
   const original = current.entries.findIndex(entry => entry.item.type === 'plugin' && entry.item.id === id);
   const message = value.messageId ? current.entries.findIndex(entry => entry.item.type === 'user_message'
     && (entry.item.messageId === value.messageId || entry.item.clientMessageId === value.messageId)) : -1;
@@ -24,14 +29,14 @@ export async function appendTopicImages(route:ProjectRoute,context:AgentContext,
   const earlier = original >= 0 && message > original;
   // Preserve old timeline identities. A display-only replacement repairs an
   // earlier media row without dispatching the already accepted prompt again.
-  if (original < 0 || earlier && !replacement) await api.agents.ref(agentId).timeline.append({
+  if (original < 0 || earlier && !replacement) await append({
     type:'plugin',id:earlier ? id + ':after' : id,kind:topicChatMediaKind,version:1,
     data:{projectConfig:route.configPath,materialId:value.id,...(value.messageId?{messageId:value.messageId}:{})},
   });
   if (earlier) {
     const item = current.entries[original].item;
     if (item.type === 'plugin' && item.data && typeof item.data === 'object' && !Array.isArray(item.data) && !item.data.hidden) {
-      await api.agents.ref(agentId).timeline.append({type:'plugin',id:item.id,kind:item.kind,version:item.version,data:{...item.data,hidden:true}});
+      await append({type:'plugin',id:item.id,kind:item.kind,version:item.version,data:{...item.data,hidden:true}});
     }
   }
 }

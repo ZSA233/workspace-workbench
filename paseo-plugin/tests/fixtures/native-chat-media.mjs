@@ -1,8 +1,8 @@
-// Native host compatibility adapter. No prompt, permission or transport changes.
+// Isolated research fixture only. Excluded from published plugin archives.
 import { createHash } from 'node:crypto';
 import { registerHooks } from 'node:module';
 import { readFileSync } from 'node:fs';
-import { captureChatMedia, nativeChatMediaDisplayed, markNativeChatMediaDisplayed, recordNativeChatMediaRuntime } from './backend/chat-media.ts';
+import { captureChatMedia, nativeChatMediaDisplayed, markNativeChatMediaDisplayed, recordNativeChatMediaRuntime } from '../../server/backend/chat-media.ts';
 
 const marker = Symbol.for('workspace-workbench.native-chat-media.v1');
 const approved = new Map([

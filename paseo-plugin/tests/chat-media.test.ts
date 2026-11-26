@@ -82,7 +82,7 @@ test('file chunks preserve the selected upload version and reject changed files 
 test('the native recorder appends after the accepted user message, without mutating or replaying its prompt', async () => {
   const s = setup();
   try {
-    const { attachChatMediaRecorder } = await import(new URL('../server/native-chat-media.mjs', import.meta.url).href);
+    const { attachChatMediaRecorder } = await import(new URL('./fixtures/native-chat-media.mjs', import.meta.url).href);
     class Manager {
       rows: Array<{ item: { type: string; id?: string; messageId?: string; data?: unknown } }> = [];
       calls = 0;
@@ -109,7 +109,7 @@ test('the native recorder appends after the accepted user message, without mutat
 test('native preload stays in the supervisor launch but is removed from provider and project child environments', async () => {
   const s=setup();
   try {
-    const adapter=new URL('../server/native-chat-media.mjs',import.meta.url).href;
+    const adapter=new URL('./fixtures/native-chat-media.mjs',import.meta.url).href;
     const {withoutMediaPreload}=await import(adapter);
     assert.equal(withoutMediaPreload('--no-warnings --import='+adapter+' --stack-trace-limit=50'),'--no-warnings  --stack-trace-limit=50');
     assert.equal(withoutMediaPreload('--import "'+adapter+'"'),'');

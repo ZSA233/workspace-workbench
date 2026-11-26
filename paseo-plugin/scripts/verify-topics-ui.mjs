@@ -19,6 +19,7 @@ const plugin = resolve(import.meta.dirname, '..');
 const output = process.env.WORKBENCH_VERIFY_OUTPUT || mkdtempSync(join(tmpdir(), 'wb-topics-ui-'));
 mkdirSync(output, { recursive: true });
 const fixture = await startArchiveFixture();
+const nativeMediaExperiment=process.env.WORKBENCH_VERIFY_NATIVE_MEDIA_EXPERIMENT==='1';
 fixture.state.topics[0].question = fixture.state.topics[0].title;
 fixture.state.topics[0].title = '[图片消息](mediaId=$truncated';
 fixture.state.topics[0].updatedAt = new Date(2026, 10, 19, 16, 20).getTime();
@@ -38,7 +39,7 @@ videoMessage.assets=[{id:'video-original',name:'attachment',mimeType:'video',sta
 for(let index=1;index<=8;index++)videoTopic.messages.push({...videoMessage,id:'video-followup-'+index,version:'video-followup-version-'+index,createdAt:videoMessage.createdAt+index*60000,text:'后续讨论 '+index,assets:[]});
 videoTopic.messageCount=videoTopic.messages.length;
 const host = spawn(process.execPath, [join(plugin, 'scripts/verify-live.mjs')], {
-  env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_LIVE_TOPICS: '1', WORKBENCH_LIVE_CHAT_MEDIA: '1', WORKBENCH_VERIFY_OUTPUT: output },
+  env: { ...process.env, WORKBENCH_LIVE_UI: '1', WORKBENCH_LIVE_TOPICS: '1', WORKBENCH_LIVE_CHAT_MEDIA: nativeMediaExperiment?'1':'0', WORKBENCH_VERIFY_OUTPUT: output },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let logs = '', ui, browser, page, client;
@@ -921,6 +922,7 @@ try {
   report.screenshots.push(join(output,'tapd-three-images-after-message.png'));
   check('three distinct TAPD originals stay after their long accepted message with an explicit sent-image count');
 
+  if(nativeMediaExperiment){
   const pocketSender=new DaemonClient({url:ui.url.replace('http:','ws:')+'/ws',clientId:'independent-pocket-sender',clientType:'browser',reconnect:{enabled:false},
     webSocketFactory:(url,options)=>new WebSocket(url,options?.protocols,{headers:options?.headers})});
   let peer;
@@ -980,8 +982,9 @@ try {
     await peer.screenshot({path:join(output,'pocket-independent-receiver-phone.png')});report.screenshots.push(join(output,'pocket-independent-receiver-phone.png'));
     await receiver.close();peer=undefined;
     assert.equal(JSON.parse(readFileSync(join(ui.topicsFixtureRoot,'native-media-child-env'),'utf8')).mediaPreloadInherited,false);
-    check('the native host retains images and uploaded files from another Pocket-protocol client; a fresh browser receiver without attachment IndexedDB or a native file picker previews all originals, downloads the exact PDF, and retains them after reload on desktop and phone');
+    check('research fixture only: a version-bound native recorder retains cross-client originals; this recorder is excluded from the plugin release and is not a production Pocket fix');
   } finally {await peer?.close();await pocketSender.close();}
+  }
   assert.equal(fixture.state.requests.some(request => request.url.startsWith('/v1/projects')), false);
   assert.equal(report.pageErrors.length, 0, JSON.stringify(report.pageErrors));
   report.fidelity.push('same flat topic-list + bottom-basket architecture as refined C',

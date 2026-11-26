@@ -607,12 +607,16 @@ test('DingTalk and TAPD media follows its accepted message; display retries neve
   } finally {await s.close();}
 });
 
-test('a historical media row before a long message is repaired after it without replacing its identity or resending',async()=>{
+test('historical media uses the plugin history owner even when the ordinary connection omits plugin rows',async()=>{
   const s=await setup();
   try {
     const native=nativeSession(s.root),topic=await s.archive.read('topic-1'),selected=selection(topic);
     selected.assets=[{id:'image-1',messageId:topic.messages[0].id,messageVersion:topic.messages[0].version}];
-    const call=(request:Parameters<WorkbenchExtensions['topics']>[3])=>s.host.topics(s.config,'project-communications',2,request,native.context) as Promise<TopicMaterialPreview>;
+    const context={...native.context,pluginPaseo:native.context.paseo,paseo:{...native.context.paseo,agents:{...native.context.paseo.agents,ref:(id:string)=>{
+      const agent=native.context.paseo.agents.ref(id);
+      return {...agent,timeline:{...agent.timeline,refetch:async()=>({entries:native.state.events.filter(event=>event.item.type==='user_message')})}};
+    }}}};
+    const call=(request:Parameters<WorkbenchExtensions['topics']>[3])=>s.host.topics(s.config,'project-communications',2,request,context as typeof native.context) as Promise<TopicMaterialPreview>;
     const preview=await call({action:'preview',targetId:'session:'+native.agent.id,selections:[selected]});
     const legacyId='topic-images:'+preview.id;
     await native.context.paseo.agents.ref(native.agent.id).timeline.append({type:'plugin',id:legacyId,kind:'workbench-topic-images',version:1,data:{projectConfig:s.config,materialId:preview.id,legacyHistory:'retain'}});
@@ -625,6 +629,21 @@ test('a historical media row before a long message is repaired after it without 
     await call({action:'receipt',id:preview.id});
     assert.equal(native.state.sent.length,1);assert.equal(native.state.events.length,3);
   } finally {await s.close();}
+});
+
+test('a missing timeline write acknowledgement cannot report that attachment display was saved',async()=>{
+  const s=await setup();
+  try{
+    const native=nativeSession(s.root),topic=await s.archive.read('topic-1'),selected=selection(topic);
+    selected.assets=[{id:'image-1',messageId:topic.messages[0].id,messageVersion:topic.messages[0].version}];
+    const context={...native.context,pluginPaseo:{agents:{ref:()=>({timeline:{refetch:async()=>({entries:native.state.events}),append:async()=>({seq:undefined,epoch:undefined})}})}}} as unknown as AgentContext;
+    const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',targetId:'session:'+native.agent.id,selections:[selected]},native.context) as TopicMaterialPreview;
+    await assert.rejects(s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},context),/topic_media_display_unavailable/);
+    assert.equal(native.state.sent.length,1);
+    const receipt=await s.host.topics(s.config,'project-communications',2,{action:'receipt',id:preview.id},native.context) as TopicMaterialPreview;
+    assert.equal(receipt.state,'accepted');assert.equal(native.state.sent.length,1);
+    assert.deepEqual(native.state.events.map(event=>event.item.type),['user_message','plugin']);
+  }finally{await s.close();}
 });
 
 test('ordinary sessions receive registered non-image originals as host file attachments', async () => {

@@ -13,10 +13,10 @@ import {videoTime,inlineVideo,videoFileSize,type TopicVideoPreview} from '../../
 import { pendingTopicAssets, TOPIC_ASSET_REFRESH_MS } from '../../topic-asset-state';
 
 export const topicTypography = StyleSheet.create({
-  title: { fontSize: 12, lineHeight: 18, fontWeight: '600' },
-  metadata: { fontSize: 10, lineHeight: 15 },
-  detailLabel: { fontSize: 10, lineHeight: 15, fontWeight: '500' },
-  body: { fontSize: 11.5, lineHeight: 18 },
+  title: { fontSize: 12, lineHeight: 18, fontWeight: '600', textAlign: 'left' },
+  metadata: { fontSize: 10, lineHeight: 15, textAlign: 'left' },
+  detailLabel: { fontSize: 10, lineHeight: 15, fontWeight: '500', textAlign: 'left' },
+  body: { fontSize: 11.5, lineHeight: 18, textAlign: 'left' },
 });
 
 export function TopicRowStatus({ label, attention }: { label: string; attention: RecordAttention }) {

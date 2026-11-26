@@ -71,7 +71,7 @@ async function shot(name) {
 }
 const renderedText = locator => locator.evaluate(element => {
   const style = getComputedStyle(element);
-  return { size: parseFloat(style.fontSize), weight: Number(style.fontWeight), color: style.color, x: element.getBoundingClientRect().left };
+  return { size: parseFloat(style.fontSize), weight: Number(style.fontWeight), color: style.color, align: style.textAlign, x: element.getBoundingClientRect().left };
 });
 try {
   ui = await ready; report.url = ui.url;
@@ -175,6 +175,7 @@ try {
   await panel.getByRole('button', { name: '更多缺陷', exact: true }).click();
   await secondRow.getByText('已解决', { exact: true }).waitFor();
   const tapdTitle = await renderedText(issueRow.getByText(issue.title, { exact: true }));
+  assert.equal(tapdTitle.align, 'left');
   const secondTitle = secondRow.getByText(secondIssue.title, { exact: true });
   const settledTitle = await renderedText(secondTitle);
   const activeStatus = await renderedText(issueRow.getByText('处理中', { exact: true }));
@@ -206,6 +207,7 @@ try {
   const description = issueDetail.getByText(issue.body, { exact: true });
   await description.waitFor();
   const descriptionStyle = await renderedText(description);
+  assert.equal(descriptionStyle.align, 'left');
   const detailLabel = await renderedText(issueDetail.getByText('缺陷描述', { exact: true }));
   const detailFrame = await issueDetail.getByTestId('topic-detail-content').evaluate(element => {
     const css = getComputedStyle(element); return { border: css.borderLeftWidth, padding: css.paddingLeft };
@@ -265,6 +267,8 @@ try {
   const chatBody = chatRow.getByText(fixture.state.topics[0].messages[0].displayText, { exact: true });
   assert.equal((await renderedText(chatTitle)).size, tapdTitle.size);
   assert.equal((await renderedText(chatBody)).size, descriptionStyle.size);
+  assert.equal((await renderedText(chatTitle)).align, 'left');
+  assert.equal((await renderedText(chatBody)).align, 'left');
   assert.deepEqual(await chatRow.getByTestId('topic-detail-content').evaluate(element => {
     const css = getComputedStyle(element); return { border: css.borderLeftWidth, padding: css.paddingLeft };
   }), detailFrame);
@@ -329,6 +333,39 @@ try {
   const targetPicker = page.getByRole('dialog', { name: '目标会话', exact: true });
   await targetPicker.getByRole('button', { name: '档案材料验收会话', exact: true }).click();
   assert.ok((await initialPreview.innerText()).includes('codex · recovery-fixture'));
+  await nativeSession.refresh();
+  assert.ok(nativeSession.workspaceId);
+  const renamedTitle = '【币商中心】钉钉与 TAPD 材料验收会话：按重命名标题查找并保留完整的缺陷上下文';
+  await client.setWorkspaceTitle(nativeSession.workspaceId, renamedTitle);
+  assert.equal((await nativeSession.refresh()).agent.title, '档案材料验收会话');
+  await page.getByTestId('topics-target').click();
+  const targetSearch = targetPicker.getByRole('textbox', { name: '搜索此项目会话', exact: true });
+  const renamedButton = targetPicker.getByRole('button', { name: renamedTitle, exact: true });
+  await renamedButton.waitFor();
+  await targetSearch.fill('  币商中心  ');
+  await renamedButton.waitFor();
+  assert.equal(await renamedButton.evaluate(element => getComputedStyle(element).justifyContent), 'flex-start');
+  assert.equal((await renderedText(renamedButton.getByText(renamedTitle, { exact: true }))).align, 'left');
+  const targetDesktop = join(output, 'renamed-session-search-desktop.png');
+  await targetPicker.screenshot({ path: targetDesktop }); report.screenshots.push(targetDesktop);
+  await page.setViewportSize({ width: 390, height: 900 });
+  const targetPhone = join(output, 'renamed-session-search-phone.png');
+  await targetPicker.screenshot({ path: targetPhone }); report.screenshots.push(targetPhone);
+  const titleBox = await renamedButton.getByText(renamedTitle, { exact: true }).boundingBox(), buttonBox = await renamedButton.boundingBox();
+  assert.ok(titleBox.x < buttonBox.x + 45 && titleBox.x + titleBox.width <= buttonBox.x + buttonBox.width);
+  assert.ok(titleBox.height > 20, 'a long renamed title must wrap inside the phone-sized picker');
+  await targetSearch.fill('档案材料验收');
+  await renamedButton.waitFor();
+  await targetSearch.fill('没有这样的会话标题');
+  await targetPicker.getByText('没有匹配的会话，可换个关键词或刷新', { exact: true }).waitFor();
+  await client.setWorkspaceTitle(nativeSession.workspaceId, '【更新名称】材料验收');
+  await targetSearch.fill('更新名称');
+  await targetPicker.getByRole('button', { name: '刷新会话', exact: true }).click();
+  await targetPicker.getByRole('button', { name: '【更新名称】材料验收', exact: true }).click();
+  await page.getByTestId('topics-target').getByText('【更新名称】材料验收', { exact: true }).waitFor();
+  await client.setWorkspaceTitle(nativeSession.workspaceId, '档案材料验收会话');
+  await page.setViewportSize({ width: 1448, height: 1120 });
+  check('the DingTalk target picker reads sidebar renames on open and refresh, searches new and original titles, shows no-match feedback, and aligns wrapped titles left on desktop and phone');
   await initialPreview.getByRole('button', { name: '返回', exact: true }).click();
   await page.getByRole('button', { name: '清空材料', exact: true }).click();
   await page.getByTestId('topic-select-topic-1').click();
@@ -753,12 +790,17 @@ try {
   await shot('tapd-shared-video-fallback-phone');
   await page.getByTestId('topics-send').click();
   await page.getByTestId('topics-send-dialog').getByRole('button', { name: '已有会话', exact: true }).click();
+  await client.setWorkspaceTitle(nativeSession.workspaceId, '【TAPD 修复】视频原件验收');
   await page.getByTestId('topics-target').click();
-  await page.getByRole('dialog', { name: '目标会话', exact: true }).getByRole('button', { name: '档案材料验收会话', exact: true }).click();
+  await targetSearch.fill('TAPD 修复');
+  await targetPicker.getByRole('button', { name: '【TAPD 修复】视频原件验收', exact: true }).click();
+  await page.getByTestId('topics-target').getByText('【TAPD 修复】视频原件验收', { exact: true }).waitFor();
+  await client.setWorkspaceTitle(nativeSession.workspaceId, '档案材料验收会话');
   const fallbackNote = '核对这两条材料所附的屏幕录制。';
   await page.getByTestId('topics-send-note').fill(fallbackNote);
   await page.getByTestId('topics-confirm').click();
   await page.getByTestId('topics-send').getByText('打开会话', { exact: true }).waitFor();
+  check('TAPD uses the same renamed-session search and delivers to the original Agent even when its sidebar title changes after selection');
   let largeOriginalReceived = false;
   for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
     for (const file of readdirSync(ui.topicsFixtureRoot).filter(name => name.endsWith('.json'))) {

@@ -56,8 +56,9 @@ function selection(topic: ArchiveTopicDetail): TopicSelection {
 function nativeSession(root: string) {
   const agent = { id: 'native-codex', cwd: root, workspaceId: 'native-host-workspace', title: '现有反馈分析会话', provider: 'codex',
     status: 'idle', archivedAt: null as string | null, labels: {}, currentModeId: 'full-access', features: [{ id: 'plan_mode', type: 'toggle', value: true }] };
+  const workspace = { id: agent.workspaceId, name: '默认工作区名称', title: null as string | null };
   const state = { uncertain: false, appended: [] as unknown[], sent: [] as Array<{ text: string; options: { messageId: string; images: Array<{ data: string; mimeType: string }>; attachments?: Array<{ type: string; fileName: string; mimeType: string; size: number; path: string }> } }> };
-  const context = { paseo: { agents: {
+  const context = { paseo: { workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) }, agents: {
     list: async () => ({ entries: [{ agent }], pageInfo: { hasMore: false } }),
     ref: (id: string) => ({ refresh: async () => ({ agent: id === agent.id ? agent : null }),
       send: async (text: string, options: typeof state.sent[number]['options']) => { assert.equal(id, agent.id); state.sent.push({ text, options }); if (state.uncertain) throw Error('connection lost after dispatch'); },
@@ -65,7 +66,7 @@ function nativeSession(root: string) {
         refetch: async () => ({ entries: [...state.sent.map(item => ({ item: { type: 'user_message', messageId: item.options.messageId } })),...state.appended.map(item=>({item}))] }) },
     }),
   } } } as unknown as AgentContext;
-  return { agent, state, context };
+  return { agent, workspace, state, context };
 }
 
 function nativeCreation(root: string) {
@@ -466,6 +467,78 @@ test('an older selected original is verified without pulling unrelated message p
     assert.equal(original.text,s.state.topics[0].messages[1].text);
     assert.equal(s.state.requests.some(request=>request.url.includes('/messages?offset=')),false);
     assert.ok(s.state.requests.some(request=>request.url.includes('messageId=message-2')));
+  } finally { await s.close(); }
+});
+
+test('sidebar renames refresh target titles while frozen DingTalk and TAPD deliveries keep the same session identity', async () => {
+  const s = await setup();
+  try {
+    const native = nativeSession(s.root);
+    const targets = () => s.host.topics(s.config, 'project-communications', 2, { action: 'targets' }, native.context) as Promise<TopicTarget[]>;
+    const original = (await targets()).find(item => item.agentId === native.agent.id)!;
+    native.workspace.title = '【币商中心重做】浏览器端支持';
+    const renamed = (await targets()).find(item => item.agentId === native.agent.id)!;
+    assert.equal(renamed.title, native.workspace.title);
+    assert.equal(renamed.sessionTitle, original.title);
+    for (const key of ['id', 'agentId', 'cwd', 'workspaceId', 'hostWorkspaceId'] as const) assert.equal(renamed[key], original[key]);
+    const topic = await s.archive.read('topic-1'), issue = s.state.issues[0];
+    const chat = await s.host.topics(s.config, 'project-communications', 2,
+      { action: 'preview', targetId: renamed.id, selections: [selection(topic)] }, native.context) as TopicMaterialPreview;
+    const tapd = await s.host.topics(s.config, 'project-communications', 2,
+      { action: 'preview', targetId: renamed.id, selections: [], issueSelections: [{ issueId: issue.id, version: issue.version, body: true, comments: [], attachments: [] }] }, native.context) as TopicMaterialPreview;
+    native.workspace.title = '再次重命名后的目标';
+    assert.equal((await targets()).find(item => item.agentId === native.agent.id)!.title, native.workspace.title);
+    for (const preview of [chat, tapd]) {
+      assert.equal(preview.targetId, original.id);
+      const sent = await s.host.topics(s.config, 'project-communications', 2, { action: 'send', id: preview.id }, native.context) as TopicMaterialPreview;
+      assert.equal(sent.state, 'accepted');
+    }
+    assert.equal(native.state.sent.length, 2);
+    assert.ok(native.state.sent[0].text.includes(topic.messages[0].text));
+    assert.ok(native.state.sent[1].text.includes(issue.body));
+    native.workspace.title = null;
+    const restored = (await targets()).find(item => item.agentId === native.agent.id)!;
+    assert.equal(restored.title, original.title); assert.equal(restored.sessionTitle, undefined);
+  } finally { await s.close(); }
+});
+
+test('Workbench targets join sidebar titles by the host Workspace ID, including directory lag', async () => {
+  const s = await setup();
+  try {
+    const native = nativeSession(s.root);
+    native.workspace.id = 'host-workspace'; native.workspace.title = '重命名后的工作会话';
+    const read = () => s.host.topics(s.config, 'project-communications', 2, { action: 'targets' }, native.context) as Promise<TopicTarget[]>;
+    let target = (await read()).find(item => item.id === 'workspace:workspace')!;
+    assert.equal(target.title, native.workspace.title);
+    assert.equal(target.workspaceId, 'workspace'); assert.equal(target.hostWorkspaceId, 'host-workspace');
+    native.agent.id = 'agent-a'; native.agent.workspaceId = 'host-workspace';
+    target = (await read()).find(item => item.id === 'workspace:workspace')!;
+    assert.equal(target.title, native.workspace.title); assert.equal(target.sessionTitle, native.agent.title);
+  } finally { await s.close(); }
+});
+
+test('target titles follow Workspace pagination and reject incomplete or looping directories', async () => {
+  const s = await setup();
+  try {
+    const native = nativeSession(s.root), cursors: Array<string | undefined> = [];
+    native.workspace.title = '后续页面中的新名称';
+    Object.assign(native.context.paseo.workspaces, { list: async (options?: { page?: { cursor?: string } }) => {
+      cursors.push(options?.page?.cursor);
+      return options?.page?.cursor ? { entries: [native.workspace], pageInfo: { hasMore: false } }
+        : { entries: [], pageInfo: { hasMore: true, nextCursor: 'next-workspace' } };
+    } });
+    const read = () => s.host.topics(s.config, 'project-communications', 2, { action: 'targets' }, native.context) as Promise<TopicTarget[]>;
+    assert.equal((await read()).find(item => item.agentId === native.agent.id)!.title, native.workspace.title);
+    assert.deepEqual(cursors, [undefined, 'next-workspace']);
+    Object.assign(native.context.paseo.workspaces, { list: async () => ({ entries: [], pageInfo: { hasMore: true } }) });
+    await assert.rejects(read, /topic_targets_incomplete/);
+    Object.assign(native.context.paseo.workspaces, { list: async () => ({ entries: [], pageInfo: { hasMore: true, nextCursor: 'loop' } }) });
+    await assert.rejects(read, /topic_targets_incomplete/);
+    let pages = 0;
+    Object.assign(native.context.paseo.workspaces, { list: async () => ({ entries: [], pageInfo: { hasMore: true, nextCursor: 'page-' + ++pages } }) });
+    await assert.rejects(read, /topic_targets_incomplete/); assert.equal(pages, 5);
+    Object.assign(native.context.paseo.agents, { list: async () => ({ entries: [], pageInfo: { hasMore: true, nextCursor: 'agents' } }) });
+    await assert.rejects(read, /topic_targets_incomplete/);
   } finally { await s.close(); }
 });
 

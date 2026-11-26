@@ -34,19 +34,20 @@ export function Label({ children, muted = false, warning = false, large = false,
   return <Text selectable numberOfLines={lines} style={{ color: warning ? c.statusWarning : muted ? c.foregroundMuted : c.foreground,
     flexShrink: 1, maxWidth: '100%', fontSize: large ? 16 : muted ? 11 : 13, lineHeight: large ? 24 : muted ? 18 : 21, fontWeight: strong || large ? '600' : '400' }}>{children}</Text>;
 }
-export function Button({ children, onPress, disabled = false, active = false, id, variant = 'secondary', icon, label }: {
+export function Button({ children, onPress, disabled = false, active = false, id, variant = 'secondary', icon, label, align = 'center' }: {
   children?: ReactNode; onPress: () => void; disabled?: boolean; active?: boolean; id?: string;
-  variant?: 'secondary' | 'primary' | 'ghost' | 'link'; icon?: string; label?: string;
+  variant?: 'secondary' | 'primary' | 'ghost' | 'link'; icon?: string; label?: string; align?: 'center' | 'start';
 }) {
   const c = useColors(), touch = useTouch(), primary = variant === 'primary', plain = variant === 'link' || variant === 'ghost';
   const color = primary ? c.accentForeground : active || variant === 'link' ? c.accent : c.foreground;
   return <Pressable testID={id} accessibilityLabel={label} {...(Platform.OS === 'web' && label ? {title:label} : {})} accessibilityRole="button" accessibilityState={{ disabled, selected: active }} disabled={disabled} onPress={onPress}
     style={({ hovered, pressed }: any) => ({ minHeight: touch ? 44 : 30, minWidth: !children ? touch ? 44 : 30 : undefined,
-      justifyContent: 'center', alignItems: 'center', flexDirection: 'row', gap: 6, paddingHorizontal: children ? plain ? 5 : 12 : 6, paddingVertical: 4,
+      justifyContent: align === 'start' ? 'flex-start' : 'center', alignItems: 'center', flexDirection: 'row', gap: 6, paddingHorizontal: children ? plain ? 5 : 12 : 6, paddingVertical: 4,
       borderRadius: 5, borderWidth: plain ? 0 : 1, borderColor: primary || active ? c.accent : c.border,
       backgroundColor: primary ? c.accent : active ? tint(c.accent) : hovered || pressed ? c.surface2 : plain ? undefined : c.surface1, opacity: disabled ? 0.45 : pressed ? 0.8 : 1 })}>
     {icon ? <Icon name={icon} size={15} color={color} /> : null}
-    {children ? <Text style={{ fontSize: 12, fontWeight: primary ? '600' : '400', color }}>{children}</Text> : null}
+    {children ? <Text style={{ fontSize: 12, fontWeight: primary ? '600' : '400', color,
+      ...(align === 'start' ? { flexShrink: 1, minWidth: 0, textAlign: 'left' as const } : {}) }}>{children}</Text> : null}
   </Pressable>;
 }
 export function Choice({id,icon,label,disabled,onPress}:{id:string;icon:string;label:string;disabled:boolean;onPress():void}) {
@@ -54,7 +55,7 @@ export function Choice({id,icon,label,disabled,onPress}:{id:string;icon:string;l
   return <Pressable testID={id} accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={onPress}
     style={{minHeight:touch?44:36,flexDirection:'row',alignItems:'center',gap:8,paddingHorizontal:10,paddingVertical:6,
       borderWidth:1,borderColor:c.border,borderRadius:5,backgroundColor:c.surface1,opacity:disabled?0.45:1}}>
-    <Icon name={icon} size={15} color={c.foregroundMuted}/><Text numberOfLines={1} style={{flex:1,minWidth:0,color:c.foreground,fontSize:12}}>{label}</Text>
+    <Icon name={icon} size={15} color={c.foregroundMuted}/><Text numberOfLines={1} style={{flex:1,minWidth:0,color:c.foreground,fontSize:12,textAlign:'left'}}>{label}</Text>
     <Icon name="ChevronDown" size={13} color={c.foregroundMuted}/>
   </Pressable>;
 }

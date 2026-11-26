@@ -13,9 +13,9 @@ import { TopicSessionControls } from './topic-session-controls';
 import { topicChoiceAvailable,topicEffortLabel,topicModelChoice,topicModelKey } from '../../topic-session-choice';
 import {TopicMaterialActions,TopicMaterialRows,type useTopicMaterialDraft} from './topic-material-editor';
 import type {TopicMaterialSettings} from '../../../shared/extensions/project-communications/topic-content';
+import { topicTargetKey as targetKey, topicTargetMatches, topicTargetTitle } from '../../topic-target-choice';
 
 type TargetDirectory = { data?: TopicTarget[]; isLoading: boolean; isFetching: boolean; error: Error | null; refetch(): Promise<unknown> };
-const targetKey = (target: TopicTarget) => target.id || 'workspace:' + target.workspaceId;
 const modelName = (target?: TopicTarget) => target?.provider ? [target.provider, target.model || '当前模型'].join(' · ') : '沿用会话模型';
 
 export function TopicSendDialog({ client, basket, issues, note, destination, newSession, targets, target, workspaceNames, currentAgentId, groupName,
@@ -29,6 +29,7 @@ export function TopicSendDialog({ client, basket, issues, note, destination, new
 }) {
   const c = useColors(), counts = materialCounts(basket, issues);
   const [picker, setPicker] = useState(false), [query, setQuery] = useState('');
+  const matchingTargets = targets.data?.filter(item => topicTargetMatches(item, query, workspaceNames)) || [];
   const pending = preview?.state === 'sending' || preview?.state === 'uncertain', accepted = preview?.state === 'accepted';
   const locked = busy || pending || accepted || !preferencesReady;
   const models = useQuery({ queryKey: ['archive-topic-models', client.scopeKey], queryFn: () => client.call<TopicModel[]>({ action: 'models' }),
@@ -62,7 +63,7 @@ export function TopicSendDialog({ client, basket, issues, note, destination, new
         </View>
         {destination === 'existing' ? <View style={{ gap: 6 }}>
           <Choice id="topics-target" icon="MessageSquare" disabled={locked} onPress={() => { setQuery('');setPicker(true); void targets.refetch(); }}
-            label={target?.title || workspaceNames[target?.workspaceId || ''] || '选择目标会话'} />
+            label={target ? topicTargetTitle(target, workspaceNames) : '选择目标会话'} />
           <View style={{ flexDirection: 'row',flexWrap:'wrap', alignItems: 'center', gap: 6 }}><Icon name="Cpu" size={13} color={c.foregroundMuted} /><Label muted>{modelName(target)}</Label>
             {target?.thinkingOptionId?<><Icon name="Brain" size={13} color={c.foregroundMuted}/><Label muted>{topicEffortLabel({id:target.thinkingOptionId})}</Label></>:null}
             {target?.permissionLabel?<><Icon name="Shield" size={13} color={c.foregroundMuted}/><Label muted>{target.permissionLabel}</Label></>:null}
@@ -92,14 +93,13 @@ export function TopicSendDialog({ client, basket, issues, note, destination, new
         <TopicIcon icon="RefreshCw" label="刷新会话" busy={targets.isFetching} onPress={() => { void targets.refetch(); }} />
       </View>
       <ScrollView contentContainerStyle={{ padding: 16, gap: 10 }}>
-        {targets.isLoading ? <ActivityIndicator /> : targets.data?.length ? targets.data
-          .filter(item => !query || [item.title, item.provider, item.model, workspaceNames[item.workspaceId]].some(text => text?.toLowerCase().includes(query.toLowerCase())))
-          .map(item => <View key={targetKey(item)} style={{ gap: 3 }}>
-            <Button icon="MessageSquare" active={Boolean(target && targetKey(target) === targetKey(item))} onPress={() => { onTarget(item); setPicker(false); }}>
-              {(item.agentId === currentAgentId ? '当前 · ' : '') + (item.title || workspaceNames[item.workspaceId] || item.agentId)}
+        {targets.error ? <Label muted>{topicError(targets.error.message)}</Label> : null}
+        {targets.isLoading ? <ActivityIndicator /> : matchingTargets.length ? matchingTargets.map(item => <View key={targetKey(item)} style={{ gap: 3 }}>
+            <Button icon="MessageSquare" align="start" active={Boolean(target && targetKey(target) === targetKey(item))} onPress={() => { onTarget(item); setPicker(false); }}>
+              {(item.agentId === currentAgentId ? '当前 · ' : '') + topicTargetTitle(item, workspaceNames)}
             </Button><Label muted>{modelName(item) + (item.status === 'running' ? ' · 进行中' : '')}</Label>
           </View>) : <View style={{ gap: 10, alignItems: 'center', padding: 20 }}>
-            <Icon name="MessagesSquare" size={28} color={c.foregroundMuted} /><Label muted>{targets.error ? topicError(targets.error.message) : '此项目暂无会话'}</Label>
+            <Icon name="MessagesSquare" size={28} color={c.foregroundMuted} /><Label muted>{targets.data?.length ? '没有匹配的会话，可换个关键词或刷新' : targets.error ? '请刷新会话列表重试' : '此项目暂无会话'}</Label>
             <Button icon="MessageSquarePlus" onPress={() => { onDestination('new'); setPicker(false); }}>新建会话</Button>
           </View>}
       </ScrollView>

@@ -15,12 +15,12 @@ import { TapdIssuesPanel } from './tapd-issues-panel';
 import { useTopicSessionPreferences } from '../../use-topic-session-preferences';
 import {defaultTopicMaterialSettings,topicContentPeople,type TopicContentAlias} from '../../../shared/extensions/project-communications/topic-content';
 import {useTopicMaterialDraft} from './topic-material-editor';
+import { topicTargetKey as targetKey } from '../../topic-target-choice';
 
 type TopicsPanelProps = {
   client: TopicsClient; width: number; onSettings(page?: '连接'): void; workspaceNames: Record<string, string>; currentWorkspaceId?: string;
   currentAgentId?: string; onOpenSession?(agentId: string): void | Promise<void>;
 };
-const targetKey = (target: TopicTarget) => target.id || 'workspace:' + target.workspaceId;
 type TopicSource = 'chat' | 'tapd';
 
 function SourceTabs({ source, chatLabel, onChange }: { source: TopicSource; chatLabel: string; onChange(value: TopicSource): void }) {

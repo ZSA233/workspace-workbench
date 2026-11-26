@@ -1,4 +1,4 @@
-import type { PaseoAgent } from '@getpaseo/client';
+import type { PaseoAgent, PaseoWorkspace } from '@getpaseo/client';
 import { realpathSync } from 'node:fs';
 import { basename, sep } from 'node:path';
 import type { AgentContext } from './agent-provider.ts';
@@ -20,6 +20,32 @@ function inside(root: string, path: string) {
 function eligible(route: ProjectRoute, agent: PaseoAgent) {
   return !agent.archivedAt && typeof agent.cwd === 'string' && inside(route.sourceRoot, agent.cwd)
     && !/review|workspace-worker/.test(agent.labels?.['workspace-workbench.role'] || '');
+}
+
+async function withWorkspaceTitles(context: AgentContext, targets: TopicTarget[]): Promise<TopicTarget[]> {
+  const remaining = new Set(targets.flatMap(target => target.hostWorkspaceId ? [target.hostWorkspaceId] : []));
+  const workspaces = new Map<string, Pick<PaseoWorkspace, 'title' | 'name'>>();
+  let cursor: string | undefined;
+  const cursors = new Set<string>();
+  for (let page = 0; remaining.size && page < 5; page++) {
+    const value = await context.paseo.workspaces.list({ page: { limit: 200, ...(cursor ? { cursor } : {}) } });
+    for (const workspace of value.entries) {
+      if (!remaining.delete(workspace.id)) continue;
+      workspaces.set(workspace.id, { title: workspace.title, name: workspace.name });
+    }
+    if (!remaining.size || !value.pageInfo.hasMore) break;
+    cursor = value.pageInfo.nextCursor || undefined;
+    if (!cursor || cursors.has(cursor) || page === 4) throw Error('topic_targets_incomplete');
+    cursors.add(cursor);
+  }
+  return targets.map(target => {
+    const workspace = workspaces.get(target.hostWorkspaceId || '');
+    // Paseo's sidebar rename belongs to the Workspace, not the Agent snapshot.
+    // Keep the Agent title searchable without changing any delivery identity.
+    const title = workspace?.title?.trim() || target.title || workspace?.name;
+    return { ...target, ...(title ? { title } : {}),
+      ...(target.title && target.title !== title ? { sessionTitle: target.title } : {}) };
+  });
 }
 
 export async function topicTargets(route: ProjectRoute, context?: AgentContext): Promise<TopicTarget[]> {
@@ -45,11 +71,11 @@ export async function topicTargets(route: ProjectRoute, context?: AgentContext):
     }
     if (!value.pageInfo.hasMore) break;
     cursor = value.pageInfo.nextCursor || undefined;
-    if (!cursor) throw Error('topic_targets_incomplete');
+    if (!cursor || page === 4) throw Error('topic_targets_incomplete');
   }
   // Keep legacy bindings visible during host-directory lag; delivery still
   // rechecks their live identity through the existing session owner.
-  return [...result, ...bound.filter(item => !observed.has(item.agentId))];
+  return withWorkspaceTitles(context, [...result, ...bound.filter(item => !observed.has(item.agentId))]);
 }
 
 export async function assertTopicSession(route: ProjectRoute, context: AgentContext, target: TopicSessionIdentity) {

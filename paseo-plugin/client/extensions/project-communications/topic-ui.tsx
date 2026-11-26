@@ -5,7 +5,7 @@ import { Icon, ScrollView, useToast } from '../../native-components';
 import type { TopicsClient } from '../../use-topics';
 import type { ArchiveAsset, ArchiveMessage } from '../../../shared/extensions/project-communications/topics';
 import type { IssueSummary } from '../../../shared/extensions/project-communications/issues';
-import { assetIsImage, assetIsVideo, messageText, senderName, topicTime, recordAttention, type RecordAttention } from '../../../shared/extensions/project-communications/topics';
+import { assetIsImage, assetIsVideo, assetIsMessageAttachment, messageText, senderName, topicTime, recordAttention, type RecordAttention } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, tint, useColors, useTouch } from './ui';
 import { MAX_VIDEO_BYTES, supportedArtifact } from '../../../shared/artifact-limits.ts';
 import {TopicVideoPlayer,TopicVideoFrames,TopicVideoFile} from '../../topic-video';
@@ -216,6 +216,8 @@ export function OriginalMessage({ client, topicId, message, contextOf, selected,
   client: TopicsClient; topicId: string; message: ArchiveMessage; contextOf?: string; selected: boolean; selectedAssets: string[]; onMessage: () => void; onAsset: (asset: ArchiveAsset) => void; onContext?: () => void; disabled?: boolean; mediaWidth?: number;
 }) {
   const c = useColors(), text = messageText(message);
+  const quotedAssets=message.assets.filter(asset=>asset.role==='quote');
+  const attachments=message.assets.filter(asset=>assetIsMessageAttachment(asset)||selectedAssets.includes(asset.id));
   return <TopicMaterial id={'topic-original-message-' + message.id} selectId={'topic-message-' + message.id}
     label={'选择消息：' + (text.slice(0,24) || '附件消息')} {...{ selected, disabled }} onSelect={onMessage}
     header={<View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
@@ -223,8 +225,13 @@ export function OriginalMessage({ client, topicId, message, contextOf, selected,
       <Text style={[topicTypography.metadata, { color: c.foregroundMuted }]}>{topicTime(message.createdAt)}</Text>
     </View>}
     actions={onContext ? <TopicIcon icon="MessagesSquare" label="查看上下文" onPress={onContext} /> : null}
-    assets={message.assets.length ? message.assets.map(asset => <TopicAsset key={asset.id} {...{ client, topicId, message, asset, contextOf }}
+    assets={attachments.length ? attachments.map(asset => <TopicAsset key={asset.id} {...{ client, topicId, message, asset, contextOf }}
       tileWidth={mediaWidth} checked={selectedAssets.includes(asset.id)} disabled={disabled} onToggle={() => onAsset(asset)} />) : undefined}>
+    {quotedAssets.length?<Pressable testID={'topic-quoted-assets-'+message.id} accessibilityRole={onContext?'button':undefined}
+      accessibilityLabel="查看引用消息的上下文" disabled={!onContext} onPress={onContext}
+      style={{borderLeftWidth:2,borderLeftColor:c.border,paddingLeft:8,paddingVertical:4,marginBottom:5}}>
+      <Text style={[topicTypography.metadata,{color:c.foregroundMuted}]}>{'引用消息含 '+quotedAssets.length+' 个附件'+(onContext?' · 查看上下文':'')}</Text>
+    </Pressable>:null}
     {text ? <Text selectable style={[topicTypography.body, { color: c.foreground }]}>{text}</Text> : null}
   </TopicMaterial>;
 }

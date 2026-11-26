@@ -60,3 +60,16 @@ test('ready supported videos can be selected with their original message and ret
   assert.deepEqual(basketCounts(basket),{topics:1,messages:0,assets:1});
   assert.deepEqual(basketCounts(changeAsset(basket,topic,message,message.assets[0])),{topics:0,messages:0,assets:0});
 });
+
+test('choosing a reply or topic does not add its quoted resources as new message attachments',()=>{
+  const topic=structuredClone(archiveFixture().topics[0]),message=topic.messages[0];
+  message.assets.push({id:'quoted-image',name:'引用的图片.png',mimeType:'image/png',state:'ready',role:'quote'});
+  assert.deepEqual(basketSelections(changeMessage({},topic,message))[0].assets.map(asset=>asset.id),['image-1']);
+  assert.deepEqual(basketSelections(selectTopic({},topic))[0].assets.map(asset=>asset.id),['image-1','image-2']);
+  const basket=changeMessage({},topic,message);
+  assert.equal(changeAsset(basket,topic,message,message.assets[1]),basket);
+  // A pre-existing explicit choice remains readable and can still be removed.
+  const legacy={...basket,[topic.id]:{...basket[topic.id],assetIds:['image-1','quoted-image']}};
+  assert.deepEqual(basketSelections(legacy)[0].assets.map(asset=>asset.id),['image-1','quoted-image']);
+  assert.deepEqual(basketSelections(changeAsset(legacy,topic,message,message.assets[1]))[0].assets.map(asset=>asset.id),['image-1']);
+});

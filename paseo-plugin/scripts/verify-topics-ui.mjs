@@ -985,6 +985,69 @@ try {
     check('research fixture only: a version-bound native recorder retains cross-client originals; this recorder is excluded from the plugin release and is not a production Pocket fix');
   } finally {await peer?.close();await pocketSender.close();}
   }
+
+  // A reply's inherited resources are not fresh uploads. Keep a real pending
+  // original alongside them to prove that readiness polling remains functional.
+  const quoteTopic=structuredClone(fixture.state.topics[0]);
+  quoteTopic.id='topic-quoted-attachments';quoteTopic.title='引用附件与原图状态';quoteTopic.question=quoteTopic.title;
+  quoteTopic.lastAnswer='';quoteTopic.summary='';quoteTopic.updatedAt=Date.now();
+  const baseMessage=structuredClone(quoteTopic.messages[0]),at=Date.now()-600000;
+  const quotedSource={...baseMessage,id:'quoted-source',externalMessageId:'native-quoted-source',text:'先前上传的原始截图',displayText:'先前上传的原始截图',createdAt:at,
+    assets:[{id:'image-2',name:'被引用的原图.png',kind:'image',mimeType:'image/png',state:'ready'}]};
+  const currentPicture={...baseMessage,id:'quote-current-picture',externalMessageId:'native-current-picture',replyTo:quotedSource.externalMessageId,
+    text:'本条消息上传的截图',displayText:'本条消息上传的截图',createdAt:at+60000,
+    assets:[{id:'image-1',name:'本条截图.png',kind:'image',mimeType:'image/png',state:'ready'},
+      {id:'quoted-resource-1',name:'attachment',mimeType:'application/octet-stream',state:'pending'}]};
+  const quotedReply={...baseMessage,id:'quote-text-reply',externalMessageId:'native-text-reply',replyTo:currentPicture.externalMessageId,
+    text:'修复后再上传',displayText:'修复后再上传',createdAt:at+180000,
+    assets:[{id:'quoted-resource-2',name:'attachment',mimeType:'application/octet-stream',state:'pending'}]};
+  const quotedFollowup={...quotedReply,id:'quote-followup',externalMessageId:'native-followup',replyTo:quotedSource.externalMessageId,
+    text:'已确认这个现象',displayText:'已确认这个现象',createdAt:at+181000,
+    assets:[{id:'quoted-resource-3',name:'attachment',mimeType:'application/octet-stream',state:'pending'}]};
+  const realPending={...baseMessage,id:'actual-pending-picture',externalMessageId:'native-pending-picture',text:'等待归档的真实截图',displayText:'等待归档的真实截图',createdAt:at+240000,
+    assets:[{id:'actual-pending-original',name:'归档中的截图.png',kind:'image',mimeType:'image/png',state:'pending'}]};
+  quoteTopic.messages=[quotedSource,currentPicture,quotedReply,quotedFollowup,realPending];quoteTopic.messageCount=5;
+  fixture.state.topics.push(quoteTopic);fixture.state.context=structuredClone(quotedSource);
+  for(const message of [currentPicture,quotedReply,quotedFollowup])fixture.state.originalMessages.set(message.id,{...structuredClone(message),nativeConversationId:'native-fixture-group',
+    attachments:message.assets.map(asset=>({id:asset.id,resourceMessageId:asset.id.startsWith('quoted-resource-')?message.replyTo:message.externalMessageId,resourceConversationId:'native-fixture-group'}))});
+  await page.setViewportSize({width:1448,height:1120});
+  await openIsolatedWorkbench(page,ui.url,'a');
+  await page.getByText('话题',{exact:true}).filter({visible:true}).first().click();await chatTab.click();
+  await panel.getByRole('textbox',{name:'搜索话题',exact:true}).fill(quoteTopic.title);
+  await page.getByTestId('topic-expand-'+quoteTopic.id).click();
+  const quoteRow=page.getByTestId('topic-row-'+quoteTopic.id);
+  await quoteRow.getByTestId('topic-quoted-assets-'+quotedReply.id).waitFor();
+  assert.equal(await quoteRow.getByTestId(/^topic-quoted-assets-/).count(),3);
+  const ownPicture=quoteRow.getByTestId('topic-original-message-'+currentPicture.id);
+  await ownPicture.getByRole('img',{name:'本条截图.png',exact:true}).waitFor();
+  for(const message of [currentPicture,quotedReply,quotedFollowup])assert.equal((await quoteRow.getByTestId('topic-original-message-'+message.id).innerText()).includes('等待原件'),false);
+  assert.equal(await quoteRow.getByTestId('topic-original-message-'+quotedReply.id).locator('img').count(),0);
+  await quoteRow.getByTestId('topic-quoted-assets-'+quotedFollowup.id).click();
+  const quoteContext=page.getByRole('dialog',{name:'上下文',exact:true});
+  await quoteContext.getByRole('img',{name:'被引用的原图.png',exact:true}).waitFor();
+  await quoteContext.getByRole('button',{name:'查看 被引用的原图.png',exact:true}).click();
+  const quotedImage=page.getByRole('dialog',{name:'被引用的原图.png',exact:true});
+  await quotedImage.getByRole('img',{name:'被引用的原图.png',exact:true}).waitFor();
+  await quotedImage.getByRole('button',{name:'关闭',exact:true}).click();await quoteContext.getByRole('button',{name:'完成',exact:true}).click();
+  await shot('quoted-attachments-desktop');
+  check('reply-only attachment descriptors render as quoted references, not endless pending-upload tiles; the current screenshot remains visible and the quoted original opens through context');
+
+  const pendingMessage=quoteRow.getByTestId('topic-original-message-'+realPending.id);
+  await pendingMessage.getByText('等待原件',{exact:true}).waitFor();
+  await quoteRow.getByTestId('topic-message-'+quotedReply.id).click();
+  const frozenBasket=await page.getByTestId('topic-basket-'+quoteTopic.id).innerText();
+  fixture.state.assetBytes.set('actual-pending-original',{bytes:fixture.image,mimeType:'image/png'});
+  fixture.state.assetInfo.set('actual-pending-original',{id:'actual-pending-original',name:'归档完成的截图.png',kind:'image',mimeType:'image/png',size:fixture.image.length,state:'ready'});
+  await pendingMessage.getByRole('img',{name:'归档完成的截图.png',exact:true}).waitFor({timeout:25000});
+  assert.equal(await page.getByTestId('topic-basket-'+quoteTopic.id).innerText(),frozenBasket);
+  const detailReads=()=>fixture.state.requests.filter(request=>request.url.endsWith('/topics/'+quoteTopic.id)).length;
+  const settledReads=detailReads();await page.waitForTimeout(11500);
+  assert.equal(detailReads(),settledReads,'only quoted placeholders remain; readiness polling must stop');
+  await page.setViewportSize({width:390,height:900});
+  await quoteRow.getByTestId('topic-quoted-assets-'+quotedReply.id).waitFor();
+  await quoteRow.getByTestId('topic-original-message-'+quotedReply.id).scrollIntoViewIfNeeded();
+  await shot('quoted-attachments-phone');
+  check('a genuine pending original automatically becomes an image in the foreground without a manual refresh, preserves chosen materials, and stops readiness polling after completion on desktop and phone');
   assert.equal(fixture.state.requests.some(request => request.url.startsWith('/v1/projects')), false);
   assert.equal(report.pageErrors.length, 0, JSON.stringify(report.pageErrors));
   report.fidelity.push('same flat topic-list + bottom-basket architecture as refined C',

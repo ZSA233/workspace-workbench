@@ -1,11 +1,12 @@
 import type { ArchiveAsset, ArchiveMessage, ArchiveTopicDetail, SelectedTopic, TopicSelection } from '../shared/extensions/project-communications/topics.ts';
+import {assetIsMessageAttachment} from '../shared/extensions/project-communications/topics.ts';
 import { supportedArtifact } from '../shared/artifact-limits.ts';
 import {topicMessageKey,type TopicContentEntry} from '../shared/extensions/project-communications/topic-content.ts';
 import type { IssueBasket } from './issue-selection';
 export type TopicBasket = Record<string, SelectedTopic>;
 export function selectTopic(basket: TopicBasket, topic: ArchiveTopicDetail): TopicBasket {
   if (basket[topic.id]) { const next = { ...basket }; delete next[topic.id]; return next; }
-  return { ...basket, [topic.id]: { topic, messages: uniqueMessages(topic.messages), assetIds: topic.messages.flatMap(message => message.assets.filter(asset => asset.state === 'ready' && supportedArtifact(asset.mimeType || '', asset.size)).map(asset => asset.id)), includeAnalysis: false, contexts: {} } };
+  return { ...basket, [topic.id]: { topic, messages: uniqueMessages(topic.messages), assetIds: topic.messages.flatMap(message => message.assets.filter(asset => assetIsMessageAttachment(asset) && asset.state === 'ready' && supportedArtifact(asset.mimeType || '', asset.size)).map(asset => asset.id)), includeAnalysis: false, contexts: {} } };
 }
 export function changeMessage(basket: TopicBasket, topic: ArchiveTopicDetail, message: ArchiveMessage, contextOf?: string): TopicBasket {
   const current = basket[topic.id] || { topic, messages: [], assetIds: [], includeAnalysis: false, contexts: {} };
@@ -13,13 +14,14 @@ export function changeMessage(basket: TopicBasket, topic: ArchiveTopicDetail, me
   const editedTexts={...current.editedTexts};if(selected)delete editedTexts[message.id];
   return compact({ ...basket, [topic.id]: { ...current, messages: selected ? current.messages.filter(item => item.id !== message.id) : uniqueMessages([...current.messages, message]),
     editedTexts,
-    assetIds: selected ? current.assetIds : [...new Set([...current.assetIds, ...message.assets.filter(asset => asset.state === 'ready' && supportedArtifact(asset.mimeType || '', asset.size)).map(asset => asset.id)])],
+    assetIds: selected ? current.assetIds : [...new Set([...current.assetIds, ...message.assets.filter(asset => assetIsMessageAttachment(asset) && asset.state === 'ready' && supportedArtifact(asset.mimeType || '', asset.size)).map(asset => asset.id)])],
     contexts: contextOf ? { ...current.contexts, [message.id]: contextOf } : current.contexts,
     topic: { ...current.topic, messages: uniqueMessages([...current.topic.messages, message]) } } });
 }
 export function changeAsset(basket: TopicBasket, topic: ArchiveTopicDetail, message: ArchiveMessage, asset: ArchiveAsset, contextOf?: string): TopicBasket {
   if (asset.state !== 'ready' || !supportedArtifact(asset.mimeType || '', asset.size)) return basket;
   const current = basket[topic.id] || { topic, messages: [], assetIds: [], includeAnalysis: false, contexts: {} };
+  if(!assetIsMessageAttachment(asset)&&!current.assetIds.includes(asset.id))return basket;
   return compact({ ...basket, [topic.id]: { ...current,
     assetIds: current.assetIds.includes(asset.id) ? current.assetIds.filter(id => id !== asset.id) : [...current.assetIds, asset.id],
     contexts: contextOf ? { ...current.contexts, [message.id]: contextOf } : current.contexts,

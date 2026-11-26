@@ -10,7 +10,7 @@ export type ArchiveLibrary = { id: string; name: string; projectId?: string };
 export type ArchiveChannel = WatchedGroup & { id: string; name: string; provider?: string; state?: string };
 export type ArchiveGroup = WatchedGroup & { id: string; name: string; revision: number; enabled: boolean; analysisEnabled?: boolean; autoDiscover?: boolean; discoveryAction?: 'collect' | 'investigate'; replyMode?: 'off' | 'restrained'; allowedTools: string[] };
 export type ArchiveTool = { id: string; name?: string; description?: string; enabled: boolean; builtin?: boolean; readOnly?: boolean };
-export type ArchiveAsset = { id: string; name: string; kind?: string; state: string; mimeType?: string; size?: number; sha256?: string; error?: string };
+export type ArchiveAsset = { id: string; name: string; kind?: string; state: string; mimeType?: string; size?: number; sha256?: string; error?: string; role?: 'message' | 'quote' };
 export type ArchiveMessage = { id: string; text: string; displayText?: string; sender: string | { name?: string; displayName?: string; id?: string }; senderId?:string;
   mentions?:Array<string|{id?:string;userId?:string;senderId?:string;name?:string;displayName?:string}>;replyTo?:string;externalMessageId?:string;ingestSequence?:number;timestampKnown?:boolean;
   createdAt: number; version: string; sourceId: string; channelId: string; sourceAccountId?: string; archiveId?: string; assets: ArchiveAsset[]; quote?: unknown };
@@ -76,4 +76,5 @@ export function groupKey(group: WatchedGroup) { return JSON.stringify([group.sou
 export function senderName(message: ArchiveMessage) { return typeof message.sender === 'string' ? message.sender : message.sender?.displayName || message.sender?.name || message.sender?.id || '未知作者'; }
 export function assetIsImage(asset: ArchiveAsset) { return asset.kind === 'image' || Boolean(asset.mimeType?.startsWith('image/')); }
 export function assetIsVideo(asset: ArchiveAsset) { return asset.kind === 'video' || asset.mimeType === 'video' || Boolean(asset.mimeType?.startsWith('video/')); }
+export function assetIsMessageAttachment(asset: ArchiveAsset) { return asset.kind !== 'avatar' && asset.role !== 'quote'; }
 export { messageText, topicTime, topicTitle, recordAttention, type RecordAttention } from './topic-presentation.ts';

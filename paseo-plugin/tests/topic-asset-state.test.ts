@@ -45,3 +45,24 @@ test('only unresolved media requires background readiness checks in topic and co
   ready.messages[0].assets[0] = { ...ready.messages[0].assets[0], state: 'pending', kind: 'avatar' };
   assert.equal(pendingTopicAssets(ready), false);
 });
+
+test('quoted resource placeholders do not keep polling, while real originals still advance from pending to ready',()=>{
+  const topic=structuredClone(archiveFixture().topics[0]),message=topic.messages[0];
+  message.assets=[{id:'quote-only',name:'attachment',mimeType:'application/octet-stream',state:'pending',role:'quote'}];
+  assert.equal(pendingTopicAssets(topic),false);
+  assert.equal(pendingTopicAssets({items:topic.messages}),false);
+  message.assets.push({id:'actual-picture',name:'图片.png',mimeType:'image/png',state:'pending'});
+  assert.equal(pendingTopicAssets(topic),true);
+  message.assets[1].state='ready';assert.equal(pendingTopicAssets(topic),false);
+});
+
+test('a verified quoted role refreshes a frozen display without removing or adding selected materials',()=>{
+  const topic=structuredClone(archiveFixture().topics[0]),message=topic.messages[0];
+  message.assets=[{id:'quote-only',name:'attachment',mimeType:'application/octet-stream',state:'pending'}];
+  const basket=changeMessage({},topic,message),before=JSON.stringify(basket),selection=basketSelections(basket);
+  const fresh=structuredClone(message);fresh.assets[0].role='quote';
+  const display=topicDisplayMessages([fresh],basket[topic.id].topic.messages);
+  assert.equal(display.find(item=>item.id===message.id)!.assets[0].role,'quote');
+  assert.equal(pendingTopicAssets({messages:display}),false);
+  assert.equal(JSON.stringify(basket),before);assert.deepEqual(basketSelections(basket),selection);
+});

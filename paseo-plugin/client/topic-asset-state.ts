@@ -1,9 +1,10 @@
 import type { ArchiveMessage } from '../shared/extensions/project-communications/topics.ts';
+import { assetIsMessageAttachment } from '../shared/extensions/project-communications/topics.ts';
 import { uniqueMessages } from './topic-selection.ts';
 
 export const TOPIC_ASSET_REFRESH_MS = 10_000;
 export function pendingTopicAssets(data?: { messages?: ArchiveMessage[]; items?: ArchiveMessage[] }): boolean {
-  return (data?.messages || data?.items || []).some(message => message.assets.some(asset => asset.kind !== 'avatar' && ['pending', 'deferred'].includes(asset.state)));
+  return (data?.messages || data?.items || []).some(message => message.assets.some(asset => assetIsMessageAttachment(asset) && ['pending', 'deferred'].includes(asset.state)));
 }
 
 /** Update display metadata without adding material or replacing a frozen body. */

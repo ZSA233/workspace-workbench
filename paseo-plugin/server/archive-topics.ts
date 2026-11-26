@@ -6,6 +6,7 @@ import {topicVideoPreview} from './topic-video.ts';
 import {MAX_INLINE_VIDEO_BYTES} from '../shared/topic-video.ts';
 
 const segment = (value: string) => encodeURIComponent(value);
+type OriginalMessage = ArchiveMessage & { nativeConversationId?: string; attachments?: Array<{ id: string; resourceMessageId?: string; resourceConversationId?: string }> };
 function topicHeader(topic: ArchiveTopic): ArchiveTopic {
   const answer: unknown = topic.lastAnswer;
   return { id: topic.id, title: topic.title, question: topic.question, issueSummary: topic.issueSummary, preview: topic.preview,
@@ -88,19 +89,32 @@ export class ArchiveTopics {
         let assets=(message.assets||[]).filter(asset=>asset.kind!=='avatar');
         // Legacy topic snapshots can omit attachments. Borrow only the exact
         // original's asset metadata; never a newer body or another speaker's file.
-        if (!assets.length && /\[(?:视频|图片|媒体|附件|文件)消息\]/.test(message.text||'')) try {
-          const original=await this.connection.archive<ArchiveMessage>(this.path('messages/'+segment(message.id)));
+        const missingAssets=!assets.length && /\[(?:视频|图片|媒体|附件|文件)消息\]/.test(message.text||'');
+        if (missingAssets || message.replyTo && assets.some(asset=>asset.role===undefined)) try {
+          const original=await this.connection.archive<OriginalMessage>(this.path('messages/'+segment(message.id)));
           const matches=original.id===message.id&&original.version===message.version&&original.sourceId===message.sourceId&&
             original.channelId===message.channelId&&original.sourceAccountId===message.sourceAccountId&&(!message.archiveId||original.archiveId===message.archiveId);
-          if (matches) assets=(original.assets||[]).filter(asset=>asset.kind!=='avatar');
+          if (matches) {
+            if(missingAssets) assets=(original.assets||[]).filter(asset=>asset.kind!=='avatar');
+            // A reply can repeat its quoted message's resource descriptors. Keep
+            // the IDs as evidence, but do not treat them as new uploads or wait
+            // for a separate copy. Ownership comes from the same-version original.
+            if(message.replyTo && original.replyTo===message.replyTo && original.externalMessageId &&
+              (!message.externalMessageId||message.externalMessageId===original.externalMessageId)) {
+              const quoted=new Set((original.attachments||[]).filter(asset=>asset.resourceMessageId===message.replyTo &&
+                asset.resourceMessageId!==original.externalMessageId && (!asset.resourceConversationId||
+                  Boolean(original.nativeConversationId&&asset.resourceConversationId===original.nativeConversationId))).map(asset=>asset.id));
+              assets=assets.map(asset=>asset.role===undefined&&quoted.has(asset.id)?{...asset,role:'quote'}:asset);
+            }
+          }
         } catch { /* Keep the historical message when its original is unavailable. */ }
         // Read metadata for these exact IDs only. A saved original can become
         // ready without rewriting the immutable topic/message snapshot.
-        for (let index=0;index<assets.length;index++) assets[index]=await this.assetInfo(assets[index]);
+        for (let index=0;index<assets.length;index++) if(assets[index].role!=='quote') assets[index]=await this.assetInfo(assets[index]);
         return {...message,assets};
       })));
     }
-    const videos=result.flatMap(message=>message.assets.flatMap((asset,index)=>assetIsVideo(asset)?[{message,asset,index}]:[]));
+    const videos=result.flatMap(message=>message.assets.flatMap((asset,index)=>asset.role!=='quote'&&assetIsVideo(asset)?[{message,asset,index}]:[]));
     let cursor=0;
     // Probe at most four canonical originals at once. Never read the raw chat URL.
     await Promise.all(Array.from({length:Math.min(4,videos.length)},async()=>{

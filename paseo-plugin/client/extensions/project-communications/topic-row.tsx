@@ -3,7 +3,7 @@ import { ActivityIndicator, Text, View } from 'react-native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { TopicsClient } from '../../use-topics';
 import { uniqueMessages } from '../../topic-selection';
-import { topicTitle } from '../../../shared/extensions/project-communications/topics';
+import { assetIsMessageAttachment, topicTitle } from '../../../shared/extensions/project-communications/topics';
 import type { ArchiveAsset, ArchiveMessage, ArchiveTopic, ArchiveTopicDetail, SelectedTopic } from '../../../shared/extensions/project-communications/topics';
 import { Button, Label, ignoreFailure, useColors } from './ui';
 import { Check, ContextDialog, MediaCount, OriginalMessage, TopicIcon, TopicRecord, topicError, topicTypography } from './topic-ui';
@@ -52,7 +52,7 @@ export function TopicRow(p: TopicRowProps) {
     onReload={changed ? () => { p.onReload(); void detail.refetch(); } : undefined}
     extra={!p.narrow ? <>
       <MediaCount icon="MessageSquare" count={data?.messageCount || p.topic.messageCount} label="原文" />
-      <MediaCount icon="Image" count={data ? data.messages.reduce((n, m) => n + m.assets.length, 0) : undefined} label="附件" />
+      <MediaCount icon="Image" count={data ? messages.reduce((n, m) => n + m.assets.filter(assetIsMessageAttachment).length, 0) : undefined} label="附件" />
     </> : undefined}>
       {detail.isLoading && !data ? <ActivityIndicator style={{ padding: 15 }} /> : null}
       {detail.error ? <Label warning>{topicError(detail.error.message)}</Label> : null}

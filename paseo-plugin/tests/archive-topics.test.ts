@@ -974,6 +974,55 @@ function pendingVideo(s:Awaited<ReturnType<typeof setup>>,id='video-original') {
   return {topic,message};
 }
 
+test('reply resources are marked as quotes only from the exact original, while genuine message images retain readiness checks',async()=>{
+  const s=await setup();
+  try{
+    const topic=s.state.topics[0],message=topic.messages[0];
+    message.externalMessageId='native-current';message.replyTo='native-quoted';
+    message.assets.push({id:'quoted-photo',name:'attachment',mimeType:'application/octet-stream',state:'pending'},
+      {id:'quoted-video',name:'引用视频.mov',mimeType:'video/quicktime',kind:'video',state:'pending'});
+    const original={...structuredClone(message),nativeConversationId:'native-group',attachments:[
+      {id:'image-1',resourceMessageId:'native-current',resourceConversationId:'native-group'},
+      {id:'quoted-photo',resourceMessageId:'native-quoted',resourceConversationId:'native-group'},
+      {id:'quoted-video',resourceMessageId:'native-quoted',resourceConversationId:'native-group'},
+    ]};
+    s.state.originalMessages.set(message.id,original);
+    const unchanged=JSON.stringify(message);
+    const detail=await s.archive.read(topic.id),assets=detail.messages[0].assets;
+    assert.equal(assets[0].state,'ready');assert.equal(assets[0].role,undefined);
+    assert.equal(assets[1].role,'quote');assert.equal(assets[1].state,'pending');assert.equal(assets[1].id,'quoted-photo');
+    assert.equal(assets[2].role,'quote');
+    assert.equal((await s.archive.messages(topic.id,0)).items[0].assets[1].role,'quote');
+    assert.equal((await s.archive.context(topic.id,message.id)).items.find(item=>item.id===message.id)!.assets[1].role,'quote');
+    assert.equal(JSON.stringify(message),unchanged);assert.equal(JSON.stringify(detail).includes('native-group'),false);
+    assert.equal(s.state.requests.some(request=>request.url.includes('/assets/quoted-')||request.method==='POST'),false);
+    // A future explicit upstream role takes precedence over legacy inference.
+    message.assets[1].role='message';
+    const explicit=(await s.archive.read(topic.id)).messages[0].assets[1];
+    assert.equal(explicit.role,'message');assert.equal(explicit.state,'pending');
+  }finally{await s.close();}
+});
+
+test('uncertain resource ownership never hides a real pending attachment or borrows another message version or group',async()=>{
+  const s=await setup();
+  try{
+    const topic=s.state.topics[0],message=topic.messages[0];
+    message.externalMessageId='native-current';message.replyTo='native-quoted';
+    message.assets=[{id:'maybe-file',name:'attachment',state:'pending',mimeType:'application/octet-stream'}];
+    const original={...structuredClone(message),nativeConversationId:'native-group',attachments:[{id:'maybe-file',resourceMessageId:'native-quoted',resourceConversationId:'native-group'}]};
+    for(const change of [{id:'another-message'},{version:'another-version'},{sourceAccountId:'another-account'},{channelId:'another-group'},
+      {externalMessageId:'another-native-current'},{replyTo:'another-native-quote'},{nativeConversationId:'another-native-group'},
+      {attachments:[{id:'another-asset',resourceMessageId:'native-quoted',resourceConversationId:'native-group'}]},
+      {attachments:[{id:'maybe-file',resourceMessageId:'native-current',resourceConversationId:'native-group'}]}]){
+      s.state.originalMessages.set(message.id,{...structuredClone(original),...change});
+      const asset=(await s.archive.read(topic.id)).messages[0].assets[0];
+      assert.equal(asset.role,undefined,JSON.stringify(change));assert.equal(asset.state,'pending');
+    }
+    s.state.originalMessages.set(message.id,original);
+    assert.equal((await s.archive.read(topic.id)).messages[0].assets[0].role,'quote');
+  }finally{await s.close();}
+});
+
 test('saved image originals replace pending topic metadata without changing the historical message or selection scope', async () => {
   const s = await setup();
   try {

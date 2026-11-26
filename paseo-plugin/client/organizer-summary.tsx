@@ -8,7 +8,7 @@ import {ModelRunInspector} from './organizer-run';
 import {GeometricIcon} from './geometric-icon';
 import {organizerErrorLabel} from './organizer-errors';
 import {WorkspaceSources,WorkspaceProduction,WorkspaceEdit} from './organizer-workspace';
-import { productionLabels, defaultMarkers, type ProductionState, type OrganizerSnapshot, type OrganizerItem, type OrganizerEvidence, type OrganizerRun, type OrganizerJob, type OrganizerTarget, type WorkspaceAnalysis } from '../shared/organizer';
+import { productionLabels, defaultMarkers, organizerStep, type ProductionState, type OrganizerSnapshot, type OrganizerItem, type OrganizerEvidence, type OrganizerRun, type OrganizerJob, type OrganizerTarget, type WorkspaceAnalysis } from '../shared/organizer';
 import { SettingCard,SettingButton,SettingField,SettingSelect,SettingSwitch,SettingText,SettingHeading,SettingPill,SettingsSurface,SettingSegments,OrganizerSteps,type SettingsTheme,type SettingsCategory } from './settings/ui';
 
 export function ProductionBadge({state,theme}:{state:ProductionState;theme:SettingsTheme}) {
@@ -41,6 +41,7 @@ export function OrganizerSummary({projectConfig,hostWorkspaceId,foreground,theme
   const profile=settings?.profiles.find(p=>p.id===settings.effective.profileId),job=data?.jobs.find(j=>j.id===preferredJob)||data?.jobs.find(j=>['queued','running'].includes(j.state)&&!!workspace&&j.workspaceIds.includes(workspace.material.workspaceId)),running=!!job&&['queued','running'].includes(job.state);
   const canApply=!!target&&!!rep&&(!!rep.fingerprint&&rep.fingerprint===rep.material.fingerprint&&!rep.error||!!rep.manual)&&!['paused','excluded'].includes(target.policy);
   const applied=!!target?.lastWritten&&target.currentTitle===target.previewTitle&&target.lastWritten===target.currentTitle;
+  const previewReady=!!workspace&&(!!workspace.manual||!!workspace.fingerprint&&workspace.fingerprint===workspace.material.fingerprint&&!workspace.error);
   const start=async(request:any)=>{setError('');setBusy(true);try{const result=await organizer.mutate<OrganizerJob>(request);setPreferredJob(result.id);}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}};
   const open=(t:OrganizerTarget)=>{setSelected(t.id);setWorkspaceKey(t.representative||t.workspaceKeys[0]);setPreferredJob('');setError('');};
   const back=()=>{setSelected('');setWorkspaceKey('');setError('');setPreferredJob('');};
@@ -54,7 +55,7 @@ export function OrganizerSummary({projectConfig,hostWorkspaceId,foreground,theme
       <View style={{alignSelf:'flex-start'}}><SettingButton theme={theme} compact quiet icon="ChevronLeft" onPress={back}>项目摘要</SettingButton></View>
       <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:8}}><SettingPill theme={theme}>{target?'会话 · '+target.workspaceKeys.length+' 个工作区':'未关联工作区'}</SettingPill>{target?<ProductionBadge theme={theme} state={target.state}/>:workspace?<ProductionBadge theme={theme} state={workspace.material.state}/>:null}</View>
       <Text numberOfLines={2} style={{color:theme.colors.foreground,fontSize:17,fontWeight:'600',lineHeight:25}}>{workspace?.fingerprint?workspace.title:target?.currentTitle||workspace?.material.name}</Text>
-      <OrganizerSteps theme={theme} phase={applied?4:running?job?.kind==='production'?0:1:canApply||workspace?.fingerprint?2:0}/>
+      <OrganizerSteps theme={theme} phase={organizerStep(job,canApply||previewReady,applied)}/>
       <OrganizerJobs theme={theme} snapshot={data} call={organizer.mutate} workspaceId={workspace?.material.workspaceId} hideCompleted preferredJobId={preferredJob||undefined} onChanged={()=>{void organizer.invalidate();}}/>
       {workspace&&data?<>
         {workspace.error?<SettingText theme={theme} error>{organizerErrorLabel(workspace.error)}</SettingText>:null}{workspace.fingerprint&&workspace.fingerprint!==workspace.material.fingerprint?<SettingPill theme={theme} tone="amber">有新材料</SettingPill>:null}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateProduction, aggregateRepositoryProduction, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, organizerPolicySchema, type WorkspaceAnalysis } from '../shared/organizer.ts';
+import { aggregateProduction, aggregateRepositoryProduction, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, organizerPolicySchema, organizerStep, type OrganizerJob, type WorkspaceAnalysis } from '../shared/organizer.ts';
 import { OrganizerModelQueue } from '../server/organizer/model-queue.ts';
 test('production aggregates uncertainty and new discussion instead of declaring all shipped',()=>{
  assert.equal(aggregateProduction(['deployed','deployed']),'deployed');assert.equal(aggregateProduction(['deployed','pending']),'partial');assert.equal(aggregateProduction(['pending','unknown']),'unknown');assert.equal(aggregateProduction(['deployed','discussion']),'partial');assert.equal(aggregateProduction([]),'discussion');
@@ -17,6 +17,14 @@ test('unchanged repositories do not prevent shipment while a separate new discus
  assert.equal(aggregateRepositoryProduction(['discussion','discussion']),'discussion');
  assert.equal(aggregateRepositoryProduction(['deployed','unknown','discussion']),'unknown');
  assert.equal(aggregateProduction(['deployed','discussion']),'partial');
+});
+test('the workflow never highlights model generation during a Git-only or initial material read',()=>{
+ const job={state:'running',stage:'materials',kind:'refresh',model:{state:'not-requested',calls:0,completed:0}} as OrganizerJob;
+ assert.equal(organizerStep(job,false,false),0);assert.equal(organizerStep({...job,kind:'analysis'},false,false),0);
+ assert.equal(organizerStep({...job,stage:'requesting',model:{state:'requesting',calls:1,completed:0}},false,false),1);
+ assert.equal(organizerStep({...job,stage:'requesting',model:{state:'requesting',calls:1,completed:0}},true,true),1);
+ assert.equal(organizerStep(undefined,false,true),0);
+ assert.equal(organizerStep({...job,state:'complete'},true,false),2);assert.equal(organizerStep(undefined,true,true),4);
 });
 test('representative activity compares instants across commit offsets and UTC dirty-file timestamps',()=>{
  const row=(key:string,at:string)=>({key,material:{state:'pending',activityAt:at}} as WorkspaceAnalysis);

@@ -80,6 +80,11 @@ export type OrganizerJob = { id: string; state: 'queued' | 'running' | 'complete
 };
 export type OrganizerSnapshot = { revision: number; workspaces: WorkspaceAnalysis[]; targets: OrganizerTarget[]; conversations: ConversationAnalysis[]; jobs: OrganizerJob[]; runs: OrganizerRun[]; unlinked: string[]; error?: string };
 
+export function organizerStep(job:OrganizerJob|undefined,hasPreview:boolean,applied:boolean):number {
+  if(job&&(job.state==='running'||job.state==='queued')){if(job.stage==='titles')return 3;return job.model&&job.model.state!=='not-requested'?1:0;}
+  return hasPreview?applied?4:2:0;
+}
+
 export function aggregateProduction(states: ProductionState[]): ProductionState {
   if (!states.length || states.every(s => s === 'discussion')) return 'discussion';
   if (states.some(s => s === 'unknown')) return 'unknown';

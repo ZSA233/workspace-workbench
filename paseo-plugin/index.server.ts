@@ -1,3 +1,4 @@
+import { OrganizerService, registerOrganizer } from './server/organizer/service';
 import {changeNotesRpc} from './shared/change-notes-rpc';
 import { filesRpc } from './shared/file-rpc';
 import { queryObserver } from './server/observer';
@@ -86,6 +87,8 @@ export default function contribute(server: PluginServerContext) {
   const extensions = new WorkbenchExtensions();
   extensions.restore();
   const host = new HostConnection();
+  const organizer = new OrganizerService({ api: () => host.api(),legacyBranches:async()=>{if(!displaySettings?.read)return{};const state=await displaySettings.read();if(state.status!=='ready')throw Error('organizer_production_settings_unavailable');return state.values.productionBranches;} });
+  const cleanupOrganizer = registerOrganizer(server, organizer);
   const metrics = new RpcMetrics();
   const gateway = new McpGatewayManager(defaultMcpGatewayEntry());
   setMcpGateway(gateway);
@@ -151,7 +154,7 @@ export default function contribute(server: PluginServerContext) {
       });
     } catch (error) { return { ok: false, error: { code: 'file_download_host_unavailable', message: error instanceof Error ? error.message : String(error) } }; }
   }));
-  measured.registerSettings(observerSettings);
+  const displaySettings=measured.registerSettings(observerSettings);
   measured.handle(communicationsConnectionRpc,input=>extensions.connection(input.projectConfig,input.extensionId,input.action,input));
   measured.handle(extensionsRpc, input => input.action === 'status' ? extensions.state(input.projectConfig,input.extensionId) : extensions.setEnabled(input.projectConfig,input.extensionId,input.action==='enable'));
   measured.handle(communicationsRpc, input => extensions.request(input.projectConfig,input.extensionId,input.request));
@@ -226,7 +229,11 @@ export default function contribute(server: PluginServerContext) {
   measured.handle(projectsQuery, async (input) => registeredProjects({ directory: input.directory }));
   // Git worktree operations intentionally bypass the Agent host connection.
   // Delegation/handoff remains a separate operation with its own identity.
-  measured.handle(workspaceCreate, handleWorkspaceCreate);
+  measured.handle(workspaceCreate, async input => {
+    const result = await handleWorkspaceCreate(input);
+    if (result.ok) organizer.changed(resolveProject(input));
+    return result;
+  });
   measured.handle(workspaceOperationStatus, handleWorkspaceOperationStatus);
   measured.handle(workspaceAddRepositories, handleWorkspaceAddRepositories);
   // Handoff preview is local and read-only.  It deliberately bypasses the
@@ -276,6 +283,7 @@ export default function contribute(server: PluginServerContext) {
       input = { ...input, params: { ...params, creator: withProject(input, () => creationSource({ contextAgentId: typeof contextAgentId === "string" ? contextAgentId : undefined })) } };
     }
     const response = await handleObserver(input, context);
+    if (response.ok && input.method === 'workspace.create') organizer.changed(resolveProject(input));
     if (input.method !== "observer.versions" || !response.ok || !response.result || typeof response.result !== "object") return response;
     return { ...response, result: { ...response.result, hostTransport: host.status() } };
   });
@@ -290,5 +298,5 @@ export default function contribute(server: PluginServerContext) {
     catch (error) { return { ok: false, action: "blocked" as const, workspaceId: input.workspaceId, error: { code: "handoff_blocked", message: (error as Error).message } }; }
   }));
   withHost.handle(workspaceLifecycle, (input, context) => withProject(input, () => handleWorkspaceLifecycle(input, context)));
-  return async () => { await extensions.close(); await cleanupRecovery(); cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); await Promise.all([gateway.close(), closeBackends(), host.close()]); setMcpGateway(null); };
+  return async () => { await cleanupOrganizer(); await extensions.close(); await cleanupRecovery(); cleanupAgents(); cleanupReviewLifecycle(); closeObserverBridge(); await Promise.all([gateway.close(), closeBackends(), host.close()]); setMcpGateway(null); };
 }

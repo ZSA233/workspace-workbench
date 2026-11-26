@@ -169,6 +169,8 @@ const workspaceCreateSchema = {
   properties: {
     requestId: { type: "string", minLength: 1, description: "Optional creation identity. After a timeout or lost response, query status using this ID and keep the same inputs for recovery." },
     name: { type: "string", minLength: 1 },
+    taskBrief: { type: "string", maxLength: 4000, description: "Optional one-sentence requirement or bug goal for summaries and title previews. Does not change Workspace identity." },
+    taskKind: { type: "string", enum: ["requirement", "bug", "change", "discussion"] },
     repositories: { ...repositorySelectorsSchema, description: `${repositorySelectorsSchema.description} Omit for a Gitlink source. Flat creation defaults to the parent's scope or all enabled repositories.` },
     parentWorkspaceId: { type: "string", minLength: 1, description: "Flat Workspace whose committed repository HEADs supply defaults for a derived Workspace. Does not copy uncommitted changes." },
     sourceWorkspaceId: { type: "string", minLength: 1 },

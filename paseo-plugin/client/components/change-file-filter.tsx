@@ -65,7 +65,7 @@ export function ChangeFileFilterControls({ filter, theme, boundsRef, mode, onMod
   </>;
 }
 
-function TestRulesEditor({ rules, onChange, theme, onBack }: { rules: TestFileRules; onChange(rules: TestFileRules): void; theme: Props['theme']; onBack(): void }) {
+export function TestRulesEditor({ rules, onChange, theme, onBack }: { rules: TestFileRules; onChange(rules: TestFileRules): void; theme: Props['theme']; onBack(): void }) {
   const zh = useWorkbenchLocale() === 'zh-CN', text = (cn: string, en: string) => zh ? cn : en;
   const [draft, setDraft] = useState({ test: rules.testPatterns.join('\n'), normal: rules.normalPatterns.join('\n') }), [error, setError] = useState('');
   const c = theme.colors, accent = observerAccent(theme);

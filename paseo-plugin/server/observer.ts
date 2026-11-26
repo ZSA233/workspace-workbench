@@ -45,6 +45,7 @@ const allowedMethods = new Set<string>(observerMethods);
 const versionedMethods = new Set<string>(["notes.read", "notes.write", "notes.feedback", "notes.manage", "workspace.environment", "workspace.prepare.task", "observer.versions", "workspace.activity", "workspace.detail", "workspace.operation.status", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary"]);
 for (const method of ['cache.list', 'cache.scan', 'cache.task', 'cache.cleanup']) versionedMethods.add(method);
 versionedMethods.add('files.request');
+versionedMethods.add('organizer.materials');
 const mutationMethods = new Set<string>([
   'cache.cleanup',
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",

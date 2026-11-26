@@ -22,6 +22,7 @@ export function CreateWorkspace({ agentId, addTo, projectKey, currentRepo, linke
 }) {
   const copy = useWorkbenchCopy();
   const [name, setName] = useState("");
+  const [taskBrief,setTaskBrief]=useState(''),[taskKind,setTaskKind]=useState('requirement');
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string[]>(!addTo && currentRepo ? [currentRepo] : []);
   const [bases, setBases] = useState<Record<string, string>>({});
@@ -56,18 +57,18 @@ export function CreateWorkspace({ agentId, addTo, projectKey, currentRepo, linke
     [repositories, search],
   );
   const maxHeight = Math.max(CREATE_WORKSPACE_MIN_HEIGHT, Math.min(CREATE_WORKSPACE_MAX_HEIGHT, Math.max(CREATE_WORKSPACE_MIN_HEIGHT, window.height - 120)));
-  const naturalHeight = createWorkspaceNaturalHeight({
+  const naturalHeight = Math.min(maxHeight,(!addTo?86:0)+createWorkspaceNaturalHeight({
     repositoryCount: linkedSource ? linkedPreview?.links.length || 0 : filteredRepositories.length,
     selectedCount: selected.length,
     basesExpanded: expanded,
     hasStatusMessage: Boolean(error) || catalog.isPending || catalog.isError || Boolean(catalog.data && !catalog.data.ok),
     maxHeight,
-  });
+  }));
   const [requestedHeight, setRequestedHeight] = useState(naturalHeight);
   const dialogHeight = clampCreateWorkspaceHeight(requestedHeight, maxHeight);
   const listContentHeight = Math.max(CREATE_WORKSPACE_MIN_LIST_HEIGHT, filteredRepositories.length * 48 + (filteredRepositories.length > 8 ? 12 : 0));
   const statusHeight = Boolean(error) || catalog.isPending || catalog.isError || Boolean(catalog.data && !catalog.data.ok) ? 28 : 0;
-  const listHeight = Math.min(listContentHeight, Math.max(CREATE_WORKSPACE_MIN_LIST_HEIGHT, dialogHeight - 142 - (!addTo && !linkedSource && parentSources.length ? 42 : 0) - (expanded ? selected.length * 42 + 28 : 0) - statusHeight));
+  const listHeight = Math.min(listContentHeight, Math.max(CREATE_WORKSPACE_MIN_LIST_HEIGHT, dialogHeight - 142 - (!addTo?86:0) - (!addTo && !linkedSource && parentSources.length ? 42 : 0) - (expanded ? selected.length * 42 + 28 : 0) - statusHeight));
   const latest = useRef({ dialogHeight, maxHeight });
   latest.current = { dialogHeight, maxHeight };
   const inputStyle = [styles.targetInput, { flex: undefined, flexGrow: 0, flexShrink: 0, height: 36, minHeight: 36, fontSize: 13 }];
@@ -118,7 +119,7 @@ export function CreateWorkspace({ agentId, addTo, projectKey, currentRepo, linke
             rootBaseRef: rootBaseRef.trim() || "HEAD",
             baseRefs: Object.fromEntries((linkedPreview?.links || []).filter(link => bases[link.path]?.trim()).map(link => [link.path, bases[link.path].trim()])) }
         : { ...(addTo ? { workspaceId: addTo.id } : { name: name.trim() }), ...(parentSource && !addTo ? { parentWorkspaceId: parentSource.id, parentInstanceKey: workspaceSource(parentSource).instanceKey } : {}), repositories: [...selected].sort(), baseRefs: Object.fromEntries(selected.filter(path => !parentSource || bases[path]?.trim()).map((path) => [path, bases[path]?.trim() || "HEAD"])) };
-      const response = await rpc({ method: addTo ? "workspace.addRepositories" : "workspace.create", params: { ...params, ...(!addTo && agentId ? { contextAgentId: agentId } : {}) } });
+      const response = await rpc({ method: addTo ? "workspace.addRepositories" : "workspace.create", params: { ...params, ...(!addTo&&taskBrief.trim()?{taskBrief:taskBrief.trim(),taskKind}:{}), ...(!addTo && agentId ? { contextAgentId: agentId } : {}) } });
       if (!response.ok) throw new Error(response.error?.message || copy.text_deb3990191);
       const result = response.result as { id: string; preparations?: Array<{ status?: string }> };
       if (result.preparations?.some((item) => item.status === "prepare_failed")) throw new Error("仓库已添加，运行时准备失败。修复运行时后重试；不会重复创建仓库。");
@@ -135,6 +136,7 @@ export function CreateWorkspace({ agentId, addTo, projectKey, currentRepo, linke
       contentContainerStyle={styles.createModalBody}
     >
       {!addTo ? <TextInput accessibilityLabel={copy.text_76848596cb} placeholder={copy.text_76848596cb} value={name} onChangeText={setName} editable={!busy} style={inputStyle} /> : null}
+      {!addTo?<View style={{gap:6}}><TextInput accessibilityLabel="任务目标（可选）" placeholder="一句话描述需求或 Bug（可选）" value={taskBrief} onChangeText={setTaskBrief} maxLength={4000} editable={!busy} style={inputStyle}/><View style={{flexDirection:'row',gap:6,flexWrap:'wrap'}}>{[['requirement','需求'],['bug','Bug'],['change','改进'],['discussion','讨论']].map(([id,label])=><Pressable key={id} accessibilityRole="button" accessibilityState={{selected:taskKind===id}} onPress={()=>setTaskKind(id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{taskKind===id?'✓ ':''}{label}</Text></Pressable>)}</View></View>:null}
       {!addTo && !linkedSource && parentSources.length ? <WorkspaceSourcePicker sources={parentSources} selected={parentSource ? workspaceSource(parentSource) : null} onSelect={value => { setParentSource(value); setSelected([]); setBases({}); }} disabled={busy} emptyLabel={copy.sourceDefault} styles={styles} /> : null}
       {!addTo && linkedSources.length ? <View style={{ gap: 5 }}>
         <Text style={styles.repositoryMeta}>{copy.linkedCreateSource}</Text>

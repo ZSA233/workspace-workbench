@@ -61,7 +61,17 @@ function fixture(options: { fail?: string; missing?: string; cleanupFailure?: st
         const real = require("zod");
         return { ...real, z: { ...real.z, object(shape: any) {
           const schema = real.z.object(shape);
-          if (shape.enabledByAgent) Object.defineProperty(schema, "parse", { value() { throw new TypeError("state initialization fixture"); } });
+          if (shape.enabledByAgent) {
+            const fail = () => { throw new TypeError("state initialization fixture"); };
+            Object.defineProperty(schema, "parse", { value: fail });
+            // The recovery schema preserves future JSON fields through catchall;
+            // inject the same startup failure into that derived schema as well.
+            Object.defineProperty(schema, "catchall", { value(value: any) {
+              const configured = real.z.object(shape).catchall(value);
+              Object.defineProperty(configured, "parse", { value: fail });
+              return configured;
+            } });
+          }
           return schema;
         } } };
       }

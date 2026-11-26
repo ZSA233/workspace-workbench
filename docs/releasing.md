@@ -45,7 +45,8 @@ Release workflow 会检出指定 tag，运行 Node 插件的完整测试和构�
 Paseo v0.8 支持从本公开仓库直接安装 Git 管理的插件：
 
 ```sh
-paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
+paseo plugin install https://github.com/ZSA233/workspace-workbench.git \
+  --path paseo-plugin \
   --ref stable \
   --id workspace-workbench-paseo \
   --json
@@ -55,7 +56,8 @@ paseo plugin update workspace-workbench-paseo --ref stable --json
 `stable` 跟随最近一次通过验证的发布版本。开发分支使用 `main`：
 
 ```sh
-paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
+paseo plugin install https://github.com/ZSA233/workspace-workbench.git \
+  --path paseo-plugin \
   --ref main \
   --id workspace-workbench-paseo \
   --json

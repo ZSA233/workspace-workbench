@@ -33,6 +33,7 @@ export const observerMethods = [
   "linked.workspaces.save",
   "repository.summary",
   "repository.compare",
+  "organizer.materials",
   "repository.fetch",
   "observer.refresh",
   "repository.graph",

@@ -22,7 +22,8 @@ Workbench 的“需求与反馈”扩展仅通过 API 连接，插件关闭或�
 ### 安装插件
 
 ```sh
-paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
+paseo plugin install https://github.com/ZSA233/workspace-workbench.git \
+  --path paseo-plugin \
   --ref stable \
   --id workspace-workbench-paseo \
   --json
@@ -101,3 +102,5 @@ Workspace 选择器默认按最近提交倒序显示，可切换为来源层级�
 
 开发者可以运行 `make check` 检查插件类型和测试，运行 `make package` 构建发布形态的
 插件压缩包。
+
+Workbench 的窄栏设置、会话摘要、历史预览与标题自动维护见 [整理说明](paseo-plugin/ORGANIZER.md)。

@@ -33,7 +33,7 @@ export const observerSettings = defineSettings({
       normalPatterns: z.array(z.string()).default([]),
     })).default({}),
     reviewModeByPaseoWorkspace: z.record(z.string(), reviewMode).default({}),
-  }),
+  }).catchall(z.json()),
   migrate: (values) => {
     const previous = values && typeof values === "object" ? values as Record<string, unknown> : {};
     return {

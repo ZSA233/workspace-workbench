@@ -154,6 +154,7 @@ export class Observation {
       managed: workspace.managed !== false,
       ...(workspace.layout ? { layout: workspace.layout } : {}),
       description: workspace.description || "",
+      ...(workspace.taskBrief ? { taskBrief: workspace.taskBrief, taskKind: workspace.taskKind } : {}),
       state: workspace.state || "active",
       ...(workspace.deletion ? { deletion: workspace.deletion } : {}),
       sourceRoot: workspace.sourceRoot,

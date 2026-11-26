@@ -8,7 +8,7 @@ export const recoveryPolicySchema = z.object({
   intervalSeconds: z.number().int().min(1).max(3600).default(10),
   maxDurationMinutes: z.number().int().min(1).max(10080).nullable().default(60),
   enabledByAgent: z.record(z.string(), z.boolean()).default({}),
-});
+}).catchall(z.json());
 export type RecoveryPolicy = z.output<typeof recoveryPolicySchema>;
 export const recoverySettings = defineSettings({ id: "workspace-workbench-recovery", scope: "host", version: 1, schema: recoveryPolicySchema });
 export const recoverySettingsRpc = settingsRpc(recoverySettings.id);

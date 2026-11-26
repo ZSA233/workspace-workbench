@@ -1,13 +1,16 @@
+import { useOrganizer } from './use-organizer';
+import type { SettingsCategory } from './settings/ui';
 import { WORKSPACE_ACTIVITY_PROTOCOL } from '../shared/workspace-activity';
 import { useTopics } from './use-topics';
 import { TopicsPanel as CommunicationsPanel } from './extensions/project-communications/topics-panel';
-import { TopicSettings as CommunicationsSettings } from './extensions/project-communications/topic-settings';
 import { CommunicationsTheme } from './extensions/project-communications/ui';
 import {openDocument,reconcileDocuments,useDocumentReturn,consumeDocumentReturn} from "./document-store";
 import { FileTransfers, useFileConnection } from './files-transfer-panel';
 import { reconcileFilesTrees } from './files-tree-store';
 import { reconcileFileReviews } from './file-review-store';
 const FilesManager = lazy(() => import('./files-manager'));
+const SettingsPage = lazy(() => import('./settings/page').then(module=>({default:module.WorkbenchSettingsPage})));
+const SummaryPage = lazy(() => import('./organizer-summary').then(module=>({default:module.OrganizerSummary})));
 import { RepositoryCompare } from './components/repository-compare';
 import { FileFilterBoundsContext } from './file-filter-bounds';
 import { readWorkspaceLineage, workspaceInstanceKey } from '../shared/workspace-lineage';
@@ -29,7 +32,6 @@ import { refreshObservations,useObservationVersions } from "./use-observation-ve
 import { usePreparationTask } from "./use-preparation-task";
 import { useRepositoryObservation } from "./use-repository-observation";
 import { useReviewSession } from "./use-review-session";
-import { useWorkbenchSettings } from "./use-workbench-settings";
 import { useWorkspaceActions } from './use-workspace-actions';
 import { useWorkspaceCatalog } from "./use-workspace-catalog";
 import { appendAssetReference,useWorkspaceHandoff } from "./use-workspace-handoff";
@@ -41,7 +43,7 @@ observationTimingFromWire
 } from "../shared/observation-timing";
 import { observerQuery } from "../shared/observer";
 import { projectsQuery,type ProjectInfo } from "../shared/projects";
-import { projectBackendStart,projectStorageQuery } from "../shared/setup";
+import { projectBackendStart } from "../shared/setup";
 import { isMainWorkspace,makeStyles,queryFailureForDisplay,resultOf,TabButton,workspaceIdFromProps } from "./components/ui";
 import { usePanelForeground } from "./foreground-activity";
 import { useRefreshOnForeground } from "./foreground-refresh";
@@ -95,9 +97,7 @@ function reportNativeRenderError(phase: string, error: unknown): void {
 import { CreateWorkspace } from "./components/create-workspace";
 import { IconButton } from "./components/icon-button";
 import { AnchoredMenu,LayoutMenu,WorkspaceSelector } from "./components/navigation";
-import { ProjectRuntimeMenu } from "./components/project-runtime";
 import { ProjectSetup } from "./components/project-setup";
-import { ProjectStorageMenu } from "./components/project-storage";
 import { useCacheManagement } from './use-cache-management';
 import { CacheManagementPanel } from './components/cache-management';
 import { SectionAllocationContext,stableScrollbarStyle } from "./components/ui";
@@ -167,6 +167,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     throw error;
   }
   const [pickingProject, setPickingProject] = useState(false);
+  const [hostSettingsOpen,setHostSettingsOpen]=useState(false);
   const [chosenProject, setChosenProject] = useState<{ context: string; configPath: string } | null>(null);
   const [setupProject, setSetupProject] = useState<{ context: string; project: ProjectInfo } | null>(null);
   const contextKey = JSON.stringify([props.hostWorkspaceId, directory]);
@@ -179,16 +180,18 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     setChosenProject(null);
     setPickingProject(false);
   }, [props.hostWorkspaceId, directory]);
-  if (hostContextPending) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.hostWorkspaceLoading}</Text>;
-  if (hostContextUnavailable) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.hostWorkspaceUnavailable}</Text>;
+  const settingsEntry=<Pressable accessibilityRole="button" onPress={()=>setHostSettingsOpen(true)} style={{padding:12}}><Text style={{color:props.theme.colors.foreground}}>Workbench 设置</Text></Pressable>;
+  if(hostSettingsOpen)return <View style={{flex:1}}><Pressable accessibilityRole="button" onPress={()=>setHostSettingsOpen(false)} style={{padding:12}}><Text style={{color:props.theme.colors.foreground}}>‹ 返回 Workbench</Text></Pressable><Suspense fallback={<Text>读取设置…</Text>}><SettingsPage {...props} projectConfig={active?.configPath} initialCategory="organizer"/></Suspense></View>;
+  if (hostContextPending) return <View>{settingsEntry}<Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.hostWorkspaceLoading}</Text></View>;
+  if (hostContextUnavailable) return <View>{settingsEntry}<Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.hostWorkspaceUnavailable}</Text></View>;
   if (projects.isPending) {
     reportNativeDiagnostic("observer-first-branch", { branch: "memory-loading" });
-    return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoading}</Text>;
+    return <View>{settingsEntry}<Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoading}</Text></View>;
   }
-  if (projects.isError) return <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoadFailed}</Text>;
+  if (projects.isError) return <View>{settingsEntry}<Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.projectLoadFailed}</Text></View>;
   if (directory && !active) {
     reportNativeDiagnostic("observer-first-branch", { branch: "project-setup" });
-    return <ProjectSetup
+    return <View style={{flex:1}}>{settingsEntry}<ProjectSetup
     key={contextKey}
     directory={directory}
     theme={props.theme}
@@ -197,11 +200,11 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
       setChosenProject({ context: contextKey, configPath: project.configPath });
       void projects.refetch();
     }}
-    />;
+    /></View>;
   }
   if (!active || (pickingProject && !hostContextRequired && !directory)) {
     reportNativeDiagnostic("observer-first-branch", { branch: "project-picker" });
-    return <View style={{ padding: 12, gap: 8 }}>
+    return <View style={{ padding: 12, gap: 8 }}>{settingsEntry}
     {!props.hostWorkspaceId ? <Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.globalProjectSelectionHint}</Text> : null}
     <Text style={{ color: props.theme.colors.foreground }}>{projects.isPending ? localizedCopy.projectLoading : projects.isError ? localizedCopy.projectLoadFailed : !projects.data?.length ? localizedCopy.noRegisteredProjects : localizedCopy.selectProject}</Text>
     {projects.data?.map((p) => <Pressable key={p.configPath} onPress={() => {
@@ -254,13 +257,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const [executionNavigationError,setExecutionNavigationError]=useState("");
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
-  const [storageMenuOpen, setStorageMenuOpen] = useState(false);
-  const [runtimeSettingsOpen, setRuntimeSettingsOpen] = useState(false);
-  const [communicationsSettingsOpen,setCommunicationsSettingsOpen]=useState(false);
-  const [communicationsSettingsPage,setCommunicationsSettingsPage]=useState<'扩展管理'|'连接与来源'|'连接'>('扩展管理');
-  const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setStorageMenuOpen(false); setRuntimeSettingsOpen(false); setLayoutMenuOpen(true); }, []);
-  const openStorageMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setRuntimeSettingsOpen(false); setStorageMenuOpen(true); }, []);
-  const openRuntimeSettings = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(false); setStorageMenuOpen(false); setReviewSettingsOpen(false); setRuntimeSettingsOpen(true); }, []);
+  const openLayoutMenu = useCallback(() => { setStatusMenuOpen(false); setLayoutMenuOpen(true); }, []);
   const compact = layout.compact || (panelWidth > 0 && panelWidth < 480);
   const styles = useMemo(() => makeStyles(theme, compact), [theme, compact]);
   let preferences: ReturnType<typeof useObserverPreferences>;
@@ -293,29 +290,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const rpc = (input: Parameters<typeof rawRpc>[0]) => rawRpc({ ...input, projectConfig });
   const rpcRef = useRef(rpc);
   rpcRef.current = rpc;
-  let getStorage;
-  try {
-    getStorage = useRpc(projectStorageQuery);
-    reportNativeDiagnostic("project-panel-storage-rpc-ready");
-  } catch (error) {
-    reportNativeRenderError("project-panel-storage-rpc-failed", error);
-    throw error;
-  }
-  let storageQuery;
-  try {
-    storageQuery = useQuery({
-    queryKey: ["workspace-workbench", projectConfig, "project-storage"],
-    queryFn: () => getStorage({ projectConfig }),
-    enabled: Boolean(projectConfig),
-    refetchOnWindowFocus: false,
-    retry: false,
-    staleTime: 60_000,
-    });
-    reportNativeDiagnostic("project-panel-storage-query-ready", { pending: String(storageQuery.isPending) });
-  } catch (error) {
-    reportNativeRenderError("project-panel-storage-query-failed", error);
-    throw error;
-  }
   let startBackend;
   try {
     startBackend = useRpc(projectBackendStart);
@@ -358,7 +332,10 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     q.key[2] === kind && (kind === "workspace-list" || kind === "review" ||
       q.key[3] === selectedWorkspaceId && (kind === "workspace-detail" || q.key[4] === selectedRepoPath))),
     [queryClient, projectConfig, selectedWorkspaceId, selectedRepoPath]);
-  const [tab, setTab] = useState<"workspace" | "review" | "files" | 'cache' | 'communications'>("workspace");
+  const [tab, setTab] = useState<"workspace" | "review" | "files" | 'cache' | 'communications' | 'summary' | 'settings'>("workspace");
+  const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('display'),[settingsVisited,setSettingsVisited]=useState(false);
+  const openSettings=useCallback((category:SettingsCategory)=>{setLayoutMenuOpen(false);setSettingsCategory(category);setSettingsVisited(true);setTab('settings');},[]);
+  const organizer=useOrganizer(projectConfig,foreground,hostWorkspaceId);
   const [reviewTab, setReviewTab] = useState<"set" | "agent">("set");
   const [reviewSessionId, setReviewSessionId] = useState("");
   const [mainReviewInstructions, setMainReviewInstructions] = useState("");
@@ -388,11 +365,11 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }, [preferenceScopeKey, selectedWorkspaceId]);
 
   const workspaceDirectory = paseoWorkspace?.directory || "";
-  const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab(current => current === "files" || current === 'cache' || current === 'communications' ? current : "workspace");},[]);
+  const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab(current => current === "files" || current === 'cache' || current === 'communications' || current === 'summary' || current === 'settings' ? current : "workspace");},[]);
   const onWorkspaceSelectionLost=useCallback(()=>{setSelectedRepoPath("");setSelectedCommit("");setSelectedFile("");scopeRepositoryIdentity.current="";},[]);
   const activityCapable = backendQuery.data?.readCapabilities?.workspaceActivityProtocol === WORKSPACE_ACTIVITY_PROTOCOL;
   const {selectionResolved, selectorOpen, fullActivityScan, activityCommandBusy, noteVisibleWorkspaces, noteWorkspaceScroll, cancelFullActivity, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, closeWorkspaceSelector, openWorkspaceSelector, refreshWorkspaceActivity, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,activityCapable,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
-  const communications=useTopics(projectConfig,foreground,tab==='communications'||communicationsSettingsOpen);
+  const communications=useTopics(projectConfig,foreground,tab==='communications');
   const cacheCapable = backendQuery.data?.readCapabilities?.cacheManagementProtocol === 1;
   const cacheManagement = useCacheManagement({ project: projectConfig, workspaceId: selectedWorkspaceId, enabled: cacheCapable && backendReady && listReady, foreground, visible: tab === 'cache', watching: selectorOpen, rpc });
   const {mainRepositoriesOpen, setMainRepositoriesOpen, mainRepositoryFilter, setMainRepositoryFilter, mainRepositoryDraft, setMainRepositoryDraft, savingMainRepositories, linkedWorkspacesOpen, setLinkedWorkspacesOpen, linkedWorkspaceFilter, setLinkedWorkspaceFilter, linkedWorkspaceDraft, setLinkedWorkspaceDraft, savingLinkedWorkspaces, orphanId, setOrphanId, orphanBranches, setOrphanBranches, adoptingOrphan, orphanError, orphanPreviewQuery, orphanPreview, mainRepositoriesQuery, mainRepositories, linkedWorkspacesQuery, linkedWorkspaces, saveMainRepositories, saveLinkedWorkspaces, adoptSelectedOrphan}=useWorkspaceCatalog({projectConfig,backendReady,rpc,localizedCopy,refreshArea,onAdopted:selectCreatedWorkspace});
@@ -499,9 +476,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const reviewFailure = queryFailureForDisplay(reviewState, reviewQuery.data, reviewQuery.error, localizedCopy);
   const onReviewStarted=useCallback(()=>setReviewSessionId(""),[]);
   const {agentReviewQuery,agentReviewHistoryQuery,agentReview,startAgentReview,controlAgentReview}=useReviewSession({projectConfig,selectedWorkspaceId,reviewSessionId,foreground,backendReady,listReady,selectedWorkspaceIsMain,boundAgentId:boundAgent?.id,locale,mainReviewInstructions,localizedCopy,onStarted:onReviewStarted});
-  const closeSettingsPeers=useCallback(()=>{setLayoutMenuOpen(false);setStorageMenuOpen(false);setRuntimeSettingsOpen(false);},[]);
-  const {reviewSettingsOpen, setReviewSettingsOpen, reviewSettingsScope, setReviewSettingsScope, reviewMode, setReviewMode, autoFix, setAutoFix, maxRounds, setMaxRounds, reviewerTimeoutMinutes, setReviewerTimeoutMinutes, repairTimeoutMinutes, setRepairTimeoutMinutes, reviewerRole, setReviewerRole, reviewInstructions, setReviewInstructions, reviewerSession, setReviewerSession, reviewerTarget, setReviewerTarget, executionModel, setExecutionModel, reviewerModel, setReviewerModel, reviewDirtyFields, sessionDefaultRelationship, setSessionDefaultRelationship, sessionPermissionMode, setSessionPermissionMode, sessionProviderRelationships, setSessionProviderRelationships, markReviewField, markSessionField, reviewModelsQuery, saveReviewSettings, closeReviewSettings, openReviewSettings, resetReviewField, resetAllProjectReviewOverrides, sessionProviders, sourceLabel, hasReviewOverride, sessionSourceLabel, sessionPermissionLabel}=useWorkbenchSettings({projectConfig,selectedWorkspaceId,foreground,backendReady,listReady,localizedCopy,boundAgentProvider:boundAgent?.provider,refreshAgentReview:agentReviewQuery.refetch,closeOtherMenus:closeSettingsPeers});
   const [manualRefreshing, setManualRefreshing] = useState(false);
+  useRefreshOnForeground(foreground,()=>{void organizer.call({action:'refresh',forceFetch:false}).catch(()=>{});});
   const observationAreas: ObservationArea[] = [
     { label: localizedCopy.observationAreaList, snapshot: listState, fetching: listQuery.isFetching },
     { label: localizedCopy.observationAreaDetail, snapshot: detailState, fetching: detailQuery.isFetching },
@@ -686,49 +662,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     >
       <FileFilterBoundsContext.Provider value={filterPanelBounds}>
       {addRepositoriesOpen && selectedWorkspace ? <CreateWorkspace addTo={{ id: selectedWorkspaceId, repositoryPaths: detail?.repositories.map((repo) => repo.repoPath) || [] }} projectKey={projectConfig} currentRepo="" rpc={rpc} onClose={() => setAddRepositoriesOpen(false)} onCreated={async () => { await refreshArea("workspace-list"); await refreshArea("workspace-detail"); await refreshArea("workspace-prepare"); setAddRepositoriesOpen(false); }} styles={styles} /> : null}
-      {mainRepositoriesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingMainRepositories) setMainRepositoriesOpen(false); }} title={localizedCopy.mainRepositoryTitle}>
-        <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
-          <Text style={styles.layoutMenuHint}>{localizedCopy.mainRepositoryHint}</Text>
-          <TextInput value={mainRepositoryFilter} onChangeText={setMainRepositoryFilter} placeholder={localizedCopy.mainRepositorySearch} style={styles.targetInput} />
-          {mainRepositories?.scan?.incomplete ? <Text style={styles.warningText}>{localizedCopy.repositoryScanIncomplete}</Text> : null}
-          {mainRepositoriesQuery.isError || mainRepositoriesQuery.data?.ok === false ? <Text style={styles.warningText}>{mainRepositoriesQuery.data?.error?.message || localizedCopy.setupScanFailed}</Text> : null}
-          {mainRepositoriesQuery.isFetching && !mainRepositories ? <Text style={styles.emptyText}>{localizedCopy.mainRepositoryScanning}</Text> : null}
-          {mainRepositories?.repositories.filter(repo => !mainRepositoryFilter.trim() || `${repo.name} ${repo.path}`.toLowerCase().includes(mainRepositoryFilter.trim().toLowerCase())).map(repo => {
-            const selected = mainRepositoryDraft.includes(repo.path);
-            return <Pressable key={repo.path} accessibilityRole="checkbox" accessibilityState={{ checked: selected }} onPress={() => setMainRepositoryDraft(current => selected ? current.filter(path => path !== repo.path) : [...current, repo.path])} style={[styles.secondaryButton, selected && styles.scopeButtonActive]}>
-              <Text style={styles.secondaryButtonText}>{selected ? "✓" : "○"} {repo.name} · {repo.missing ? localizedCopy.mainRepositoryMissing : repo.configured ? localizedCopy.mainRepositoryConfigured : localizedCopy.mainRepositoryDiscovered}</Text>
-              <Text selectable style={styles.layoutMenuHint}>{repo.path}</Text>
-            </Pressable>;
-          })}
-          {!mainRepositoriesQuery.isFetching && !mainRepositories?.repositories.length ? <Text style={styles.emptyText}>{localizedCopy.mainRepositoryEmpty}</Text> : null}
-          <View style={styles.briefActions}>
-            <Pressable accessibilityRole="button" onPress={() => { void mainRepositoriesQuery.refetch(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainRepositoryRescan}</Text></Pressable>
-            <Pressable accessibilityRole="button" disabled={savingMainRepositories || !mainRepositories} onPress={() => { void saveMainRepositories(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{savingMainRepositories ? localizedCopy.mainRepositorySaving : localizedCopy.mainRepositorySave}</Text></Pressable>
-            <Pressable accessibilityRole="button" disabled={savingMainRepositories} onPress={() => setMainRepositoriesOpen(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainRepositoryCancel}</Text></Pressable>
-          </View>
-        </Modal.Content>
-      </Modal> : null}
-      {linkedWorkspacesOpen ? <Modal open onOpenChange={(open) => { if (!open && !savingLinkedWorkspaces) setLinkedWorkspacesOpen(false); }} title={localizedCopy.linkedWorkspaceTitle}>
-        <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 8, padding: 14 }}>
-          <Text style={styles.layoutMenuHint}>{localizedCopy.linkedWorkspaceHint}</Text>
-          <TextInput value={linkedWorkspaceFilter} onChangeText={setLinkedWorkspaceFilter} placeholder={localizedCopy.mainRepositorySearch} style={styles.targetInput} />
-          {linkedWorkspaces?.scan?.incomplete ? <Text style={styles.warningText}>{localizedCopy.repositoryScanIncomplete}</Text> : null}
-          {linkedWorkspacesQuery.data?.ok === false ? <Text style={styles.warningText}>{linkedWorkspacesQuery.data.error?.message}</Text> : null}
-          {linkedWorkspaces?.repositories.filter(item => !linkedWorkspaceFilter.trim() || `${item.name} ${item.path}`.toLowerCase().includes(linkedWorkspaceFilter.trim().toLowerCase())).map(item => {
-            const selected = linkedWorkspaceDraft.includes(item.path);
-            return <Pressable key={item.path} accessibilityRole="checkbox" accessibilityState={{ checked: selected }} onPress={() => setLinkedWorkspaceDraft(current => selected ? current.filter(path => path !== item.path) : [...current, item.path])} style={[styles.secondaryButton, selected && styles.scopeButtonActive]}>
-              <Text style={styles.secondaryButtonText}>{selected ? "✓" : "○"} {item.name} · {item.links?.length || 0} Gitlinks{item.missing ? ` · ${localizedCopy.mainRepositoryMissing}` : ""}</Text>
-              <Text selectable style={styles.layoutMenuHint}>{item.path}</Text>
-            </Pressable>;
-          })}
-          {!linkedWorkspacesQuery.isFetching && !linkedWorkspaces?.repositories.length ? <Text style={styles.emptyText}>{localizedCopy.linkedWorkspaceEmpty}</Text> : null}
-          <View style={styles.briefActions}>
-            <Pressable accessibilityRole="button" onPress={() => { void linkedWorkspacesQuery.refetch(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainRepositoryRescan}</Text></Pressable>
-            <Pressable accessibilityRole="button" disabled={savingLinkedWorkspaces || !linkedWorkspaces} onPress={() => { void saveLinkedWorkspaces(); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{savingLinkedWorkspaces ? localizedCopy.mainRepositorySaving : localizedCopy.mainRepositorySave}</Text></Pressable>
-            <Pressable accessibilityRole="button" disabled={savingLinkedWorkspaces} onPress={() => setLinkedWorkspacesOpen(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.mainRepositoryCancel}</Text></Pressable>
-          </View>
-        </Modal.Content>
-      </Modal> : null}
       {orphanId ? <Modal open onOpenChange={(open) => { if (!open && !adoptingOrphan) setOrphanId(""); }} title={localizedCopy.orphanAdoptTitle}>
         <Modal.Content scrollable style={{ maxHeight: 640, width: "100%" }} contentContainerStyle={{ gap: 9, padding: 14 }}>
           <Text style={styles.layoutMenuHint}>{localizedCopy.orphanAdoptHint}</Text>
@@ -870,10 +803,12 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll} contentContainerStyle={styles.tabs}>
         <TabButton active={tab === "workspace"} label={localizedCopy.tabWorkspace} onPress={() => setTab("workspace")} theme={theme} styles={styles} />
         <TabButton active={tab === "files"} label={locale === "zh-CN" ? "文件" : "Files"} onPress={() => setTab("files")} theme={theme} styles={styles} />
+        <TabButton active={tab==='summary'} label="摘要" onPress={()=>{closeWorkspaceSelector();setTab('summary');}} theme={theme} styles={styles}/>
         {reviewTabsVisible ? <TabButton active={tab === "review" && reviewTab === "set"} label={`${localizedCopy.tabReviewSet}${reviewIds.length ? ` ${reviewIds.length}` : ""}`} onPress={() => { setTab("review"); setReviewTab("set"); }} theme={theme} styles={styles} /> : null}
         <TabButton active={tab==='communications'} label="话题" onPress={()=>{closeWorkspaceSelector();setTab('communications');}} theme={theme} styles={styles}/>
         {cacheCapable ? <TabButton active={tab === 'cache'} label={locale === 'zh-CN' ? '缓存与空间' : 'Caches & space'} onPress={() => { closeWorkspaceSelector(); setTab('cache'); }} theme={theme} styles={styles} /> : null}
         {reviewTabsVisible && selectedWorkspaceId && selectedWorkspace?.kind !== "linked-live" && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
+        <TabButton active={tab==='settings'} label="设置" onPress={()=>openSettings(settingsCategory)} theme={theme} styles={styles}/>
       </ScrollView>
       <View
         style={styles.bodyShell}
@@ -891,7 +826,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               <Pressable accessibilityRole="button" disabled={backendQuery.isFetching} onPress={() => { void backendQuery.refetch(); }} style={{ marginTop: 7 }}><Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "600" }}>{backendQuery.isFetching ? localizedCopy.setupBackendStarting : localizedCopy.setupRetry}</Text></Pressable>
             </View>
           ) : null}
-          {tab === "workspace" ? (
+          {settingsVisited?<View style={tab==='settings'?{flex:1,minHeight:0}:{display:'none'}}><Suspense fallback={<Text style={styles.layoutMenuHint}>读取设置…</Text>}><SettingsPage {...props} projectConfig={projectConfig} active={foreground&&tab==='settings'} initialCategory={settingsCategory}/></Suspense></View>:null}
+          {tab==='settings'?null:tab==='summary'?<Suspense fallback={<Text style={styles.layoutMenuHint}>读取摘要…</Text>}><SummaryPage projectConfig={projectConfig} hostWorkspaceId={hostWorkspaceId} foreground={foreground} theme={theme}/></Suspense>:tab === "workspace" ? (
             <View style={{flex:1,minHeight:0}}>
             {selectedRepository ? <View style={comparisonOpen ? {flex:1,minHeight:0}:{display:'none'}}><RepositoryCompare key={`${projectConfig}:${selectedWorkspaceId}:${selectedRepoPath}:${comparisonStart}:${comparisonEnd}`} project={projectConfig} workspaceId={selectedWorkspaceId} hostWorkspaceId={hostWorkspaceId} agentId={agentId} directory={selectedWorkspace?.treePath || selectedWorkspace?.sourceRoot} repo={selectedRepository} repositories={displayDetail?.repositories||[]} onRepository={path=>{setComparisonStart("");setComparisonEnd("HEAD");onRepo(path);}} foreground={foreground && comparisonOpen} styles={styles} theme={theme} initialFrom={comparisonStart} initialTo={comparisonEnd} onClose={()=>setComparisonOpen(false)} rpc={rpc}/></View> : null}
             <View style={comparisonOpen ? {display:'none'} : {flex:1,minHeight:0}}>
@@ -948,7 +884,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
               styles={styles}
             />
             </View></View>
-          ) : tab === 'communications' ? <CommunicationsTheme theme={theme}><CommunicationsPanel key={`${projectConfig}:${communications.connection?.revision}`} client={communications} width={panelWidth} currentWorkspaceId={selectedWorkspaceId} currentAgentId={agentId} onOpenSession={props.navigation ? id=>props.navigation!.openAgent({agentId:id}) : undefined} workspaceNames={Object.fromEntries(observedWorkspaces.map(workspace=>[workspace.id,workspace.displayName||workspace.id]))} onSettings={page=>{setCommunicationsSettingsPage(page === '连接' ? '连接' : '连接与来源');setCommunicationsSettingsOpen(true);}}/></CommunicationsTheme> : tab === 'cache' ? <CacheManagementPanel cache={cacheManagement} theme={theme} /> : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} onOpenDocument={backendQuery.data?.readCapabilities?.documentPreviewProtocol===1?(path,instance)=>openDocument({hostWorkspaceId,agentId,projectConfig,scope:filesScopeKey,workspaceId:selectedWorkspace.id,workspaceName:selectedWorkspace.displayName||selectedWorkspace.id,instance,directory:selectedWorkspace.treePath||selectedWorkspace.sourceRoot||'',path}):undefined} foreground={foreground} sortedListing={backendQuery.data?.readCapabilities?.directoryListingProtocol === 2} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
+          ) : tab === 'communications' ? <CommunicationsTheme theme={theme}><CommunicationsPanel key={`${projectConfig}:${communications.connection?.revision}`} client={communications} width={panelWidth} currentWorkspaceId={selectedWorkspaceId} currentAgentId={agentId} onOpenSession={props.navigation ? id=>props.navigation!.openAgent({agentId:id}) : undefined} workspaceNames={Object.fromEntries(observedWorkspaces.map(workspace=>[workspace.id,workspace.displayName||workspace.id]))} onSettings={()=>openSettings('topics')}/></CommunicationsTheme> : tab === 'cache' ? <CacheManagementPanel cache={cacheManagement} theme={theme} /> : tab === "files" ? selectedWorkspace ? <Suspense fallback={<Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "正在加载文件…" : "Loading files…"}</Text>}><FilesManager key={`${filesScopeKey}:${selectedWorkspaceId}`} scope={filesScopeKey} workspace={selectedWorkspace} store={fileStore} theme={theme} onOpenDocument={backendQuery.data?.readCapabilities?.documentPreviewProtocol===1?(path,instance)=>openDocument({hostWorkspaceId,agentId,projectConfig,scope:filesScopeKey,workspaceId:selectedWorkspace.id,workspaceName:selectedWorkspace.displayName||selectedWorkspace.id,instance,directory:selectedWorkspace.treePath||selectedWorkspace.sourceRoot||'',path}):undefined} foreground={foreground} sortedListing={backendQuery.data?.readCapabilities?.directoryListingProtocol === 2} decorationsEnabled={backendQuery.data?.readCapabilities?.fileDecorationsProtocol === 1}/></Suspense> : <Text style={styles.layoutMenuHint}>{locale === "zh-CN" ? "请选择一个工作区" : "Select a workspace"}</Text> : reviewTab === "agent" ? <View>
             {selectedWorkspaceIsMain ? <View style={styles.targetRow}>
               <Text style={styles.layoutMenuHint}>{localizedCopy.mainReviewHint}</Text>
               <TextInput value={mainReviewInstructions} onChangeText={setMainReviewInstructions} placeholder={localizedCopy.mainReviewInstructions} multiline style={styles.targetInput} />
@@ -992,25 +928,6 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         {observationAreas.filter((area) => area.snapshot.response || area.fetching || area.snapshot.status !== "loading").map((area) => <Text key={area.label} style={area.snapshot.status === "expired" ? styles.warningText : styles.layoutMenuHint}>{observationAreaDetail(area, localizedCopy)}</Text>)}
         <Pressable accessibilityRole="button" accessibilityLabel={localizedCopy.refreshNow} disabled={refreshCapable ? selectedRefresh.manual : manualRefreshing} onPress={() => { setStatusMenuOpen(false); void (!refreshCapable && selectedWorkspaceId ? rpc({ method: "workspace.detail", params: { workspaceId: selectedWorkspaceId, force: true } }).catch(() => undefined).then(() => refreshAll()) : refreshAll()); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.refreshNow}</Text></Pressable>
       </AnchoredMenu>
-      <ProjectStorageMenu
-        open={storageMenuOpen}
-        onClose={() => setStorageMenuOpen(false)}
-        storage={storageQuery.data}
-        loading={storageQuery.isPending}
-        error={Boolean(storageQuery.isError)}
-        onRetry={() => { void storageQuery.refetch(); }}
-        compact={compact}
-        theme={theme}
-      />
-      <ProjectRuntimeMenu
-        open={runtimeSettingsOpen}
-        onClose={() => setRuntimeSettingsOpen(false)}
-        projectConfig={projectConfig}
-        compact={compact}
-        theme={theme}
-        styles={styles}
-        onSaved={() => { void Promise.allSettled([refreshArea("workspace-list"), refreshArea("workspace-detail"), storageQuery.refetch()]); }}
-      />
       <WorkspaceBatchPanel state={batchState} controller={batch} styles={styles} />
       <WorkspaceDeletionPanel
         open={Boolean(lifecycleWorkspaceId)}
@@ -1033,9 +950,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         theme={theme}
         styles={styles}
       />
-      <CommunicationsTheme theme={theme}><CommunicationsSettings key={`${projectConfig}:${communications.connection?.revision}`} client={communications} open={communicationsSettingsOpen} initialPage={communicationsSettingsPage} onClose={()=>setCommunicationsSettingsOpen(false)}/></CommunicationsTheme>
       <LayoutMenu
-        onOpenExtensions={()=>{setLayoutMenuOpen(false);setCommunicationsSettingsPage('扩展管理');setCommunicationsSettingsOpen(true);}}
+        onOpenExtensions={()=>openSettings('topics')}
         onOpenExecution={!selectedWorkspaceIsMain&&listResult?.capabilities?.agent?openExecutionDetails:undefined}
         onOpenCreator={props.navigation ? id => { setLayoutMenuOpen(false); props.navigation?.openAgent({ agentId: id }); } : undefined}
         onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}
@@ -1043,14 +959,14 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         selectedWorkspace={selectedWorkspace}
         sourceAvailable={readWorkspaceLineage(selectedWorkspace?.lineage)?.parent ? observedWorkspaces.some(workspace => workspaceInstanceKey(workspace) === readWorkspaceLineage(selectedWorkspace?.lineage)!.parent!.instanceKey) : undefined}
         onAddRepositories={selectedWorkspace?.managed && selectedWorkspace.layout !== "gitlink" && !selectedWorkspaceBlocksTasks && listResult?.capabilities?.create ? () => { setLayoutMenuOpen(false); setAddRepositoriesOpen(true); } : undefined}
-        onSelectMainRepositories={selectedWorkspaceId === "main" ? () => { setLayoutMenuOpen(false); setMainRepositoryFilter(""); setMainRepositoriesOpen(true); } : undefined}
-        onSelectLinkedWorkspaces={() => { setLayoutMenuOpen(false); setLinkedWorkspaceFilter(""); setLinkedWorkspacesOpen(true); }}
-        onOpenStorage={openStorageMenu}
+        onSelectMainRepositories={selectedWorkspaceId === 'main' ? ()=>openSettings('project') : undefined}
+        onSelectLinkedWorkspaces={()=>openSettings('project')}
+        onOpenStorage={()=>openSettings('storage')}
         fullActivity={activityCapable && listReady ? { scan: fullActivityScan, busy: activityCommandBusy,
           start: () => refreshWorkspaceActivity(true), cancel: cancelFullActivity } : undefined}
         runtimeNotice={(menuToolchain || displayDetail?.workspace.toolchain) && (menuToolchain || displayDetail?.workspace.toolchain).status !== 'not_applicable' ? <ToolchainNotice toolchain={menuToolchain || displayDetail!.workspace.toolchain} repositoryCount={displayDetail?.repositories.length || 0} styles={styles} onPrepare={!selectedWorkspaceIsMain ? prepareSelectedToolchain : undefined} preparing={preparingToolchain} progress={preparation.task?.state !== 'idle' ? preparationPhase : undefined} /> : undefined}
-        onOpenRuntimeSettings={openRuntimeSettings}
-        onOpenReviewSettings={openReviewSettings}
+        onOpenRuntimeSettings={()=>openSettings('runtime')}
+        onOpenReviewSettings={()=>openSettings('review')}
         open={layoutMenuOpen}
         onClose={() => setLayoutMenuOpen(false)}
         onCollapseAll={collapseAll}
@@ -1059,68 +975,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         theme={theme}
         styles={styles}
       />
-      <AnchoredMenu open={reviewSettingsOpen} onClose={closeReviewSettings} theme={theme} width={compact ? 270 : 330}>
-        <ScrollView style={{ maxHeight: compact ? 420 : 600 }} contentContainerStyle={{ gap: 6 }}>
-        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsTitle}</Text>
-        <View style={styles.briefActions}>
-          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewSettingsScope === "project" }} onPress={() => { reviewDirtyFields.current.clear(); setReviewSettingsScope("project"); }} style={[styles.secondaryButton, reviewSettingsScope === "project" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsScopeProject}</Text></Pressable>
-          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewSettingsScope === "global" }} onPress={() => { reviewDirtyFields.current.clear(); setReviewSettingsScope("global"); }} style={[styles.secondaryButton, reviewSettingsScope === "global" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsScopeGlobal}</Text></Pressable>
-        </View>
-        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsInheritedHint}</Text>
-        <Text style={styles.layoutMenuHint}>{localizedCopy.agentSessionSettings} · {sessionSourceLabel("defaultRelationship")}</Text>
-        <View style={styles.briefActions}>
-          {(["independent", "child"] as AgentRelationship[]).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: sessionDefaultRelationship === relationship }} onPress={() => { markSessionField("defaultRelationship"); setSessionDefaultRelationship(relationship); }} style={[styles.secondaryButton, sessionDefaultRelationship === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "independent" ? localizedCopy.reviewSettingsIndependent : localizedCopy.reviewSettingsChildAgent}</Text></Pressable>)}
-        </View>
-        <Text style={styles.layoutMenuHint}>{localizedCopy.agentSessionPermissionSettings} · {sessionSourceLabel("permissionMode")}</Text>
-        <Text style={styles.layoutMenuHint}>{localizedCopy.agentSessionPermissionHint}</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.briefActions}>
-          {(["inherit", "auto", "auto-review", "full-access"] as AgentPermissionMode[]).map((mode) => <Pressable key={mode} accessibilityRole="button" accessibilityState={{ selected: sessionPermissionMode === mode }} onPress={() => { markSessionField("permissionMode"); setSessionPermissionMode(mode); }} style={[styles.secondaryButton, sessionPermissionMode === mode && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{sessionPermissionLabel(mode)}</Text></Pressable>)}
-        </ScrollView>
-        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsProviderOverrides}</Text>
-        {sessionProviders.map((provider) => {
-          const selected = sessionProviderRelationships[provider];
-          return <View key={provider} style={{ gap: 4 }}>
-            <Text style={styles.reviewEntryMeta}>{provider} · {sessionSourceLabel(provider)}</Text>
-            <View style={styles.briefActions}>
-              <Pressable accessibilityRole="button" accessibilityState={{ selected: !selected }} onPress={() => { markSessionField("providerRelationships"); setSessionProviderRelationships((current) => { const next = { ...current }; delete next[provider]; return next; }); }} style={[styles.secondaryButton, !selected && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsFollowDefault}</Text></Pressable>
-              {(["independent", "child"] as AgentRelationship[]).map((relationship) => <Pressable key={relationship} accessibilityRole="button" accessibilityState={{ selected: selected === relationship }} onPress={() => { markSessionField("providerRelationships"); setSessionProviderRelationships((current) => ({ ...current, [provider]: relationship })); }} style={[styles.secondaryButton, selected === relationship && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{relationship === "independent" ? localizedCopy.reviewSettingsIndependentShort : localizedCopy.reviewSettingsChildAgent}</Text></Pressable>)}
-            </View>
-          </View>;
-        })}
-        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsMode} · {sourceLabel("mode")}</Text>
-        <View style={styles.briefActions}>
-          {["off", "manual", "automatic"].map((mode) => <Pressable key={mode} accessibilityRole="button" accessibilityState={{ selected: reviewMode === mode }} onPress={() => { markReviewField("mode"); setReviewMode(mode as "off" | "manual" | "automatic"); }} style={[styles.secondaryButton, reviewMode === mode && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{mode === "off" ? localizedCopy.reviewSettingsModeOff : mode === "manual" ? localizedCopy.reviewSettingsModeManual : localizedCopy.reviewSettingsModeAutomatic}</Text></Pressable>)}
-        </View>
-        <Pressable accessibilityRole="button" accessibilityState={{ selected: autoFix }} onPress={() => { markReviewField("autoFix"); setAutoFix((value) => !value); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{autoFix ? `✓ ${localizedCopy.reviewSettingsAutoFix}` : `○ ${localizedCopy.reviewSettingsManualFix}`} · {sourceLabel("autoFix")}</Text></Pressable>
-        <TextInput accessibilityLabel={localizedCopy.reviewSettingsRole} onChangeText={(value) => { markReviewField("reviewerRole"); setReviewerRole(value); }} placeholder={`${localizedCopy.reviewSettingsRole} · ${sourceLabel("reviewerRole")}`} placeholderTextColor={theme.colors.foregroundMuted} style={styles.targetInput} value={reviewerRole} />
-        <TextInput accessibilityLabel={localizedCopy.reviewSettingsInstructions} multiline onChangeText={(value) => { markReviewField("instructions"); setReviewInstructions(value); }} placeholder={`${localizedCopy.reviewSettingsInstructions} · ${sourceLabel("instructions")}`} placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { minHeight: 48 }]} value={reviewInstructions} />
-        <TextInput accessibilityLabel={localizedCopy.reviewSettingsMaxRounds} keyboardType="number-pad" onChangeText={(value) => { markReviewField("maxRounds"); setMaxRounds(value); }} placeholder={`${localizedCopy.reviewSettingsMaxRounds} · ${sourceLabel("maxRounds")}`} placeholderTextColor={theme.colors.foregroundMuted} style={styles.targetInput} value={maxRounds} />
-        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsTimeout} · {localizedCopy.reviewSettingsReviewerTimeout} {sourceLabel("reviewerTimeoutMs")} / {localizedCopy.reviewSettingsRepairTimeout} {sourceLabel("repairTimeoutMs")}</Text>
-        <View style={styles.briefActions}>
-          <TextInput accessibilityLabel={localizedCopy.reviewSettingsReviewerTimeout} keyboardType="number-pad" onChangeText={(value) => { markReviewField("reviewerTimeoutMs"); setReviewerTimeoutMinutes(value); }} placeholder={localizedCopy.reviewSettingsReviewerTimeoutPlaceholder} placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { flex: 1 }]} value={reviewerTimeoutMinutes} />
-          <TextInput accessibilityLabel={localizedCopy.reviewSettingsRepairTimeout} keyboardType="number-pad" onChangeText={(value) => { markReviewField("repairTimeoutMs"); setRepairTimeoutMinutes(value); }} placeholder={localizedCopy.reviewSettingsRepairTimeoutPlaceholder} placeholderTextColor={theme.colors.foregroundMuted} style={[styles.targetInput, { flex: 1 }]} value={repairTimeoutMinutes} />
-        </View>
-        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsReviewerSession} · {sourceLabel("reviewerSession")}</Text>
-        <View style={styles.reviewTagRow}>
-          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerTarget === "coordinator" }} onPress={() => { markReviewField("reviewerTarget"); setReviewerTarget("coordinator"); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewCoordinator}</Text></Pressable>
-          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerTarget === "independent" }} onPress={() => { markReviewField("reviewerTarget"); setReviewerTarget("independent"); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewIndependentSwitch}</Text></Pressable>
-        </View>
-        <View style={styles.briefActions}>
-          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerSession === "reuse" }} onPress={() => { markReviewField("reviewerSession"); setReviewerSession("reuse"); }} style={[styles.secondaryButton, reviewerSession === "reuse" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsReuse}</Text></Pressable>
-          <Pressable accessibilityRole="button" accessibilityState={{ selected: reviewerSession === "new_per_round" }} onPress={() => { markReviewField("reviewerSession"); setReviewerSession("new_per_round"); }} style={[styles.secondaryButton, reviewerSession === "new_per_round" && styles.scopeButtonActive]}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsNewPerRound}</Text></Pressable>
-        </View>
-        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsExecutionModel} · {sourceLabel("executionModel")}</Text>
-        <Pressable accessibilityRole="button" onPress={() => { markReviewField("executionModel"); setExecutionModel(""); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.reviewSettingsFollowExecution}{!executionModel ? " ✓" : ""}</Text></Pressable>
-        {(reviewModelsQuery.data?.models || []).slice(0, 6).map((model) => <Pressable key={`exec-${model.id}`} accessibilityRole="button" onPress={() => { markReviewField("executionModel"); setExecutionModel(model.id); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{model.label}{executionModel === model.id ? " ✓" : ""}</Text></Pressable>)}
-        {reviewSettingsScope === "project" && hasReviewOverride("executionModel") ? <Pressable accessibilityRole="button" onPress={() => resetReviewField("executionModel")} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.reviewSettingsResetExecution}</Text></Pressable> : null}
-        <Text style={styles.layoutMenuHint}>{localizedCopy.reviewSettingsReviewerModel} · {sourceLabel("reviewerModel")}</Text>
-        <Pressable accessibilityRole="button" onPress={() => { markReviewField("reviewerModel"); setReviewerModel(""); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.reviewSettingsFollowExecution}{!reviewerModel ? " ✓" : ""}</Text></Pressable>
-        {(reviewModelsQuery.data?.models || []).slice(0, 6).map((model) => <Pressable key={`review-${model.id}`} accessibilityRole="button" onPress={() => { markReviewField("reviewerModel"); setReviewerModel(model.id); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{model.label}{reviewerModel === model.id ? " ✓" : ""}</Text></Pressable>)}
-        {reviewSettingsScope === "project" && hasReviewOverride("reviewerModel") ? <Pressable accessibilityRole="button" onPress={() => resetReviewField("reviewerModel")} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.reviewSettingsResetReviewer}</Text></Pressable> : null}
-        {reviewSettingsScope === "project" ? <Pressable accessibilityRole="button" onPress={() => { void resetAllProjectReviewOverrides(); }} style={styles.layoutMenuItem}><Text style={styles.layoutMenuItemText}>{localizedCopy.reviewSettingsResetAll}</Text></Pressable> : null}
-        <Pressable accessibilityRole="button" onPress={saveReviewSettings} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{localizedCopy.reviewSettingsSave}</Text></Pressable>
-        </ScrollView>
-      </AnchoredMenu>
+
       </FileFilterBoundsContext.Provider>
     </View>
   );

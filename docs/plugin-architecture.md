@@ -97,3 +97,28 @@ runs an actual Agent shell probe against two isolated Workspace directories.
 Report actual-host RPC, Agent command execution, web UI, simulated failures and
 native-device evidence separately. Automatic change visibility includes the
 version-check interval; it is not a cached-click or manual-refresh latency.
+
+## Summary and title maintenance
+
+`server/organizer/` owns host model connections/secrets, project policies, durable
+analysis/jobs, public conversation checkpoints, shared model admission and guarded
+native Workspace title writes. It does not start business Agents. Interrupted
+writes retain their intent and require read-only reconciliation; reload does not
+replay uncertain delivery. Each project ledger is namespaced by host and Workspace
+instance. Configuration revisions and source fingerprints are checked after model
+work and again at title publication. External title changes pause ownership.
+
+`backend/production-coverage.ts` is read-only and uses the existing bounded Git
+queue. It verifies current production blobs or unambiguous text hunks against the
+frozen creation base, excludes imported first-parent merge work, and treats missing
+or partial evidence conservatively. Remote fetch remains the journaled comparison
+fetch path. Production state, content analysis and canonical title bodies have
+separate identities; observations/fetches never become substantive activity.
+
+`client/settings/` assembles existing RPC-backed forms in a narrow category view.
+Drafts survive category/collapse changes and contextual panel replacement; project
+and scope changes expose save/discard/continue controls. `organizer-summary.tsx`
+presents source-backed manual items, historical previews and separate production
+coverage. Native titles use `PaseoWorkspaceHandle.setTitle`; there is no business
+JavaScript bridge or replacement native sidebar. Archive topics remain externally
+owned and are never populated with local organizer items.

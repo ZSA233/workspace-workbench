@@ -20,6 +20,8 @@ export const workspaceCreate = defineRpc({
     token: z.string().min(1).optional(),
     requestId,
     name: z.string().trim().min(1),
+    taskBrief: z.string().trim().max(4000).optional(),
+    taskKind: z.enum(['requirement', 'bug', 'change', 'discussion']).optional(),
     repositories: repositoryRefs,
     parentWorkspaceId: z.string().trim().min(1).optional(),
   sourceWorkspaceId: z.string().trim().min(1).optional(),

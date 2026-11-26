@@ -34,6 +34,8 @@ export async function handleWorkspaceCreate(input: WorkspaceCreateInput) {
       const response = await handleObserver({ method: "workspace.create", params: {
         ...(input.requestId ? { requestId: input.requestId } : {}),
         name: input.name,
+        ...(input.taskBrief ? { taskBrief: input.taskBrief } : {}),
+        ...(input.taskKind ? { taskKind: input.taskKind } : {}),
         creator: creationSource(input),
         ...(input.repositories ? { repositories: input.repositories } : {}),
         ...(input.parentWorkspaceId ? { parentWorkspaceId: input.parentWorkspaceId } : {}),

@@ -124,22 +124,21 @@ export function Footer({ children }: { children: ReactNode }) {
   const c = useColors(); return <View style={{ paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: c.border, backgroundColor: c.surface1 }}><Row end>{children}</Row></View>;
 }
 
-/** The host's standard modal is fixed to 520px. This bounded surface allows the
- * approved settings sidebar and two-column model form, without changing host UI. */
-export function Dialog({ open = true, title, onClose, children, footer, width = 800, height = 700, id }: {
-  open?: boolean; title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; width?: number; height?: number; id?: string;
+/** Bounded plugin dialogs; settings can embed the shared form in their own tab. */
+export function Dialog({ open = true, title, onClose, children, footer, width = 800, height = 700, id, embedded = false }: {
+  open?: boolean; title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; width?: number; height?: number; id?: string; embedded?:boolean;
 }) {
   const c = useColors(), window = useWindowDimensions(), [keyboardTop, setKeyboardTop] = useState<number | null>(null);
   const container = useRef<View>(null), close = useRef(onClose), childrenCount = useRef(0); close.current = onClose;
-  useChildDialog(open);
+  useChildDialog(open && !embedded);
   useEffect(() => {
-    if (!open || Platform.OS === 'web') return;
+    if (!open || embedded || Platform.OS === 'web') return;
     const show = Keyboard.addListener('keyboardDidShow', event => setKeyboardTop(event.endCoordinates.screenY));
     const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardTop(null));
     return () => { show.remove(); hide.remove(); };
-  }, [open]);
+  }, [open, embedded]);
   useEffect(() => {
-    if (!open || Platform.OS !== 'web') return;
+    if (!open || embedded || Platform.OS !== 'web') return;
     const target = (globalThis as any).document, previous = target?.activeElement;
     const focusable = () => Array.from((container.current as any)?.querySelectorAll('button, input, textarea, select, [tabindex]') || [])
       .filter((element: any) => element.tabIndex >= 0 && !element.disabled && element.getAttribute('aria-disabled') !== 'true' && element.getClientRects().length) as any[];
@@ -160,8 +159,9 @@ export function Dialog({ open = true, title, onClose, children, footer, width = 
     };
     target?.addEventListener('keydown', key, true);
     return () => { (globalThis as any).cancelAnimationFrame?.(frame); target?.removeEventListener('keydown', key, true); if (previous?.isConnected) previous.focus?.(); };
-  }, [open]);
+  }, [open, embedded]);
   if (!open) return null;
+  if (embedded) return <View testID={id} style={{height:620,minHeight:300,minWidth:0,borderWidth:1,borderColor:c.border,borderRadius:7,overflow:'hidden'}}><View style={{flex:1,minHeight:0}}>{children}</View>{footer?<View style={{padding:10,gap:6,flexDirection:'row',flexWrap:'wrap',borderTopWidth:1,borderTopColor:c.border}}>{footer}</View>:null}</View>;
   const available = Math.max(160, Math.min(window.height, keyboardTop ?? window.height) - 24);
   // Web Escape is handled above. The host can deliver a second native close
   // after a child unmounts; only native hardware-back uses this callback.

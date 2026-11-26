@@ -4,6 +4,7 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { observerSettings, observerSettingsRpc } from "../shared/settings";
 import { effectiveReviewMode, type ReviewMode } from "./review-mode";
 import { reportNativeDiagnostic } from "./native-diagnostics.ts";
+const modeListeners=new Set<(scope:string,mode:ReviewMode)=>void>();
 
 function parseMode(value: unknown): ReviewMode | null {
   return value === "split" || value === "unified" ? value : null;
@@ -22,6 +23,7 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
   const pendingRef = useRef<ReviewMode | null>(null);
   const readyRef = useRef(false);
   const queue = useRef(Promise.resolve());
+  useEffect(()=>{const receive=(scope:string,mode:ReviewMode)=>{if(scope===scopeKey)setSavedMode(mode);};modeListeners.add(receive);return()=>{modeListeners.delete(receive);};},[scopeKey]);
 
   useEffect(() => {
     reportNativeDiagnostic("hook-effect-start", { hook: "review-preferences-read" });
@@ -74,13 +76,14 @@ export function useReviewModePreference(scopeKey: string, compact: boolean) {
   }, [persist, ready]);
 
   const setMode = useCallback((mode: ReviewMode) => {
+    for(const receive of modeListeners)receive(scopeKey,mode);
     setSavedMode(mode);
     pendingRef.current = mode;
     if (readyRef.current) {
       pendingRef.current = null;
       persist(mode);
     }
-  }, [persist]);
+  }, [persist,scopeKey]);
 
   const mode = effectiveReviewMode(compact, savedMode);
   return { mode, setMode };

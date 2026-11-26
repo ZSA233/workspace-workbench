@@ -6,10 +6,11 @@ import type { ArchiveChannel, ArchiveGroup, WatchedGroup } from '../../../shared
 import { groupKey } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Field, Label, Search, Toggle, ignoreFailure, useColors } from './ui';
 import { Check, MediaCount, TopicIcon, TopicStatus, topicError } from './topic-ui';
+import { useSettingsDraftRegistration } from '../../settings/drafts';
 
 type ToolDraft = { channel: ArchiveChannel; group?: ArchiveGroup; ids: string[] };
-export function TopicSettings({ client, open, onClose, initialPage }: {
-  client: TopicsClient; open: boolean; onClose(): void; initialPage?: string;
+export function TopicSettings({ client, open, onClose, initialPage, embedded=false, draftKey='topics-dialog' }: {
+  client: TopicsClient; open: boolean; onClose(): void; initialPage?: string; embedded?:boolean; draftKey?:string;
 }) {
   const c = useColors();
   const [page, setPage] = useState<'connection' | 'groups'>(initialPage === '连接与来源' ? 'groups' : 'connection');
@@ -57,7 +58,8 @@ export function TopicSettings({ client, open, onClose, initialPage }: {
   const dirty = JSON.stringify(watched) !== JSON.stringify(client.connection?.connection.watchedGroups || []);
   const connectionDirty = endpoint !== client.connection?.connection.endpoint || publicUrl !== (client.connection?.connection.publicUrl || '') ||
     libraryId !== (client.connection?.connection.libraryId || 'default') || token !== undefined;
-  return <Dialog open={open} id="communications-settings-dialog" title="话题设置" onClose={onClose} width={900} height={690}
+  useSettingsDraftRegistration(draftKey,Boolean(client.connection&&(dirty||connectionDirty)),async()=>{if(!await save(connectionDirty))throw Error('话题设置保存失败');},()=>{const config=client.connection?.connection;if(config){setEndpoint(config.endpoint);setPublicUrl(config.publicUrl||'');setLibraryId(config.libraryId||'default');setWatched(config.watchedGroups||[]);setToken(undefined);}});
+  return <Dialog embedded={embedded} open={open} id="communications-settings-dialog" title="话题设置" onClose={onClose} width={900} height={690}
     footer={<>
       <View style={{ flex: 1 }}><Button icon={client.enabled ? 'Pause' : 'Power'} disabled={busy || client.changing || !client.connection?.hasToken}
         onPress={() => ignoreFailure(run(() => client.setEnabled(!client.enabled)))}>{client.enabled ? '停用话题' : '启用话题'}</Button></View>

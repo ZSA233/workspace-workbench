@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRpc } from '@getpaseo/plugin/client';
 import { observerSettings, observerSettingsRpc } from '../shared/settings';
+type DisplayValues={fontSize:number;wrap:boolean;production:Record<string,string>};
+const listeners=new Set<(patch:Partial<DisplayValues>)=>void>();
+export function publishDisplaySettings(patch:Partial<DisplayValues>){for(const receive of listeners)receive(patch);}
 /** Revision-aware settings merge. Saves only the user's changed fields. */
 export function useDisplaySettings() {
   const read = useRpc(observerSettingsRpc.read), write = useRpc(observerSettingsRpc.write);
@@ -8,13 +11,15 @@ export function useDisplaySettings() {
   const [ready,setReady]=useState(false);
   const pending = useRef<Record<string, unknown>>({});
   const queue = useRef(Promise.resolve());
+  useEffect(()=>{const receive=(patch:Partial<DisplayValues>)=>setValues(current=>({...current,...patch,production:{...current.production,...patch.production}}));listeners.add(receive);return()=>{listeners.delete(receive);};},[]);
   useEffect(() => {let live = true; void read({}).then(result => {
     if (!live || result.status !== 'ready') return;
     const parsed = observerSettings.schema.safeParse(result.values);
     if (parsed.success) setValues(current => ({...current, ...parsed.data.diffDisplay, production: parsed.data.productionBranches, ...pending.current}));
   }).catch(() => {}).finally(()=>{if(live)setReady(true);}); return () => {live = false;};}, [read]);
   function update(patch: Partial<typeof values>) {
-    Object.assign(pending.current, patch); setValues(current => ({...current, ...patch}));
+    publishDisplaySettings(patch);
+    Object.assign(pending.current, patch); setValues(current => ({...current, ...patch,production:{...current.production,...patch.production}}));
     queue.current = queue.current.then(async () => {
       for (let attempt=0; attempt<3; attempt++) {
         const current = await read({}); if(current.status !== 'ready') return;

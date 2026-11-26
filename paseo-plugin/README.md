@@ -10,14 +10,19 @@
 
 Paseo Web 0.13 的 Explorer 使用官方插件面板入口。在右侧“＋”中选择 Workspace Workbench，即可添加工作台标签；普通浏览器和 Pocket 使用相同注册。面板复用插件已有 RPC 和缓存，不依赖 Pocket 侧栏 SDK。
 
+## 摘要与设置
+
+主导航新增“摘要”和“设置”。设置集中显示、项目、执行、Reviewer、恢复、工具链、缓存、文件、话题、生产与自动整理；适配 320–480px 窄栏。支持本地模型、历史预览、稳定标题和上线状态符号，详见 [整理说明](ORGANIZER.md)。历史标题须先预览再应用，归档由用户手动操作。
+
 ## 安装
 
 ```sh
-paseo plugin install ZSA233/workspace-workbench:paseo-plugin \
+paseo plugin install https://github.com/ZSA233/workspace-workbench.git \
+  --path paseo-plugin \
   --ref stable \
   --id workspace-workbench-paseo \
   --json
-paseo plugin update workspace-workbench-paseo --json
+paseo plugin update workspace-workbench-paseo --ref stable --json
 ```
 
 开发版本使用 `--ref main`。本地开发可以安装插件目录：

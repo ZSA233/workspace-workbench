@@ -289,6 +289,8 @@ export class WorkspaceCreation {
             }
             workspace = { schemaVersion: 1, ...(workspaceCreator(params.creator) ? { creator: workspaceCreator(params.creator) } : {}), requestHash, ...(params.requestId ? { operationId: String(params.requestId) } : {}), id, displayName: params.name.trim(), kind: "managed",
                 layout: "gitlink", instanceId: randomUUID(), managed: true, state: "creating", sourceWorkspaceId: source.id,
+                ...(typeof params.taskBrief === 'string' && params.taskBrief.trim() ? { taskBrief: params.taskBrief.trim().slice(0,4000) } : {}),
+                ...(typeof params.taskKind === 'string' ? { taskKind: params.taskKind } : {}),
                 sourceRoot: root, treePath, branchName: branch, repositories: plans,
                 repositoryIds: plans.map(plan => plan.id), createdAt: this.deps.storage.now() };
             workspace.lineage = this.deps.lineages.snapshot(source, workspaceInstanceKey(workspace as any), "gitlink");
@@ -362,6 +364,8 @@ export class WorkspaceCreation {
                 kind: "managed",
                 managed: true,
                 description: params.description || "",
+                ...(typeof params.taskBrief === 'string' && params.taskBrief.trim() ? { taskBrief: params.taskBrief.trim().slice(0,4000) } : {}),
+                ...(['requirement','bug','change','discussion'].includes(params.taskKind) ? { taskKind: params.taskKind } : {}),
                 state: "creating",
                 sourceRoot: this.deps.config().sourceRoot,
                 treePath,

@@ -1,5 +1,6 @@
 import {WorkbenchThemeProvider,useWorkbenchThemeColors,type TextThemeColors} from "./theme-context";
-import type { PluginAgentPanelProps,PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
+import type { PluginAgentPanelProps,PluginWorkspacePanelProps,PluginSurfaceProps } from "@getpaseo/plugin/client";
+import type { SettingsCategory } from './settings/ui';
 import { createElement,useEffect,useState,type ComponentType } from "react";
 import { AppState,Platform,Text,View } from "react-native";
 import { copy } from "../shared/copy";
@@ -11,6 +12,8 @@ import { installNativeHealthMonitor } from "./native-health";
 const loadWorkbenchPanel = () => import("./panel");
 const loadDocumentPanel=()=>import("./document-panel");
 const loadFileReviewPanel = () => import("./file-review");
+const loadSettingsPage = () => import('./settings/page');
+export function WorkbenchSettingsScreen(props:PluginSurfaceProps & {initialCategory?:SettingsCategory}) {return <DeferredPanel name="WorkbenchSettings" loader={loadSettingsPage} exportName="WorkbenchSettingsScreen" props={props}/>;}
 
 type PanelProps = PluginAgentPanelProps | PluginWorkspacePanelProps;
 type DeferredProps = { name: string; loader: () => Promise<Record<string, unknown>>; exportName: string; props: object };

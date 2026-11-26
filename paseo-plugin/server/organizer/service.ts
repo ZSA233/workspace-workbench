@@ -240,8 +240,10 @@ export class OrganizerService {
       l.unlinked = unlinked; this.projectTargets(l, policy); delete l.error;
     });
     const current = store.read(), selected = options.workspaceIds ? new Set(options.workspaceIds) : null;
-    const automaticKeys = new Set(Object.values(current.targets).filter(t => ['auto', 'symbols'].includes(t.policy) && visible(policy, t)).flatMap(t => t.workspaceKeys));
+    const automaticKeys = new Set(Object.values(current.targets).filter(t => ['auto', 'symbols'].includes(t.policy) && visible(policy, t)).flatMap(t => t.workspaceKeys.filter(key=>policy.mode!=='selected'||policy.selectedIds.includes(t.id)||policy.selectedIds.includes(key)||policy.selectedIds.includes(current.workspaces[key]?.material.workspaceId))));
     const candidates = rows.filter(row => !selected || selected.has(row.id));
+    const selectedKeys=new Set(candidates.filter(row=>!options.automatic||automaticKeys.has(String(row.instanceKey))).map(row=>String(row.instanceKey)));
+    const selectedAgents=new Set(candidates.filter(row=>selectedKeys.has(String(row.instanceKey))).flatMap(row=>[row.creator?.agentId,bindings.find(b=>b.workspaceId===row.id)?.agentId].filter(Boolean)));
     updateJob({ total: candidates.length, workspaceIds: candidates.map(row => row.id) });
     let completed = 0;
     for (const row of candidates) {
@@ -302,8 +304,8 @@ export class OrganizerService {
       updateJob({ completed: ++completed });
     }
     if (options.conversation && policy.conversationSummary && policy.profileId) {
-      const targets = Object.values(store.read().targets).filter(t => !options.automatic || policy.enabled && automaticKeys.has(t.representative || ''));
-      for (const id of new Set(targets.flatMap(t => t.agentIds))) { assertCurrent(); await this.analyzeConversation(route, id, api, policy, signal, assertCurrent, !options.automatic).catch(error => { if (signal.aborted) throw error; store.update(l => { const c = l.conversations[id]; if (c) c.error = failure(error); }); }); }
+      const targets = Object.values(store.read().targets).filter(t => t.workspaceKeys.some(key=>selectedKeys.has(key))&&(!options.automatic || policy.enabled && automaticKeys.has(t.representative || '')));
+      for (const id of new Set(targets.flatMap(t => t.agentIds).filter(id=>selectedAgents.has(id)))) { assertCurrent(); await this.analyzeConversation(route, id, api, policy, signal, assertCurrent, !options.automatic).catch(error => { if (signal.aborted) throw error; store.update(l => { const c = l.conversations[id]; if (c) c.error = failure(error); }); }); }
     }
     assertCurrent();
     if (options.automatic && policy.enabled) for (const t of Object.values(store.read().targets)) if (['auto', 'symbols'].includes(t.policy) && visible(policy, t)) await this.writeTarget(route, t.id, false, true).catch(error => { store.update(l => { l.targets[t.id].reason = failure(error); }); });

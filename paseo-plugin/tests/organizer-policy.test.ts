@@ -12,3 +12,8 @@ test('host model queue bounds concurrency and drains after individual failures',
  const queue=new OrganizerModelQueue(()=>2);let active=0,peak=0;const work=(fail=false)=>queue.run(async()=>{peak=Math.max(peak,++active);try{await new Promise(resolve=>setTimeout(resolve,10));if(fail)throw Error('failure');return true;}finally{active--;}});
  const results=await Promise.allSettled([work(),work(true),work(),work()]);await queue.idle();assert.equal(peak,2);assert.equal(active,0);assert.equal(results.filter(r=>r.status==='fulfilled').length,3);
 });
+test('representative activity compares instants across commit offsets and UTC dirty-file timestamps',()=>{
+ const row=(key:string,at:string)=>({key,material:{state:'pending',activityAt:at}} as WorkspaceAnalysis);
+ assert.equal(representativeWorkspace([row('local-commit','2026-11-26T23:30:00+08:00'),row('later-edit','2026-11-26T16:00:00Z')])?.key,'later-edit');
+ assert.equal(representativeWorkspace([row('old','2026-11-27T00:30:00+08:00'),row('new','2026-11-26T17:00:00Z')])?.key,'new');
+});

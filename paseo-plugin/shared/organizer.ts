@@ -79,7 +79,7 @@ export function aggregateProduction(states: ProductionState[]): ProductionState 
 }
 export function representativeWorkspace(workspaces: WorkspaceAnalysis[]): WorkspaceAnalysis | undefined {
   const rank = (s: ProductionState) => s === 'pending' || s === 'partial' ? 0 : s === 'unknown' || s === 'discussion' ? 1 : 2;
-  return [...workspaces].sort((a, b) => rank(a.material.state) - rank(b.material.state) || b.material.activityAt.localeCompare(a.material.activityAt) || a.key.localeCompare(b.key))[0];
+  return [...workspaces].sort((a, b) => rank(a.material.state) - rank(b.material.state) || (Date.parse(b.material.activityAt)||0)-(Date.parse(a.material.activityAt)||0) || a.key.localeCompare(b.key))[0];
 }
 export function stripOrganizerMarker(title:string,policy:OrganizerPolicy):string {
   const marker=[...new Set([...Object.values(policy.markers),...Object.values(defaultMarkers)])].filter(Boolean).sort((a,b)=>b.length-a.length).find(marker=>title.startsWith(marker+' '));

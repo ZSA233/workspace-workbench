@@ -69,7 +69,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
     if (commits.length > 40) complete = false;
     for (const row of commits.slice(0, 40)) {
       const [sha, at, subject] = row.split('\0');
-      if (!activityAt) activityAt = at;
+      if (!activityAt) activityAt = new Date(at).toISOString();
       evidence.push({ id: `commit:${input.repositoryId}:${sha}`, kind: 'commit', text: subject, sha, repository: input.repositoryId });
     }
     const ownPaths = new Set<string>();
@@ -150,7 +150,7 @@ export async function workspaceMaterials(observation: Observation, params: Json,
     const result = await withBackgroundGit(() => inspectRepository(git, { repositoryId: repo.id, repoPath: repo.repoPath || repo.id, baseSha: repo.baseSha, productionRef: params.productionBranches?.[repo.sourcePath] || params.productionBranches?.[configured?.path||''] || params.productionBranches?.[repo.id] || params.productionBranches?.[repo.repoPath] }));
     result.coverage.sourcePath=repo.sourcePath;
     repositories.push(result.coverage); evidence.push(...result.evidence); fingerprints.push(result.fingerprint);
-    if (result.activityAt > activityAt) activityAt = result.activityAt;
+    if (Date.parse(result.activityAt) > (Date.parse(activityAt)||0)) activityAt = result.activityAt;
     complete &&= result.complete;
   }
   evidence.push({id:'hint:'+instance,kind:'hint',text:'工作区名称（仅作为弱线索）：'+(workspace.displayName||workspace.id)});

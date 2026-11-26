@@ -14,11 +14,11 @@ import { openIsolatedWorkbench } from './ui-project-selection.mjs';
 import {observerSettingsRpc} from '../shared/settings.ts';
 const plugin=resolve(import.meta.dirname,'..'),output=process.env.WORKBENCH_VERIFY_OUTPUT||mkdtempSync(join(tmpdir(),'wb-organizer-ui-'));
 mkdirSync(output,{recursive:true});
-let calls=0;
+let calls=0,modelDelay=0;
 const model=createServer(async(req,res)=>{
   res.setHeader('content-type','application/json');
   if(req.method==='GET'){res.end(JSON.stringify({data:[{id:'organizer-fixture',owned_by:'fixture'}]}));return;}
-  const parts=[];for await(const part of req)parts.push(part);const input=JSON.parse(JSON.parse(Buffer.concat(parts).toString()).messages[1].content);calls++;
+  const parts=[];for await(const part of req)parts.push(part);const input=JSON.parse(JSON.parse(Buffer.concat(parts).toString()).messages[1].content);calls++;if(modelDelay)await new Promise(r=>setTimeout(r,modelDelay));
   res.end(JSON.stringify({choices:[{finish_reason:'stop',message:{content:JSON.stringify({title:'仓库登录异常修复',brief:'修复登录异常，补充错误处理。',items:[{text:'修复登录错误处理',evidenceIds:[input.evidence[0].id],completed:true}]})}}],usage:{prompt_tokens:100,completion_tokens:40}}));
 });
 await new Promise(r=>model.listen(0,'127.0.0.1',r));
@@ -65,33 +65,58 @@ try {
   snapshot=await organize({action:'snapshot'});const visibleApply=await organize({action:'apply',targetIds:[nativeId],revision:snapshot.revision,maintain:false});assert.ok(!visibleApply[0].error,JSON.stringify(visibleApply));
   const nativeTitle=page.getByText('○ 仓库登录异常修复',{exact:true}).filter({visible:true}).first();await nativeTitle.waitFor();const nativeShot=join(output,'native-title-characters.png');await nativeTitle.screenshot({path:nativeShot});report.screenshots.push(nativeShot);await organize({action:'restore',targetId:nativeId});await page.getByText('原始会话标题',{exact:true}).filter({visible:true}).first().waitFor();check('actual native Workspace list renders the status character within its title and then restores the original title');
   await page.getByRole('tab',{name:'设置',exact:true}).filter({visible:true}).last().click();
-  const panel=page.getByTestId('workbench-settings-tab');await panel.getByText('Workbench 设置',{exact:true}).waitFor();
-  const category=async label=>{await panel.getByRole('button',{name:'设置分类',exact:true}).click();await panel.getByRole('button',{name:new RegExp('^(?:✓ )?'+label+'$')}).click();};
-  await category('标题与自动整理');await panel.getByLabel('整理提示词',{exact:true}).fill('草稿：保持模块与具体行为');
-  await category('生产与上线');await category('标题与自动整理');assert.equal(await panel.getByLabel('整理提示词',{exact:true}).inputValue(),'草稿：保持模块与具体行为');
-  await panel.getByRole('button',{name:'自动维护范围',exact:true}).click();await panel.getByRole('button',{name:'仅指定范围',exact:true}).click();await panel.getByText('选择 Workspace 范围',{exact:true}).click();const range=panel.getByRole('switch',{name:'organizer-history',exact:true});await range.click();await wait(async()=> (await panel.getByLabel('指定 ID（每行一个 Workspace 或 PASEO 条目 ID）',{exact:true}).inputValue()).split('\n').includes('organizer-history'));
-  await panel.getByRole('button',{name:'编辑项目（固定，不跟随会话焦点）',exact:true}).click();await panel.getByRole('button',{name:'b',exact:true}).click();await panel.getByText('切换目标前，请处理未保存设置。',{exact:true}).waitFor();await panel.getByRole('button',{name:'继续编辑',exact:true}).click();
-  check('category switching preserves draft; switching project presents explicit save/discard/continue controls');
+  const panel=page.getByTestId('workbench-settings-tab');
+  await panel.getByTestId('settings-model-entry').getByText(profile.baseUrl,{exact:true}).waitFor();
+  for(const label of ['扩展管理','项目存储与缓存','审核配置'])await panel.getByRole('button',{name:label,exact:true}).waitFor();
+  assert.equal(await panel.getByText(/Diff 字号|Diff 自动换行|常用与显示/).count(),0);
+  const category=async label=>{
+    const menu=panel.getByRole('button',{name:'设置分类',exact:true}).filter({visible:true});
+    if(await menu.count()){await menu.click();await panel.getByRole('button',{name:new RegExp('^(?:✓ )?'+label+'$')}).filter({visible:true}).click();}
+    else await panel.getByRole('button',{name:label==='模型连接'?'配置地址与模型':label==='自动整理'?'范围与命名规则':label,exact:true}).filter({visible:true}).click();
+  };
+  const home=async()=>{const back=panel.getByRole('button',{name:'全部设置',exact:true}).filter({visible:true});if(await back.count())await back.click();};
+  const automatic=panel.getByRole('switch',{name:'自动整理',exact:true}).filter({visible:true});await automatic.click();await wait(async()=> (await organize({action:'settings.get'})).effective.enabled===true);await automatic.click();await wait(async()=> (await organize({action:'settings.get'})).effective.enabled===false);
+  check('settings home exposes the current model address, real automatic switch, extensions, storage and review; duplicate Diff controls are absent');
+  const jobsBefore=(await organize({action:'snapshot'})).jobs.length;
+  await category('自动整理');await panel.getByText('提示词与更新频率',{exact:true}).filter({visible:true}).click();await panel.getByLabel('整理提示词',{exact:true}).fill('草稿：保持模块与具体行为');
+  await category('生产与上线');await category('自动整理');assert.equal(await panel.getByLabel('整理提示词',{exact:true}).inputValue(),'草稿：保持模块与具体行为');
+  await panel.getByRole('button',{name:'自动维护范围',exact:true}).filter({visible:true}).click();await panel.getByRole('button',{name:'仅指定范围',exact:true}).filter({visible:true}).click();await panel.getByText('选择 Workspace 范围',{exact:true}).filter({visible:true}).click();await panel.getByRole('switch',{name:'organizer-history',exact:true}).filter({visible:true}).click();await wait(async()=> (await panel.getByLabel('指定 ID（每行一个 Workspace 或 PASEO 条目 ID）',{exact:true}).inputValue()).split('\n').join('\n').includes('organizer-history'));
+  await panel.getByRole('button',{name:'切换',exact:true}).filter({visible:true}).click();await panel.getByRole('button',{name:'编辑项目（固定，不跟随会话焦点）',exact:true}).click();await panel.getByRole('button',{name:'b',exact:true}).filter({visible:true}).click();await panel.getByText('切换目标前，请处理未保存设置。',{exact:true}).waitFor();await panel.getByRole('button',{name:'继续编辑',exact:true}).click();
   await panel.getByRole('button',{name:'放弃草稿',exact:true}).click();
-  for(const width of [320,360,480]) {
-    // Constrain only the plugin page, matching its explorer panel allocation.
-    await panel.evaluate((element,width)=>{element.style.width=width+'px';element.style.maxWidth=width+'px';element.style.flex='none';element.style.height='850px';},width);
-    await category('标题与自动整理');
+  assert.equal((await organize({action:'snapshot'})).jobs.length,jobsBefore,'category changes do not create background jobs');
+  check('category changes retain drafts and start no jobs; target switching guards unsaved changes; selected scope uses real Workspace IDs');
+  for(const width of [320,360,480,680]) {
+    await home();await panel.evaluate((element,width)=>{element.style.width=width+'px';element.style.maxWidth=width+'px';element.style.flex='none';element.style.height='800px';},width);
     const overflow=await panel.evaluate(element=>({width:element.clientWidth,scroll:element.scrollWidth}));assert.ok(overflow.scroll<=overflow.width+2,JSON.stringify(overflow));
     const file=join(output,`settings-${width}.png`);await panel.screenshot({path:file});report.screenshots.push(file);
+    for(const label of ['模型连接','自动整理','扩展管理','项目存储与缓存','审核配置']){await category(label);const size=await panel.evaluate(e=>({width:e.clientWidth,scroll:e.scrollWidth}));assert.ok(size.scroll<=size.width+2,JSON.stringify({label,...size}));}
   }
-  check('320/360/480px allocated plugin widths render a single column with no horizontal overflow; screenshots captured');
-  await category('标题与自动整理');
-  // Existing profile editor starts as new. Selecting the fixture permits a non-writing test.
-  await panel.getByRole('button',{name:'编辑连接',exact:true}).click();await panel.getByRole('button',{name:'隔离本地模型',exact:true}).click();
-  await panel.getByText('不写标题的生成测试',{exact:true}).click();await panel.getByLabel('测试材料',{exact:true}).fill('修复登录失败时未显示错误消息的问题');await panel.getByRole('button',{name:'运行测试',exact:true}).click();await panel.getByText('实际输入与来源',{exact:true}).waitFor();
+  check('settings home and model/rule/extension/storage/review pages fit 320/360/480/680px allocations');
+  await category('模型连接');assert.equal(await panel.getByLabel('接口地址',{exact:true}).inputValue(),profile.baseUrl);assert.equal(await panel.getByLabel('模型 ID',{exact:true}).inputValue(),profile.model);
+  await panel.getByRole('button',{name:'检测连接',exact:true}).filter({visible:true}).click();await panel.getByText('模型已就绪',{exact:true}).filter({visible:true}).waitFor();
+  await panel.getByText('不写标题的生成测试',{exact:true}).filter({visible:true}).click();await panel.getByLabel('测试材料',{exact:true}).fill('修复登录失败时未显示错误消息的问题');await panel.getByRole('button',{name:'运行测试',exact:true}).click();await panel.getByText('实际输入与来源',{exact:true}).filter({visible:true}).waitFor();
   assert.equal((await api.workspaces.ref(nativeId).refresh()).title,'原始会话标题');
-  check('model test UI shows actual prompt/input/output without modifying the native title');
-  await category('会话与执行');await panel.getByText('会话与执行默认值',{exact:true}).waitFor();await category('代码评审');await panel.getByText('代码评审',{exact:true}).filter({visible:true}).last().waitFor();
-  await category('环境与工具链');await panel.getByLabel('mise 路径',{exact:true}).waitFor();await category('自动恢复');await panel.getByLabel('继续消息',{exact:true}).waitFor();
-  check('session, Reviewer, runtime and recovery settings render using their existing RPCs');
-  await page.getByRole('tab',{name:'摘要',exact:true}).filter({visible:true}).last().click();await page.getByTestId('workbench-summary-tab').getByText('修复登录异常，补充错误处理。',{exact:true}).first().waitFor();await page.getByRole('button',{name:'事项筛选',exact:true}).filter({visible:true}).first().click();await page.getByRole('button',{name:'已完成',exact:true}).filter({visible:true}).first().click();
-  const summaryShot=join(output,'summary.png');await page.getByTestId('workbench-summary-tab').screenshot({path:summaryShot});report.screenshots.push(summaryShot);check('Summary tab renders the linked brief, production indicator, manual checklist filter and separate completion claims');
+  await panel.getByText('测试记录',{exact:true}).filter({visible:true}).click();await panel.getByTestId('model-test-history').getByRole('button').first().click();await panel.getByTestId('model-test-history').getByText('实际输入与来源',{exact:true}).waitFor();
+  check('model editor selects the configured connection by default and runs a non-writing model test with inspectable input/output');
+  await category('会话与执行');await panel.getByText('会话与执行默认值',{exact:true}).filter({visible:true}).waitFor();await category('审核配置');await panel.getByText('代码评审',{exact:true}).filter({visible:true}).last().waitFor();await category('环境与工具链');await panel.getByLabel('mise 路径',{exact:true}).filter({visible:true}).waitFor();await category('自动恢复');await panel.getByLabel('继续消息',{exact:true}).filter({visible:true}).waitFor();
+  await category('扩展管理');const extBefore=await invoke('workspace.workbench.extensions',{projectConfig:config,extensionId:'project-communications',action:'status'});await panel.getByRole('switch',{name:'档案话题',exact:true}).filter({visible:true}).click();await wait(async()=> (await invoke('workspace.workbench.extensions',{projectConfig:config,extensionId:'project-communications',action:'status'})).enabled!==extBefore.enabled);await panel.getByRole('switch',{name:'档案话题',exact:true}).filter({visible:true}).click();await wait(async()=> (await invoke('workspace.workbench.extensions',{projectConfig:config,extensionId:'project-communications',action:'status'})).enabled===extBefore.enabled);
+  check('session, review, runtime and recovery reuse existing settings RPCs; extension toggles change and restore actual service state');
+  await organize({action:'target.policy',targetId:nativeId,policy:'preview'});
+  await page.getByRole('tab',{name:'摘要',exact:true}).filter({visible:true}).last().click();const summary=page.getByTestId('workbench-summary-tab');await summary.evaluate(e=>{e.style.width='360px';e.style.maxWidth='360px';e.style.height='800px';e.style.flex='none';});await summary.getByRole('button',{name:'查看材料与预览',exact:true}).first().click();
+  await summary.getByText('修复登录异常，补充错误处理。',{exact:true}).first().waitFor();
+  writeFileSync(join(worktree,'README'),'login errors handled and retries checked\n');git(worktree,'add','README');git(worktree,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Handle login retries');
+  modelDelay=3000;const beforeCalls=calls;await summary.getByTestId('organizer-generate-preview').click();await wait(()=>calls>beforeCalls);await summary.getByTestId('organizer-task').getByText('模型生成',{exact:true}).waitFor();assert.equal(await summary.getByRole('button',{name:'取消生成',exact:true}).count(),1);
+  await summary.evaluate(e=>{e.scrollTop=0;for(const child of e.querySelectorAll('*'))if(child.scrollHeight>child.clientHeight)child.scrollTop=0;});const runningShot=join(output,'model-running.png');await summary.screenshot({path:runningShot});report.screenshots.push(runningShot);
+  await summary.getByRole('button',{name:'取消生成',exact:true}).click();await wait(async()=>{const s=await organize({action:'snapshot'});return s.jobs.some(j=>j.kind==='analysis'&&j.state==='cancelled');});await wait(async()=> !(await organize({action:'snapshot'})).jobs.some(j=>['queued','running'].includes(j.state)));
+  modelDelay=900;await summary.getByTestId('organizer-generate-preview').click();await wait(async()=>{const s=await organize({action:'snapshot'}),w=s.workspaces.find(w=>w.material.workspaceId==='organizer-history');return w?.fingerprint===w?.material.fingerprint&&!s.jobs.some(j=>['queued','running'].includes(j.state));});
+  await summary.getByTestId('organizer-title-preview').waitFor();
+  check('Summary starts a scoped real model request, exposes current Workspace/progress, has exactly one cancel action, and retries a cancelled generation');
+  const item=summary.getByTestId('organizer-workspace-items').getByRole('checkbox',{name:'完成事项：修复登录错误处理',exact:true});await item.click();await wait(async()=>{const w=(await organize({action:'snapshot'})).workspaces.find(w=>w.material.workspaceId==='organizer-history');return w.items[0].manual&&w.items[0].state==='done';});
+  await summary.getByTestId('organizer-workspace-items').getByRole('button',{name:'事项筛选',exact:true}).click();await summary.getByTestId('organizer-workspace-items').getByRole('button',{name:'已完成',exact:true}).click();
+  await summary.getByRole('button',{name:'核对并应用标题',exact:true}).click();await page.getByTestId('organizer-confirm-apply').waitFor();assert.equal((await api.workspaces.ref(nativeId).refresh()).title,'原始会话标题');await page.getByTestId('organizer-confirm-apply').click();await wait(async()=> (await api.workspaces.ref(nativeId).refresh()).title==='○ 仓库登录异常修复');
+  await summary.evaluate(e=>{e.scrollTop=0;for(const child of e.querySelectorAll('*'))if(child.scrollHeight>child.clientHeight)child.scrollTop=0;});const summaryShot=join(output,'summary.png');await summary.screenshot({path:summaryShot});report.screenshots.push(summaryShot);
+  await organize({action:'restore',targetId:nativeId});assert.equal((await api.workspaces.ref(nativeId).refresh()).title,'原始会话标题');
+  check('manual checklist edits persist; preview and explicit confirmation are separate; actual native title changes only after confirmation and guarded restore succeeds');
   assert.deepEqual(report.pageErrors,[]);report.ok=true;report.modelCalls=calls;console.log(JSON.stringify(report,null,2));
 } catch(error) {
   if(page){await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});writeFileSync(join(output,'failure-dom.txt'),await page.locator('body').innerText().catch(()=>''));}

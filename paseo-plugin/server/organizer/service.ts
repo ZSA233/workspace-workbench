@@ -2,16 +2,17 @@ import { OrganizerModelQueue } from './model-queue.ts';
 import { randomUUID } from 'node:crypto';
 import type { PaseoApi, PaseoAgent } from '@getpaseo/client';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
-import { organizerRpc, aggregateProduction, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, type OrganizerInput, type OrganizerSnapshot, type OrganizerTarget, type WorkspaceMaterial, type WorkspaceAnalysis, type OrganizerEvidence, type ConversationAnalysis, type OrganizerJob, type OrganizerPolicy, type OrganizerRun } from '../../shared/organizer.ts';
+import { organizerRpc, aggregateProduction, aggregateRepositoryProduction, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, type OrganizerInput, type OrganizerSnapshot, type OrganizerTarget, type WorkspaceMaterial, type WorkspaceAnalysis, type OrganizerEvidence, type ConversationAnalysis, type OrganizerJob, type OrganizerJobOptions, type OrganizerPolicy, type OrganizerRun } from '../../shared/organizer.ts';
 import { resolveProject, withProject, type ProjectRoute } from '../projects.ts';
 import { queryObserver } from '../observer.ts';
 import { allAgentBindings } from '../agent-store.ts';
 import { OrganizerSettings, OrganizerStore, OrganizerTestStore, organizerHash, type OrganizerLedger } from './storage.ts';
 import { callOrganizerModel, checkOrganizerModel, mergeOrganizerItems, retainOrganizerSources } from './model.ts';
 import { conversationBatch } from './conversation.ts';
+import {organizerProgress,type OrganizerProgress} from './jobs.ts';
 
 type Dependencies = { api(): Promise<PaseoApi>; query?: typeof queryObserver; settings?: OrganizerSettings;legacyBranches?():Promise<Record<string,string>> };
-type JobOptions = { workspaceIds?: string[]; analyze: boolean; conversation: boolean; regenerate: boolean; automatic: boolean; fetch: boolean; forceFetch?: boolean };
+type JobOptions = OrganizerJobOptions;
 const now = () => new Date().toISOString();
 const failure = (error: unknown) => error instanceof Error ? error.message : String(error);
 const matches = (ids: string[], target: OrganizerTarget) => ids.includes(target.id) || target.workspaceKeys.some(key => ids.includes(key) || ids.includes(key.split(':')[0]));
@@ -74,7 +75,7 @@ export class OrganizerService {
           if(abort.signal.aborted||this.settings.read().revision!==revision)throw Error('organizer_settings_changed');
           this.testStore.update(test.id,{state:'running'});
           let run:OrganizerRun|undefined;
-          try {await callOrganizerModel(profile,secret,policy,[{id:'test:input',kind:'goal',text:request.text}],undefined,'workspace','connection-test',abort.signal,value=>{run=value;});}
+          try {await callOrganizerModel(profile,secret,policy,[{id:'test:input',kind:'goal',text:request.text}],undefined,'workspace','connection-test',abort.signal,value=>{run=value;},(_phase,value)=>{run=value;this.testStore.update(test.id,{run:value});});}
           finally{this.testStore.update(test.id,{state:abort.signal.aborted?'cancelled':run?.error?'failed':'complete',run});}
         }).catch(error=>{this.testStore.update(test.id,{state:abort.signal.aborted?'cancelled':'failed',error:failure(error)});}).finally(()=>this.tests.delete(test.id));
         return {ok:true,result:test};
@@ -82,17 +83,20 @@ export class OrganizerService {
       if (!route) throw Error('project_context_required');
       const store = this.store(route);
       if (request.action === 'snapshot') return { ok: true, result: this.snapshot(route, request.hostWorkspaceId) };
+      if(request.action==='status'){const ledger=store.read();return{ok:true,result:{revision:ledger.revision,active:ledger.jobs.some(job=>job.state==='running'||job.state==='queued')}};}
       if (request.action === 'run') return { ok: true, result: store.run(request.runId) };
       if (request.action === 'refresh') {
         if(request.productionBranches)await this.syncLegacy(route,request.productionBranches);
-        return { ok: true, result: this.enqueue(route, { analyze: true, conversation: true, regenerate: false, automatic: true, fetch: true, forceFetch: request.forceFetch }) };
+        const productionOnly=request.productionOnly||request.forceFetch;
+        return { ok: true, result: this.enqueue(route, { workspaceIds:request.workspaceIds,hostWorkspaceId:request.hostWorkspaceId, analyze: !productionOnly, conversation: !productionOnly, regenerate: false, automatic: true, fetch: true, forceFetch: request.forceFetch, productionOnly }) };
       }
-      if (request.action === 'analyze') return { ok: true, result: this.enqueue(route, { workspaceIds: request.workspaceIds, analyze: true, conversation: request.conversation, regenerate: request.regenerate, automatic: false, fetch: false }) };
+      if (request.action === 'analyze') return { ok: true, result: this.enqueue(route, { workspaceIds: request.workspaceIds, hostWorkspaceId:request.hostWorkspaceId, analyze: true, conversation: request.conversation, regenerate: request.regenerate, automatic: false, fetch: false }) };
       if (request.action === 'resume') {
         const old = store.read().jobs.find(j => j.id === request.jobId); if (!old) throw Error('organizer_job_missing');
-        return { ok: true, result: this.enqueue(route, { workspaceIds: old.workspaceIds, analyze: true, conversation: true, regenerate: false, automatic: false, fetch: false }) };
+        if(!old.options)throw Error('organizer_legacy_job_reselect');
+        return { ok: true, result: this.enqueue(route, { ...old.options,workspaceIds:old.total?old.workspaceIds:old.options.workspaceIds }) };
       }
-      if (request.action === 'cancel') { const running = this.running.get(request.jobId); if (running?.project === route.configPath) running.abort.abort(); return { ok: true, result: this.snapshot(route) }; }
+      if (request.action === 'cancel') { const running = this.running.get(request.jobId); if (running?.project === route.configPath) {running.abort.abort();organizerProgress(store,request.jobId).update(job=>{job.cancelRequestedAt=now();if(job.state==='queued')job.state='cancelled';});} return { ok: true, result: this.snapshot(route) }; }
       if (request.action === 'job') return { ok: true, result: store.read().jobs.find(j => j.id === request.jobId) || null };
       if (request.action === 'apply') {
         const frozen=store.read();
@@ -141,12 +145,13 @@ export class OrganizerService {
   }
   private enqueue(route: ProjectRoute, options: JobOptions): OrganizerJob {
     if (this.closed) throw Error('organizer_closed');
-    const duplicate = [...this.running.entries()].find(([, run]) => run.project === route.configPath && organizerHash(run.options) === organizerHash(options));
+    const duplicate = [...this.running.entries()].find(([, run]) => !run.abort.signal.aborted&&run.project === route.configPath && organizerHash(run.options) === organizerHash(options));
     if (duplicate) return this.store(route).read().jobs.find(j => j.id === duplicate[0])!;
     if (this.running.size >= 8) throw Error('organizer_queue_full');
-    const job: OrganizerJob = { id: randomUUID(), state: 'queued', workspaceIds: options.workspaceIds || [], completed: 0, total: 0, createdAt: now(), updatedAt: now() };
+    const policy=this.settings.response(route).effective;
+    const job: OrganizerJob = { id: randomUUID(), state: 'queued', workspaceIds: options.workspaceIds || [], completed: 0, total: 0, createdAt: now(), updatedAt: now(),kind:options.productionOnly?'production':options.automatic?'refresh':options.regenerate?'regenerate':'analysis',hostWorkspaceId:options.hostWorkspaceId,options:structuredClone(options),stage:'queued',stageAt:now(),model:{profileId:policy.profileId,state:'not-requested',calls:0,completed:0,reason:options.productionOnly?'production-only':options.automatic&&!policy.enabled?'automatic-off':!policy.profileId?'no-profile':undefined},result:{analyzed:0,cached:0,skipped:0,failed:0,titleWrites:0,conversations:0},events:[] };
     const store = this.store(route), abort = new AbortController(); store.update(l => { l.jobs.push(job); });
-    const promise = (this.projectTails.get(route.configPath) || Promise.resolve()).catch(() => {}).then(() => withProject({ projectConfig: route.configPath }, () => this.perform(route, job.id, options, abort.signal))).catch(error => {
+    const promise = (this.projectTails.get(route.configPath) || Promise.resolve()).catch(() => {}).then(() => {if(abort.signal.aborted)throw Error('organizer_cancelled');return withProject({ projectConfig: route.configPath }, () => this.perform(route, job.id, options, abort.signal));}).catch(error => {
       store.update(l => { const j = l.jobs.find(j => j.id === job.id)!; j.state = abort.signal.aborted ? 'cancelled' : 'failed'; j.error = failure(error); j.updatedAt = now(); });
     }).finally(() => this.running.delete(job.id));
     this.projectTails.set(route.configPath, promise);
@@ -200,7 +205,9 @@ export class OrganizerService {
     const store = this.store(route), config = this.settings.response(route), policy = config.effective, configToken = this.settings.fingerprint(route);
     const assertCurrent = () => { if (signal.aborted) throw Error('organizer_cancelled'); if (this.closed || this.settings.fingerprint(route) !== configToken) throw Error('organizer_settings_changed'); };
     const updateJob = (patch: Partial<OrganizerJob>) => store.update(l => { Object.assign(l.jobs.find(j => j.id === jobId)!, patch, { updatedAt: now() }); });
-    updateJob({ state: 'running' });
+    const progress=organizerProgress(store,jobId);
+    updateJob({ state: 'running',startedAt:now() });progress.stage('discovering');
+    if(!options.automatic&&options.analyze&&!policy.profileId)throw Error('organizer_model_required');
     const roster = await this.read(route, 'workspace.list', { includeRemoved: false }); assertCurrent();
     const rows = (roster.workspaces as Array<Record<string, any>>).filter(w => w.managed && w.id !== 'main' && w.state !== 'record_invalid');
     const bindings = withProject({ projectConfig: route.configPath }, () => allAgentBindings());
@@ -241,14 +248,15 @@ export class OrganizerService {
     });
     const current = store.read(), selected = options.workspaceIds ? new Set(options.workspaceIds) : null;
     const automaticKeys = new Set(Object.values(current.targets).filter(t => ['auto', 'symbols'].includes(t.policy) && visible(policy, t)).flatMap(t => t.workspaceKeys.filter(key=>policy.mode!=='selected'||policy.selectedIds.includes(t.id)||policy.selectedIds.includes(key)||policy.selectedIds.includes(current.workspaces[key]?.material.workspaceId))));
-    const candidates = rows.filter(row => !selected || selected.has(row.id));
+    const scoped=options.hostWorkspaceId?new Set(current.targets[options.hostWorkspaceId]?.workspaceKeys||[]):null;
+    const candidates = rows.filter(row => (!scoped||scoped.has(String(row.instanceKey)))&&(!selected||selected.has(row.id))&&(!options.automatic||automaticKeys.has(String(row.instanceKey))||options.forceFetch||options.productionOnly||!!current.workspaces[String(row.instanceKey)]?.fingerprint));
     const selectedKeys=new Set(candidates.filter(row=>!options.automatic||automaticKeys.has(String(row.instanceKey))).map(row=>String(row.instanceKey)));
     const selectedAgents=new Set(candidates.filter(row=>selectedKeys.has(String(row.instanceKey))).flatMap(row=>[row.creator?.agentId,bindings.find(b=>b.workspaceId===row.id)?.agentId].filter(Boolean)));
     updateJob({ total: candidates.length, workspaceIds: candidates.map(row => row.id) });
     let completed = 0;
     for (const row of candidates) {
       assertCurrent(); const key = String(row.instanceKey);
-      if (options.automatic && !automaticKeys.has(key) && !options.forceFetch&&!current.workspaces[key]?.fingerprint) { updateJob({ completed: ++completed }); continue; }
+      progress.stage('materials',{workspaceId:row.id,name:row.displayName||row.id});
       let material: WorkspaceMaterial;
       let materialUpdated = false;
       try {
@@ -266,6 +274,7 @@ export class OrganizerService {
             if(!selectedRef)continue;
             if(refs.fetch?.state==='ready'&&refs.fetch?.ref===repo.productionRef&&Date.parse(refs.fetch.lastFetchedAt||'')>(previous?.at||0)) previous={at:Date.parse(refs.fetch.lastFetchedAt),state:'ready'};
             if(options.forceFetch||!previous||Date.now()-previous.at>=policy.fetchIntervalSeconds*1000) {
+              progress.stage('fetching',{workspaceId:row.id,name:row.displayName||row.id,repository:repo.repositoryId});
               const value=await this.read(route,'repository.fetch',{workspaceId:row.id,repoPath:repo.repoPath,ref:repo.productionRef,requestId:`organizer:${jobId}:${organizerHash(fetchKey)}`});
               let state=value.state;
               const deadline=Date.now()+35000;
@@ -283,38 +292,45 @@ export class OrganizerService {
           material=await this.materials(route,row.id,key,policy);
           for(const repo of material.repositories)if(this.fetches.get(route.configPath+':'+(repo.sourcePath||repo.repositoryId)+':'+repo.productionRef)?.state==='unknown'){repo.state='unknown';repo.reason='生产引用获取未确认';}
         }
-        material.state = aggregateProduction(material.repositories.map(r => r.state));
+        material.state = aggregateRepositoryProduction(material.repositories.map(r => r.state));
         store.update(l => { l.workspaces[key].material = material; this.projectTargets(l, policy); });
         materialUpdated = true;
         const previous = store.read().workspaces[key];
-        const due = !previous.analyzedAt || Date.now() - Date.parse(previous.analyzedAt) >= policy.analysisIntervalSeconds * 1000;
-        if (options.analyze && (!options.automatic || policy.enabled && automaticKeys.has(key)) && policy.profileId && material.evidence.some(e=>e.kind!=='hint') && (options.regenerate || previous.fingerprint !== material.fingerprint && (!options.automatic || due))) {
+        const attempted=previous.lastAttemptAt||previous.analyzedAt,due = !attempted || Date.now() - Date.parse(attempted) >= policy.analysisIntervalSeconds * 1000;
+        if (options.analyze && (!options.automatic || policy.enabled && automaticKeys.has(key)) && policy.profileId && material.evidence.some(e=>e.kind!=='hint') && (options.regenerate || previous.error || previous.fingerprint !== material.fingerprint) && (!options.automatic || due)) {
+          const profile=this.settings.profile(policy.profileId);progress.queued(profile);
+          store.update(l=>{l.workspaces[key].lastAttemptAt=now();});
           await this.model(async () => {
-            assertCurrent(); const latest = store.read().workspaces[key], profile = this.settings.profile(policy.profileId);
-            const result = await callOrganizerModel(profile, this.settings.secret(profile.id), policy, material.evidence, latest.fingerprint ? latest : undefined, 'workspace', key, signal, run => store.addRun(run));
+            assertCurrent(); const latest = store.read().workspaces[key];
+            const result = await callOrganizerModel(profile, this.settings.secret(profile.id), policy, material.evidence, latest.fingerprint ? latest : undefined, 'workspace', key, signal, run => store.addRun(run),(phase,run)=>progress.model(phase,run));
             assertCurrent();
             const checked = await this.materials(route, row.id, key, policy);
             if (checked.fingerprint !== material.fingerprint) throw Error('organizer_source_changed');
             store.update(l => { const w = l.workspaces[key]; if (!w.fingerprint && !w.manual) w.title = result.value.title; else if (options.regenerate && result.value.title !== w.title) w.proposedTitle = result.value.title; if (!w.manual) w.brief = result.value.brief; w.items = mergeOrganizerItems(w.items, result.value, key);w.sources=retainOrganizerSources([...(w.sources||[]),...material.evidence],w.items); w.fingerprint = material.fingerprint; w.analyzedAt = now(); w.material.complete &&= !result.truncated; delete w.error; this.projectTargets(l, policy); });
+            progress.count('analyzed');
           });
+        } else if(options.analyze) {
+          const reason=options.automatic&&!policy.enabled?'automatic-off':!policy.profileId?'no-profile':!material.evidence.some(e=>e.kind!=='hint')?'no-material':previous.fingerprint===material.fingerprint?'cached':options.automatic&&!due?'interval':'scope';
+          progress.skip(reason);progress.count(reason==='cached'?'cached':'skipped');
         }
       } catch (error) {
-        assertCurrent(); store.update(l => { const w = l.workspaces[key]; w.error = failure(error); if (!materialUpdated || failure(error) === 'organizer_source_changed') w.material.state = 'unknown'; this.projectTargets(l, policy); });
+        assertCurrent();progress.count('failed'); store.update(l => { const w = l.workspaces[key]; w.error = failure(error); if (!materialUpdated || failure(error) === 'organizer_source_changed') w.material.state = 'unknown'; this.projectTargets(l, policy); });
       }
       updateJob({ completed: ++completed });
     }
     if (options.conversation && policy.conversationSummary && policy.profileId) {
       const targets = Object.values(store.read().targets).filter(t => t.workspaceKeys.some(key=>selectedKeys.has(key))&&(!options.automatic || policy.enabled && automaticKeys.has(t.representative || '')));
-      for (const id of new Set(targets.flatMap(t => t.agentIds).filter(id=>selectedAgents.has(id)))) { assertCurrent(); await this.analyzeConversation(route, id, api, policy, signal, assertCurrent, !options.automatic).catch(error => { if (signal.aborted) throw error; store.update(l => { const c = l.conversations[id]; if (c) c.error = failure(error); }); }); }
+      for (const id of new Set(targets.flatMap(t => t.agentIds).filter(id=>selectedAgents.has(id)))) { assertCurrent();progress.stage('conversation',{agentId:id,name:agents.get(id)?.title||id}); await this.analyzeConversation(route, id, api, policy, signal, assertCurrent, !options.automatic,progress).catch(error => { if (signal.aborted) throw error;progress.count('failed'); store.update(l => { const c = l.conversations[id]; if (c) c.error = failure(error); }); }); }
     }
     assertCurrent();
-    if (options.automatic && policy.enabled) for (const t of Object.values(store.read().targets)) if (['auto', 'symbols'].includes(t.policy) && visible(policy, t)) await this.writeTarget(route, t.id, false, true).catch(error => { store.update(l => { l.targets[t.id].reason = failure(error); }); });
-    store.update(l => { l.refreshedAt = now(); }); updateJob({ state: 'complete' });
+    if (options.automatic && policy.enabled) for (const t of Object.values(store.read().targets)) if ((!options.hostWorkspaceId||t.id===options.hostWorkspaceId)&&['auto', 'symbols'].includes(t.policy) && visible(policy, t)) {progress.stage('titles',{name:t.currentTitle||t.id});const before=t.history.length;await this.writeTarget(route, t.id, false, true).catch(error => { store.update(l => { l.targets[t.id].reason = failure(error); }); });progress.count('titleWrites',store.read().targets[t.id].history.length-before);}
+    store.update(l => { l.refreshedAt = now(); });progress.stage('finished'); updateJob({ state: 'complete',current:undefined });
   }
   private model<T>(work: () => Promise<T>): Promise<T> {return this.modelQueue.run(work);}
-  private async analyzeConversation(route: ProjectRoute, agentId: string, api: PaseoApi, policy: OrganizerPolicy, signal: AbortSignal, assertCurrent: () => void, force = false) {
+  private async analyzeConversation(route: ProjectRoute, agentId: string, api: PaseoApi, policy: OrganizerPolicy, signal: AbortSignal, assertCurrent: () => void, force = false,progress?:OrganizerProgress) {
     const store = this.store(route), old = store.read().conversations[agentId];
-    if (!force && old?.updatedAt && Date.now() - Date.parse(old.updatedAt) < policy.analysisIntervalSeconds * 1000) return;
+    const attempted=old?.lastAttemptAt||old?.updatedAt;
+    if (!force && attempted && Date.now() - Date.parse(attempted) < policy.analysisIntervalSeconds * 1000) return;
     const page = await api.agents.ref(agentId).timeline.refetch({ limit: 40, direction: 'after', ...(old?.cursor ? { cursor: old.cursor } : {}) });
     if (page.error || page.staleCursor) throw Error(page.error || 'organizer_history_cursor_stale');
     const batch = conversationBatch(agentId, page, old), evidence = batch.evidence;
@@ -324,11 +340,14 @@ export class OrganizerService {
       return;
     }
     const fingerprint = organizerHash(evidence); if (old?.fingerprint === fingerprint) return;
+    const profile=this.settings.profile(policy.profileId);progress?.queued(profile);
+    store.update(l=>{l.conversations[agentId]={...old,agentId,brief:old?.brief||'',items:old?.items||[],complete:old?.complete||false,updatedAt:old?.updatedAt||'',evidence:old?.evidence||[],lastAttemptAt:now()};});
     await this.model(async () => {
       assertCurrent(); const profile = this.settings.profile(policy.profileId);
-      const result = await callOrganizerModel(profile, this.settings.secret(profile.id), policy, evidence, old, 'conversation', agentId, signal, run => store.addRun(run)); assertCurrent();
+      const result = await callOrganizerModel(profile, this.settings.secret(profile.id), policy, evidence, old, 'conversation', agentId, signal, run => store.addRun(run),(phase,run)=>progress?.model(phase,run)); assertCurrent();
       const last = result.consumedIds.at(-1), checkpoint = last ? batch.checkpoints.get(last) : undefined;
       store.update(l => { const current = l.conversations[agentId],items=mergeOrganizerItems(current?.items||[],result.value,agentId); l.conversations[agentId] = { ...current, agentId, brief: result.value.brief, items, evidence: retainOrganizerSources([...(current?.evidence||[]),...evidence.filter(e=>result.consumedIds.includes(e.id))],items), cursor: checkpoint?.cursor || current?.cursor, pendingMessage: checkpoint?.pendingMessage, startedAtBeginning: batch.startedAtBeginning, complete: batch.startedAtBeginning && !page.hasNewer && !batch.limited && !result.truncated, fingerprint, updatedAt: now() }; });
+      progress?.count('conversations');
     });
   }
   private async writeTarget(route: ProjectRoute, id: string, explicit: boolean, maintain: boolean) {

@@ -10,6 +10,15 @@ const info=[circle(12,12,9),circle(12,7,1,true),line(12,11,12,17)];
 const file=path(5,21,5,3,14,3,19,8,19,21,5,21);
 const folded=[...file,...path(14,3,14,8,19,8)];
 export const iconShapes:Record<string,IconPart[]>={
+ Bot:[box(3,7,18,13,2),line(8,3,8,7),line(16,3,16,7),line(8,11,8,14),line(16,11,16,14),line(8,17,16,17)],
+ Sparkles:[...path(12,3,15,9,21,12,15,15,12,21,9,15,3,12,9,9,12,3),line(19,1,19,5),line(17,3,21,3)],
+ Database:[box(3,3,18,18,5),line(3,9,21,9),line(3,15,21,15)],
+ ShieldCheck:[...path(12,3,21,7,21,13,18,18,12,22,6,18,3,13,3,7,12,3),...path(7,12,10,15,17,8)],
+ Terminal:[box(3,4,18,16,2),...path(7,9,10,12,7,15),line(13,15,17,15)],
+ Package:[...path(12,3,21,8,21,18,12,22,3,18,3,8,12,3),...path(3,8,12,13,21,8),line(12,13,12,22),line(8,5,17,10)],
+ Puzzle:[...path(3,9,8,9,8,4,12,4,12,9,17,9,17,14,21,14,21,18,17,18,17,21,3,21,3,16,7,16,7,12,3,12,3,9)],
+ Activity:[...path(3,12,7,12,10,4,14,20,17,12,21,12)],
+ Settings:[circle(12,12,4),...path(9,3,15,3,16,6,19,7,21,11,19,14,18,17,14,20,10,21,7,18,4,16,3,12,5,9,6,6,9,3)],
  ChevronDown:down,ChevronUp:up,ChevronRight:right,ChevronLeft:path(15,6,9,12,15,18),ChevronsUpDown:[...path(8,8,12,4,16,8),...path(8,16,12,20,16,16)],
  ArrowLeft:[...path(11,5,4,12,11,19),line(4,12,21,12)], ArrowLeftRight:swap,GitCompare:swap,
  Ellipsis:[circle(5,12,1.6,true),circle(12,12,1.6,true),circle(19,12,1.6,true)],

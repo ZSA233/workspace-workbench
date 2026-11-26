@@ -44,12 +44,13 @@ export const organizerRpc = defineRpc({
     z.object({ action: action('profile.test.cancel'),testId:z.string().min(1) }),
     z.object({ action: action('profile.tests') }),
     z.object({ action: action('snapshot'), hostWorkspaceId: z.string().optional() }),
-    z.object({ action: action('refresh'), hostWorkspaceId: z.string().optional(), forceFetch: z.boolean().default(false), productionBranches: z.record(z.string(), z.string()).optional() }),
-    z.object({ action: action('analyze'), workspaceIds: ids.optional(), conversation: z.boolean().default(true), regenerate: z.boolean().default(false) }),
+    z.object({ action: action('status') }),
+    z.object({ action: action('refresh'), hostWorkspaceId: z.string().optional(), workspaceIds:ids.optional(), forceFetch: z.boolean().default(false), productionOnly: z.boolean().optional(), productionBranches: z.record(z.string(), z.string()).optional() }),
+    z.object({ action: action('analyze'), hostWorkspaceId: z.string().optional(), workspaceIds: ids.optional(), conversation: z.boolean().default(true), regenerate: z.boolean().default(false) }),
     z.object({ action: action('job'), jobId: z.string() }), z.object({ action: action('cancel'), jobId: z.string() }),
     z.object({ action: action('resume'), jobId: z.string() }), z.object({ action: action('run'), runId: z.string() }),
     z.object({ action: action('apply'), targetIds: ids, revision: z.number().int(), maintain: z.boolean().default(true) }),
-    z.object({ action: action('target.policy'), targetId: z.string(), policy: z.enum(['auto', 'symbols', 'excluded']) }),
+    z.object({ action: action('target.policy'), targetId: z.string(), policy: z.enum(['preview','auto', 'symbols', 'excluded']) }),
     z.object({ action: action('restore'), targetId: z.string() }),
     z.object({ action: action('item.update'), owner: z.string(), itemId: z.string(), revision: z.number().int(), text: z.string().trim().min(1).max(2000).optional(), state: z.enum(['todo', 'done', 'cancelled', 'confirm']).optional() }),
     z.object({ action: action('conversation.reset'), agentId: z.string().min(1) }),
@@ -62,12 +63,21 @@ export type OrganizerEvidence = { id: string; kind: 'goal' | 'commit' | 'note' |
 export type OrganizerItem = { id: string; text: string; state: 'todo' | 'done' | 'cancelled' | 'confirm'; evidenceIds: string[]; manual?: boolean };
 export type RepositoryCoverage = { repositoryId: string; repoPath: string; sourcePath?:string; productionRef: string; baseSha?: string; head?: string; productionSha?: string; state: ProductionState; reason?: string; covered: number; pending: number; uncertain: number; dirty: boolean; observedAt: string };
 export type WorkspaceMaterial = { workspaceId: string; instance: string; name: string; createdAt: string; activityAt: string; creatorAgentId?: string; taskBrief: string; taskKind?: string; fingerprint: string; evidence: OrganizerEvidence[]; repositories: RepositoryCoverage[]; state: ProductionState; complete: boolean };
-export type WorkspaceAnalysis = { key: string; material: WorkspaceMaterial; sources?:OrganizerEvidence[]; title: string; proposedTitle?: string; brief: string; items: OrganizerItem[]; fingerprint?: string; analyzedAt?: string; manual?: boolean; error?: string };
+export type WorkspaceAnalysis = { key: string; material: WorkspaceMaterial; sources?:OrganizerEvidence[]; title: string; proposedTitle?: string; brief: string; items: OrganizerItem[]; fingerprint?: string; analyzedAt?: string; lastAttemptAt?:string; manual?: boolean; error?: string };
 export type OrganizerTarget = { id: string; agentIds: string[]; workspaceKeys: string[]; currentTitle: string | null; previewTitle?: string; body?: string; representative?: string; state: ProductionState; policy: 'preview' | 'auto' | 'symbols' | 'excluded' | 'paused'; originalTitle?: string | null; lastWritten?: string | null; reason?: string; pendingWrite?: { from: string | null; to: string | null; id: string }; history: Array<{ at: string; from: string | null; to: string; representative?: string }> };
-export type ConversationAnalysis = { agentId: string; brief: string; items: OrganizerItem[]; cursor?: { epoch: string; seq: number }; fingerprint?: string; complete: boolean; startedAtBeginning?: boolean; pendingMessage?: { seq: number; offset: number }; error?: string; updatedAt: string; evidence: OrganizerEvidence[] };
-export type OrganizerRun = { id: string; kind: 'workspace' | 'conversation'; owner: string; at: string; profileId: string; prompt: string; input: string; output?: string; truncated: boolean; elapsedMs?: number; usage?: Record<string, unknown>; error?: string };
+export type ConversationAnalysis = { agentId: string; brief: string; items: OrganizerItem[]; cursor?: { epoch: string; seq: number }; fingerprint?: string; complete: boolean; startedAtBeginning?: boolean; pendingMessage?: { seq: number; offset: number }; error?: string; updatedAt: string; lastAttemptAt?:string; evidence: OrganizerEvidence[] };
+export type OrganizerModelPhase = 'checking' | 'requesting' | 'validating' | 'complete' | 'failed';
+export type OrganizerRun = { id: string; kind: 'workspace' | 'conversation'; owner: string; at: string; profileId: string; model?:string; endpoint?:string; prompt: string; input: string; output?: string; truncated: boolean; elapsedMs?: number; usage?: Record<string, unknown>; error?: string; state?: OrganizerModelPhase; requestedAt?:string; finishedAt?:string };
 export type OrganizerModelTest={id:string;state:'queued'|'running'|'complete'|'failed'|'cancelled'|'interrupted';createdAt:string;run?:OrganizerRun;error?:string};
-export type OrganizerJob = { id: string; state: 'queued' | 'running' | 'complete' | 'cancelled' | 'interrupted' | 'failed'; workspaceIds: string[]; completed: number; total: number; createdAt: string; updatedAt: string; error?: string };
+export type OrganizerJobOptions = { workspaceIds?:string[]; hostWorkspaceId?:string; analyze:boolean; conversation:boolean; regenerate:boolean; automatic:boolean; fetch:boolean; forceFetch?:boolean; productionOnly?:boolean };
+export type OrganizerStage = 'queued'|'discovering'|'materials'|'fetching'|'model-queued'|OrganizerModelPhase|'conversation'|'titles'|'finished';
+export type OrganizerJob = { id: string; state: 'queued' | 'running' | 'complete' | 'cancelled' | 'interrupted' | 'failed'; workspaceIds: string[]; completed: number; total: number; createdAt: string; updatedAt: string; error?: string;
+  kind?:'refresh'|'production'|'analysis'|'regenerate'; hostWorkspaceId?:string; options?:OrganizerJobOptions; startedAt?:string; stage?:OrganizerStage; stageAt?:string; cancelRequestedAt?:string;
+  current?:{workspaceId?:string;name?:string;repository?:string;agentId?:string};
+  model?:{profileId?:string;name?:string;model?:string;state:'not-requested'|'queued'|OrganizerModelPhase;calls:number;completed:number;reason?:'automatic-off'|'production-only'|'cached'|'no-material'|'no-profile'|'interval'|'scope';runId?:string;requestedAt?:string;timeoutMs?:number};
+  result?:{analyzed:number;cached:number;skipped:number;failed:number;titleWrites:number;conversations:number};
+  events?:Array<{at:string;stage:OrganizerStage;workspaceId?:string;message:string}>;
+};
 export type OrganizerSnapshot = { revision: number; workspaces: WorkspaceAnalysis[]; targets: OrganizerTarget[]; conversations: ConversationAnalysis[]; jobs: OrganizerJob[]; runs: OrganizerRun[]; unlinked: string[]; error?: string };
 
 export function aggregateProduction(states: ProductionState[]): ProductionState {
@@ -77,6 +87,7 @@ export function aggregateProduction(states: ProductionState[]): ProductionState 
   if (states.some(s => s === 'deployed' || s === 'partial')) return 'partial';
   return states.some(s => s === 'pending') ? 'pending' : 'discussion';
 }
+export function aggregateRepositoryProduction(states:ProductionState[]):ProductionState {return aggregateProduction(states.filter(state=>state!=='discussion'));}
 export function representativeWorkspace(workspaces: WorkspaceAnalysis[]): WorkspaceAnalysis | undefined {
   const rank = (s: ProductionState) => s === 'pending' || s === 'partial' ? 0 : s === 'unknown' || s === 'discussion' ? 1 : 2;
   return [...workspaces].sort((a, b) => rank(a.material.state) - rank(b.material.state) || (Date.parse(b.material.activityAt)||0)-(Date.parse(a.material.activityAt)||0) || a.key.localeCompare(b.key))[0];

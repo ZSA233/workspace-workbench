@@ -181,7 +181,7 @@ export function ObserverPanelContent(props: ObserverPanelContentProps) {
     setPickingProject(false);
   }, [props.hostWorkspaceId, directory]);
   const settingsEntry=<Pressable accessibilityRole="button" onPress={()=>setHostSettingsOpen(true)} style={{padding:12}}><Text style={{color:props.theme.colors.foreground}}>Workbench 设置</Text></Pressable>;
-  if(hostSettingsOpen)return <View style={{flex:1}}><Pressable accessibilityRole="button" onPress={()=>setHostSettingsOpen(false)} style={{padding:12}}><Text style={{color:props.theme.colors.foreground}}>‹ 返回 Workbench</Text></Pressable><Suspense fallback={<Text>读取设置…</Text>}><SettingsPage {...props} projectConfig={active?.configPath} initialCategory="organizer"/></Suspense></View>;
+  if(hostSettingsOpen)return <View style={{flex:1}}><Pressable accessibilityRole="button" onPress={()=>setHostSettingsOpen(false)} style={{padding:12}}><Text style={{color:props.theme.colors.foreground}}>‹ 返回 Workbench</Text></Pressable><Suspense fallback={<Text>读取设置…</Text>}><SettingsPage {...props} projectConfig={active?.configPath} initialCategory="home"/></Suspense></View>;
   if (hostContextPending) return <View>{settingsEntry}<Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.hostWorkspaceLoading}</Text></View>;
   if (hostContextUnavailable) return <View>{settingsEntry}<Text style={{ color: props.theme.colors.foregroundMuted }}>{localizedCopy.hostWorkspaceUnavailable}</Text></View>;
   if (projects.isPending) {
@@ -333,7 +333,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
       q.key[3] === selectedWorkspaceId && (kind === "workspace-detail" || q.key[4] === selectedRepoPath))),
     [queryClient, projectConfig, selectedWorkspaceId, selectedRepoPath]);
   const [tab, setTab] = useState<"workspace" | "review" | "files" | 'cache' | 'communications' | 'summary' | 'settings'>("workspace");
-  const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('display'),[settingsVisited,setSettingsVisited]=useState(false);
+  const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('home'),[settingsVisited,setSettingsVisited]=useState(false);
   const openSettings=useCallback((category:SettingsCategory)=>{setLayoutMenuOpen(false);setSettingsCategory(category);setSettingsVisited(true);setTab('settings');},[]);
   const organizer=useOrganizer(projectConfig,foreground,hostWorkspaceId);
   const [reviewTab, setReviewTab] = useState<"set" | "agent">("set");
@@ -477,7 +477,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const onReviewStarted=useCallback(()=>setReviewSessionId(""),[]);
   const {agentReviewQuery,agentReviewHistoryQuery,agentReview,startAgentReview,controlAgentReview}=useReviewSession({projectConfig,selectedWorkspaceId,reviewSessionId,foreground,backendReady,listReady,selectedWorkspaceIsMain,boundAgentId:boundAgent?.id,locale,mainReviewInstructions,localizedCopy,onStarted:onReviewStarted});
   const [manualRefreshing, setManualRefreshing] = useState(false);
-  useRefreshOnForeground(foreground,()=>{void organizer.call({action:'refresh',forceFetch:false}).catch(()=>{});});
+  useEffect(()=>{if(foreground)void organizer.refresh().catch(()=>{});},[foreground,organizer.refresh]);
+  useRefreshOnForeground(foreground,()=>{void organizer.refresh().catch(()=>{});});
   const observationAreas: ObservationArea[] = [
     { label: localizedCopy.observationAreaList, snapshot: listState, fetching: listQuery.isFetching },
     { label: localizedCopy.observationAreaDetail, snapshot: detailState, fetching: detailQuery.isFetching },
@@ -550,6 +551,8 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const refreshAll = useCallback(() => {
     if (tab === 'communications') { void communications.refresh(); return; }
     if (tab === 'cache') { void cacheManagement.scan(); return; }
+    void organizer.refresh().catch(()=>{});
+    if(tab==='summary'||tab==='settings'){void organizer.invalidate();return;}
     refreshWorkspaceActivity();
     if (comparisonOpen) void refreshArea('repository-compare');
     if (!refreshCapable) return refreshLegacy();
@@ -557,7 +560,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
     selectedRefresh.refresh();
     basicSummaries.refresh();
     void refreshArea('workspace-list');
-  }, [tab, communications.refresh, cacheManagement.scan, refreshWorkspaceActivity, comparisonOpen, refreshCapable, refreshLegacy, selectedRefresh.refresh, refreshArea, basicSummaries.refresh, backendQuery.refetch]);
+  }, [tab, organizer.refresh, organizer.invalidate, communications.refresh, cacheManagement.scan, refreshWorkspaceActivity, comparisonOpen, refreshCapable, refreshLegacy, selectedRefresh.refresh, refreshArea, basicSummaries.refresh, backendQuery.refetch]);
 
 
   // The version poll resumes observation queries; only bootstrap needs a direct retry.
@@ -808,7 +811,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         <TabButton active={tab==='communications'} label="话题" onPress={()=>{closeWorkspaceSelector();setTab('communications');}} theme={theme} styles={styles}/>
         {cacheCapable ? <TabButton active={tab === 'cache'} label={locale === 'zh-CN' ? '缓存与空间' : 'Caches & space'} onPress={() => { closeWorkspaceSelector(); setTab('cache'); }} theme={theme} styles={styles} /> : null}
         {reviewTabsVisible && selectedWorkspaceId && selectedWorkspace?.kind !== "linked-live" && listResult?.capabilities?.agent ? <TabButton active={tab === "review" && reviewTab === "agent"} label={localizedCopy.tabAgentReview} onPress={() => { setTab("review"); setReviewTab("agent"); }} theme={theme} styles={styles} /> : null}
-        <TabButton active={tab==='settings'} label="设置" onPress={()=>openSettings(settingsCategory)} theme={theme} styles={styles}/>
+        <TabButton active={tab==='settings'} label="设置" onPress={()=>openSettings('home')} theme={theme} styles={styles}/>
       </ScrollView>
       <View
         style={styles.bodyShell}
@@ -827,7 +830,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
             </View>
           ) : null}
           {settingsVisited?<View style={tab==='settings'?{flex:1,minHeight:0}:{display:'none'}}><Suspense fallback={<Text style={styles.layoutMenuHint}>读取设置…</Text>}><SettingsPage {...props} projectConfig={projectConfig} active={foreground&&tab==='settings'} initialCategory={settingsCategory}/></Suspense></View>:null}
-          {tab==='settings'?null:tab==='summary'?<Suspense fallback={<Text style={styles.layoutMenuHint}>读取摘要…</Text>}><SummaryPage projectConfig={projectConfig} hostWorkspaceId={hostWorkspaceId} foreground={foreground} theme={theme}/></Suspense>:tab === "workspace" ? (
+          {tab==='settings'?null:tab==='summary'?<Suspense fallback={<Text style={styles.layoutMenuHint}>读取摘要…</Text>}><SummaryPage projectConfig={projectConfig} hostWorkspaceId={hostWorkspaceId} foreground={foreground} theme={theme} onSettings={openSettings}/></Suspense>:tab === "workspace" ? (
             <View style={{flex:1,minHeight:0}}>
             {selectedRepository ? <View style={comparisonOpen ? {flex:1,minHeight:0}:{display:'none'}}><RepositoryCompare key={`${projectConfig}:${selectedWorkspaceId}:${selectedRepoPath}:${comparisonStart}:${comparisonEnd}`} project={projectConfig} workspaceId={selectedWorkspaceId} hostWorkspaceId={hostWorkspaceId} agentId={agentId} directory={selectedWorkspace?.treePath || selectedWorkspace?.sourceRoot} repo={selectedRepository} repositories={displayDetail?.repositories||[]} onRepository={path=>{setComparisonStart("");setComparisonEnd("HEAD");onRepo(path);}} foreground={foreground && comparisonOpen} styles={styles} theme={theme} initialFrom={comparisonStart} initialTo={comparisonEnd} onClose={()=>setComparisonOpen(false)} rpc={rpc}/></View> : null}
             <View style={comparisonOpen ? {display:'none'} : {flex:1,minHeight:0}}>
@@ -951,7 +954,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
         styles={styles}
       />
       <LayoutMenu
-        onOpenExtensions={()=>openSettings('topics')}
+        onOpenExtensions={()=>openSettings('extensions')}
         onOpenExecution={!selectedWorkspaceIsMain&&listResult?.capabilities?.agent?openExecutionDetails:undefined}
         onOpenCreator={props.navigation ? id => { setLayoutMenuOpen(false); props.navigation?.openAgent({ agentId: id }); } : undefined}
         onSwitchProject={props.onSwitchProject ? () => { setLayoutMenuOpen(false); props.onSwitchProject?.(); } : undefined}

@@ -1,28 +1,14 @@
 import { useRpc } from '@getpaseo/plugin/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { View } from 'react-native';
+import { Text, View } from 'react-native';
 import { observerQuery, type ObserverMethod } from '../../shared/observer';
 import { recoverySettingsRpc, recoveryPolicySchema, sessionRecoveryRpc, recoveryStatusLabel, type RecoveryPolicy } from '../../shared/session-recovery';
 import { projectRuntimeSettingsGet, projectRuntimeSettingsUpdate, projectStorageQuery } from '../../shared/setup';
-import { useObserverPreferences } from '../preferences';
-import { useReviewModePreference } from '../review-preferences';
-import { useDisplaySettings } from '../use-display-settings';
-import { projectPreferenceScopeKey } from '../panel/scope';
 import { useChangeFileFilter } from '../use-change-file-filter';
 import { TestRulesEditor } from '../components/change-file-filter';
 import { useSettingsForm } from './drafts';
 import { SettingButton, SettingCard, SettingField, SettingSelect, SettingSwitch, SettingText, type SettingsTheme } from './ui';
 type Props={projectConfig:string;theme:SettingsTheme;draftKey:string;active:boolean};
-export function DisplaySettings({projectConfig,hostWorkspaceId,theme}:{projectConfig?:string;hostWorkspaceId:string;theme:SettingsTheme}) {
-  const scope=projectPreferenceScopeKey(projectConfig||'host',hostWorkspaceId),preferences=useObserverPreferences(scope),mode=useReviewModePreference(scope,false),display=useDisplaySettings();
-  return <SettingCard title="常用与显示（即时保存）" theme={theme}><SettingText theme={theme}>Diff 字号与换行使用主机默认；列表和区域布局保存到当前项目及 PASEO 条目。</SettingText>
-    {projectConfig?<SettingSelect theme={theme} label="Workspace 列表" value={preferences.workspaceView} onChange={x=>preferences.setWorkspaceView(x as 'list'|'tree')} options={[{value:'list',label:'列表'},{value:'tree',label:'来源树'}]}/>:null}
-    <SettingSelect theme={theme} label="Diff 字号" value={String(display.fontSize)} onChange={x=>display.update({fontSize:Number(x)})} options={[12,14,16,18].map(n=>({value:String(n),label:n+'px'}))}/>
-    <SettingSwitch theme={theme} label="Diff 自动换行" value={display.wrap} onChange={x=>display.update({wrap:x})}/>
-    <SettingSelect theme={theme} label="宽面板 Diff 显示" value={mode.mode} onChange={x=>mode.setMode(x as 'unified'|'split')} options={[{value:'unified',label:'统一'},{value:'split',label:'并排'}]}/><SettingText theme={theme}>480px 以下自动统一显示，保留宽面板偏好。</SettingText>
-    {projectConfig?<SettingCard title="区域布局" theme={theme} collapsed>{(['repositories','graph','changes'] as const).map((id,index)=><View key={id} style={{gap:5}}><SettingSwitch theme={theme} label={['仓库','提交图','改动文件'][index]+'默认折叠'} value={preferences.sectionLayout[id].collapsed} onChange={collapsed=>preferences.updateSection(id,{collapsed})}/><SettingField theme={theme} label="区域高度（72–600px；留空自动）" value={String(preferences.sectionLayout[id].height||'')} onChange={x=>{const height=x?Number(x):null;if(height===null||Number.isFinite(height)&&height>=72&&height<=600)preferences.updateSection(id,{height});}}/></View>)}<SettingButton theme={theme} onPress={preferences.resetLayout}>恢复布局默认值</SettingButton></SettingCard>:null}
-  </SettingCard>;
-}
 export function FileSettings({projectConfig,theme}:Pick<Props,'projectConfig'|'theme'>) {
   const filter=useChangeFileFilter({projectConfig,workspaceId:'main',repoPath:'',scope:'working'},[],false);
   return <SettingCard theme={theme} title="文件显示与测试规则"><SettingText theme={theme}>当前项目默认值，即时保存。临时路径筛选仍按改动视图单独保存。</SettingText><SettingSelect theme={theme} label="测试文件显示" value={filter.preference.display} options={[{value:'all',label:'正常显示'},{value:'dim',label:'淡化测试文件'},{value:'hide',label:'隐藏测试文件'}]} onChange={x=>filter.setDisplay(x as 'all'|'dim'|'hide')}/><TestRulesEditor rules={filter.preference.rules} theme={theme} onChange={filter.setRules} onBack={()=>{}}/>{filter.preference.error?<SettingText theme={theme} error>{filter.preference.error}</SettingText>:null}</SettingCard>;
@@ -49,7 +35,9 @@ export function RuntimeSettings({projectConfig,theme,draftKey,storage=false}:Pro
 }
 export function StorageSettings({projectConfig,theme,active}:Props) {
   const read=useRpc(projectStorageQuery),query=useQuery({queryKey:['workspace-workbench',projectConfig,'project-storage'],queryFn:()=>read({projectConfig}),enabled:active,retry:false,refetchOnWindowFocus:false});
-  return <SettingCard title="空间与存储位置" theme={theme}>{query.data?(['config','worktrees','records','state','socket'] as const).map((key,index)=><SettingText key={key} theme={theme}>{['项目配置','Worktree','Workspace 记录','运行状态','后端 socket'][index]}\n{query.data![key].path}</SettingText>):<SettingText theme={theme}>{query.error?.message||'读取存储信息…'}</SettingText>}{query.data?.derived?<SettingText theme={theme}>观察缓存 {Math.round(query.data.derived.cacheBytes/1048576)} MiB / {Math.round(query.data.derived.cacheLimit/1048576)} MiB · {query.data.derived.cacheEntries} 项\n传输暂存 {Math.round(query.data.derived.temporaryBytes/1048576)} MiB</SettingText>:null}</SettingCard>;
+  return <SettingCard title="项目存储位置" theme={theme}>{query.data?(['worktrees','records','state','config'] as const).map((key,index)=><View key={key} style={{gap:6}}><Text style={{color:theme.colors.foregroundMuted,fontSize:11}}>{['工作区目录','Workspace 记录','运行状态与整理记录','项目配置文件'][index]}</Text><View style={{backgroundColor:theme.colors.surface2,borderRadius:6,padding:10}}><Text selectable style={{color:theme.colors.foreground,fontSize:11,lineHeight:18,fontFamily:'monospace'}}>{query.data![key].path}</Text></View></View>):<SettingText theme={theme}>{query.error?.message||'读取存储位置…'}</SettingText>}
+    {query.data?.derived?<SettingCard theme={theme} title="缓存占用" collapsed><SettingText theme={theme}>{Math.round(query.data.derived.cacheBytes/1048576)} / {Math.round(query.data.derived.cacheLimit/1048576)} MiB · {query.data.derived.cacheEntries} 项</SettingText></SettingCard>:null}
+  </SettingCard>;
 }
 type Selection={revision:number;scan?:{incomplete:boolean};repositories:Array<{path:string;name:string;selected:boolean;missing?:boolean}>};
 export function RepositorySettings({projectConfig,theme,draftKey,active,linked=false}:Props&{linked?:boolean}) {

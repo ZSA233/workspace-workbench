@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import type { PaseoApi } from '@getpaseo/client';
 import { OrganizerService } from '../server/organizer/service.ts';
-import { OrganizerSettings } from '../server/organizer/storage.ts';
+import { OrganizerSettings,OrganizerTestStore } from '../server/organizer/storage.ts';
 import { organizerPolicySchema, type OrganizerSnapshot, type WorkspaceMaterial } from '../shared/organizer.ts';
 const pause=()=>new Promise(resolve=>setTimeout(resolve,5));
 async function fixture(){
@@ -63,6 +63,56 @@ test('settings preserve unknown metadata, revision conflicts and project inherit
 async function done(f:Awaited<ReturnType<typeof fixture>>,job:{id:string}) {
   for(let i=0;i<500;i++){const j=await f.request({action:'job',jobId:job.id});if(['complete','failed','cancelled'].includes(j.state))return j;await pause();}throw Error('job timeout');
 }
+test('production checks and manual previews expose distinct progress and actual model requests',async()=>{
+ const f=await fixture();try{
+  const checked=await done(f,await f.request({action:'refresh',productionOnly:true,forceFetch:false,workspaceIds:['one']}));
+  assert.equal(checked.kind,'production');assert.equal(checked.model.calls,0);assert.equal(checked.model.reason,'production-only');assert.equal(checked.result.analyzed,0);assert.equal(checked.completed,1);assert.equal(f.counts().modelCalls,0);
+  f.delayModel(100);const started=await f.request({action:'analyze',workspaceIds:['one'],conversation:false,regenerate:false});
+  while(!f.counts().modelCalls)await pause();
+  const running=await f.request({action:'job',jobId:started.id});assert.equal(running.stage,'requesting');assert.equal(running.current.workspaceId,'one');assert.equal(running.model.calls,1);assert.equal(running.model.completed,0);assert.equal(running.total,1);
+  const liveRun=await f.request({action:'run',runId:running.model.runId});assert.equal(liveRun.state,'requesting');assert.match(liveRun.input,/Fix login/);assert.ok(liveRun.requestedAt);assert.equal(liveRun.output,undefined);
+  const finished=await done(f,started);assert.equal(finished.result.analyzed,1);assert.equal(finished.model.completed,1);assert.equal(finished.result.titleWrites,0);
+  const snapshot=await f.request({action:'snapshot'});assert.equal(snapshot.runs.filter((r:any)=>r.id===liveRun.id).length,1,'live updates replace one durable run');
+  const cached=await done(f,await f.request({action:'analyze',workspaceIds:['one'],conversation:false,regenerate:false}));assert.equal(cached.model.calls,0);assert.equal(cached.model.reason,'cached');assert.equal(cached.result.cached,1);
+ }finally{await f.close();}
+});
+test('an unrelated native scope cannot fall back to analyzing every Workspace',async()=>{
+ const f=await fixture();try{
+  const result=await done(f,await f.request({action:'analyze',hostWorkspaceId:'different-native-workspace',conversation:true,regenerate:false}));
+  assert.equal(result.total,0);assert.equal(f.counts().modelCalls,0);assert.equal(f.counts().materialReads,0);assert.equal(f.historyReads.length,0);
+ }finally{await f.close();}
+});
+test('passive status reads expose active work without starting Git scans or model tasks',async()=>{
+ const f=await fixture();try{
+  const before=await f.request({action:'status'});assert.equal(before.active,false);assert.equal(f.counts().materialReads,0);assert.equal(f.counts().modelCalls,0);
+  f.delayModel(80);const job=await f.request({action:'analyze',conversation:false,regenerate:false});while(!f.counts().modelCalls)await pause();
+  const active=await f.request({action:'status'});assert.equal(active.active,true);assert.ok(active.revision>before.revision);
+  await done(f,job);assert.equal((await f.request({action:'status'})).active,false);
+ }finally{await f.close();}
+});
+test('reload marks unfinished model records unconfirmed instead of leaving a permanent requesting state',async()=>{
+ const f=await fixture();try{
+  const run={id:'unfinished-run',kind:'workspace' as const,owner:'one',at:new Date().toISOString(),profileId:'local',model:'fixture',prompt:'prompt',input:'input',truncated:false,state:'requesting' as const};
+  const store=f.service.store(f.route);store.addRun(run);store.update(l=>{l.jobs.push({id:'unfinished-job',state:'running',workspaceIds:['one'],completed:0,total:1,createdAt:run.at,updatedAt:run.at});});
+  store.recover();assert.equal(store.run(run.id)?.state,'failed');assert.match(store.run(run.id)?.error||'',/未确认/);assert.equal(store.read().jobs.at(-1)?.state,'interrupted');
+  const tests=new OrganizerTestStore(f.settings.root),test=tests.create();tests.update(test.id,{state:'running',run});tests.recover();assert.equal(tests.get(test.id).state,'interrupted');assert.equal(tests.get(test.id).run?.state,'failed');assert.equal(f.counts().modelCalls,0);assert.equal(f.counts().writes,0);
+ }finally{await f.close();}
+});
+test('queued cancellation is immediate and resuming production work never upgrades it to model analysis',async()=>{
+ const f=await fixture();try{
+  f.delayModel(120);const active=await f.request({action:'analyze',conversation:false,regenerate:false});while(!f.counts().modelCalls)await pause();
+  const waiting=await f.request({action:'refresh',productionOnly:true,forceFetch:false,workspaceIds:['one']});assert.equal(waiting.state,'queued');
+  await f.request({action:'cancel',jobId:waiting.id});assert.equal((await f.request({action:'job',jobId:waiting.id})).state,'cancelled');
+  const resumed=await f.request({action:'resume',jobId:waiting.id});await done(f,active);const result=await done(f,resumed);
+  assert.equal(result.kind,'production');assert.equal(result.model.calls,0);assert.equal(f.counts().modelCalls,1);assert.equal(result.options.productionOnly,true);
+ }finally{await f.close();}
+});
+test('legacy task retries require reselecting scope rather than guessing whether models were intended',async()=>{
+ const f=await fixture();try{
+  f.service.store(f.route).update(l=>{l.jobs.push({id:'legacy',state:'interrupted',workspaceIds:[],completed:0,total:0,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});});
+  await assert.rejects(f.request({action:'resume',jobId:'legacy'}),/legacy_job_reselect/);assert.equal(f.counts().modelCalls,0);
+ }finally{await f.close();}
+});
 test('enabling only enrolls future linked work; automatic refresh does not analyze historical previews',async()=>{
   const f=await fixture();try {
     let settings=f.settings.response(f.route);f.settings.save('project',settings.revision,{enabled:true},[],f.route);

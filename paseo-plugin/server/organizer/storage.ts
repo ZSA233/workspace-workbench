@@ -112,7 +112,7 @@ export class OrganizerTestStore {
   }
   get(id:string):OrganizerModelTest {if(!this.list().some(t=>t.id===id))throw Error('organizer_test_missing');return readOrganizerJson<OrganizerModelTest>(this.path(id),null as never);}
   update(id:string,patch:Partial<OrganizerModelTest>){const test={...this.get(id),...patch};writeOrganizerJson(this.path(id),test);writeOrganizerJson(join(this.root,'tests','index.json'),this.list().map(t=>t.id===id?{...test,run:undefined}:t));return test;}
-  recover(){for(const t of this.list())if(t.state==='queued'||t.state==='running')this.update(t.id,{state:'interrupted',error:'插件已重载，测试未自动重放'});}
+  recover(){for(const t of this.list())if(t.state==='queued'||t.state==='running'){const full=this.get(t.id);this.update(t.id,{state:'interrupted',error:'插件已重载，测试未自动重放',...(full.run?{run:{...full.run,state:'failed',error:'插件已重载，生成结果未确认',finishedAt:new Date().toISOString()}}:{})});}}
 }
 
 export type OrganizerLedger = { version: 1; revision: number; workspaces: Record<string, WorkspaceAnalysis>; targets: Record<string, OrganizerTarget>; conversations: Record<string, ConversationAnalysis>; jobs: OrganizerJob[]; runs: OrganizerRun[]; unlinked: string[]; refreshedAt?: string; error?: string; [key: string]: unknown };
@@ -133,8 +133,8 @@ export class OrganizerStore {
   addRun(run: OrganizerRun) {
     writeOrganizerJson(join(this.root(), 'runs', organizerHash(run.id) + '.json'), run);
     const old = this.read().runs;
-    this.update(l => { l.runs.push({ ...run, input: '', prompt: '', output: undefined }); });
-    for (const item of old.slice(0, Math.max(0, old.length - 29))) {
+    this.update(l => { const metadata={ ...run, input: '', prompt: '', output: undefined },index=l.runs.findIndex(r=>r.id===run.id);if(index<0)l.runs.push(metadata);else l.runs[index]=metadata; });
+    for (const item of old.slice(0, Math.max(0, old.length + (old.some(r=>r.id===run.id)?0:1) - 30))) {
       const file = join(this.root(), 'runs', organizerHash(item.id) + '.json'); if (existsSync(file)) unlinkSync(file);
     }
   }
@@ -144,6 +144,7 @@ export class OrganizerStore {
   }
   recover() {
     const value = this.read();
+    for(const metadata of value.runs)if(['checking','requesting','validating'].includes(metadata.state||'')){const run=this.run(metadata.id);if(run)this.addRun({...run,state:'failed',error:'插件已重载，生成结果未确认',finishedAt:new Date().toISOString()});}
     if (value.jobs.some(j => j.state === 'running' || j.state === 'queued')) this.update(l => { for (const j of l.jobs) if (j.state === 'running' || j.state === 'queued') { j.state = 'interrupted'; j.updatedAt = new Date().toISOString(); } });
   }
 }

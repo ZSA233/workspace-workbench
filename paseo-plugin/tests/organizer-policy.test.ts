@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateProduction, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, organizerPolicySchema, type WorkspaceAnalysis } from '../shared/organizer.ts';
+import { aggregateProduction, aggregateRepositoryProduction, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, organizerPolicySchema, type WorkspaceAnalysis } from '../shared/organizer.ts';
 import { OrganizerModelQueue } from '../server/organizer/model-queue.ts';
 test('production aggregates uncertainty and new discussion instead of declaring all shipped',()=>{
  assert.equal(aggregateProduction(['deployed','deployed']),'deployed');assert.equal(aggregateProduction(['deployed','pending']),'partial');assert.equal(aggregateProduction(['pending','unknown']),'unknown');assert.equal(aggregateProduction(['deployed','discussion']),'partial');assert.equal(aggregateProduction([]),'discussion');
@@ -11,6 +11,12 @@ test('production aggregates uncertainty and new discussion instead of declaring 
 test('host model queue bounds concurrency and drains after individual failures',async()=>{
  const queue=new OrganizerModelQueue(()=>2);let active=0,peak=0;const work=(fail=false)=>queue.run(async()=>{peak=Math.max(peak,++active);try{await new Promise(resolve=>setTimeout(resolve,10));if(fail)throw Error('failure');return true;}finally{active--;}});
  const results=await Promise.allSettled([work(),work(true),work(),work()]);await queue.idle();assert.equal(peak,2);assert.equal(active,0);assert.equal(results.filter(r=>r.status==='fulfilled').length,3);
+});
+test('unchanged repositories do not prevent shipment while a separate new discussion Workspace remains visible',()=>{
+ assert.equal(aggregateRepositoryProduction(['deployed','discussion','discussion']),'deployed');
+ assert.equal(aggregateRepositoryProduction(['discussion','discussion']),'discussion');
+ assert.equal(aggregateRepositoryProduction(['deployed','unknown','discussion']),'unknown');
+ assert.equal(aggregateProduction(['deployed','discussion']),'partial');
 });
 test('representative activity compares instants across commit offsets and UTC dirty-file timestamps',()=>{
  const row=(key:string,at:string)=>({key,material:{state:'pending',activityAt:at}} as WorkspaceAnalysis);

@@ -1,7 +1,7 @@
 import { lstat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { workspaceInstanceKey } from '../../shared/workspace-lineage.ts';
-import { aggregateProduction, type OrganizerEvidence, type RepositoryCoverage, type WorkspaceMaterial } from '../../shared/organizer.ts';
+import { aggregateRepositoryProduction, type OrganizerEvidence, type RepositoryCoverage, type WorkspaceMaterial } from '../../shared/organizer.ts';
 import { Git, withBackgroundGit } from './git.ts';
 import { hash, stable, type Json } from './storage.ts';
 import type { Observation } from './observation.ts';
@@ -156,5 +156,5 @@ export async function workspaceMaterials(observation: Observation, params: Json,
   evidence.push({id:'hint:'+instance,kind:'hint',text:'工作区名称（仅作为弱线索）：'+(workspace.displayName||workspace.id)});
   return { workspaceId: workspace.id, instance, name: workspace.displayName || workspace.id, createdAt: workspace.createdAt || '', activityAt,
     ...(workspace.creator?.agentId ? { creatorAgentId: workspace.creator.agentId } : {}), taskBrief: brief, taskKind: workspace.taskKind,
-    evidence, repositories, fingerprint: hash(stable([brief, workspace.taskKind, fingerprints])), state: aggregateProduction(repositories.map(r => r.state)), complete };
+    evidence, repositories, fingerprint: hash(stable([brief, workspace.taskKind, fingerprints])), state: aggregateRepositoryProduction(repositories.map(r => r.state)), complete };
 }

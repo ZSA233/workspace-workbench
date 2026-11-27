@@ -113,6 +113,11 @@ test("saved workspace selection wins over auto detection and falls back safely",
   assert.deepEqual(resolveWorkspaceSelection({ savedWorkspaceId: "gone", workspaces }), { workspaceId: "saved", source: "first" });
   assert.deepEqual(resolveWorkspaceSelection({ savedWorkspaceId: "removed", workspaces: [workspace("removed", { state: "removed" }), workspace("live")] }), { workspaceId: "live", source: "first" });
 });
+test('a conversation without a usable choice falls back to main instead of an unrelated recently active Workspace',()=>{
+ const workspaces=[workspace('other-conversation-work'),workspace('main')];
+ assert.deepEqual(resolveWorkspaceSelection({savedWorkspaceId:'deleted',fallbackWorkspaceId:'main',workspaces}),{workspaceId:'main',source:'fallback'});
+ assert.deepEqual(resolveWorkspaceSelection({savedWorkspaceId:'other-conversation-work',fallbackWorkspaceId:'main',workspaces}),{workspaceId:'other-conversation-work',source:'saved'});
+});
 
 test("tree rows stay compact and expand only the selected directory", () => {
   const files = [file("src/one.ts"), file("src/two.ts"), file("docs/readme.md"), file("root.txt")];

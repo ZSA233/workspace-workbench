@@ -1,4 +1,4 @@
-import {projectNavigationKey,projectTab,rememberProjectTab,type WorkbenchTab} from './session-navigation';
+import {projectNavigationKey,sessionSelectionKey,projectTab,rememberProjectTab,type WorkbenchTab} from './session-navigation';
 import { WORKSPACE_ACTIVITY_PROTOCOL } from '../shared/workspace-activity';
 import { useTopics } from './use-topics';
 import { TopicsPanel as CommunicationsPanel } from './extensions/project-communications/topics-panel';
@@ -249,6 +249,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   }
   const preferenceScopeKey = projectPreferenceScopeKey(projectConfig, hostWorkspaceId);
   const navigationKey=projectNavigationKey(props.host.id,projectConfig);
+  const selectionScopeKey=sessionSelectionKey(props.host.id,projectConfig,hostWorkspaceId);
   const filesScopeKey = `files:host:${props.host.id}:project:${projectConfig}`;
   const [panelWidth, setPanelWidth] = useState(0);
   const [panelHeight, setPanelHeight] = useState(0);
@@ -269,7 +270,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const styles = useMemo(() => makeStyles(theme, compact), [theme, compact]);
   let preferences: ReturnType<typeof useObserverPreferences>;
   try {
-    preferences = useObserverPreferences(preferenceScopeKey,navigationKey);
+    preferences = useObserverPreferences(preferenceScopeKey,selectionScopeKey);
   } catch (error) {
     reportNativeRenderError("project-panel-preferences-failed", error);
     throw error;
@@ -397,7 +398,7 @@ function ProjectPanel(props: ObserverPanelContentProps & { projectConfig: string
   const onWorkspaceSelected=useCallback(()=>{setSelectedRepoPath("");setTab(current => current === "files" || current === 'cache' || current === 'communications' || current === 'session' ? current : "workspace");},[]);
   const onWorkspaceSelectionLost=useCallback(()=>{setSelectedRepoPath("");setSelectedCommit("");setSelectedFile("");scopeRepositoryIdentity.current="";},[]);
   const activityCapable = backendQuery.data?.readCapabilities?.workspaceActivityProtocol === WORKSPACE_ACTIVITY_PROTOCOL;
-  const {selectionResolved, selectorOpen, fullActivityScan, activityCommandBusy, noteVisibleWorkspaces, noteWorkspaceScroll, cancelFullActivity, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, closeWorkspaceSelector, openWorkspaceSelector, refreshWorkspaceActivity, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,activityCapable,rpc,preferences,preferenceScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
+  const {selectionResolved, selectorOpen, fullActivityScan, activityCommandBusy, noteVisibleWorkspaces, noteWorkspaceScroll, cancelFullActivity, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, closeWorkspaceSelector, openWorkspaceSelector, refreshWorkspaceActivity, identifyQuery, selectWorkspace, selectCreatedWorkspace}=useWorkspaceSelection({projectConfig,foreground,backendReady,activityCapable,rpc,preferences,selectionScopeKey,workspaceDirectory,observationTiming,localizedCopy,onProjectReady:props.onProjectReady,refreshArea,onSelect:onWorkspaceSelected,onSelectionLost:onWorkspaceSelectionLost});
   const communications=useTopics(projectConfig,foreground,tab==='communications'||communicationsSettingsOpen);
   const cacheCapable = backendQuery.data?.readCapabilities?.cacheManagementProtocol === 1;
   const cacheManagement = useCacheManagement({ project: projectConfig, workspaceId: selectedWorkspaceId, enabled: cacheCapable && backendReady && listReady, foreground, visible: tab === 'cache', watching: selectorOpen, rpc });

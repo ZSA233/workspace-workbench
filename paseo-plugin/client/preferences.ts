@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRpc } from "@getpaseo/plugin/client";
+import {savedWorkspaceSelection} from './session-navigation';
 
 import {
   observerSettings,
@@ -89,8 +90,10 @@ export function useObserverPreferences(scopeKey: string,selectionScopeKey=scopeK
   const [settings, setSettings] = useState<SettingsSnapshot>({ status: "loading" });
   const readGeneration = useRef(0);
   const [hydratedKey, setHydratedKey] = useState("");
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
-  const [savedWorkspaceId, setSavedWorkspaceId] = useState("");
+  const [selection,setSelection]=useState({scope:'',id:''});
+  const selectionScope=useRef(selectionScopeKey);selectionScope.current=selectionScopeKey;
+  const selectedWorkspaceId=selection.scope===selectionScopeKey?selection.id:'';
+  const savedWorkspaceId=selectedWorkspaceId;
   const [workspaceView, setWorkspaceView] = useState<'list' | 'tree'>('list');
   const [sectionLayout, setSectionLayout] = useState(defaultObserverSectionLayout);
   const writeQueue = useRef(Promise.resolve());
@@ -98,7 +101,7 @@ export function useObserverPreferences(scopeKey: string,selectionScopeKey=scopeK
   useEffect(() => {
     const receive = (event: PreferenceEvent) => {
       if(event.kind==='selection'){
-        if(event.scope===selectionScopeKey){setSelectedWorkspaceId(event.id);setSavedWorkspaceId(event.id);}return;
+        if(event.scope===selectionScopeKey&&selectionScope.current===selectionScopeKey)setSelection({scope:selectionScopeKey,id:event.id});return;
       }
       if (event.scope !== scopeKey) return;
       if (event.kind === 'workspaceView') {
@@ -163,15 +166,14 @@ export function useObserverPreferences(scopeKey: string,selectionScopeKey=scopeK
   const revision = settings.status === "ready" || settings.status === "invalid"
     ? settings.revision
     : settings.status;
-  const currentHydrationKey = scopeKey;
+  const currentHydrationKey = JSON.stringify([scopeKey,selectionScopeKey]);
 
   useEffect(() => {
     if (!ready) return;
     if (hydratedKey === currentHydrationKey) return;
     const values = settings.status === "ready" ? settings.values : emptySettingsValues();
-    const saved = rememberedSelections.get(selectionScopeKey)??values.selectedWorkspaceByPaseoWorkspace[selectionScopeKey]??values.selectedWorkspaceByPaseoWorkspace[scopeKey]??'';
-    setSavedWorkspaceId(saved);
-    setSelectedWorkspaceId(saved);
+    const saved = rememberedSelections.get(selectionScopeKey)??savedWorkspaceSelection(values.selectedWorkspaceByPaseoWorkspace,selectionScopeKey,scopeKey);
+    setSelection({scope:selectionScopeKey,id:saved});
     setWorkspaceView(values.workspaceViewByScope[scopeKey] || 'list');
     setSectionLayout(
       normalizeObserverSectionLayout(values.sectionLayoutByPaseoWorkspace[scopeKey]),
@@ -216,8 +218,7 @@ export function useObserverPreferences(scopeKey: string,selectionScopeKey=scopeK
   const selectWorkspace = useCallback((id: string): void => {
     rememberedSelections.set(selectionScopeKey,id);
     publishPreference({ scope: selectionScopeKey, kind: "selection", id });
-    setSelectedWorkspaceId(id);
-    setSavedWorkspaceId(id);
+    if(selectionScope.current===selectionScopeKey)setSelection({scope:selectionScopeKey,id});
     persist((values) => ({
       ...values,
       selectedWorkspaceByPaseoWorkspace: {

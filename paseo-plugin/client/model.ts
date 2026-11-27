@@ -238,13 +238,14 @@ export type WorkspaceSummary = {
 
 export type WorkspaceSelectionResolution = {
   workspaceId: string;
-  source: "current" | "saved" | "identified" | "first";
+  source: "current" | "saved" | "identified" | "fallback" | "first";
 };
 
 export function resolveWorkspaceSelection(input: {
   currentWorkspaceId?: string;
   savedWorkspaceId?: string;
   identifiedWorkspaceId?: string | null;
+  fallbackWorkspaceId?: string;
   workspaces: readonly WorkspaceSummary[];
 }): WorkspaceSelectionResolution | null {
   const selectable = input.workspaces.filter((workspace) => workspace.state !== "removed");
@@ -258,6 +259,7 @@ export function resolveWorkspaceSelection(input: {
   if (input.identifiedWorkspaceId && ids.has(input.identifiedWorkspaceId)) {
     return { workspaceId: input.identifiedWorkspaceId, source: "identified" };
   }
+  if(input.fallbackWorkspaceId&&ids.has(input.fallbackWorkspaceId))return {workspaceId:input.fallbackWorkspaceId,source:'fallback'};
   const first = selectable[0];
   return first ? { workspaceId: first.id, source: "first" } : null;
 }

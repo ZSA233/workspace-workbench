@@ -11,7 +11,7 @@ import { observationQueryOptions } from './observation-content';
 import { queryDiagnosticDetails } from './panel/observation-display';
 import type { useObserverPreferences } from './preferences';
 import { useWorkspaceActivity } from './use-workspace-activity';
-export function useWorkspaceSelection({ projectConfig, foreground, backendReady, activityCapable, rpc, preferences, preferenceScopeKey, workspaceDirectory, observationTiming, localizedCopy, onProjectReady, refreshArea, onSelect, onSelectionLost }: {
+export function useWorkspaceSelection({ projectConfig, foreground, backendReady, activityCapable, rpc, preferences, selectionScopeKey, workspaceDirectory, observationTiming, localizedCopy, onProjectReady, refreshArea, onSelect, onSelectionLost }: {
     projectConfig: string;
     foreground: boolean;
     backendReady: boolean;
@@ -21,7 +21,7 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
         params: Record<string, unknown>;
     }) => Promise<ObserverResponse>;
     preferences: ReturnType<typeof useObserverPreferences>;
-    preferenceScopeKey: string;
+    selectionScopeKey: string;
     workspaceDirectory: string;
     observationTiming: ObservationTiming;
     localizedCopy: WorkbenchCopy;
@@ -31,7 +31,9 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
     onSelectionLost: () => void;
 }) {
     const selectedWorkspaceId = preferences.selectedWorkspaceId;
-    const [selectionResolved, setSelectionResolved] = useState(false);
+    const [resolvedScope, setResolvedScope] = useState('');
+    const selectionResolved=resolvedScope===selectionScopeKey;
+    const latestScope=useRef(selectionScopeKey);latestScope.current=selectionScopeKey;
     const [selectorProject, setSelectorProject] = useState('');
     const selectorOpen = foreground && selectorProject === projectConfig && Boolean(projectConfig);
     const closeWorkspaceSelector = useCallback(() => setSelectorProject(''), []);
@@ -43,8 +45,7 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
     }, [foreground, closeWorkspaceSelector]);
     useEffect(closeWorkspaceSelector, [projectConfig, closeWorkspaceSelector]);
     const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>("all");
-    const newlyCreatedWorkspace = useRef<string | null>(null);
-    useEffect(() => setSelectionResolved(false), [preferenceScopeKey]);
+    const newlyCreatedWorkspace = useRef<{scope:string;id:string}|null>(null);
     const listQuery = useQuery({
         queryKey: ["workspace-workbench", projectConfig, "workspace-list"],
         queryFn: () => rpc({ method: "workspace.list", params: { includeRemoved: true } }),
@@ -106,16 +107,17 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
             currentWorkspaceId: selectedWorkspaceId,
             savedWorkspaceId: preferences.savedWorkspaceId,
             identifiedWorkspaceId: identified?.matched ? identified.workspaceId : null,
+            fallbackWorkspaceId:'main',
             workspaces: observedWorkspaces,
         });
         if (!resolution)
             return;
         if (resolution.source === "current" || resolution.source === "saved") {
-            setSelectionResolved(true);
+            setResolvedScope(selectionScopeKey);
             return;
         }
         preferences.selectWorkspace(resolution.workspaceId);
-        setSelectionResolved(true);
+        setResolvedScope(selectionScopeKey);
     }, [
         identifyQuery.data,
         identifyQuery.error,
@@ -127,6 +129,7 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
         preferences.selectWorkspace,
         selectedWorkspaceId,
         selectionResolved,
+        selectionScopeKey,
         workspaceDirectory,
     ]);
     useEffect(() => {
@@ -139,19 +142,20 @@ export function useWorkspaceSelection({ projectConfig, foreground, backendReady,
         }
         // A successful create can precede the last-good roster's React update.
         // Its absence from that older snapshot is not evidence of deletion.
-        if (newlyCreatedWorkspace.current === selectedWorkspaceId)
+        if (newlyCreatedWorkspace.current?.scope===selectionScopeKey&&newlyCreatedWorkspace.current.id===selectedWorkspaceId)
             return;
-        setSelectionResolved(false);
+        setResolvedScope('');
         onSelectionLost();
-    }, [listReady, observedWorkspaces, preferences.hydrated, selectedWorkspaceId, selectionResolved, workspaceFilter]);
+    }, [listReady, observedWorkspaces, preferences.hydrated, selectedWorkspaceId, selectionResolved, selectionScopeKey, workspaceFilter]);
     function selectWorkspace(id: string): void {
-        if (newlyCreatedWorkspace.current !== id)
+        if (newlyCreatedWorkspace.current?.scope!==selectionScopeKey||newlyCreatedWorkspace.current.id!==id)
             newlyCreatedWorkspace.current = null;
         preferences.selectWorkspace(id);
-        setSelectionResolved(true);
+        if(latestScope.current!==selectionScopeKey)return;
+        setResolvedScope(selectionScopeKey);
         onSelect();
         closeWorkspaceSelector();
     }
-    const selectCreatedWorkspace = (id: string) => { newlyCreatedWorkspace.current = id; selectWorkspace(id); };
+    const selectCreatedWorkspace = (id: string) => { newlyCreatedWorkspace.current={scope:selectionScopeKey,id};selectWorkspace(id); };
     return { selectionResolved, selectorOpen, fullActivityScan: activity.fullScan, activityCommandBusy: activity.commandBusy, noteVisibleWorkspaces: activity.noteVisible, noteWorkspaceScroll: activity.noteScroll, cancelFullActivity, workspaceFilter, setWorkspaceFilter, listQuery, listState, listResult, listFailure, listReady, listContentState, listUnavailable, observedWorkspaces, allWorkspaces, historyWorkspaces, visibleWorkspaces, closeWorkspaceSelector, openWorkspaceSelector, refreshWorkspaceActivity, identifyQuery, selectWorkspace, selectCreatedWorkspace };
 }

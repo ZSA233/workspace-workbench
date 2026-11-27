@@ -41,5 +41,5 @@ export function sessionAssociations(ledger:OrganizerLedger,target:OrganizerTarge
   const workspaces=eligibleAssociationWorkspaces(rows).map(row=>({key:row.instanceKey,id:row.id,name:row.displayName||row.id,title:ledger.workspaces[row.instanceKey]?.digest?.title,linked:target.workspaceKeys.includes(row.instanceKey),source:target.workspaceLinks?.[row.instanceKey]?.source}));
   // Model progress and title edits do not invalidate a selection dialog. A scope
   // edit or a replaced Workspace instance does.
-  return {targetId:target.id,revision:organizerHash([target.id,target.workspaceLinks,workspaces.map(row=>[row.key,row.id]).sort((a,b)=>a[0].localeCompare(b[0]))]),workspaces};
+  return {targetId:target.id,title:target.currentTitle,revision:organizerHash([target.id,target.workspaceLinks,workspaces.map(row=>[row.key,row.id]).sort((a,b)=>a[0].localeCompare(b[0]))]),workspaces};
 }

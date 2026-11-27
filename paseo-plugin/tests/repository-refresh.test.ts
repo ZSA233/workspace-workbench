@@ -131,17 +131,19 @@ test('the shared UI job client returns partial regions and late results stay in 
 
 test('manual refresh does not join a pre-change in-flight observation while the watcher token is unchanged', async () => {
   const f = fixture(), original = Git.prototype.run;
-  let release!: () => void;
+  let release!: () => void, started!: () => void;
+  const inFlight = new Promise<void>(resolve => { started = resolve; });
   const gate = new Promise<void>(resolve => { release = resolve; }); let block = true;
   Git.prototype.run = async function(...args) {
     const result = await original.apply(this, args);
-    if (block && args[0][0] === 'log') { block = false; await gate; }
+    if (block && args[0][0] === 'log') { block = false; started(); await gate; }
     return result;
   };
   try {
     const id = (await f.service.handle('workspace.list', {})).workspaces[0].id;
     const input = { workspaceId: id, repoPath: 'one', scope: 'working', historyMode: 'full' };
     const old = await f.service.handle('observer.refresh', { ...input, requestId: 'old', prefetch: true });
+    await inFlight;
     writeFileSync(join(f.root, 'one/file'), 'new commit\n'); git(join(f.root, 'one'), 'add', 'file'); git(join(f.root, 'one'), 'commit', '-qm', 'new commit');
     const head = git(join(f.root, 'one'), 'rev-parse', 'HEAD');
     const current = await finish(f.service, { ...input, requestId: 'manual', force: true });

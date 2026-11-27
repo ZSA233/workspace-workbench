@@ -27,3 +27,9 @@
 界面测试命令为 `node paseo-plugin/scripts/verify-organizer-ui.mjs`。最终截图与报告保存在本机临时目录 `wb-session-ui-kN9Pm8`，包括 `automatic-on-queued.png`、`automatic-on-generating.png`、`automatic-off-during-generation.png` 与 `report.json`，不把临时产物提交到仓库。
 
 本轮不改变模型、提示词、Git 覆盖算法、Workspace ID 或关联规则。模型实际生成耗时仍取决于材料和本地服务；本轮验证的是授权及交互不再被生成等待阻塞。未知结果的写入仍需要显式核对。
+
+## 正常安装核对
+
+[Release 46032885247](https://github.com/ZSA233/workspace-workbench/actions/runs/46032885247) 通过并推进 stable 后，使用正式安装器更新本机。HTTPS 克隆两次触发宿主的 120 秒超时；随后仅对本仓库临时切换 Git SSH 传输，再次使用正式安装器成功，临时 URL 规则已移除并核对恢复。安装来源仍为原 GitHub 仓库，运行 commit 为 `79b8d8266192cfbbd71d232a37036d8620e21166`。
+
+本机插件、客户端源文件、RPC 输入与后端版本均核对为 0.13.14；客户端包含即时开关处理，RPC 接受 `enabled: true`。两个原已开启维护的真实 YUVA 会话保持开启，标题分别为「🟢 币商中心重做与部署」和「🔴 ✎ 关系迁移与退款」，缓存检查模型调用为零。模型连接、秘密、关联与已接受标题正文核对保留；未为验证关闭、重新开启或改写用户会话。

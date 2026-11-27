@@ -21,6 +21,8 @@ function fixture(){
 
 test('roster has no synchronous filesystem or worktree traversal dependency',async()=>{
  const f=fixture();
+ const fileDirectory=join(f.root,'one');
+ fs.writeFileSync(join(f.workspaces.config.stateRoot,'file-browser.json'),JSON.stringify({schemaVersion:1,mainDirectory:fileDirectory}));
  const methods=['readFileSync','readdirSync','realpathSync','existsSync','lstatSync'] as const;
  const saved=new Map(methods.map(name=>[name,fs[name]]));
  let calls=0;
@@ -29,6 +31,7 @@ test('roster has no synchronous filesystem or worktree traversal dependency',asy
   syncBuiltinESMExports();
   const rows=await f.workspaces.roster();
   assert.equal(rows.length,2);assert.equal(rows.find(w=>w.id==='saved')?.history.unknown,'preserved');
+  assert.equal(rows.find(w=>w.id==='main')?.fileRoot,fileDirectory);
   assert.equal(calls,0);
  }finally{
   for(const [name,value] of saved)(fs as any)[name]=value;

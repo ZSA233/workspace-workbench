@@ -2,6 +2,16 @@
 
 日期：2026-10-22。使用说明见 [FILES.md](../paseo-plugin/FILES.md)。
 
+## 2026-11-28：主目录自动识别与独立文件视图
+
+文件工具栏增加「当前 Workspace／主工作区」位置入口，文件浏览可以单独切到主目录，上方 Workspace、Git 与执行目标保持独立。右上角菜单及文件位置菜单均提供「文件目录设置」，支持自动识别、当前宿主目录和主机目录选择器。覆盖值保存在项目状态中，保留原多仓库 `sourceRoot` 和 schema-v1 记录。
+
+- 类型检查通过；本次涉及的 **205 项不同 Node 回归通过**。新增 6 项真实临时 Git／客户端状态回归覆盖公共父目录过大、普通 worktree 不受影响、未知记录字段保留、设置冲突、旧实例写入隔离、未完成任务保护、目录分页和文档失效。Reviewer、handoff 材料和运行时环境回归使用各自已有的受控 Agent/session 测试，不属于真实模型执行证据。
+- `verify-files-ui.mjs` 经 `verify-live.mjs` 在隔离 Paseo home 和项目注册表中加载实际插件：宿主 **19 项检查通过**，Chromium **28 项交互检查通过**，页面与控制台错误均为 0。新增交互检查覆盖文件视图切换、筛选状态保留、主机目录选择与恢复自动目录；原有上传、下载、ZIP、拖拽及恢复检查同时通过。
+- 宽泛 `sourceRoot` 与本地项目主目录的分离使用 Node 真实临时 Git 仓库验证；实际宿主 UI 验证目录设置和独立视图的传输链路。没有把两者合并表述为真实会话模型执行。
+- 对实际 `communications-service` 配置的只读核验得到：Git 范围仍为 `/Volumes/data2/projects`，自动文件目录为 `/Volumes/data2/projects/zsa233/communications-service`。未修改该配置，也未更新或重载用户正在使用的插件。
+- 可复现产物位于 `.local/verification/files/`：`files-ui-report.json`、`files-ui-host.log`、`file-main-peek.png` 和 `file-directory-settings.png`。本机已安装浏览器通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定；Windows 原生与手机设备不在此次新增的实机证据范围内。
+
 ## 已实现
 
 现有 Workspace 选择器下新增「文件」Tab，原来的 Git 页仍为默认页。文件树直接切换主工作区与各 Workspace，显示真实目录和未跟踪文件；按需展开、分页、虚拟化，各空间记忆选择、展开与位置。

@@ -7,7 +7,7 @@ import { fileRequest, type DirectoryPage, type FileEntry } from '../../shared/fi
 import { FileRoots, fileVersion, fileStat } from './file-roots.ts';
 import { FileTasks } from './file-tasks.ts';
 import { terminal } from './file-journal.ts';
-import { hash, stable, WorkbenchError, type Json } from './storage.ts';
+import { canonical, hash, stable, WorkbenchError, type Json } from './storage.ts';
 import type { Workspaces } from './workspaces.ts';
 import type { ObservationCache } from './cache.ts';
 import { FileDecorationsService } from './file-decorations.ts';
@@ -15,6 +15,7 @@ import { RepositoryStatus } from './repository-status.ts';
 import { ObservationScheduler } from './observation-scheduler.ts';
 import { Documents } from './documents.ts';
 import { SyntaxService } from './syntax-service.ts';
+import { browseDirectories, configureFileBrowser, fileBrowserSettings } from './file-browser.ts';
 
 export class WorkspaceFiles {
   readonly roots: FileRoots;
@@ -45,7 +46,7 @@ export class WorkspaceFiles {
   private changed(id: string, paths: string[]) {
     if (this.closed) return;
     let workspace: Json; try { workspace = this.workspaces.get(id); } catch { return; }
-    const root = workspace.treePath || workspace.sourceRoot;
+    const root = workspace.id === 'main' && workspace.fileRoot || workspace.treePath || workspace.sourceRoot;
     const fullPaths = paths.map(path => join(root, path));
     for (const [full, directory] of this.directories) if (directory.owners.has(id) && fullPaths.some(path => full === dirname(path) || full === path)) directory.revision++;
     let batch = this.changes.get(id);
@@ -75,6 +76,20 @@ export class WorkspaceFiles {
     const parsed = fileRequest.safeParse(raw);
     if (!parsed.success) throw new WorkbenchError('file_request_invalid', 'Invalid file request', parsed.error.issues.map(i => ({ path: i.path, message: i.message })));
     const input = parsed.data;
+    if (input.action === 'browser-settings') return fileBrowserSettings(this.workspaces.config);
+    if (input.action === 'browse-directories') return browseDirectories(input.directory, input.cursor);
+    if (input.action === 'browser-configure') return this.workspaces.mutations.run(async () => {
+      const before = fileBrowserSettings(this.workspaces.config);
+      const target = input.mainDirectory === null ? before.automaticDirectory : canonical(input.mainDirectory);
+      if (target !== before.effectiveDirectory && this.tasks.active('main').length)
+        throw new WorkbenchError('workspace_file_task_active', 'Finish or cancel main workspace file tasks before changing its directory');
+      const settings = await configureFileBrowser(this.workspaces.config, input.revision, input.mainDirectory);
+      if (settings.effectiveDirectory !== before.effectiveDirectory) { this.retire('main'); this.ownScheduler?.activateWorkspace('main'); }
+      this.cache.invalidateWorkspace('main');
+      this.workspaces.observationRecords.invalidate();
+      this.onChanged('main', [settings.effectiveDirectory]);
+      return settings;
+    });
     if (input.action === 'upload') return this.workspaces.mutations.run(() => this.tasks.upload(input));
     if (input.action === 'chunk') return this.tasks.chunk(input);
     if (input.action === 'finish') { await this.tasks.finish(input.id); return this.tasks.settled(input.id); }

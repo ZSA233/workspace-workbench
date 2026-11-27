@@ -78,6 +78,7 @@ export function LayoutMenu({
   onCreate,
   onSwitchProject,
   onOpenStorage,
+  onOpenFileDirectories,
   fullActivity,
   onOpenExtensions,
   onOpenModelSettings,
@@ -102,6 +103,7 @@ export function LayoutMenu({
   onCreate?: () => void;
   onSwitchProject?: () => void;
   onOpenStorage?: () => void;
+  onOpenFileDirectories?: () => void;
   fullActivity?: { scan: WorkspaceActivityScan | null; busy: boolean; start(): void; cancel(): void };
   onOpenExtensions?: () => void;
   onOpenModelSettings?:()=>void;
@@ -119,6 +121,7 @@ export function LayoutMenu({
   styles: ReturnType<typeof makeStyles>;
 }) {
   const localizedCopy = useWorkbenchCopy();
+  const zh = useWorkbenchLocale() === 'zh-CN';
   const timestamp = (value: string | null | undefined) => {
     if (!value) return localizedCopy.text_6478dde454;
     const parsed = Date.parse(value);
@@ -152,6 +155,7 @@ export function LayoutMenu({
     {onOpenExtensions ? <LayoutMenuItem label="扩展管理" onPress={onOpenExtensions} styles={styles} /> : null}
     {onOpenModelSettings?<LayoutMenuItem label="模型设置" onPress={onOpenModelSettings} styles={styles}/>:null}
     {onOpenStorage ? <LayoutMenuItem label={localizedCopy.storageMenu} onPress={onOpenStorage} styles={styles} /> : null}
+    {onOpenFileDirectories ? <LayoutMenuItem label={zh ? '文件目录设置' : 'File directory settings'} onPress={onOpenFileDirectories} styles={styles} /> : null}
     {onOpenExecution?<LayoutMenuItem label={localizedCopy.executionMenu} onPress={onOpenExecution} styles={styles}/>:null}
     {runtimeNotice}
     {onOpenRuntimeSettings ? <LayoutMenuItem label={localizedCopy.runtimeSettingsMenu} onPress={onOpenRuntimeSettings} styles={styles} /> : null}

@@ -27,9 +27,10 @@ export function useActiveDocument(host:string){return useSyncExternalStore(f=>{l
 export function useDocumentReturn(scope:string){return useSyncExternalStore(f=>{listeners.add(f);return()=>{listeners.delete(f);};},()=>returns.get(scope));}
 export function consumeDocumentReturn(scope:string,target:DocumentSelection){if(returns.get(scope)===target){returns.delete(scope);emit();}}
 export function clearDocuments(host:string){for(const s of selections.get(host)||[])clearDocumentCache(s.scope,s.workspaceId);selections.delete(host);active.delete(host);emit();}
-export function reconcileDocuments(scope:string,workspaces:{id:string;state?:string;instanceKey?:string}[]){
+export function reconcileDocuments(scope:string,workspaces:{id:string;state?:string;instanceKey?:string;fileRoot?:string}[]){
   if(workspaces.some(w=>w.state==='record_invalid'))return;
   const live=new Map(workspaces.filter(w=>w.state!=='removed').map(w=>[w.id,w]));
-  const target=returns.get(scope);if(target&&(!live.has(target.workspaceId)||live.get(target.workspaceId)?.instanceKey&&!target.instance.startsWith(live.get(target.workspaceId)!.instanceKey!+':'))){returns.delete(scope);emit();}
-  for(const values of selections.values())for(const s of values)if(s.scope===scope&&(!live.has(s.workspaceId)||live.get(s.workspaceId)?.instanceKey&&!s.instance.startsWith(live.get(s.workspaceId)!.instanceKey!+':'))){clearDocumentCache(s.scope,s.workspaceId);closeDocument(s);}
+  const invalid=(s:DocumentSelection)=>{const workspace=live.get(s.workspaceId);return !workspace||workspace.instanceKey&&!s.instance.startsWith(workspace.instanceKey+':')||workspace.fileRoot&&workspace.fileRoot!==s.directory;};
+  const target=returns.get(scope);if(target&&invalid(target)){returns.delete(scope);emit();}
+  for(const values of selections.values())for(const s of values)if(s.scope===scope&&invalid(s)){clearDocumentCache(s.scope,s.workspaceId);closeDocument(s);}
 }

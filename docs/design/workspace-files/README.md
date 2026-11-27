@@ -15,7 +15,7 @@
 | 内容 | 已有依据 | 对本次功能的意义 |
 | --- | --- | --- |
 | 现有面板与主区域 | `paseo-plugin/index.client.tsx` 注册 Explorer、workspace 面板及 surface | 可以在现有 Workbench 增加「文件」页，也能提供展开视图；Explorer 在宿主中的物理位置由宿主决定 |
-| Workspace 根目录 | `server/backend/workspace-directory.ts` 的 `mainWorkspace()`，以及 `client/model.ts` 的 `sourceRoot` / `treePath` | 主工作区以 `sourceRoot` 为根；普通 Workspace 以自己的 `treePath` 为根，不需要从主目录逐层寻找 worktree |
+| Workspace 根目录 | `server/backend/workspace-directory.ts` 的 `mainWorkspace()`，以及 `client/model.ts` 的 `fileRoot` / `sourceRoot` / `treePath` | 主文件目录独立于多仓库 `sourceRoot`，本地配置默认使用所属项目目录，也可在设置里选择；普通 Workspace 以自己的 `treePath` 为根 |
 | 多仓库目录 | Workspace 记录保存 `repositories[].worktreePath` | 文件树展示实际目录，仓库节点加标记；非 Git 文件同样可见，不按 Git 变更列表生成树 |
 | 插件服务端文件访问 | Node 后端、现有 `server.handle()` 与 `useRpc()` | 常规文件操作可走插件的已认证 RPC，无需另开公开上传端口或要求用户配置 SSH |
 | Paseo 底层文件接口 | 已安装 `@getpaseo/client` 的 `daemon-client.d.ts`：`listDirectory`、`readFile`、`createFileEntry`、`renameFileEntry`、`duplicateFileEntry`、`deleteFileEntry` | 宿主具备文件管理基础，但不能据此认定插件公开 API 已暴露这些方法 |
@@ -43,7 +43,7 @@
 ## 共同交互约定
 
 - 根目录绑定 `{hostId, projectConfig, workspaceId}`，由服务端解析实际路径。不能信任客户端提供的绝对路径。
-- 选择某个 Workspace 后，直接显示它自己的根目录；切回主工作区直接显示 `sourceRoot`。各自记忆展开节点和当前目录。
+- 选择某个 Workspace 后，默认显示它自己的根目录；文件工具栏可单独切到主工作区，保持 Git 和执行目标不变。主目录自动识别，也可用设置里的主机目录选择器覆盖；各自记忆展开、筛选和当前目录。
 - 拖到目录行就上传到该目录；拖到根节点或明确的根目录空白区就上传到根。上传按钮使用当前选中目录，未选目录时使用根。拖入文件行时明确显示其父目录。
 - 拖拽只在可写目录上显示落点和目的地；悬停可展开目录，尚未释放时不创建任务。桌面外部文件与树内移动区分处理。
 - **任务在加入队列时固定目的 Workspace 和目录。** 切换视图只改变浏览对象，不改变已经排队的目的地。

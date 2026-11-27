@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { type Config } from "./config.ts";
 import { childPath, commitGitlinks } from "./gitlinks.ts";
 import { RecordCatalog } from './record-catalog.ts';
+import { fileBrowserSettingsPath, mainFileDirectory } from './file-browser.ts';
 import { displayRecordPaths, filesystemRecordPaths } from './record-paths.ts';
 import { inside, issue, WorkbenchError, type Json } from "./storage.ts";
 import type { WorkspaceCatalog } from './workspace-catalog.ts';
@@ -66,20 +67,22 @@ export class WorkspaceDirectory {
     private recordValidationMs = 0;
     recordReadHealth() { return { ...this.recordCatalog.health(), validationMs: this.recordValidationMs }; }
     async roster(): Promise<Json[]> {
-        const rows = await this.recordCatalog.read(this.deps.config().recordsRoot, [this.deps.catalog.mainSelectionPath(), this.deps.catalog.linkedSelectionPath()]);
+        const browserSettingsPath = fileBrowserSettingsPath(this.deps.config());
+        const rows = await this.recordCatalog.read(this.deps.config().recordsRoot, [this.deps.catalog.mainSelectionPath(), this.deps.catalog.linkedSelectionPath(), browserSettingsPath]);
         const start = performance.now();
         try {
             const selections = new Map(rows.map(row => [row.path, row.value]));
             const records = rows.filter(row => dirname(row.path) === this.deps.config().recordsRoot);
             return this.assembleList(records.map(({ path, value }) => value && this.deps.records.validateRecord(path, value, displayRecordPaths) || this.deps.records.invalidRecord(path)), {
                 main: selections.get(this.deps.catalog.mainSelectionPath()) || null, linked: selections.get(this.deps.catalog.linkedSelectionPath()) || null,
+                fileBrowser: selections.get(browserSettingsPath) || null,
             }, displayRecordPaths);
         }
         finally {
             this.recordValidationMs = performance.now() - start;
         }
     }
-    mainWorkspace(snapshot?: Json | null, paths = filesystemRecordPaths): Json {
+    mainWorkspace(snapshot?: Json | null, paths = filesystemRecordPaths, fileBrowserSnapshot?: Json | null): Json {
         const c = this.deps.config();
         return {
             id: "main",
@@ -90,6 +93,7 @@ export class WorkspaceDirectory {
             state: "active",
             sourceRoot: c.sourceRoot,
             treePath: c.sourceRoot,
+            fileRoot: mainFileDirectory(c, fileBrowserSnapshot, paths.canonical),
             repositories: this.deps.catalog.mainRepositories(snapshot, paths),
             createdAt: null,
             updatedAt: null,
@@ -104,8 +108,9 @@ export class WorkspaceDirectory {
     assembleList(records: Json[], snapshots?: {
         main: Json | null;
         linked: Json | null;
+        fileBrowser: Json | null;
     }, paths = filesystemRecordPaths): Json[] {
-        const main = this.mainWorkspace(snapshots?.main, paths);
+        const main = this.mainWorkspace(snapshots?.main, paths, snapshots?.fileBrowser);
         records.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
         const linked = this.deps.catalog.linkedSelection(snapshots?.linked, paths).roots.map((entry: Json) => this.deps.catalog.linkedWorkspace(entry, paths));
         return [main, ...linked, ...records];

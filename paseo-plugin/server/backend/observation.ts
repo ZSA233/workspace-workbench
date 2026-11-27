@@ -162,6 +162,7 @@ export class Observation {
       ...(workspace.deletion ? { deletion: workspace.deletion } : {}),
       sourceRoot: workspace.sourceRoot,
       treePath: workspace.treePath,
+      ...(workspace.id === 'main' && workspace.fileRoot ? { fileRoot: workspace.fileRoot } : {}),
       workspaceBranchLabel: workspaceBranchLabel(workspace),
       ...currentRef,
       repositoryCount: roster ? workspace.repositories.length : observed.length,

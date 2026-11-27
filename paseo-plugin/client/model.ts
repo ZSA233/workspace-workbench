@@ -210,6 +210,7 @@ export type WorkspaceSummary = {
   managed?: boolean;
   sourceRoot?: string;
   treePath?: string;
+  fileRoot?: string;
   description: string;
   state: string;
   createdAt?: string | null;

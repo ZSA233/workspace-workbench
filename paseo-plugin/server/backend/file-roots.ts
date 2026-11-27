@@ -17,7 +17,7 @@ export class FileRoots {
     const workspace = this.workspaces.get(workspaceId);
     if (workspace.state !== 'active') throw new WorkbenchError('workspace_state_invalid', 'Workspace is not active');
     if (write && workspace.kind === 'linked-live') throw new WorkbenchError('files_read_only', 'This aggregate Workspace is read-only');
-    const root = await realpath(String(workspace.treePath || workspace.sourceRoot));
+    const root = await realpath(String(workspace.id === 'main' && workspace.fileRoot || workspace.treePath || workspace.sourceRoot));
     const identity = workspaceInstanceKey(workspace as Json & { id: string }) + ':' + hash(root);
     if (instance && instance !== identity) throw new WorkbenchError('workspace_instance_changed', 'Workspace instance changed; select it again');
     return { workspace, root, instance: identity, repositories: new Set((workspace.repositories || []).map((r: Json) => resolve(r.worktreePath || r.sourcePath))) };

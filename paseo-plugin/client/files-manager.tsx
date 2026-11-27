@@ -1,4 +1,4 @@
-import { createElement, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createElement, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { View, Text, Pressable, Platform, useWindowDimensions } from 'react-native';
 import { Modal, FlatList, TextInput, ScrollView } from './native-components';
 import { useWorkbenchLocale } from './i18n';
@@ -15,13 +15,14 @@ import { destinationInsideSource, unchangedFileMove, type FileLocation } from '.
 
 const noSubscription = () => () => {};
 const parent = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
-export default function FilesManager({ scope, workspace, store, theme, decorationsEnabled = false, foreground = true, sortedListing = false, onOpenDocument }: { scope: string; workspace: any; store: FileTransferStore; theme: any; decorationsEnabled?: boolean; foreground?: boolean; sortedListing?: boolean; onOpenDocument?:(path:string,instance:string)=>void }) {
+export default function FilesManager({ scope, workspace, store, theme, decorationsEnabled = false, foreground = true, sortedListing = false, onOpenDocument, toolbarStart }: { scope: string; workspace: any; store: FileTransferStore; theme: any; decorationsEnabled?: boolean; foreground?: boolean; sortedListing?: boolean; onOpenDocument?:(path:string,instance:string)=>void; toolbarStart?: ReactNode }) {
   const zh = useWorkbenchLocale() === 'zh-CN', c = theme.colors;
   const { fontScale } = useWindowDimensions();
   const dense = Platform.OS === 'web' && !(globalThis as any).matchMedia?.('(pointer: coarse)').matches;
   const rowHeight = Math.max(dense ? 22 : 30, Math.ceil(16 * fontScale) + 6), indent = dense ? 12 : 15;
   const clipboard = useSyncExternalStore(subscribeFileClipboard, getFileClipboard);
   const tree = useMemo(() => filesTreeState(scope, workspace.id), [scope, workspace.id]);
+  useLayoutEffect(() => tree.setBaseDirectory(workspace.fileRoot), [tree, workspace.fileRoot]);
   const revision = useSyncExternalStore(foreground ? tree.subscribe : noSubscription, tree.snapshot);
   const filter = tree.filter;
   const [menu, setMenu] = useState<string | null>(null), [dialog, setDialog] = useState<'mkdir' | 'rename' | 'delete' | null>(null), [name, setName] = useState(''), [error, setError] = useState(''), [drop, setDrop] = useState<string | null>(null), [preview, setPreview] = useState<{ name: string; text: string; size: number } | null>(null);
@@ -222,6 +223,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   };
   const body = <View style={{ flex: 1, minHeight: 0 }}>
     <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', paddingHorizontal: 3, borderBottomWidth: 1, borderBottomColor: c.border || '#ffffff18' }}>
+      {toolbarStart}
       {button(zh ? '↑ 上传' : '↑ Upload', () => pickFiles(false, files => run(() => upload(files, targetPath))), readOnly || !tree.instance, true)}
       {Platform.OS === 'web' ? button(zh ? '上传目录' : 'Upload folder', () => pickFiles(true, files => run(() => upload(files, targetPath))), readOnly || !tree.instance, true) : null}
       {button(zh ? '+ 文件夹' : '+ Folder', () => showDialog('mkdir'), readOnly || !tree.instance, true)}

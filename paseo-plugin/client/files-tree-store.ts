@@ -19,6 +19,7 @@ export class FilesTreeState {
   get canGoBack() { return this.history.length > 0; }
   get backFilter() { return this.history.at(-1)?.filter || ''; }
   instance = '';
+  baseDirectory?: string;
   error = '';
   refreshing = new Set<string>();
   private flights = new Map<string, Promise<void>>();
@@ -41,13 +42,17 @@ export class FilesTreeState {
   constructor(key: string, workspaceId: string) {
     this.key = key; this.workspaceId = workspaceId;
     this.decorations = new FilesDecorationsState(workspaceId, () => this.instance, () => this.emit('view'));
-    const saved = readPreference(key); if (saved) { this.root = typeof saved.root === 'string' ? saved.root : ''; this.filter = typeof saved.filter === 'string' ? saved.filter : ''; this.filterBrowsed = new Set(this.filter ? saved.filterBrowsed || [] : []); this.expanded = new Set([this.root, ...(saved.expanded || [])]); this.selected = new Set(saved.selected || []); this.scroll = saved.scroll || 0; this.instance = saved.instance || ''; }
+    const saved = readPreference(key); if (saved) { this.baseDirectory = saved.baseDirectory; this.root = typeof saved.root === 'string' ? saved.root : ''; this.filter = typeof saved.filter === 'string' ? saved.filter : ''; this.filterBrowsed = new Set(this.filter ? saved.filterBrowsed || [] : []); this.expanded = new Set([this.root, ...(saved.expanded || [])]); this.selected = new Set(saved.selected || []); this.scroll = saved.scroll || 0; this.instance = saved.instance || ''; }
   }
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   snapshot = () => this.revision;
   emit(kind: 'structure' | 'view' = 'structure') { if(kind==='structure')this.structureRevision++; this.revision++; this.listeners.forEach(fn => fn()); }
-  save() { writePreference(this.key, { instance: this.instance, root: this.root, filter: this.filter, filterBrowsed: [...this.filterBrowsed], expanded: [...this.expanded], selected: [...this.selected], scroll: this.scroll }); }
+  save() { writePreference(this.key, { baseDirectory: this.baseDirectory, instance: this.instance, root: this.root, filter: this.filter, filterBrowsed: [...this.filterBrowsed], expanded: [...this.expanded], selected: [...this.selected], scroll: this.scroll }); }
   clear() { this.epoch++; this.history = []; this.root = ''; this.filter = ''; this.filterBrowsed.clear(); this.navigationRevision++; this.sortReady.clear(); this.directoryEpochs.clear(); this.dirty.clear(); this.flights.clear(); this.refreshing.clear(); this.changesFlight = undefined; this.decorations.clear(); this.pages.clear(); this.expanded = new Set(['']); this.selected.clear(); this.scroll = 0; this.instance = ''; removePreference(this.key); this.emit(); }
+  setBaseDirectory(directory: string | undefined) {
+    if (directory === undefined || this.baseDirectory === directory) return;
+    this.clear(); this.baseDirectory = directory; this.save();
+  }
   setFilter(filter: string) {
     if (this.filter === filter) return;
     this.filter = filter; this.filterBrowsed.clear(); this.scroll = 0; this.navigationRevision++;
@@ -228,11 +233,12 @@ const states = new Map<string, FilesTreeState>();
 export function filesTreesChanged(scope: string, changes: FileChange[], rpc: FilesCall) {
   for (const [key, state] of states) if (key.startsWith(scope + ':files-tree:')) for (const change of changes) state.changed(change, rpc);
 }
-export function filesTreeState(scope: string, workspaceId: string) {
+export function filesTreeState(scope: string, workspaceId: string, baseDirectory?: string) {
   const key = scope + ':files-tree:' + workspaceId;
   const keys: string[] = readPreference(scope + ':files-tree-keys') || [];
   if (!keys.includes(workspaceId)) writePreference(scope + ':files-tree-keys', [...keys, workspaceId]);
   let state = states.get(key); if (!state) { state = new FilesTreeState(key, workspaceId); states.set(key, state); }
+  state.setBaseDirectory(baseDirectory);
   states.delete(key); states.set(key, state);
   if (states.size > 128) states.delete(states.keys().next().value!);
   return state;

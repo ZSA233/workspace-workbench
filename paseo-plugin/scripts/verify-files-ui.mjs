@@ -10,6 +10,7 @@ import { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import WebSocket from 'ws';
 import { openGlobalWorkbench } from './ui-project-selection.mjs';
 import { verifyFileNoticesUi } from './verify-files-notices-ui.mjs';
+import { verifyFileWorkspacesUi } from './verify-file-workspaces-ui.mjs';
 const plugin = resolve(import.meta.dirname, '..'), output = resolve(process.env.WORKBENCH_VERIFY_OUTPUT || join(plugin, '../.local/verification/files'));
 await mkdir(output, { recursive: true });
 let child, client, browser, ui, logs = '';
@@ -31,7 +32,7 @@ try {
   const rpc = async request => { const response = await client.invokePluginRpc('workspace-workbench-paseo', 'workspace.workbench.files', { projectConfig, request }); assert.ok(response.ok, JSON.stringify(response.error)); return response.result; };
   const observer = async (method, params={}) => { const response = await client.invokePluginRpc('workspace-workbench-paseo', 'workspace.workbench.query', { projectConfig, method, params }); assert.ok(response.ok, JSON.stringify(response.error)); return response.result; };
   const created = await observer('workspace.create', { name: 'file-proof-space', repositories: ['one'] });
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } }); page.on('pageerror', e => report.errors.push(e.message));
   page.on('console', message => { if (['warning', 'error'].includes(message.type())) report.console.push({ type: message.type(), text: message.text() }); });
   await page.addInitScript(() => {
@@ -61,6 +62,7 @@ try {
   assert.ok(filesBox.x > gitBox.x && filesBox.x < gitBox.x + gitBox.width + 24, 'Files is immediately right of Git');
   check('Git is the default tab and Files follows it immediately');
   await page.getByText('Files', { exact: true }).click(); await page.locator('[data-file-path=""]').waitFor({ timeout: 20000 }); await page.locator('[data-file-path="one"]').waitFor({timeout:20000});
+  if (process.env.WORKBENCH_FILES_NOTICES_ONLY !== '1') await verifyFileWorkspacesUi({ page, ui, created, rpc, output, report, check });
   const rootEntry = page.locator('[data-file-path=""]');
   await verifyFileNoticesUi({ page, ui, output, report, check });
   if (process.env.WORKBENCH_FILES_NOTICES_ONLY !== '1') {

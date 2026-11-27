@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { fileBrowserRequests } from './file-browser.ts';
 
 export const FILE_CHUNK_BYTES = 512 * 1024;
 const id = z.string().min(1).max(128).regex(/^[a-zA-Z0-9_-]+$/);
@@ -8,6 +9,7 @@ const entry = z.object({ ...scope, path, version: z.string().optional() });
 const batchId = z.string().max(128).optional();
 const policy = z.enum(['ask', 'replace', 'keep']).default('ask');
 export const fileRequest = z.discriminatedUnion('action', [
+  ...fileBrowserRequests,
   z.object({ action: z.literal('list'), ...scope, path, listingProtocol:z.literal(2).optional(), order:z.enum(['native','sorted']).optional(), cursor: z.string().optional(), limit: z.number().int().min(1).max(200).default(200), fresh: z.boolean().default(false) }),
   z.object({ action: z.literal('versions'), ...scope, listingProtocol:z.literal(2).optional(), paths: z.array(z.string()).max(200).default([]) }),
   z.object({ action: z.literal('decorations'), ...scope, paths: z.array(z.string().max(32768)).max(200), force: z.boolean().default(false) }),
@@ -39,4 +41,4 @@ export type DirectoryPage = { workspaceId: string; instance: string; path: strin
 export type FileTaskState = 'queued' | 'preparing' | 'active' | 'paused' | 'interrupted' | 'conflict' | 'ready_to_save' | 'complete' | 'cancelled' | 'failed' | 'delegated';
 export type FileChange = { workspaceId: string; instance: string; paths: string[]; removed?: string[] };
 export type FileTask = { id: string; batchId?: string; cleanupPending?: boolean; canReplace?: boolean; conflict?: 'exists' | 'changed'; direction: 'upload' | 'download' | 'operation'; operation?: string; workspaceId: string; instance: string; workspaceName: string; path: string; name: string; size: number | null; offset: number; state: FileTaskState; createdAt: number; updatedAt: number; error?: string; sha256?: string; files?: number; processed?: number; excluded?: number; modifiedAt?: number; sourceName?: string; nextOffset?: number; changes?: FileChange[]; selectionPending?: boolean; selectionCount?: number };
-export type FileResult = import('./document.ts').DocumentPage | import('./document.ts').DocumentSyntax | import('./document.ts').DocumentAsset | import('./document.ts').DocumentStat | {cancelled:true} | import('./file-decorations.ts').FileDecorations | { noop: true } | DirectoryPage | FileTask | { tasks: FileTask[]; next?: number; temporaryBytes: number } | { versions: Record<string, string>; instance: string } | { data: string; offset: number; size: number; sha256: string; confirmedOffset?: number; version?: string };
+export type FileResult = import('./file-browser.ts').FileBrowserSettings | import('./file-browser.ts').DirectoryChoices | import('./document.ts').DocumentPage | import('./document.ts').DocumentSyntax | import('./document.ts').DocumentAsset | import('./document.ts').DocumentStat | {cancelled:true} | import('./file-decorations.ts').FileDecorations | { noop: true } | DirectoryPage | FileTask | { tasks: FileTask[]; next?: number; temporaryBytes: number } | { versions: Record<string, string>; instance: string } | { data: string; offset: number; size: number; sha256: string; confirmedOffset?: number; version?: string };

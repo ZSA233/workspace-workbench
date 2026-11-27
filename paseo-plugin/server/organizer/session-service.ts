@@ -126,12 +126,12 @@ export class SessionOrganizer {
     const needTitle=wantTitle&&(force||newMessages||!cachedTitle||cachedTitle.sourceFingerprint!==fingerprint||cachedTitle.configurationFingerprint!==configuration);
     progress.update(j=>{j.intent={preview,title:needTitle,summaries:changed.length};if(j.result)j.result.cached=own.length-changed.length;});
     const batches:string[][]=[];for(let i=0;i<changed.length;i+=4)batches.push(changed.slice(i,i+4));if(!batches.length&&(needTitle||newMessages))batches.push([]);
-    if(batches.length)store.update(l=>{l.targets[targetId].session!.lastAttemptAt=at();delete l.targets[targetId].session!.error;});
+    if(batches.length)store.update(l=>{delete l.targets[targetId].session!.error;});
     let generatedTitle:Awaited<ReturnType<typeof callSessionModel>>['value']['title'],runId:string|undefined;
     for(let index=0;index<batches.length;index++){
       assertCurrent();const keys=batches[index],title=needTitle&&index===batches.length-1,profile=settings.profile(policy.profileId),rows=this.rows(store,targetId);
       const messages=index===0?conversation.rows:conversation.rows.map(row=>({...row,evidence:[],previous:store.read().conversations[row.agentId]}));
-      progress.queued(profile);const result=await this.deps.model(async()=>{assertCurrent();return callSessionModel(profile,settings.secret(profile.id),policy,rows,keys,messages,title,target.currentTitle,target.session?.acceptedBody,targetId,signal,run=>store.addRun(run),(phase,run)=>{runId=run.id;progress.model(phase,run);});});assertCurrent();
+      progress.queued(profile);const result=await this.deps.model(async()=>{assertCurrent();return callSessionModel(profile,settings.secret(profile.id),policy,rows,keys,messages,title,target.currentTitle,target.session?.acceptedBody,targetId,signal,run=>store.addRun(run),(phase,run)=>{runId=run.id;if(phase==='requesting')store.update(l=>{l.targets[targetId].session!.lastAttemptAt=at();});progress.model(phase,run);});});assertCurrent();
       for(const key of keys){const before=rows.find(w=>w.key===key)!;progress.stage('verifying',{workspaceId:before.material.workspaceId,name:before.material.name});const checked=await this.deps.materials(route,before.material.workspaceId,key,policy);assertCurrent();if(checked.fingerprint!==before.material.fingerprint)throw Error('organizer_source_changed');}
       store.update(l=>{
         for(const item of result.value.workspaces){const w=l.workspaces[item.key];if(!w.manual)w.digest={...w.digest,version:1,title:item.title,brief:item.brief,evidenceIds:item.evidenceIds,fingerprint:w.material.fingerprint,at:at(),partial:result.packed.workspaces.find(p=>p.key===item.key)?.coverage!=='complete'};}

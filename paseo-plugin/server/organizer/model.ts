@@ -53,10 +53,10 @@ export async function checkOrganizerModel(profile: ModelProfile, secret: string,
   const models: Array<{ id: string; loaded?: boolean; state?: string }> = (value.data || []).filter((m: { id?: unknown }) => typeof m.id === 'string').map((m: { id: string; loaded?: boolean; state?: string }) => ({ id: m.id, ...(m.loaded === undefined ? {} : { loaded: m.loaded }), ...(m.state ? { state: m.state } : {}) }));
   return { models, sushi, selectedAvailable: models.some(m => m.id === profile.model&&(!sushi||m.loaded===true&&m.state==='ready')) };
 }
-export async function requestOrganizerJson<T>(profile:ModelProfile,secret:string,request:{kind:OrganizerRun['kind'];owner:string;prompt:string;input:string;truncated:boolean;references?:Record<string,string>},signal:AbortSignal,validate:(value:unknown)=>T,record:(run:OrganizerRun)=>void,observe?:(phase:OrganizerModelPhase,run:OrganizerRun)=>void):Promise<T> {
+export async function requestOrganizerJson<T>(profile:ModelProfile,secret:string,request:{kind:OrganizerRun['kind'];owner:string;prompt:string;input:string;truncated:boolean;references?:Record<string,string>;contextBudget?:OrganizerRun['contextBudget']},signal:AbortSignal,validate:(value:unknown)=>T,record:(run:OrganizerRun)=>void,observe?:(phase:OrganizerModelPhase,run:OrganizerRun)=>void):Promise<T> {
   const {kind,owner,prompt,input,truncated}=request;
   if(Buffer.byteLength(prompt)+Buffer.byteLength(input)>profile.contextTokens-profile.outputTokens)throw Error('organizer_context_budget_too_small');
-  const run: OrganizerRun = { id: randomUUID(), kind, owner, at: new Date().toISOString(), profileId: profile.id,model:profile.model,endpoint:profile.baseUrl,references:request.references, prompt, input, truncated };
+  const run: OrganizerRun = { id: randomUUID(), kind, owner, at: new Date().toISOString(), profileId: profile.id,model:profile.model,endpoint:profile.baseUrl,references:request.references,contextBudget:request.contextBudget, prompt, input, truncated };
   const started = Date.now();
   const phase=(state:OrganizerModelPhase)=>{run.state=state;run.elapsedMs=Date.now()-started;observe?.(state,{...run});};
   try {

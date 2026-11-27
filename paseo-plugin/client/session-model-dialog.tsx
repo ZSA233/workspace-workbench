@@ -29,7 +29,7 @@ function ModelEditor({projectConfig,onClose}:{projectConfig:string;onClose():voi
         <Field label="连接名称" value={profile.name} onChange={name=>change({name})}/>
         <Field label="命名提示词" value={prompt} multiline minHeight={120} onChange={value=>{setPrompt(value);setDirty(true);}}/>
         <Field label="标题长度" value={length} onChange={value=>{setLength(value);setDirty(true);}}/>
-        <Field label="上下文预算（tokens）" value={String(profile.contextTokens)} onChange={value=>change({contextTokens:Number(value)})}/>
+        <Field label="单次上下文上限（tokens）" value={String(profile.contextTokens)} onChange={value=>change({contextTokens:Number(value)})}/>
         <Field label="输出上限（tokens）" value={String(profile.outputTokens)} onChange={value=>change({outputTokens:Number(value)})}/>
         <Field label="请求超时（秒）" value={String(profile.timeoutMs/1000)} onChange={value=>change({timeoutMs:Number(value)*1000})}/>
       </Section>

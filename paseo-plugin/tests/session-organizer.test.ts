@@ -80,6 +80,15 @@ test('production-only state changes update the marker within the analysis interv
  const job=await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(job.state,'complete',job.error);assert.equal(f.title(),'✓ 小时统计查询优化');assert.equal(f.counts().calls,1);assert.equal(f.counts().writes,2);
  }finally{await f.close();}
 });
+test('a local packing failure does not start the model cooldown or block the first real request',async()=>{
+ const f=await fixture();try{
+  let settings=f.settings.response(f.route);const profile=settings.profiles[0];f.settings.save('project',settings.revision,{analysisIntervalSeconds:300},[],f.route);
+  settings=f.settings.response(f.route);f.settings.saveProfile(settings.revision,{...profile,contextTokens:2048,outputTokens:2048});
+  const failed=await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(failed.state,'failed');assert.match(failed.error,/context_allocation_invalid/);assert.equal(failed.model.calls,0);assert.equal((await f.request({action:'snapshot'})).targets[0].session.lastAttemptAt,undefined);
+  settings=f.settings.response(f.route);f.settings.saveProfile(settings.revision,profile);
+  const retried=await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(retried.state,'complete',retried.error);assert.equal(retried.model.calls,1);assert.equal(retried.result.previewReady,true);assert.equal(f.counts().writes,0);
+ }finally{await f.close();}
+});
 test('an uncertain write can only be attempted again after a fresh explicit preview confirmation',async()=>{
  const f=await fixture();try{await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));const before=(await f.request({action:'snapshot'})).targets[0];f.failWrite();await assert.rejects(f.request({action:'session.apply',targetId:'native',previewId:before.session.preview.id}),/closed/);f.recoverWrite();await assert.rejects(f.request({action:'session.apply',targetId:'native',previewId:before.session.preview.id}),/preview_changed/);assert.equal(f.counts().writes,1);
  const job=await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));assert.equal(job.state,'complete',job.error);const after=(await f.request({action:'snapshot'})).targets[0];assert.notEqual(after.session.preview.id,before.session.preview.id);await f.request({action:'session.apply',targetId:'native',previewId:after.session.preview.id});assert.equal(f.counts().writes,2);assert.equal((await f.request({action:'snapshot'})).targets[0].uncertainWrites.length,1);

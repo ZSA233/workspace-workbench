@@ -49,6 +49,20 @@ test('source changes reload only the affected Workspace and degraded versions fa
   f.enableCache(false);f.reads.length=0;const degraded=await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(degraded.state,'complete',degraded.error);assert.deepEqual(f.reads,['w0','w1','w2']);assert.equal(degraded.model.calls,0);
  }finally{await f.close();}
 });
+test('changing title markers previews the cached body without a model request and still requires confirmation',async()=>{
+ const f=await fixture();try{
+  f.enableCache();await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));let target=(await f.request({action:'snapshot'})).targets[0];
+  await f.request({action:'session.apply',targetId:'native',previewId:target.session.preview.id});const title=f.title(),counts=f.counts(),oldPreviewId=target.session.preview.id;
+  f.service.store(f.route).update(l=>{delete l.targets.native.session!.preview!.contentConfigurationFingerprint;});assert.equal((await f.done(await f.request({action:'session.refresh',targetId:'native'}))).model.calls,0);
+  let settings=await f.request({action:'settings.get'});await f.request({action:'settings.save',scope:'project',revision:settings.revision,patch:{markers:{...settings.effective.markers,pending:'🔴'}},reset:[]});
+  await assert.rejects(f.request({action:'session.apply',targetId:'native',previewId:oldPreviewId}),/organizer_preview_changed/);
+  const job=await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));assert.equal(job.state,'complete',job.error);assert.equal(job.model.calls,0);assert.equal(job.result.previewReady,true);assert.equal(f.title(),title);assert.deepEqual(f.counts(),counts);
+  target=(await f.request({action:'snapshot'})).targets[0];assert.equal(target.session.enabled,false);assert.notEqual(target.session.preview.id,oldPreviewId);assert.equal(target.session.preview.title,'🔴 小时统计查询优化');
+  await f.request({action:'session.apply',targetId:'native',previewId:target.session.preview.id});assert.equal(f.title(),'🔴 小时统计查询优化');assert.equal(f.counts().calls,counts.calls);assert.equal((await f.request({action:'snapshot'})).targets[0].session.enabled,true);
+  settings=await f.request({action:'settings.get'});await f.request({action:'settings.save',scope:'project',revision:settings.revision,patch:{prompt:'按业务对象与问题命名，避免实现细节。'},reset:[]});
+  const changed=await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));assert.equal(changed.state,'complete',changed.error);assert.equal(changed.model.calls,1);assert.equal((await f.request({action:'snapshot'})).targets[0].session.enabled,false);
+ }finally{await f.close();}
+});
 test('expired material proofs and explicit force refreshes cannot silently reuse a previous Git check',async()=>{
  const f=await fixture();try{
   f.enableCache();await f.done(await f.request({action:'session.refresh',targetId:'native'}));f.service.store(f.route).update(l=>{for(const w of Object.values(l.workspaces))w.materialCache!.at='2000-01-01';});f.reads.length=0;

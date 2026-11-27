@@ -2,6 +2,7 @@ import { workspaceCreator } from '../../shared/workspace-creator.ts';
 import { workspaceInstanceKey } from "../../shared/workspace-lineage.ts";
 import { RepositoryRefresh } from "./repository-refresh.ts";
 import { RepositoryStatus } from './repository-status.ts';
+import {ProductionReads} from './production-reads.ts';
 import { randomUUID } from "node:crypto";
 import { DiffContent } from "./diff-content.ts";
 import { DiffReadTasks } from "./diff-read-tasks.ts";
@@ -57,6 +58,7 @@ export class Observation {
   diffContent: DiffContent;
   refresh: RepositoryRefresh;
   status: RepositoryStatus;
+  production: ProductionReads;
   diffTasks = new DiffReadTasks();
   statistics = new FileStatistics();
   private linkedReads = new Map<string, AbortController>();
@@ -79,6 +81,7 @@ export class Observation {
     this.diffContent = new DiffContent(workspaces, cache, scheduler);
     this.status = new RepositoryStatus(cache, scheduler, workspaces.config.gitTimeout);
     this.refresh = new RepositoryRefresh(this);
+    this.production=new ProductionReads(this);
   }
   git(repo: Json, deadline?: number, signal?: AbortSignal) {
     const git = new Git(

@@ -9,9 +9,10 @@ import {callSessionModel,sessionModelPrompt,type SessionMessages} from './sessio
 import {organizerHash,type OrganizerSettings,type OrganizerStore} from './storage.ts';
 import {SessionProduction} from './session-production.ts';
 import {eligibleAssociationWorkspaces,sessionAssociations,syncSessionAssociations} from './session-associations.ts';
+import {materialStamp,reuseMaterial} from './material-cache.ts';
 
 type Request=Extract<OrganizerInput['request'],{action:'session.refresh'|'session.apply'|'session.automatic'|'session.associations'|'session.associations.save'}>;
-type Dependencies={settings:OrganizerSettings;api():Promise<PaseoApi>;store(route:ProjectRoute):OrganizerStore;read(route:ProjectRoute,method:'workspace.list'|'repository.compare'|'repository.fetch',params?:Record<string,unknown>):Promise<Record<string,any>>;materials(route:ProjectRoute,id:string,key:string,policy:OrganizerPolicy):Promise<WorkspaceMaterial>;model<T>(work:()=>Promise<T>):Promise<T>};
+type Dependencies={settings:OrganizerSettings;api():Promise<PaseoApi>;store(route:ProjectRoute):OrganizerStore;read(route:ProjectRoute,method:'workspace.list'|'repository.compare'|'repository.fetch'|'organizer.versions',params?:Record<string,unknown>):Promise<Record<string,any>>;materials(route:ProjectRoute,id:string,key:string,policy:OrganizerPolicy):Promise<WorkspaceMaterial>;model<T>(work:()=>Promise<T>):Promise<T>};
 const at=()=>new Date().toISOString();
 const errorText=(error:unknown)=>error instanceof Error?error.message:String(error);
 const productionState=(rows:WorkspaceAnalysis[])=>aggregateProduction(rows.filter(w=>w.material.state!=='discussion'||w.material.taskBrief||w.material.evidence.some(e=>e.kind==='goal')).map(w=>w.material.state));
@@ -85,6 +86,13 @@ export class SessionOrganizer {
     const x=Date.parse(a.material.latestCommitAt||''),y=Date.parse(b.material.latestCommitAt||'');if(Number.isFinite(x)&&Number.isFinite(y)&&x!==y)return y-x;if(Number.isFinite(x)!==Number.isFinite(y))return Number.isFinite(x)?-1:1;return a.material.workspaceId.localeCompare(b.material.workspaceId);
   });}
   private fingerprint(store:OrganizerStore,targetId:string){const l=store.read(),t=l.targets[targetId];return organizerHash([[...t.workspaceKeys].sort().map(key=>[key,l.workspaces[key]?.material.fingerprint,l.workspaces[key]?.material.latestCommitAt]),[...t.agentIds].sort().map(id=>[id,l.conversations[id]?.fingerprint,l.conversations[id]?.cursor,l.conversations[id]?.pendingMessage])]);}
+  private async versions(route:ProjectRoute,ids:string[],policy:OrganizerPolicy){
+    const stamps=new Map<string,string|undefined>(),bindings=withProject({projectConfig:route.configPath},allAgentBindings);
+    for(let i=0;i<ids.length;i+=100){const group=ids.slice(i,i+100);let result:Record<string,any>|undefined;
+      try{result=await this.deps.read(route,'organizer.versions',{workspaceIds:group});}catch{/* Older or degraded backends retain the full verification path. */}
+      for(const id of group)stamps.set(id,materialStamp(result,id,policy,bindings.filter(b=>b.workspaceId===id).map(b=>[b.handoffHash,b.handoff])));
+    }return stamps;
+  }
   private async messages(store:OrganizerStore,target:OrganizerTarget,api:PaseoApi,assertCurrent:()=>void,reusePreview=false,progress?:OrganizerProgress){
     const rows:Messages[]=[],heads:Record<string,{epoch:string;seq:number}>={};
     for(const agentId of target.agentIds){assertCurrent();progress?.stage('conversation',{agentId,page:0});let old=store.read().conversations[agentId];const head=await api.agents.ref(agentId).timeline.refetch({limit:1,direction:'before'});if(head.error||head.staleCursor)throw Error(head.error||'organizer_history_cursor_stale');heads[agentId]={epoch:head.epoch,seq:head.entries.at(-1)?.seqEnd||0};
@@ -102,12 +110,18 @@ export class SessionOrganizer {
     const assertCurrent=()=>{if(signal.aborted||this.closed)throw Error('organizer_cancelled');if(settings.fingerprint(route)!==token)throw Error('organizer_settings_changed');};
     const progress=organizerProgress(store,id);assertCurrent();progress.update(j=>{j.state='running';j.startedAt=at();});progress.stage('discovering');
     const {linked:roster}=await this.discover(route,targetId,api,assertCurrent);progress.update(j=>{j.total=roster.length;j.workspaceIds=roster.map(r=>r.id);});
+    const versions=await this.versions(route,roster.map(row=>row.id),policy);assertCurrent();
     for(const row of roster){
       assertCurrent();const previous=store.read().workspaces[row.instanceKey],name=previous.digest?.title||row.displayName||row.id;
-      const load=()=>{progress.stage('materials',{workspaceId:row.id,name,repositoryCount:row.repositoryCount});return this.deps.materials(route,row.id,row.instanceKey,policy);};
-      const initial=await load();progress.update(j=>{j.input!.workspaces.push({id:row.id,name:row.displayName||row.id,repositories:initial.repositories.length,commits:initial.evidence.filter(e=>e.kind==='commit').length,notes:initial.evidence.filter(e=>e.kind==='note').length,diffs:initial.evidence.filter(e=>e.kind==='diff').length,cached:!!previous.manual||previous.digest?.fingerprint===initial.fingerprint});});
-      const material=await this.production.refresh(route.configPath,initial,policy,id,(method,params)=>this.deps.read(route,method,params),load,signal,(repository,ref,fetching)=>progress.stage(fetching?'fetching':'production',{workspaceId:row.id,name,repository,ref}));
-      material.latestCommitAt=row.latestCommitAt||null;assertCurrent();store.update(l=>{l.workspaces[row.instanceKey].material=material;});progress.update(j=>{j.completed++;});
+      let proof=previous.materialCache,loads=0;
+      const load=async()=>{progress.stage('materials',{workspaceId:row.id,name,repositoryCount:row.repositoryCount});
+        const before=loads++?(await this.versions(route,[row.id],policy)).get(row.id):versions.get(row.id),material=await this.deps.materials(route,row.id,row.instanceKey,policy),after=(await this.versions(route,[row.id],policy)).get(row.id);assertCurrent();
+        proof=before&&before===after?{stamp:before,fingerprint:material.fingerprint,at:at()}:undefined;return material;
+      };
+      const reused=!force&&reuseMaterial(previous,versions.get(row.id),policy),initial=reused?structuredClone(previous.material):await load();
+      progress.update(j=>{j.input!.workspaces.push({id:row.id,name:row.displayName||row.id,repositories:initial.repositories.length,commits:initial.evidence.filter(e=>e.kind==='commit').length,notes:initial.evidence.filter(e=>e.kind==='note').length,diffs:initial.evidence.filter(e=>e.kind==='diff').length,materialCached:reused,cached:!!previous.manual||previous.digest?.fingerprint===initial.fingerprint});});
+      const material=reused?initial:await this.production.refresh(route.configPath,initial,policy,id,(method,params)=>this.deps.read(route,method,params),load,signal,(repository,ref,fetching)=>progress.stage(fetching?'fetching':'production',{workspaceId:row.id,name,repository,ref}));
+      material.latestCommitAt=row.latestCommitAt||null;assertCurrent();store.update(l=>{const w=l.workspaces[row.instanceKey];w.material=material;w.materialCache=proof;});progress.update(j=>{j.completed++;});
     }
     store.update(l=>{l.targets[targetId].state=productionState(l.targets[targetId].workspaceKeys.map(k=>l.workspaces[k]));});
     let target=store.read().targets[targetId];if(!roster.length){progress.skip('no-material');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
@@ -119,7 +133,7 @@ export class SessionOrganizer {
       const cached=target.session!.preview;if(target.session!.enabled&&cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached.configurationFingerprint===configuration){store.update(l=>{l.targets[targetId].session!.preview!.title=formatOrganizerTitle(cached.body,l.targets[targetId].state,policy);});if(target.currentTitle!==store.read().targets[targetId].session!.preview!.title)await this.write(route,targetId,cached.id,false);}
       progress.skip('interval');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result){j.result.cached=own.filter(w=>w.digest?.fingerprint===w.material.fingerprint).length;j.result.previewReady=cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached?.configurationFingerprint===configuration;}});return;}
     const changed=own.filter(w=>!w.manual&&(!w.digest||w.digest.fingerprint!==w.material.fingerprint)).map(w=>w.key);
-    const cached=target.session!.preview,reusePreview=preview&&!force&&!changed.length&&cached?.configurationFingerprint===configuration&&cached?.sourceFingerprint===this.fingerprint(store,targetId);
+    const cached=target.session!.preview,reusePreview=!force&&!changed.length&&cached?.configurationFingerprint===configuration&&cached?.sourceFingerprint===this.fingerprint(store,targetId);
     const conversation=policy.conversationSummary?await this.messages(store,target,api,assertCurrent,!!reusePreview,progress):{rows:[] as Messages[],heads:{}};assertCurrent();
     const fingerprint=this.fingerprint(store,targetId),wantTitle=preview||target.session!.enabled||changed.length>0||!cached||conversation.rows.some(r=>r.evidence.length);
     const newMessages=conversation.rows.some(r=>r.evidence.length),cachedTitle=target.session!.preview;
@@ -142,7 +156,7 @@ export class SessionOrganizer {
     assertCurrent();const finalFingerprint=this.fingerprint(store,targetId);
     store.update(l=>{const t=l.targets[targetId],session=t.session!;if(generatedTitle)session.preview={...session.preview,id:randomUUID(),body:generatedTitle.text,title:formatOrganizerTitle(generatedTitle.text,t.state,policy),sourceFingerprint:finalFingerprint,configurationFingerprint:configuration,at:at(),runId,evidenceIds:generatedTitle.evidenceIds,conversationComplete:t.agentIds.every(id=>l.conversations[id]?.complete),messageHeads:conversation.heads,reviewedWriteId:preview?t.pendingWrite?.id:undefined};else if(session.preview&&session.preview.sourceFingerprint===finalFingerprint){session.preview.title=formatOrganizerTitle(session.preview.body,t.state,policy);if(preview&&session.preview.reviewedWriteId!==t.pendingWrite?.id){session.preview.reviewedWriteId=t.pendingWrite?.id;session.preview.id=randomUUID();}}delete session.error;});
     if(!batches.length)progress.skip('cached');
-    target=store.read().targets[targetId];if(!preview&&target.session!.enabled&&target.session!.preview&&target.session!.configurationFingerprint===configuration){progress.stage('titles');await this.write(route,targetId,target.session!.preview.id,false);progress.count('titleWrites',target.history.length<store.read().targets[targetId].history.length?1:0);}
+    target=store.read().targets[targetId];if(!preview&&target.session!.enabled&&target.session!.preview&&target.currentTitle!==target.session!.preview.title&&target.session!.configurationFingerprint===configuration){progress.stage('titles');await this.write(route,targetId,target.session!.preview.id,false);progress.count('titleWrites',target.history.length<store.read().targets[targetId].history.length?1:0);}
     progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result)j.result.previewReady=!!target.session!.preview&&target.session!.preview.sourceFingerprint===this.fingerprint(store,targetId)&&target.session!.preview.configurationFingerprint===configuration;});
   }
   private async apply(route:ProjectRoute,targetId:string,previewId:string){await this.write(route,targetId,previewId,true);}

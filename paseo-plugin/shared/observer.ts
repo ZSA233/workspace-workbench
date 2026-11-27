@@ -34,6 +34,7 @@ export const observerMethods = [
   "repository.summary",
   "repository.compare",
   "organizer.materials",
+  "organizer.versions",
   "repository.fetch",
   "observer.refresh",
   "repository.graph",

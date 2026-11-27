@@ -21,7 +21,7 @@ class SnapshotGit extends Git {
     const existing = this.reads.get(key);
     if (existing) return existing;
     const start = Date.now();
-    const basic = !output && ['rev-parse','symbolic-ref','status'].includes(args[0]);
+    const basic = !output && ['rev-parse','symbolic-ref','status','for-each-ref'].includes(args[0]);
     const promise = (basic && this.basic ? this.basic.read(this.path,this.sourceVersion,args,check,this.timeout,this.signal) : super.run(args, check, output)).then(value => {
       this.trace.push({ phase: this.phase, command: args[0], durationMs: Date.now() - start, bytes: value.bytes, ok: true }); return value;
     }, error => {
@@ -68,6 +68,14 @@ export class RepositoryRefresh {
   private producers = new Set<AbortController>();
   private statistics = new Map<string, { abort: AbortController; promise: Promise<void> }>();
   constructor(observation: Observation) { this.observation = observation; }
+  /** The Git page, comparisons and production checks share the same basic-read
+   * flights and original status cache, rather than creating per-feature queues. */
+  sourceGit(context:{workspace:Json;path:string},deadline:number,signal?:AbortSignal,trace:Json[]=[]){
+    const git=new SnapshotGit(context.path,this.observation.workspaces.config.gitTimeout,deadline,signal,trace);
+    git.basic=this.basic;git.sourceVersion=this.observation.scheduler.token(context.path)+`:${this.observation.cache.workspaceEpoch(context.workspace.id)}`;
+    git.statusReader={reader:this.observation.status,workspaceId:context.workspace.id,instance:workspaceInstanceKey(context.workspace as Json&{id:string})};
+    return git;
+  }
   private context(params: Json) {
     return this.observation.workspaces.observationRecords.request('context', { workspaceId: String(params.workspaceId || ''), repository: params.repoPath || params.repositoryId || '' }, params.prefetch === true);
   }
@@ -84,9 +92,7 @@ export class RepositoryRefresh {
     const cacheEpoch = this.observation.cache.epoch;
     const workspaceEpoch = this.observation.cache.workspaceEpoch(workspace.id);
     const trace: Json[] = [];
-    const git = new SnapshotGit(path, this.observation.workspaces.config.gitTimeout, deadline, signal, trace);
-    git.basic = this.basic; git.sourceVersion = this.observation.scheduler.token(path) + `:${workspaceEpoch}`;
-    git.statusReader = { reader: this.observation.status, workspaceId: workspace.id, instance: workspaceInstanceKey(workspace as Json & { id: string }) };
+    const git = this.sourceGit({workspace,path},deadline,signal,trace);
     git.statistics = this.observation.statistics;
     git.statisticsComplete = () => this.observation.scheduler.statisticsChanged(path);
     if (await git.root() !== git.path) throw new WorkbenchError('repository_root_mismatch', 'Expected recorded repository root');

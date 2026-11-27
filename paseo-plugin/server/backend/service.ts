@@ -1,5 +1,6 @@
 import { WORKSPACE_ACTIVITY_PROTOCOL } from "../../shared/workspace-activity.ts";
 import { workspaceMaterials } from './production-coverage.ts';
+import {organizerVersions} from './organizer-versions.ts';
 import {ChangeNotes} from './change-notes.ts';
 import { CacheManagement } from './cache-management.ts';
 import { WorkspaceFiles } from './files.ts';
@@ -123,6 +124,7 @@ export class Service {
   }
   async handle(method: string, params: Json = {}, signal?: AbortSignal): Promise<Json> {
     if (method === 'organizer.materials') return workspaceMaterials(this.observation, params, signal);
+    if (method === 'organizer.versions') return {...await organizerVersions(this.observation,params),notesRevision:this.notes.revision};
     if (method === 'cache.list') return this.cacheManagement.list();
     if (method === 'cache.scan') return this.cacheManagement.scan(params);
     if (method === 'cache.task') return this.cacheManagement.task(params);
@@ -339,6 +341,7 @@ export class Service {
     await this.cacheManagement.close();
     await this.files.close();
     this.observation.status.close();
+    this.observation.production.close();
     this.eventLoop.close();
     await this.environmentReads.close();
     await this.preparations.close();

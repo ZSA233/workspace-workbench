@@ -27,7 +27,7 @@ export async function resolveComparison(git: Git, input: Json): Promise<Comparis
 export async function compareRepository(observation: Observation, params: Json, signal?: AbortSignal): Promise<Json> {
   const {workspace, repo, path} = await observation.workspaces.observationRecords.request('context', {workspaceId: String(params.workspaceId || ''), repository: params.repoPath || params.repositoryId || ''});
   if(params.workspaceInstance&&params.workspaceInstance!==workspaceInstanceKey(workspace))throw new WorkbenchError('workspace_instance_changed','The original workspace no longer exists');
-  const git = new Git(path, observation.workspaces.config.gitTimeout, Date.now() + Math.min(30_000, observation.workspaces.config.observationTimeout), signal, true);
+  const git = observation.refresh.sourceGit({workspace,path},Date.now() + Math.min(30_000, observation.workspaces.config.observationTimeout),signal);
   if (await git.root() !== path) throw new WorkbenchError('repository_root_mismatch', 'Expected recorded repository root');
   const token = observation.scheduler.token(path, 'refs');
   const meta = {state: 'ready', observedAt: new Date().toISOString(), validationKey: `${path}#refs`, validationToken: token};

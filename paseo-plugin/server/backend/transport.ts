@@ -22,7 +22,7 @@ import {
 } from "./storage.ts";
 const cancellableMethods = new Set([
   'cache.list', 'cache.task',
-  "workspace.environment", "observer.versions", "workspace.list", "workspace.detail", "workspace.identify",
+  "workspace.environment", "observer.versions", "organizer.versions", "workspace.list", "workspace.detail", "workspace.identify",
   "workspace.orphan.preview", "repository.summary", "repository.compare", "repository.graph", "repository.changes", "repository.diff",
   "review-set.compare", "review-set.brief",
 ]);

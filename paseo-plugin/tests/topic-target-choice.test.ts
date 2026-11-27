@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { topicTargetKey, topicTargetMatches, topicTargetTitle } from '../client/topic-target-choice.ts';
+import { topicTargetKey, topicTargetMatches, topicTargetTitle,resolveTopicTarget } from '../client/topic-target-choice.ts';
 import type { TopicTarget } from '../shared/extensions/project-communications/topics.ts';
 
 test('renamed session titles display and match searches while the original title remains searchable', () => {
@@ -20,4 +20,15 @@ test('legacy targets retain Workbench names and identity when host metadata is a
   assert.equal(topicTargetMatches(target, '客户反馈', names), true);
   assert.equal(topicTargetTitle(target, {}), target.agentId);
   assert.equal(topicTargetKey(target), 'workspace:worktree-a');
+});
+test('visible native conversations take precedence over remembered delivery targets and top Workbench selections',()=>{
+ const a:TopicTarget={id:'session:a',kind:'session',agentId:'a',workspaceId:'host-a'},b:TopicTarget={id:'session:b',kind:'session',agentId:'b',workspaceId:'host-b'},work:TopicTarget={agentId:'worker',workspaceId:'worktree'};
+ const targets=[a,b,work];assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentAgentId:'b',currentWorkspaceId:'worktree'}),b);
+ assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentHostWorkspaceId:'host-b'}),b);
+ assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentHostWorkspaceId:'host-a'}),a);
+ assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentHostWorkspaceId:'host-b',manualId:a.id}),a);
+ assert.equal(resolveTopicTarget(targets,{rememberedId:a.id}),a);
+ assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentHostWorkspaceId:'unavailable'}),undefined);
+ assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentAgentId:'unavailable'}),undefined);
+ assert.equal(resolveTopicTarget(targets,{manualId:'removed',currentHostWorkspaceId:'host-b'}),undefined);
 });

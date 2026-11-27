@@ -18,10 +18,10 @@ import { topicTargetKey as targetKey, topicTargetMatches, topicTargetTitle } fro
 type TargetDirectory = { data?: TopicTarget[]; isLoading: boolean; isFetching: boolean; error: Error | null; refetch(): Promise<unknown> };
 const modelName = (target?: TopicTarget) => target?.provider ? [target.provider, target.model || '当前模型'].join(' · ') : '沿用会话模型';
 
-export function TopicSendDialog({ client, basket, issues, note, destination, newSession, targets, target, workspaceNames, currentAgentId, groupName,
+export function TopicSendDialog({ client, basket, issues, note, destination, newSession, targets, target, workspaceNames, currentAgentId,currentHostWorkspaceId, groupName,
   busy, preview, error, preferencesReady,preferencesError,onRetryPreferences,materialSettings,materialDraft,onMaterialSettings,onEditText,onClose, onOpenSession, onNote, onDestination, onTarget, onModel, onConfirm }: {
   client: TopicsClient; basket: TopicBasket; issues: IssueBasket; note: string; destination: 'existing' | 'new'; newSession?: TopicNewSession;
-  targets: TargetDirectory; target?: TopicTarget; workspaceNames: Record<string, string>; currentAgentId?: string;
+  targets: TargetDirectory; target?: TopicTarget; workspaceNames: Record<string, string>; currentAgentId?: string;currentHostWorkspaceId?:string;
   groupName(group: WatchedGroup): string; busy: boolean; preview?: TopicMaterialPreview; error: string; preferencesReady:boolean;preferencesError:boolean;onRetryPreferences():void;
   materialSettings:TopicMaterialSettings;materialDraft:ReturnType<typeof useTopicMaterialDraft>['draft'];onMaterialSettings(value:TopicMaterialSettings):void;onEditText(message:ArchiveMessage,text:string|undefined):void;
   onClose(): void; onOpenSession?(): void; onNote(value: string): void; onDestination(value: 'existing' | 'new'): void;
@@ -96,7 +96,7 @@ export function TopicSendDialog({ client, basket, issues, note, destination, new
         {targets.error ? <Label muted>{topicError(targets.error.message)}</Label> : null}
         {targets.isLoading ? <ActivityIndicator /> : matchingTargets.length ? matchingTargets.map(item => <View key={targetKey(item)} style={{ gap: 3 }}>
             <Button icon="MessageSquare" align="start" active={Boolean(target && targetKey(target) === targetKey(item))} onPress={() => { onTarget(item); setPicker(false); }}>
-              {(item.agentId === currentAgentId ? '当前 · ' : '') + topicTargetTitle(item, workspaceNames)}
+              {(item.agentId === currentAgentId || item.kind==='session'&&item.workspaceId===currentHostWorkspaceId ? '当前 · ' : '') + topicTargetTitle(item, workspaceNames)}
             </Button><Label muted>{modelName(item) + (item.status === 'running' ? ' · 进行中' : '')}</Label>
           </View>) : <View style={{ gap: 10, alignItems: 'center', padding: 20 }}>
             <Icon name="MessagesSquare" size={28} color={c.foregroundMuted} /><Label muted>{targets.data?.length ? '没有匹配的会话，可换个关键词或刷新' : targets.error ? '请刷新会话列表重试' : '此项目暂无会话'}</Label>

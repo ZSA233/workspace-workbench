@@ -2,7 +2,7 @@ import { lstat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { workspaceInstanceKey } from '../../shared/workspace-lineage.ts';
 import { aggregateRepositoryProduction, type OrganizerEvidence, type RepositoryCoverage, type WorkspaceMaterial } from '../../shared/organizer.ts';
-import { Git, withBackgroundGit } from './git.ts';
+import type { Git } from './git.ts';
 import { hash, stable, type Json } from './storage.ts';
 import type { Observation } from './observation.ts';
 
@@ -49,7 +49,7 @@ export function textPatchCoverage(patch: string, production: string): 'covered' 
   return pending ? 'pending' : 'covered';
 }
 
-export async function inspectRepository(git: Git, input: { repositoryId: string; repoPath: string; baseSha?: string; productionRef?: string }): Promise<{ coverage: RepositoryCoverage; evidence: OrganizerEvidence[]; fingerprint: string; activityAt: string; complete: boolean }> {
+export async function inspectRepository(git: Git, input: { repositoryId: string; repoPath: string; baseSha?: string; productionRef?: string },sharedStatus?:Array<[string,string]>): Promise<{ coverage: RepositoryCoverage; evidence: OrganizerEvidence[]; fingerprint: string; activityAt: string; complete: boolean }> {
   const coverage: RepositoryCoverage = { repositoryId: input.repositoryId, repoPath: input.repoPath, productionRef: input.productionRef || '', state: 'unknown', covered: 0, pending: 0, uncertain: 0, dirty: false, observedAt: new Date().toISOString() };
   const evidence: OrganizerEvidence[] = [];
   let activityAt = '', complete = true;
@@ -62,7 +62,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
         try { await git.commit(ref); coverage.productionRef = ref; break; } catch {}
       }
     }
-    const status = await git.status(false, false, true);
+    const status = sharedStatus||await git.status(false, false, true);
     coverage.dirty = status.length > 0;
     const own = await git.run(['log', '--first-parent', '--no-merges', '--format=%H%x00%cI%x00%s', '--max-count=41', `${base}..${head}`, '--'], true, { maxBytes: 32768 });
     const commits = own.stdout.trim().split('\n').filter(Boolean);
@@ -141,13 +141,17 @@ export async function workspaceMaterials(observation: Observation, params: Json,
   let activityAt = workspace.createdAt || '', complete = true;
   const brief = String(workspace.taskBrief || workspace.description || '');
   if (brief) evidence.push({ id: 'goal:' + instance, kind: 'goal', text: (workspace.taskKind?'类型：'+workspace.taskKind+'\n':'')+brief });
-  for (const repo of workspace.repositories) {
+  const contexts=await Promise.all(workspace.repositories.map((repo:Json)=>observation.workspaces.observationRecords.request('context',{workspaceId:workspace.id,repository:repo.repoPath||repo.id})));
+  await Promise.all(contexts.map(context=>observation.scheduler.register(workspace.id,context.path)));
+  const results:Array<Awaited<ReturnType<typeof observation.production.read>>>=[];let next=0;
+  await Promise.all(Array.from({length:Math.min(4,contexts.length)},async()=>{while(next<contexts.length){
+    const index=next++,repo=workspace.repositories[index],context=contexts[index];
     if (signal?.aborted) throw Error('organizer_cancelled');
-    const context = await observation.workspaces.observationRecords.request('context', { workspaceId: workspace.id, repository: repo.repoPath || repo.id });
-    const git = new Git(context.path, Math.max(3000, observation.workspaces.config.gitTimeout), Date.now() + 25000, signal, true);
-    if (await git.root() !== context.path) throw Error('repository_root_mismatch');
     const configured=observation.workspaces.config.repositories.find(r=>r.id===repo.id||r.path===repo.sourcePath);
-    const result = await withBackgroundGit(() => inspectRepository(git, { repositoryId: repo.id, repoPath: repo.repoPath || repo.id, baseSha: repo.baseSha, productionRef: params.productionBranches?.[repo.sourcePath] || params.productionBranches?.[configured?.path||''] || params.productionBranches?.[repo.id] || params.productionBranches?.[repo.repoPath] }));
+    results[index]=await observation.production.read({...context,repo},params.productionBranches?.[repo.sourcePath] || params.productionBranches?.[configured?.path||''] || params.productionBranches?.[repo.id] || params.productionBranches?.[repo.repoPath],signal);
+  }}));
+  for(const [index,repo] of workspace.repositories.entries()){
+    const result=results[index];
     result.coverage.sourcePath=repo.sourcePath;
     repositories.push(result.coverage); evidence.push(...result.evidence); fingerprints.push(result.fingerprint);
     if (Date.parse(result.activityAt) > (Date.parse(activityAt)||0)) activityAt = result.activityAt;

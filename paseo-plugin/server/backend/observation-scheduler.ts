@@ -11,7 +11,7 @@ type Subscription = { unsubscribe(): Promise<void> };
 type Watch = { users: Set<Repo>; promise: Promise<Subscription | null>; close?: () => void };
 type Repo = {
   path: string; successfulAt?: string; working: number; sourceWorking: number; refs: number; lease: number; verified: number;
-  issue: string | null; retryAt: number; failures: number; ready?: Promise<void>;
+  issue: string | null; retryAt: number; failures: number; ready?: Promise<void>; sourceReady?: boolean;
   watches: Set<string>; firstEvent: number; timer?: ReturnType<typeof setTimeout>;
   pendingWorking: boolean; pendingSource: boolean; pendingRefs: boolean; pendingActivity: boolean; refresh?: () => Promise<unknown>; refreshing?: Promise<unknown>;
 };
@@ -76,7 +76,7 @@ export class ObservationScheduler {
     const tokens: Record<string, string> = { roster: String(this.rosterRevision) };
     for (const id of workspaceIds) {
       tokens[`workspace:${id}`] = this.workspaceToken(id);
-      for (const path of this.workspaces.get(id) || []) for (const scope of ['working', 'refs'] as const) tokens[`${path}#${scope}`] = this.token(path, scope);
+      for (const path of this.workspaces.get(id) || []) {for (const scope of ['working', 'refs'] as const) tokens[`${path}#${scope}`] = this.token(path, scope);tokens[`${path}#source`]=this.statusToken(path);}
     }
     return { instanceId: this.instanceId, revision: this.revision, rosterRevision: this.rosterRevision,
       workspaceVersions: Object.fromEntries(workspaceIds.map(id => [id, this.workspaceVersions.get(id) || 0])),
@@ -84,7 +84,7 @@ export class ObservationScheduler {
       tokens,
       repositories: [...new Set(workspaceIds.flatMap(id => [...(this.workspaces.get(id) || [])]))].map(path => {
         const r = this.repos.get(path)!;
-        return { path, revision: `${r.working}:${r.refs}`, refreshing: !!r.refreshing,
+        return { path, revision: `${r.working}:${r.refs}`, refreshing: !!r.refreshing, sourceReady:!!r.sourceReady&&!r.issue, sourcePending:r.pendingSource,
           issue: r.issue, lastSuccessfulAt: r.successfulAt || null, lastVerifiedAt: new Date(r.verified).toISOString() };
       }) };
   }
@@ -157,9 +157,9 @@ export class ObservationScheduler {
         await this.watch(repo, gitDir, [join(gitDir, 'objects')], true);
         if (commonDir !== gitDir) await this.watch(repo, commonDir, [join(commonDir, 'objects'), join(commonDir, 'worktrees')], true);
         if (this.closed) return;
-        repo.issue = null; repo.failures = 0; repo.retryAt = 0; repo.working++; repo.refs++; this.revision++;
+        repo.issue = null; repo.failures = 0; repo.retryAt = 0; repo.sourceReady=true;repo.working++;repo.refs++; this.revision++;
       } catch (error) {
-        repo.issue = error instanceof WorkbenchError ? error.code : 'watcher_unavailable';
+        repo.sourceReady=false;repo.issue = error instanceof WorkbenchError ? error.code : 'watcher_unavailable';
         repo.retryAt = repo.issue === 'repository_missing' || repo.issue === 'repository_root_mismatch' || repo.issue === 'repository_access_denied'
           ? Date.now() + this.options.degradedMs
           : Date.now() + Math.min(300_000, 5_000 * 2 ** Math.min(6, repo.failures++));
@@ -246,6 +246,7 @@ export class ObservationScheduler {
       });
   }
   private async release(repo: Repo) {
+    repo.sourceReady=false;
     for (const path of repo.watches) {
       const item = this.watches.get(path); if (!item) continue;
       item.users.delete(repo);

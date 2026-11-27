@@ -15,11 +15,11 @@ import { TapdIssuesPanel } from './tapd-issues-panel';
 import { useTopicSessionPreferences } from '../../use-topic-session-preferences';
 import {defaultTopicMaterialSettings,topicContentPeople,type TopicContentAlias} from '../../../shared/extensions/project-communications/topic-content';
 import {useTopicMaterialDraft} from './topic-material-editor';
-import { topicTargetKey as targetKey } from '../../topic-target-choice';
+import { topicTargetKey as targetKey,resolveTopicTarget } from '../../topic-target-choice';
 
 type TopicsPanelProps = {
   client: TopicsClient; width: number; onSettings(page?: '连接'): void; workspaceNames: Record<string, string>; currentWorkspaceId?: string;
-  currentAgentId?: string; onOpenSession?(agentId: string): void | Promise<void>;
+  currentAgentId?: string; currentHostWorkspaceId?:string; onOpenSession?(agentId: string): void | Promise<void>;
 };
 type TopicSource = 'chat' | 'tapd';
 
@@ -64,7 +64,7 @@ export function TopicsPanel(props: TopicsPanelProps) {
   </View>;
 }
 
-function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentWorkspaceId, currentAgentId, onOpenSession }: TopicsPanelProps) {
+function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentWorkspaceId, currentAgentId,currentHostWorkspaceId, onOpenSession }: TopicsPanelProps) {
   const c = useColors(), cache = useQueryClient(), narrow = width > 0 && width < 580;
   const [source, setSource] = useState<TopicSource>('chat');
   const [query, setQuery] = useState(''), [group, setGroup] = useState<WatchedGroup>();
@@ -74,7 +74,11 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [picker, setPicker] = useState<'group' | ''>('');
   const [note, setNote] = useState('');
-  const preferences=useTopicSessionPreferences(client),{destination,newSession}=preferences.value;
+  const preferences=useTopicSessionPreferences(client),{newSession}=preferences.value;
+  const deliveryScope=client.scopeKey+':'+(currentHostWorkspaceId||currentAgentId||'');
+  const [deliveryChoice,setDeliveryChoice]=useState<{scope:string;targetId?:string;destination?:'existing'|'new'}>();
+  const choice=deliveryChoice?.scope===deliveryScope?deliveryChoice:undefined;
+  const destination=choice?.destination||(currentHostWorkspaceId||currentAgentId?'existing':preferences.value.destination);
   const materialSettings=preferences.value.material||defaultTopicMaterialSettings;
   const material=useTopicMaterialDraft(basket,issues,materialSettings,note,selection.aliases);
   const [preview, setPreview] = useState<TopicMaterialPreview>(), [previewOpen, setPreviewOpen] = useState(false);
@@ -94,10 +98,9 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
     queryFn: () => client.call<TopicTarget[]>({ action: 'targets' }),
     enabled: client.enabled && client.active, retry: false, staleTime: 10000, refetchOnWindowFocus: false,
   });
-  const selectedTarget = targets.data?.find(item => targetKey(item) === preferences.value.targetId)
-    || targets.data?.find(item=>item.agentId===currentAgentId)
-    || targets.data?.find(item=>item.kind!=='session'&&item.workspaceId===currentWorkspaceId)
-    || (targets.data?.length===1?targets.data[0]:undefined);
+  const selectedTarget = preview&&(locked||preview.state==='accepted')
+    ?targets.data?.find(item=>targetKey(item)===preview.targetId||item.agentId===preview.targetAgentId)
+    :resolveTopicTarget(targets.data||[],{manualId:choice?.targetId,rememberedId:preferences.value.targetId,currentAgentId,currentHostWorkspaceId,currentWorkspaceId});
   const target=selectedTarget?targetKey(selectedTarget):'';
   const deliveredAgentId = preview?.targetAgentId || selectedTarget?.agentId;
   const openSession = deliveredAgentId && onOpenSession ? () => {
@@ -105,6 +108,8 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
     try { void Promise.resolve(onOpenSession(deliveredAgentId)).catch(failed); } catch { failed(); }
   } : undefined;
   const indexed = new Map<string, ArchiveTopic>();
+  useEffect(()=>{if(!lockedRef.current)setPreview(current=>current?.state==='accepted'?current:undefined);},[deliveryScope]);
+  const openDelivery=()=>{if(!lockedRef.current&&!preview)setDeliveryChoice({scope:deliveryScope});setPreviewOpen(true);void targets.refetch();};
   for (const item of list.data?.pages.flatMap(page => page.items) || []) if (!indexed.has(item.id)) indexed.set(item.id, item);
   const items = [...indexed.values()], counts = materialCounts(basket, issues);
   useEffect(() => { if (!counts.records) setNote(''); }, [counts.records]);
@@ -220,8 +225,8 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
     </>}
     <TopicMaterialBasket {...{ client, basket, issues, edit, busy, narrow, preview }} hasNote={Boolean(note.trim())} onOpenSession={openSession}
       onClear={clearMaterials} onRemoveIssue={id=>editIssues(current=>removeIssue(current,id))}
-      onEdit={()=>setPreviewOpen(true)}
-      onSend={() => { setPreviewOpen(true); void targets.refetch(); }} />
+      onEdit={openDelivery}
+      onSend={openDelivery} />
     <TopicStatus error={shownError} state={state} onDetails={() => { if (shownError || state) setStatusOpen(true); }} />
     {picker ? <Dialog title="关注群" onClose={() => setPicker('')} width={540} height={450}>
       <ScrollView contentContainerStyle={{ padding: 16, gap: 8 }}>
@@ -230,15 +235,15 @@ function ActiveTopicsPanel({ client, width, onSettings, workspaceNames, currentW
             onPress={() => { setGroup(channel); setPicker(''); }}>{channel.name}</Button>)}
       </ScrollView>
     </Dialog> : null}
-    {previewOpen ? <TopicSendDialog {...{client,basket,issues,note,destination,newSession,targets,workspaceNames,currentAgentId,groupName,busy,preview}}
+    {previewOpen ? <TopicSendDialog {...{client,basket,issues,note,destination,newSession,targets,workspaceNames,currentAgentId,currentHostWorkspaceId,groupName,busy,preview}}
       preferencesReady={preferences.ready} preferencesError={Boolean(preferences.error)} onRetryPreferences={preferences.retry}
       materialSettings={materialSettings} materialDraft={material.draft}
       onMaterialSettings={value=>{preferences.update({material:value});setPreview(undefined);}}
       onEditText={(message,text)=>edit(current=>editSelectedMessage(current,message,text))}
       target={selectedTarget} error={shownError} onClose={() => setPreviewOpen(false)} onOpenSession={openSession}
       onNote={value => { setNote(value); setPreview(undefined); }}
-      onDestination={value => { preferences.update({destination:value}); setPreview(undefined); }}
-      onTarget={value => { preferences.update({targetId:targetKey(value)}); setPreview(undefined); }}
+      onDestination={value => { setDeliveryChoice({...choice,scope:deliveryScope,destination:value});preferences.update({destination:value}); setPreview(undefined); }}
+      onTarget={value => { setDeliveryChoice({...choice,scope:deliveryScope,targetId:targetKey(value)});preferences.update({targetId:targetKey(value)}); setPreview(undefined); }}
       onModel={value => { preferences.update({newSession:value}); setPreview(undefined); }} onConfirm={() => ignoreFailure(perform())} /> : null}
     {statusOpen ? <Dialog title={state || '连接状态'} onClose={() => setStatusOpen(false)} width={520} height={260}>
       <View style={{ padding: 18, gap: 8 }}><Label>{shownError ? topicError(shownError) : state}</Label>

@@ -74,7 +74,7 @@ export const archiveTopicsRpc = defineRpc({
 export const archiveTopicsDeliveryRpc = defineRpc({ name: 'workspace.workbench.archive-topics-delivery', input: archiveTopicsRpc.input, output: archiveTopicsRpc.output });
 export function groupKey(group: WatchedGroup) { return JSON.stringify([group.sourceId, group.channelId]); }
 export function senderName(message: ArchiveMessage) { return typeof message.sender === 'string' ? message.sender : message.sender?.displayName || message.sender?.name || message.sender?.id || '未知作者'; }
-export function assetIsImage(asset: ArchiveAsset) { return asset.kind === 'image' || Boolean(asset.mimeType?.startsWith('image/')); }
+export function assetIsImage(asset: ArchiveAsset) { return asset.kind === 'image' || asset.mimeType === 'image' || Boolean(asset.mimeType?.startsWith('image/')); }
 export function assetIsVideo(asset: ArchiveAsset) { return asset.kind === 'video' || asset.mimeType === 'video' || Boolean(asset.mimeType?.startsWith('video/')); }
 export function assetIsMessageAttachment(asset: ArchiveAsset) { return asset.kind !== 'avatar' && asset.role !== 'quote'; }
 export { messageText, topicTime, topicTitle, recordAttention, type RecordAttention } from './topic-presentation.ts';

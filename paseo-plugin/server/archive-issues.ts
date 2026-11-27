@@ -1,4 +1,4 @@
-import { MAX_REGISTERED_BYTES, artifactByteLimit, supportedArtifact } from '../shared/artifact-limits.ts';
+import { MAX_REGISTERED_BYTES, artifactByteLimit } from '../shared/artifact-limits.ts';
 import { issueAssets, issueAssetSelectable, type IssueAsset } from '../shared/extensions/project-communications/issue-assets.ts';
 import { archivePublicUrl, serviceConnectionSchema } from '../shared/extensions.ts';
 import {
@@ -85,26 +85,19 @@ export class ArchiveIssues {
 
   private attachment(issue: IssueDetail, id: string) {
     const item = issueAssets(issue).find(attachment => attachment.id === id);
-    if (item && item.kind !== 'image' && issue.attachmentsState === 'ready' && item.state === 'ready' && !supportedArtifact(item.mimeType || '', item.size)) throw Error('artifact_type_not_allowed');
     if (!item || !issueAssetSelectable(issue, item)) throw Error('issue_material_unavailable');
     return item;
   }
 
   async original(issue: IssueDetail, item: IssueAsset) {
-    const mimeType = item.mimeType?.toLowerCase();
-    const inline = item.kind === 'image', image = inline || Boolean(mimeType?.startsWith('image/'));
+    const mimeType = (item.mimeType || 'application/octet-stream').toLowerCase();
+    const inline = item.kind === 'image', image = inline || mimeType === 'image' || Boolean(mimeType?.startsWith('image/'));
     const path = this.path(`issues/${encodeURIComponent(issue.id)}/versions/${encodeURIComponent(issue.version)}/attachments/${encodeURIComponent(item.id)}`);
-    // Preview returns the same raster bytes with a validated type. Other originals use octet-stream.
+    // The versioned image response supplies its actual type; generic file
+    // responses can retain the source hint and fall back to file delivery.
     const result = await this.connection.bytes('/v2/archive/' + path + (image ? '?view=preview' : ''), 'GET', undefined, inline ? MAX_REGISTERED_BYTES : artifactByteLimit(mimeType!));
-    if (inline) {
-      const type = result.mimeType.toLowerCase();
-      if (!type.startsWith('image/') || !supportedArtifact(type, result.bytes.length)) throw Error('artifact_type_not_allowed');
-      if (!result.bytes.length) throw Error('issue_material_unavailable');
-      return { bytes: result.bytes, mimeType: type };
-    }
-    if (!result.bytes.length || (item.size !== undefined && result.bytes.length !== item.size) ||
-      (result.mimeType !== mimeType && (image || result.mimeType !== 'application/octet-stream'))) throw Error('issue_material_unavailable');
-    return { bytes: result.bytes, mimeType: mimeType! };
+    if (!result.bytes.length || (item.size !== undefined && result.bytes.length !== item.size)) throw Error('issue_material_unavailable');
+    return { bytes: result.bytes, mimeType: result.mimeType === 'application/octet-stream' ? mimeType : result.mimeType };
   }
 
   async asset(issueId: string, version: string, attachmentId: string, part?: 'original' | 'video-preview') {

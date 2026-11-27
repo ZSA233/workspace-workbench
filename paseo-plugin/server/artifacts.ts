@@ -230,7 +230,7 @@ export function resolveArtifactReference(reference: ReviewArtifactReference, run
       mimeType: reference.mimeType || stored.metadata.mimeType,
       bytes: stored.bytes,
       size: stored.metadata.size,
-      binary: stored.metadata.mimeType.startsWith("image/") || stored.metadata.mimeType.startsWith("video/") || stored.metadata.mimeType === "application/pdf",
+      binary: stored.metadata.mimeType.startsWith("image/") || stored.metadata.mimeType.startsWith("video/") || stored.metadata.mimeType === "application/pdf" || stored.metadata.mimeType === "application/octet-stream",
     };
   }
   const repository = resolveRepository(reference, runtime);
@@ -252,7 +252,7 @@ export function resolveArtifactReference(reference: ReviewArtifactReference, run
     mimeType,
     bytes,
     size: bytes.length,
-    binary: mimeType.startsWith("image/") || mimeType.startsWith("video/") || mimeType === "application/pdf",
+    binary: mimeType.startsWith("image/") || mimeType.startsWith("video/") || mimeType === "application/pdf" || mimeType === "application/octet-stream",
   };
 }
 

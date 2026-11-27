@@ -1,5 +1,5 @@
 import type { ArchiveAsset, ArchiveChannel, ArchiveDirectory, ArchiveGroup, ArchiveMessage, ArchiveTopic, ArchiveTopicDetail, ArchiveTool, TopicContext, TopicPage, WatchedGroup } from '../shared/extensions/project-communications/topics.ts';
-import { assetIsVideo, groupKey } from '../shared/extensions/project-communications/topics.ts';
+import { assetIsImage, assetIsVideo, groupKey } from '../shared/extensions/project-communications/topics.ts';
 import type { CommunicationsConnection } from './communications-connection.ts';
 import { MAX_REGISTERED_BYTES, artifactByteLimit } from '../shared/artifact-limits.ts';
 import {topicVideoPreview} from './topic-video.ts';
@@ -114,22 +114,24 @@ export class ArchiveTopics {
         return {...message,assets};
       })));
     }
-    const videos=result.flatMap(message=>message.assets.flatMap((asset,index)=>asset.role!=='quote'&&assetIsVideo(asset)?[{message,asset,index}]:[]));
+    const originals=result.flatMap(message=>message.assets.flatMap((asset,index)=>asset.role!=='quote'&&
+      (assetIsVideo(asset)||asset.state==='ready'&&assetIsImage(asset)&&(!asset.mimeType?.includes('/')||asset.mimeType==='application/octet-stream'))?[{message,asset,index}]:[]));
     let cursor=0;
     // Probe at most four canonical originals at once. Never read the raw chat URL.
-    await Promise.all(Array.from({length:Math.min(4,videos.length)},async()=>{
-      while(cursor<videos.length){
-        const {message,asset,index}=videos[cursor++];
+    await Promise.all(Array.from({length:Math.min(4,originals.length)},async()=>{
+      while(cursor<originals.length){
+        const {message,asset,index}=originals[cursor++],video=assetIsVideo(asset);
         const key = JSON.stringify([asset.id, asset.state, asset.mimeType, asset.size]);
         let pending = this.assetMetadata.get(key);
         if (!pending) {
           pending = (async () => {
             try {
               const metadata = await this.connection.metadata(this.originalPath(asset.id));
+              if(!video) return metadata.mimeType.startsWith('image/') ? {...asset,...metadata,kind:'image',state:'ready'} : asset;
               if (!metadata.mimeType.startsWith('video/')) return {...asset,kind:'video'};
               const name = !asset.name || asset.name === 'attachment' ? metadata.mimeType === 'video/webm' ? '视频.webm' : metadata.mimeType === 'video/quicktime' ? '视频.mov' : '视频.mp4' : asset.name;
               return {...asset,...metadata,name,kind:'video',state:'ready'};
-            } catch {return {...asset,kind:'video'};}
+            } catch {return video?{...asset,kind:'video'}:asset;}
           })(); this.assetMetadata.set(key,pending);
         }
         message.assets[index]=await pending;

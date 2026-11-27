@@ -7,7 +7,7 @@ import type { ArchiveAsset, ArchiveMessage } from '../../../shared/extensions/pr
 import type { IssueSummary } from '../../../shared/extensions/project-communications/issues';
 import { assetIsImage, assetIsVideo, assetIsMessageAttachment, messageText, senderName, topicTime, recordAttention, type RecordAttention } from '../../../shared/extensions/project-communications/topics';
 import { Button, Dialog, Label, tint, useColors, useTouch } from './ui';
-import { MAX_VIDEO_BYTES, supportedArtifact } from '../../../shared/artifact-limits.ts';
+import { MAX_VIDEO_BYTES, selectableArchiveArtifact } from '../../../shared/artifact-limits.ts';
 import {TopicVideoPlayer,TopicVideoFrames,TopicVideoFile} from '../../topic-video';
 import {videoTime,inlineVideo,videoFileSize,type TopicVideoPreview} from '../../../shared/topic-video';
 import { pendingTopicAssets, TOPIC_ASSET_REFRESH_MS } from '../../topic-asset-state';
@@ -149,9 +149,8 @@ type TopicAssetSource = { topicId: string; message: ArchiveMessage; contextOf?: 
 export function TopicAsset({ client, topicId, message, issue, asset, contextOf, checked, onToggle, disabled, small = false, removable = false, tileWidth = 132 }: TopicAssetSource & {
   client: TopicsClient; asset: ArchiveAsset; checked: boolean; onToggle: () => void; disabled?: boolean; small?: boolean; removable?: boolean; tileWidth?: number;
 }) {
-  const c = useColors(), [open, setOpen] = useState(false), image = assetIsImage(asset), video = assetIsVideo(asset);
-  // Inline archive images declare their kind; the versioned preview validates the returned raster type.
-  const canSelect = supportedArtifact(asset.mimeType || '', asset.size) || image && !asset.mimeType;
+  const c = useColors(), [open, setOpen] = useState(false), [imageFailed, setImageFailed] = useState(false), image = assetIsImage(asset), video = assetIsVideo(asset);
+  const canSelect = selectableArchiveArtifact(asset.mimeType || '', asset.size);
   const ready = client.active && asset.state === 'ready' && canSelect;
   const source = issue ? [issue.id, issue.version] : [topicId, message.id, message.version];
   const read = <T,>(part: 'original' | 'video-preview') => issue
@@ -169,18 +168,18 @@ export function TopicAsset({ client, topicId, message, issue, asset, contextOf, 
     enabled: ready && (image || video && open && playable), retry: false, staleTime: Infinity, gcTime: 60000, refetchOnWindowFocus: false,
   });
   const uri = data.data ? 'data:' + data.data.mimeType + ';base64,' + data.data.base64 : undefined;
-  const poster = frames.data?.frames[0], thumbnail = image ? uri : poster ? 'data:' + poster.mimeType + ';base64,' + poster.base64 : undefined;
+  const poster = frames.data?.frames[0], thumbnail = image ? imageFailed ? undefined : uri : poster ? 'data:' + poster.mimeType + ';base64,' + poster.base64 : undefined;
   const width = small ? 54 : tileWidth, height = small ? 42 : Math.round(tileWidth * 0.64);
   const error = data.error || frames.error;
   const state = asset.state !== 'ready' ? asset.state === 'pending' ? '等待原件' : '原件不可用'
-    : !canSelect ? video && asset.size !== undefined && asset.size > MAX_VIDEO_BYTES ? '视频超过 24 MiB' : '原件格式或大小暂不支持交接'
-      : video ? '可选择并发送原视频' : error ? topicError(error.message) : asset.name;
+    : !canSelect ? video && asset.size !== undefined && asset.size > MAX_VIDEO_BYTES ? '视频超过 24 MiB' : '附件超过当前交接大小上限'
+      : video ? '可选择并发送原视频' : imageFailed || error ? '预览不可用，仍可发送原件' : asset.name;
   const videoInfo = [asset.name, videoFileSize(asset.size ?? frames.data?.size)].filter(Boolean).join(' · ');
   return <View style={{ position: 'relative', width, gap: 3 }}>
     <Pressable accessibilityRole="button" accessibilityLabel={'查看 ' + asset.name} {...(Platform.OS === 'web' ? { title: video ? videoInfo + ' · ' + state : state } : {})}
       onPress={() => setOpen(true)}
       style={{ width, height, alignItems: 'center', justifyContent: 'center', gap: 3, borderWidth: 1, borderColor: checked ? c.accent : c.border, borderRadius: 5, overflow: 'hidden', backgroundColor: c.surface2 }}>
-      {thumbnail ? <Image source={{ uri: thumbnail }} accessibilityLabel={asset.name} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+      {thumbnail ? <Image source={{ uri: thumbnail }} accessibilityLabel={asset.name} onError={() => setImageFailed(true)} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
         : data.isFetching || frames.isFetching ? <ActivityIndicator size="small" color={c.foregroundMuted} />
           : <Icon name={asset.state === 'pending' ? 'Clock' : video ? 'Video' : image ? 'Image' : 'FileText'} size={small ? 17 : 24} color={asset.state === 'ready' ? c.foregroundMuted : c.statusWarning} />}
       {video && thumbnail ? <View style={{ position: 'absolute', padding: 5, borderRadius: 20, backgroundColor: '#0009' }}><Icon name="Play" size={small ? 16 : 24} color="#fff" /></View> : null}
@@ -203,7 +202,7 @@ export function TopicAsset({ client, topicId, message, issue, asset, contextOf, 
       <ScrollView contentContainerStyle={{ flexGrow: 1, padding: 16, gap: 12 }}>
         {video ? uri ? <TopicVideoPlayer uri={uri} poster={thumbnail} />
           : data.isFetching ? <ActivityIndicator /> : <TopicVideoFile name={asset.name} size={asset.size ?? frames.data?.size} message={state} />
-          : image && uri ? <Image source={{ uri }} accessibilityLabel={asset.name} style={{ minHeight: 320, flex: 1, width: '100%' }} resizeMode="contain" />
+          : image && uri && !imageFailed ? <Image source={{ uri }} accessibilityLabel={asset.name} onError={() => setImageFailed(true)} style={{ minHeight: 320, flex: 1, width: '100%' }} resizeMode="contain" />
             : data.isFetching ? <ActivityIndicator /> : <Label>{state}</Label>}
         {video && frames.data ? <TopicVideoFrames video={frames.data} /> : null}
         {error ? <><Label warning>{topicError(error.message)}</Label><Button onPress={() => { if (data.error) void data.refetch(); if (frames.error) void frames.refetch(); }}>重试预览</Button></> : null}

@@ -12,6 +12,7 @@ import {topicVideoPreview} from './topic-video.ts';
 import {videoTime,type TopicStoredVideo} from '../shared/topic-video.ts';
 import { ArchiveIssues } from './archive-issues.ts';
 import { issueMaterialText, type IssueSelection, type IssueVersion } from '../shared/extensions/project-communications/issues.ts';
+import { canonicalArtifactMimeType, supportedArtifact } from '../shared/artifact-limits.ts';
 
 type StoredPreview = TopicMaterialPreview & { scope: string; agentId: string; references: ReviewArtifactReference[]; dispatchText?: string;
   issueVersions?: IssueVersion[];
@@ -74,7 +75,11 @@ export class TopicMaterials {
         const data = await load();
         const sha256 = hash(data.bytes);
         if (asset.sha256 && asset.sha256 !== sha256) throw Error('topic_asset_version_changed');
-        const mimeType = (asset.mimeType || data.mimeType).toLowerCase();
+        const actualType=canonicalArtifactMimeType(data.mimeType), declaredType=canonicalArtifactMimeType(asset.mimeType || '');
+        const resolvedType=actualType==='application/octet-stream'?declaredType:actualType;
+        // Unrecognized formats remain original file attachments, independently
+        // of browser preview support or provider image-format support.
+        const mimeType=supportedArtifact(resolvedType)?resolvedType:'application/octet-stream';
         if (mimeType.startsWith('video/') && mimeType !== data.mimeType.toLowerCase()) throw Error('topic_asset_version_changed');
         const contentKey = mimeType + ':' + sha256;
         referenceId = contents.get(contentKey);

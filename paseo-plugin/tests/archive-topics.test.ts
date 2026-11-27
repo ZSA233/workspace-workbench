@@ -237,7 +237,7 @@ test('TAPD inline body and comment images remain versioned originals through pre
     assert.deepEqual(Buffer.from(host.state.sent[1].options.images[0].data, 'base64'), s.image);
     assert.ok(s.state.requests.filter(request => request.url.includes('/attachments/' + bodyId)).every(request => request.url.endsWith('?view=preview')));
     s.state.assetBytes.set(bodyId, { bytes: Buffer.from('<svg/>'), mimeType: 'image/svg+xml' });
-    await assert.rejects(asset(), /artifact_type_not_allowed/);
+    assert.equal((await asset() as {mimeType:string}).mimeType,'image/svg+xml');
     s.state.assetBytes.set(bodyId, { bytes: Buffer.alloc(9 * 1024 * 1024), mimeType: 'image/png' });
     await assert.rejects(asset(), /service_response_too_large/);
     issue.commentsState = 'unavailable';
@@ -973,6 +973,47 @@ function pendingVideo(s:Awaited<ReturnType<typeof setup>>,id='video-original') {
   message.assets=[{id,name:'attachment',state:'pending',mimeType:'video'}];
   return {topic,message};
 }
+
+test('generic image labels resolve from the canonical original and deliver its exact bytes without changing the snapshot',async()=>{
+  const s=await setup();
+  try{
+    const topic=s.state.topics[0],message=topic.messages[0],asset=message.assets[0],native=nativeSession(s.root);
+    asset.mimeType='image';asset.kind='image';asset.size=s.image.length;
+    s.state.assetInfo.set(asset.id,{...asset});
+    const before=JSON.stringify(message),detail=await s.archive.read(topic.id);
+    assert.equal(detail.messages[0].assets[0].mimeType,'image/png');
+    assert.equal(JSON.stringify(message),before);
+    assert.equal(s.state.requests.filter(item=>item.method==='HEAD'&&item.url.endsWith('/assets/'+asset.id)).length,1);
+    assert.equal(s.state.requests.some(item=>item.method==='GET'&&item.url.endsWith('/assets/'+asset.id)),false);
+    const selected=selection(detail);selected.assets=[{id:asset.id,messageId:message.id,messageVersion:message.version}];
+    const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',targetId:'session:'+native.agent.id,selections:[selected]},native.context) as TopicMaterialPreview;
+    assert.equal(preview.assets[0].mimeType,'image/png');
+    await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},native.context);
+    assert.equal(native.state.sent.length,1);
+    assert.deepEqual(native.state.sent[0].options.images,[{data:s.image.toString('base64'),mimeType:'image/png'}]);
+  }finally{await s.close();}
+});
+
+test('DingTalk and TAPD send unfamiliar original formats as files without depending on image preview support',async()=>{
+  const s=await setup();
+  try{
+    const native=nativeSession(s.root),topic=s.state.topics[0],message=topic.messages[0],issue=s.state.issues[0];
+    const bytes=Buffer.from('II*\0original tiff bytes'),id=createHash('sha256').update('unfamiliar-original').digest('hex');
+    const asset={id,version:'original-tiff-1',name:'截图.tiff',mimeType:'image/tiff',state:'ready',size:bytes.length};
+    message.assets=[{...asset,kind:'image'}];issue.attachments=[asset];
+    s.state.assetBytes.set(id,{bytes,mimeType:'image/tiff'});
+    const selected=selection(await s.archive.read(topic.id));selected.assets=[{id,messageId:message.id,messageVersion:message.version}];
+    for(const input of [{selections:[selected]},
+      {selections:[],issueSelections:[{issueId:issue.id,version:issue.version,body:false,comments:[],attachments:[{id,version:asset.version}]}]}]){
+      const preview=await s.host.topics(s.config,'project-communications',2,{action:'preview',targetId:'session:'+native.agent.id,...input},native.context) as TopicMaterialPreview;
+      assert.equal(preview.assets[0].mimeType,'application/octet-stream');
+      await s.host.topics(s.config,'project-communications',2,{action:'send',id:preview.id},native.context);
+      const sent=native.state.sent.at(-1)!;
+      assert.deepEqual(sent.options.images,[]);assert.equal(sent.options.attachments?.length,1);
+      assert.deepEqual(readFileSync(sent.options.attachments![0].path),bytes);
+    }
+  }finally{await s.close();}
+});
 
 test('reply resources are marked as quotes only from the exact original, while genuine message images retain readiness checks',async()=>{
   const s=await setup();

@@ -22,13 +22,14 @@ test('message and original-image selection are independent and context keeps its
   assert.equal(basketSelections(basket)[0].messages.find(message => message.id === context.id)?.contextOf, topic.messages[0].id);
   assert.deepEqual(basketCounts(basket), { topics: 1, messages: 2, assets: 1 });
 });
-test('pending, unsupported and oversized attachments stay unselected', () => {
+test('unfamiliar formats remain selectable while pending and oversized attachments stay unselected', () => {
   const { topics } = archiveFixture(), topic = structuredClone(topics[1]);
   topic.messages[0].assets.push({ id: 'zip', state: 'ready', name: 'bundle.zip', mimeType: 'application/zip' },
     { id: 'large', state: 'ready', name: 'huge.png', mimeType: 'image/png', size: 10 * 1024 * 1024 });
   const basket = selectTopic({}, topic);
-  assert.equal(basketCounts(basket).assets, 0);
-  for (const asset of topic.messages[0].assets) assert.equal(changeAsset(basket, topic, topic.messages[0], asset), basket);
+  assert.equal(basketCounts(basket).assets, 1);
+  assert.deepEqual(basketSelections(basket)[0].assets.map(asset=>asset.id),['zip']);
+  for (const asset of topic.messages[0].assets.filter(asset=>asset.id!=='zip')) assert.equal(changeAsset(basket, topic, topic.messages[0], asset), basket);
 });
 
 test('reselecting original messages preserves source chronology', () => {

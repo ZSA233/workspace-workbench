@@ -1,4 +1,4 @@
-import { supportedArtifact } from '../../artifact-limits.ts';
+import { selectableArchiveArtifact } from '../../artifact-limits.ts';
 import type { IssueAttachment, IssueDetail, IssueInlineImage } from './issues.ts';
 
 export type IssueAsset = IssueAttachment & { kind?: 'image' };
@@ -17,7 +17,7 @@ export function issueAssets(issue: IssueDetail): IssueAsset[] {
 export function issueAssetSelectable(issue: IssueDetail, asset: IssueAsset) {
   if (asset.state !== 'ready') return false;
   if (issue.attachments.some(item => item.id === asset.id && item.version === asset.version)) {
-    return issue.attachmentsState === 'ready' && supportedArtifact(asset.mimeType || '', asset.size);
+    return issue.attachmentsState === 'ready' && selectableArchiveArtifact(asset.mimeType || '', asset.size);
   }
   if (asset.kind !== 'image' || asset.version !== issue.version) return false;
   return Boolean(issue.inlineImages?.some(image => image.id === asset.id && image.state === 'ready' &&

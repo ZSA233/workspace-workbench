@@ -25,6 +25,8 @@ fixture.state.topics[0].title = '[图片消息](mediaId=$truncated';
 fixture.state.topics[0].updatedAt = new Date(2026, 10, 19, 16, 20).getTime();
 fixture.state.topics[0].messages[0].displayText = fixture.state.topics[0].messages[0].text;
 fixture.state.topics[0].messages[0].text = '[图片消息](mediaId=$image-1)' + fixture.state.topics[0].messages[0].text;
+// A generic upstream label must not disable the ordinary image send flow.
+fixture.state.topics[0].messages[0].assets[0].mimeType = 'image';
 fixture.state.topics[0].messages[0].createdAt = fixture.state.topics[0].updatedAt;
 fixture.state.context.displayText = fixture.state.context.text;
 fixture.state.context.text = '[图片消息](mediaId=$context-image)' + fixture.state.context.text;

@@ -38,8 +38,10 @@ const bytes=(value:unknown)=>Buffer.byteLength(typeof value==='string'?value:JSO
  * context limit to accommodate a large repository or advance an omitted message. */
 export function sessionModelInput(workspaces:WorkspaceAnalysis[],changedKeys:string[],messages:SessionMessages[],title:boolean,topicHint:string|null,accepted:string|undefined,profile:ModelProfile,policy:OrganizerPolicy) {
   const changed=new Set(changedKeys),sourceRows=workspaces.filter(w=>changed.has(w.key));
+  // A stale digest must not become the source for its own regeneration.
+  // Only unchanged workspaces contribute cached summaries to this request.
   const input:SessionInput={task:'session-workbench',wantTitle:title,namingMode:policy.namingMode,latestWorkspace:workspaces.find(w=>w.material.evidence.some(e=>e.kind==='commit'))?.key||null,topicHint:excerpt(topicHint||'',600),acceptedTitle:accepted||null,
-    workspaces:workspaces.map(w=>({key:w.key,name:excerpt(w.material.name,180),latestCommitAt:w.material.latestCommitAt||null,hasOwnCommits:w.material.evidence.some(e=>e.kind==='commit'),...(w.manual?{summary:{sourceId:'summary:'+w.key,title:w.title,brief:excerpt(w.brief,500)}}:w.digest?{summary:{sourceId:'summary:'+w.key,title:w.digest.title,brief:w.digest.brief}}:{})})),
+    workspaces:workspaces.map(w=>({key:w.key,name:excerpt(w.material.name,180),latestCommitAt:w.material.latestCommitAt||null,hasOwnCommits:w.material.evidence.some(e=>e.kind==='commit'),...(w.manual?{summary:{sourceId:'summary:'+w.key,title:w.title,brief:excerpt(w.brief,500)}}:w.digest&&!changed.has(w.key)?{summary:{sourceId:'summary:'+w.key,title:w.digest.title,brief:w.digest.brief}}:{})})),
     changedWorkspaces:sourceRows.map(w=>({key:w.key,evidence:[],coverage:'partial'})),
     conversations:messages.map(c=>({agentId:c.agentId,previous:excerpt(c.previous?.brief||'',Math.min(900,Math.floor(profile.contextTokens*.1/Math.max(messages.length,1)))),evidence:[],coverage:'partial'}))};
   const reserve=512,limit=profile.contextTokens-profile.outputTokens-reserve;
@@ -84,7 +86,7 @@ export function sessionModelPrompt(policy:OrganizerPolicy){return [
   policy.namingMode==='latest'?'先根据 latestWorkspace 自身最新改动和目标命名。其他工作区和历史讨论只解释上下文；已进入修复、优化或实现阶段时，不要仍停留在开场的“排查”请求。不被发布提交、观察记录或底层实现细节带偏。':policy.namingMode==='overall'?'概括整个会话持续推进的主要需求，不将零散修补或发布细节当成会话主旨。':'根据用户提供的命名提示词决定会话主旨。',
   'acceptedTitle 是用户已接受的会话标题；需求没变、仅措辞同义时原样保留。需求明显转向或最近工作区有新的主旨时才更新。部署、合并、版本、生成文件通常只是过程，不能凭它们推断业务需求。',
   'conversations 仅归纳提供的新公开消息并合并 previous；资料被截断或 coverage=partial 时不得声称已经读完整段历史。',
-  '每项只引用最关键的1条来源，最多2条。evidenceIds 直接复制该对象输入证据的 id；缓存摘要使用其明确的 sourceId（例如 W1S），不得自造编号。title 可引用所有工作区摘要和公开消息。不得捏造或跨工作区引用证据。',
+  '每项只引用最关键的1条来源，最多2条。工作区新摘要的 evidenceIds 只从自身 changedWorkspaces.evidence 复制，不得引用缓存摘要或自己的 summarySourceId。只有 title 可引用工作区摘要 sourceId 或 summarySourceId。不得自造编号或跨工作区引用。',
   '工作区证据编号形如 W1E1，会话公开消息编号形如 C1M1。conversations 只能引用它自己提供的 C…M… 消息，不得引用 W…E… 工作区提交。',
   '缓存摘要的 sourceId 和工作区的 summarySourceId 都可供 title 引用。本批已为该工作区生成摘要时可引用其 summarySourceId；既无缓存也未生成摘要的工作区不得充当标题证据。',
   '严格按本次输出模板返回。changedWorkspaces=[] 时 workspaces 必须为 []，缓存摘要只供参考，不重复输出。wantTitle=false 时省略 title。无新会话消息时 conversations=[]。',

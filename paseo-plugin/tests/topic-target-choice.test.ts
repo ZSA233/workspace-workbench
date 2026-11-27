@@ -22,9 +22,10 @@ test('legacy targets retain Workbench names and identity when host metadata is a
   assert.equal(topicTargetKey(target), 'workspace:worktree-a');
 });
 test('visible native conversations take precedence over remembered delivery targets and top Workbench selections',()=>{
- const a:TopicTarget={id:'session:a',kind:'session',agentId:'a',workspaceId:'host-a'},b:TopicTarget={id:'session:b',kind:'session',agentId:'b',workspaceId:'host-b'},work:TopicTarget={agentId:'worker',workspaceId:'worktree'};
+ const a:TopicTarget={id:'session:a',kind:'session',agentId:'a',workspaceId:'host-a'},b:TopicTarget={id:'session:b',kind:'session',agentId:'b',workspaceId:'host-b'},work:TopicTarget={agentId:'worker',workspaceId:'worktree',hostWorkspaceId:'bound-host'};
  const targets=[a,b,work];assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentAgentId:'b',currentWorkspaceId:'worktree'}),b);
  assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentHostWorkspaceId:'host-b'}),b);
+ assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentHostWorkspaceId:'bound-host'}),work);
  assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentHostWorkspaceId:'host-a'}),a);
  assert.equal(resolveTopicTarget(targets,{rememberedId:a.id,currentHostWorkspaceId:'host-b',manualId:a.id}),a);
  assert.equal(resolveTopicTarget(targets,{rememberedId:a.id}),a);

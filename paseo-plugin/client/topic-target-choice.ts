@@ -9,7 +9,7 @@ export const topicTargetTitle = (target: TopicTarget, workspaceNames: Record<str
 export function resolveTopicTarget(targets:TopicTarget[],context:{manualId?:string;rememberedId?:string;currentAgentId?:string;currentHostWorkspaceId?:string;currentWorkspaceId?:string}):TopicTarget|undefined{
  if(context.manualId)return targets.find(t=>topicTargetKey(t)===context.manualId);
  const agent=context.currentAgentId&&targets.find(t=>t.agentId===context.currentAgentId);if(agent)return agent;
- if(context.currentHostWorkspaceId)return targets.find(t=>t.kind==='session'&&(t.workspaceId===context.currentHostWorkspaceId||t.hostWorkspaceId===context.currentHostWorkspaceId));
+ if(context.currentHostWorkspaceId)return targets.find(t=>t.kind==='session'&&t.workspaceId===context.currentHostWorkspaceId)||targets.find(t=>t.hostWorkspaceId===context.currentHostWorkspaceId);
  if(context.currentAgentId)return;
  return targets.find(t=>topicTargetKey(t)===context.rememberedId)||targets.find(t=>t.kind!=='session'&&t.workspaceId===context.currentWorkspaceId)||(targets.length===1?targets[0]:undefined);
 }

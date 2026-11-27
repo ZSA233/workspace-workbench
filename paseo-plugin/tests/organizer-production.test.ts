@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Git } from '../server/backend/git.ts';
-import { inspectRepository, textPatchCoverage } from '../server/backend/production-coverage.ts';
+import { inspectRepository, textPatchCoverage,retainedCommittedText } from '../server/backend/production-coverage.ts';
 import {aggregateRepositoryCoverage} from '../shared/organizer.ts';
 
 function fixture() {
@@ -98,4 +98,18 @@ test('large incoming merges do not overflow the raw diff for this Workspace own 
   for(let i=0;i<700;i++)writeFileSync(join(f.root,'incoming-'+i+'x'.repeat(110)),'unrelated\n');f.git('add','.');f.git('commit','-qm','Large unrelated incoming release');f.git('checkout','-q','main');f.git('merge','-q','--no-edit','incoming');
   const result=await f.inspect();assert.equal(result.coverage.state,'deployed',result.coverage.reason);assert.equal(result.coverage.covered,1);assert.equal(result.evidence.filter(e=>e.kind==='commit').length,1);
  }finally{f.close();}
+});
+test('a published commit remains covered when later production inserts split its patch context',async()=>{
+ const f=fixture();try{
+  const base=f.commit('jobs:\n  existing: true\nprofiles:\n  common: true\n','configuration baseline');
+  const head=f.commit('jobs:\n  existing: true\nprofiles:\n  merchant: true\n  common: true\n','Merchant profile');
+  f.git('checkout','-qb','release',head);const prod=f.commit('jobs:\n  existing: true\n  refund_review: true\nprofiles:\n  merchant: true\n  common: true\n','Add later production job');f.git('update-ref','refs/remotes/origin/main',prod);f.git('checkout','-q','main');
+  const check=()=>inspectRepository(new Git(f.root,10000),{repositoryId:'repo',repoPath:'repo',baseSha:base});
+  const patch=f.git('diff','--unified=3',base,head,'--','file'),body=f.git('show',prod+':file');assert.equal(textPatchCoverage(patch,body),'unknown');let result=await check();assert.equal(result.coverage.committedState,'deployed');assert.equal(result.coverage.uncertain,0);
+  f.git('checkout','-q','release');const revert=f.commit('jobs:\n  existing: true\n  refund_review: true\nprofiles:\n  common: true\n','Remove merchant profile');f.git('update-ref','refs/remotes/origin/main',revert);f.git('checkout','-q','main');result=await check();assert.notEqual(result.coverage.committedState,'deployed');
+ }finally{f.close();}
+});
+test('retained content verification rejects removal, changed values, reordering, invalid text and binary content',()=>{
+ assert.equal(retainedCommittedText('a\nfeature: on\nz\n','new\na\nfeature: on\nextra\nz\n'),true);
+ for(const production of ['a\nz\n','a\nfeature: off\nz\n','z\nfeature: on\na\n','a\nfeature: on\nz\n\0','a\nfeature: on\nz\n\ufffd'])assert.equal(retainedCommittedText('a\nfeature: on\nz\n',production),false);
 });

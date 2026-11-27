@@ -11,6 +11,7 @@ import { callOrganizerModel, checkOrganizerModel, mergeOrganizerItems, retainOrg
 import { conversationBatch } from './conversation.ts';
 import {organizerProgress,type OrganizerProgress} from './jobs.ts';
 import {SessionOrganizer} from './session-service.ts';
+import {eligibleAssociationWorkspaces,syncSessionAssociations} from './session-associations.ts';
 
 type Dependencies = { api(): Promise<PaseoApi>; query?: typeof queryObserver; settings?: OrganizerSettings;legacyBranches?():Promise<Record<string,string>> };
 type JobOptions = OrganizerJobOptions;
@@ -86,7 +87,7 @@ export class OrganizerService {
       }
       if (!route) throw Error('project_context_required');
       const store = this.store(route);
-      if(request.action==='session.refresh'||request.action==='session.apply'||request.action==='session.automatic')return{ok:true,result:await this.sessions.request(route,request)};
+      if(request.action==='session.refresh'||request.action==='session.apply'||request.action==='session.automatic'||request.action==='session.associations'||request.action==='session.associations.save')return{ok:true,result:await this.sessions.request(route,request)};
       if (request.action === 'snapshot') return { ok: true, result: this.snapshot(route, request.hostWorkspaceId) };
       if(request.action==='status'){const ledger=store.read();return{ok:true,result:{revision:ledger.revision,active:ledger.jobs.some(job=>job.state==='running'||job.state==='queued')}};}
       if (request.action === 'run') return { ok: true, result: store.run(request.runId) };
@@ -165,7 +166,7 @@ export class OrganizerService {
   private async agents(api: PaseoApi) {
     const agents = new Map<string, PaseoAgent>(); let cursor: string | undefined;
     for (let page = 0; page < 20; page++) {
-      const result = await api.agents.list({ filter: { includeArchived: false }, page: { limit: 200, ...(cursor ? { cursor } : {}) } });
+      const result = await api.agents.list({ filter: { includeArchived: true }, sort:[{key:'created_at',direction:'desc'}],page: { limit: 200, ...(cursor ? { cursor } : {}) } });
       for (const row of result.entries) agents.set(row.agent.id, row.agent);
       if (!result.pageInfo.hasMore) return agents;
       const next = result.pageInfo.nextCursor || undefined; if (!next || next === cursor) break; cursor = next;
@@ -214,31 +215,22 @@ export class OrganizerService {
     updateJob({ state: 'running',startedAt:now() });progress.stage('discovering');
     if(!options.automatic&&options.analyze&&!policy.profileId)throw Error('organizer_model_required');
     const roster = await this.read(route, 'workspace.list', { includeRemoved: false }); assertCurrent();
-    const rows = (roster.workspaces as Array<Record<string, any>>).filter(w => w.managed && w.id !== 'main' && w.state !== 'record_invalid');
+    const rows = eligibleAssociationWorkspaces(roster.workspaces);
     const bindings = withProject({ projectConfig: route.configPath }, () => allAgentBindings());
     const api = await this.deps.api(), [agents, directory] = await Promise.all([this.agents(api), this.directory(api)]); assertCurrent();
-    const links = new Map<string, { agentIds: Set<string>; keys: Set<string>; fresh: boolean }>();
-    const unlinked: string[] = [];
+    const targetIds=new Set(Object.keys(store.read().targets));
+    for(const row of rows)for(const id of [row.creator?.agentId,...bindings.filter(b=>b.workspaceId===row.id).map(b=>b.agentId)]){const nativeId=id&&agents.get(id)?.workspaceId;if(nativeId&&directory.has(nativeId))targetIds.add(nativeId);}
     store.update(l => {
       for (const row of rows) {
         const key = String(row.instanceKey), previous = l.workspaces[key];
         if (!previous) l.workspaces[key] = { key, title: row.taskBrief || row.displayName || row.id, brief: row.taskBrief || '', items: [], material: { workspaceId: row.id, instance: key, name: row.displayName || row.id, taskBrief: row.taskBrief || '', createdAt: row.createdAt || '', activityAt: row.createdAt || '', fingerprint: '', evidence: [], repositories: [], state: 'unknown', complete: false } };
-        const ids = new Set<string>([row.creator?.agentId, bindings.find(b => b.workspaceId === row.id)?.agentId].filter(Boolean));
-        let linked = false;
-        for (const id of ids) {
-          const agent = agents.get(id), nativeId = agent?.workspaceId;
-          if (!nativeId || !directory.has(nativeId) || (directory.get(nativeId) as unknown as { archivedAt?: string })?.archivedAt) continue;
-          const binding = bindings.find(b => b.workspaceId === row.id && b.agentId === id);
-          if (binding && (binding.cwd !== agent.cwd || binding.paseoWorkspaceId !== nativeId)) continue;
-          const link = links.get(nativeId) || { agentIds: new Set<string>(), keys: new Set<string>(), fresh: false };
-          link.agentIds.add(id); link.keys.add(key); link.fresh ||= String(row.createdAt || '') >= this.settings.enabledAt(route); links.set(nativeId, link); linked = true;
-        }
-        if (!linked) unlinked.push(row.id);
       }
-      for (const [id, link] of links) {
-        const currentTitle = directory.get(id)?.title || null, previous = l.targets[id];
+      for (const id of targetIds) {
+        const native=directory.get(id),previous=l.targets[id];
+        if(!native||(native as {archivedAt?:string}).archivedAt){if(previous){previous.workspaceKeys=[];previous.policy='paused';previous.reason='当前宿主对象不可用';}continue;}
+        const currentTitle = native.title || null;
         const target: OrganizerTarget = previous || { id, agentIds: [], workspaceKeys: [], currentTitle, state: 'unknown', policy: 'preview', history: [] };
-        target.agentIds = [...link.agentIds]; target.workspaceKeys = [...link.keys]; target.currentTitle = currentTitle;
+        syncSessionAssociations(l,target,rows,agents,bindings);target.currentTitle = currentTitle;
         if (target.pendingWrite) {
           if (currentTitle === target.pendingWrite.to) { target.lastWritten = currentTitle; delete target.pendingWrite; }
           else { target.policy = 'paused'; target.reason = '此前标题写入结果未确认，请核对后恢复自动维护'; }
@@ -246,9 +238,9 @@ export class OrganizerService {
         if (target.lastWritten !== undefined && currentTitle !== target.lastWritten && !target.pendingWrite && ['auto', 'symbols'].includes(target.policy)) { target.policy = 'paused'; target.reason = '检测到外部改名，已保留当前标题并暂停自动维护'; }
         l.targets[id] = target;
       }
-      // No stale target may keep writing after its explicit association disappears.
-      for (const target of Object.values(l.targets)) if (!links.has(target.id)) { target.workspaceKeys = []; target.policy = 'paused'; target.reason = '当前关联或宿主对象不可用'; }
-      l.unlinked = unlinked; this.projectTargets(l, policy); delete l.error;
+      for(const target of Object.values(l.targets))if(!target.workspaceKeys.length){target.policy='paused';target.reason='当前关联或宿主对象不可用';}
+      const linkedKeys=new Set(Object.values(l.targets).flatMap(target=>target.workspaceKeys));
+      l.unlinked = rows.filter(row=>!linkedKeys.has(String(row.instanceKey))).map(row=>row.id); this.projectTargets(l, policy); delete l.error;
     });
     const current = store.read(), selected = options.workspaceIds ? new Set(options.workspaceIds) : null;
     const automaticKeys = new Set(Object.values(current.targets).filter(t => ['auto', 'symbols'].includes(t.policy) && visible(policy, t)).flatMap(t => t.workspaceKeys.filter(key=>policy.mode!=='selected'||policy.selectedIds.includes(t.id)||policy.selectedIds.includes(key)||policy.selectedIds.includes(current.workspaces[key]?.material.workspaceId))));

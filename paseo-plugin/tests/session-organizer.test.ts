@@ -20,11 +20,11 @@ async function fixture(){
  await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const settings=new OrganizerSettings(join(root,'settings'));settings.saveProfile(0,{id:'local',name:'Local',baseUrl:`http://127.0.0.1:${(server.address() as{port:number}).port}`,model:'fixture',contextTokens:16384,outputTokens:2048,timeoutMs:10000});
  const route={configPath:config,sourceRoot:root,stateRoot:join(root,'state'),workspaceRoot:join(root,'workspaces'),treesRoot:join(root,'trees'),recordsRoot:join(root,'records'),socketPath:join(root,'s.sock'),displayName:'session'};
  settings.save('project',1,{profileId:'local',analysisIntervalSeconds:0,debounceSeconds:0},[],route);
- const agent={id:'agent',workspaceId:'native',cwd:root,archivedAt:null};const api={agents:{list:async()=>({entries:[{agent}],pageInfo:{hasMore:false}}),ref:()=>({timeline:{refetch:async(options:any)=>({epoch:'epoch',hasOlder:false,hasNewer:options.direction==='after'&&hasNewer,entries:options?.cursor?.seq>=head?[]:[{seqStart:head,seqEnd:head,item:{type:'user_message',text:messageText}}]})}})},workspaces:{ref:(id:string)=>({refresh:async()=>id==='native'?{id,title}:null,setTitle:async(value:string)=>{writes++;if(failWrite)throw Error('closed');title=value;}})}} as unknown as PaseoApi;
+ const agent={id:'agent',workspaceId:'native',cwd:root,archivedAt:null as string|null};let agentVisible=true;const api={agents:{list:async()=>({entries:agentVisible?[{agent}]:[],pageInfo:{hasMore:false}}),ref:()=>({timeline:{refetch:async(options:any)=>({epoch:'epoch',hasOlder:false,hasNewer:options.direction==='after'&&hasNewer,entries:options?.cursor?.seq>=head?[]:[{seqStart:head,seqEnd:head,item:{type:'user_message',text:messageText}}]})}})},workspaces:{list:async()=>({entries:[{id:'native',title}],pageInfo:{hasMore:false}}),ref:(id:string)=>({refresh:async()=>id==='native'?{id,title}:null,setTitle:async(value:string)=>{writes++;if(failWrite)throw Error('closed');title=value;}})}} as unknown as PaseoApi;
  const query=async({method,params}:any)=>{if(method==='repository.compare')return{ok:true,result:{refs:[]}};if(method==='workspace.list')return {ok:true,result:{workspaces:materials.map((m,i)=>({id:m.workspaceId,instanceKey:m.instance,displayName:m.name,creator:{agentId:m.creatorAgentId},createdAt:m.createdAt,managed:true,state:'active',latestCommitAt:`2026-01-0${i+1}T00:00:00Z`}))}};if(method==='notes.read')return{ok:true,result:{notes:[]}};if(method==='organizer.materials'){reads.push(params.workspaceId);if(readDelay)await new Promise(r=>setTimeout(r,readDelay));return {ok:true,result:structuredClone(materials.find(m=>m.workspaceId===params.workspaceId))};}throw Error(method);};
- const service=new OrganizerService({settings,api:async()=>api,query:query as any}),request=async(request:any)=>{const value=await service.request({projectConfig:config,request});if(!value.ok)throw Error(value.error);return value.result as any;};
+ let service=new OrganizerService({settings,api:async()=>api,query:query as any});const request=async(request:any)=>{const value=await service.request({projectConfig:config,request});if(!value.ok)throw Error(value.error);return value.result as any;};
  const done=async(j:any)=>{for(let i=0;i<1000;i++){const state=await request({action:'job',jobId:j.id});if(!['running','queued'].includes(state.state))return state;await pause();}throw Error('timeout');};
- return{root,route,settings,service,request,done,materials,inputs,reads,counts:()=>({writes,calls:inputs.length}),title:(value?:string)=>{if(value)title=value;return title;},modelTitle:(value:string)=>{modelTitle=value;},delay:(value:number)=>{delay=value;},delayRead:(value:number)=>{readDelay=value;},longHistory:()=>{messageText="讨论统计查询与后续实现。".repeat(400);hasNewer=true;},advance:()=>head++,bad:()=>badSource=true,failWrite:()=>failWrite=true,recoverWrite:()=>failWrite=false,close:async()=>{await service.close();await new Promise<void>(r=>server.close(()=>r()));if(oldRegistry===undefined)delete process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY;else process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY=oldRegistry;rmSync(root,{recursive:true,force:true});}};
+ return{root,route,settings,service,agent,hideAgent:()=>agentVisible=false,restart:async()=>{await service.close();service=new OrganizerService({settings,api:async()=>api,query:query as any});},request,done,materials,inputs,reads,counts:()=>({writes,calls:inputs.length}),title:(value?:string)=>{if(value)title=value;return title;},modelTitle:(value:string)=>{modelTitle=value;},delay:(value:number)=>{delay=value;},delayRead:(value:number)=>{readDelay=value;},longHistory:()=>{messageText="讨论统计查询与后续实现。".repeat(400);hasNewer=true;},advance:()=>head++,bad:()=>badSource=true,failWrite:()=>failWrite=true,recoverWrite:()=>failWrite=false,close:async()=>{await service.close();await new Promise<void>(r=>server.close(()=>r()));if(oldRegistry===undefined)delete process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY;else process.env.WORKSPACE_WORKBENCH_PROJECT_REGISTRY=oldRegistry;rmSync(root,{recursive:true,force:true});}};
 }
 test('session view batches its own workspaces, leaves native titles alone, and caches unchanged summaries',async()=>{
  const f=await fixture();try{const job=await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(job.state,'complete',job.error);assert.equal(f.counts().calls,1);assert.equal(f.counts().writes,0);assert.equal(f.inputs[0].workspaces.find((w:any)=>w.key===f.inputs[0].latestWorkspace).name,'task-2');assert.equal(f.inputs[0].workspaces.length,3);assert.equal(f.inputs[0].wantTitle,true);
@@ -87,5 +87,61 @@ test('an uncertain write can only be attempted again after a fresh explicit prev
 test('an empty baseline does not keep fully deployed work in a partially deployed state',async()=>{
  const f=await fixture();try{for(const m of f.materials)m.state=m.repositories[0].state='deployed';const baseline=structuredClone(f.materials[0]);baseline.workspaceId='baseline';baseline.instance='baseline:instance';baseline.taskBrief='';baseline.evidence=[];baseline.state=baseline.repositories[0].state='discussion';f.materials.push(baseline);
  const job=await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));assert.equal(job.state,'complete',job.error);assert.equal((await f.request({action:'snapshot'})).targets[0].session.preview.title,'✓ 小时统计查询优化');
+ }finally{await f.close();}
+});
+test('verified associations survive archived or missing Agents, reloads and legacy project refreshes',async()=>{
+ const f=await fixture();try{
+  const first=await f.request({action:'session.associations',targetId:'native'});assert.equal(first.workspaces.filter((w:any)=>w.linked).length,3);assert.equal(f.counts().calls,0);
+  f.agent.archivedAt='2026-02-01';let view=await f.request({action:'session.associations',targetId:'native'});assert.equal(view.workspaces.filter((w:any)=>w.linked).length,3);
+  f.hideAgent();await f.restart();view=await f.request({action:'session.associations',targetId:'native'});assert.equal(view.workspaces.filter((w:any)=>w.linked).length,3);
+  assert.equal((await f.done(await f.request({action:'refresh'}))).state,'complete');assert.equal((await f.request({action:'snapshot',hostWorkspaceId:'native'})).targets[0].workspaceKeys.length,3);assert.equal(f.counts().writes,0);
+ }finally{await f.close();}
+});
+test('a session can explicitly associate legacy Workspaces without creators and preserve those links across refreshes',async()=>{
+ const f=await fixture();try{
+  for(const m of f.materials)delete m.creatorAgentId;
+  const view=await f.request({action:'session.associations',targetId:'native'});assert.equal(view.workspaces.length,3);assert.equal(view.workspaces.some((w:any)=>w.linked),false);
+  const saved=await f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:[view.workspaces[1].key]});assert.equal(saved.workspaces.filter((w:any)=>w.linked).length,1);assert.equal(saved.workspaces[1].source,'manual');assert.equal(f.counts().calls,0);assert.equal(f.counts().writes,0);
+  assert.equal((await f.done(await f.request({action:'refresh'}))).state,'complete');await f.restart();assert.equal((await f.request({action:'session.associations',targetId:'native'})).workspaces[1].linked,true);
+  const job=await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(job.state,'complete',job.error);assert.equal(f.inputs[0].workspaces.length,1);assert.equal(f.inputs[0].conversations.length,1);assert.deepEqual((await f.request({action:'snapshot'})).targets[0].agentIds,['agent']);assert.equal(f.counts().writes,0);
+ }finally{await f.close();}
+});
+test('deselecting an automatic association persists an exclusion and reselecting does not alter creator records',async()=>{
+ const f=await fixture();try{
+  let view=await f.request({action:'session.associations',targetId:'native'});view=await f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:view.workspaces.slice(1).map((w:any)=>w.key)});
+  await f.restart();view=await f.request({action:'session.associations',targetId:'native'});assert.equal(view.workspaces[0].linked,false);assert.equal(view.workspaces[0].source,'manual');assert.equal((await f.done(await f.request({action:'refresh'}))).state,'complete');assert.equal((await f.request({action:'snapshot'})).targets[0].workspaceKeys.length,2);
+  await f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:view.workspaces.map((w:any)=>w.key)});assert.equal(f.materials[0].creatorAgentId,'agent');assert.equal((await f.request({action:'snapshot'})).targets[0].workspaceKeys.length,3);
+ }finally{await f.close();}
+});
+test('association selections reject stale scopes and foreign or duplicate Workspace instances atomically',async()=>{
+ const f=await fixture();try{
+  const view=await f.request({action:'session.associations',targetId:'native'}),keys=view.workspaces.map((w:any)=>w.key);
+  await assert.rejects(f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:[...keys,'foreign:instance']}),/workspace_unavailable/);
+  await assert.rejects(f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:[keys[0],keys[0]]}),/workspace_unavailable/);
+  await f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:keys.slice(1)});
+  await assert.rejects(f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:keys}),/associations_changed/);
+  assert.equal((await f.request({action:'snapshot'})).targets[0].workspaceKeys.length,2);assert.equal(f.counts().writes,0);
+ }finally{await f.close();}
+});
+test('Workspace IDs reused by a new instance do not inherit a manual association',async()=>{
+ const f=await fixture();try{
+  for(const m of f.materials)delete m.creatorAgentId;let view=await f.request({action:'session.associations',targetId:'native'});await f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:[view.workspaces[0].key]});
+  view=await f.request({action:'session.associations',targetId:'native'});f.materials[0].instance='w0:replacement';
+  await assert.rejects(f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:[view.workspaces[0].key]}),/associations_changed/);
+  const updated=await f.request({action:'session.associations',targetId:'native'});assert.equal(updated.workspaces.some((w:any)=>w.linked),false);assert.ok((await f.request({action:'snapshot'})).targets[0].workspaceLinks[view.workspaces[0].key]);
+ }finally{await f.close();}
+});
+test('editing an association pauses title authorization and invalidates previously confirmed inputs',async()=>{
+ const f=await fixture();try{
+  await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));let t=(await f.request({action:'snapshot'})).targets[0];await f.request({action:'session.apply',targetId:'native',previewId:t.session.preview.id});const oldPreview=t.session.preview.id;
+  const view=await f.request({action:'session.associations',targetId:'native'});await f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:view.workspaces.slice(1).map((w:any)=>w.key)});
+  t=(await f.request({action:'snapshot'})).targets[0];assert.equal(t.session.enabled,false);assert.equal(t.session.preview,undefined);await assert.rejects(f.request({action:'session.apply',targetId:'native',previewId:oldPreview}),/preview_changed/);assert.equal(f.counts().writes,1);
+ }finally{await f.close();}
+});
+test('saving associations cancels an in-flight model result before it can publish',async()=>{
+ const f=await fixture();try{
+  f.delay(150);const job=await f.request({action:'session.refresh',targetId:'native',preview:true});while(!f.inputs.length)await pause();
+  const view=await f.request({action:'session.associations',targetId:'native'});await f.request({action:'session.associations.save',targetId:'native',revision:view.revision,workspaceKeys:view.workspaces.slice(1).map((w:any)=>w.key)});
+  assert.equal((await f.done(job)).state,'cancelled');assert.equal((await f.request({action:'snapshot'})).workspaces.some((w:any)=>w.digest),false);assert.equal(f.counts().writes,0);
  }finally{await f.close();}
 });

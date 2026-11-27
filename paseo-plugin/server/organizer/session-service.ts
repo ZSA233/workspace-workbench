@@ -8,8 +8,9 @@ import {organizerProgress} from './jobs.ts';
 import {callSessionModel,sessionModelPrompt,type SessionMessages} from './session-model.ts';
 import {organizerHash,type OrganizerSettings,type OrganizerStore} from './storage.ts';
 import {SessionProduction} from './session-production.ts';
+import {eligibleAssociationWorkspaces,sessionAssociations,syncSessionAssociations} from './session-associations.ts';
 
-type Request=Extract<OrganizerInput['request'],{action:'session.refresh'|'session.apply'|'session.automatic'}>;
+type Request=Extract<OrganizerInput['request'],{action:'session.refresh'|'session.apply'|'session.automatic'|'session.associations'|'session.associations.save'}>;
 type Dependencies={settings:OrganizerSettings;api():Promise<PaseoApi>;store(route:ProjectRoute):OrganizerStore;read(route:ProjectRoute,method:'workspace.list'|'repository.compare'|'repository.fetch',params?:Record<string,unknown>):Promise<Record<string,any>>;materials(route:ProjectRoute,id:string,key:string,policy:OrganizerPolicy):Promise<WorkspaceMaterial>;model<T>(work:()=>Promise<T>):Promise<T>};
 const at=()=>new Date().toISOString();
 const errorText=(error:unknown)=>error instanceof Error?error.message:String(error);
@@ -24,6 +25,7 @@ export class SessionOrganizer {
   constructor(deps:Dependencies){this.deps=deps;}
   private config(route:ProjectRoute){const settings=this.deps.settings.response(route),profile=settings.profiles.find(p=>p.id===settings.effective.profileId);return organizerHash([profile,sessionModelPrompt(settings.effective),settings.effective.markers]);}
   async request(route:ProjectRoute,request:Request){
+    if(request.action==='session.associations'||request.action==='session.associations.save')return this.associations(route,request);
     if(request.action==='session.apply'){await this.apply(route,request.targetId,request.previewId);return this.deps.store(route).read().targets[request.targetId];}
     if(request.action==='session.automatic'){
       const timerKey=route.configPath+':'+request.targetId,timer=this.timers.get(timerKey);if(timer)clearTimeout(timer);this.timers.delete(timerKey);
@@ -47,22 +49,37 @@ export class SessionOrganizer {
   private async discover(route:ProjectRoute,targetId:string,api:PaseoApi,assertCurrent:()=>void) {
     const native=await api.workspaces.ref(targetId).refresh();if(!native||(native as {archivedAt?:string}).archivedAt)throw Error('organizer_host_workspace_unavailable');
     const roster=await this.deps.read(route,'workspace.list'),bindings=withProject({projectConfig:route.configPath},allAgentBindings),agents=new Map<string,PaseoAgent>();let cursor:string|undefined;
-    for(let page=0;page<20;page++){const result=await api.agents.list({filter:{includeArchived:false},page:{limit:200,...(cursor?{cursor}:{})}});for(const row of result.entries)agents.set(row.agent.id,row.agent);if(!result.pageInfo.hasMore)break;const next=result.pageInfo.nextCursor||undefined;if(!next||next===cursor||page===19)throw Error('organizer_agents_incomplete');cursor=next;}
-    assertCurrent();const linked:Array<Record<string,any>>=[],agentIds=new Set<string>();
-    for(const row of roster.workspaces||[]){if(!row.managed||row.id==='main'||['record_invalid','removed','deletion_pending'].includes(row.state))continue;
-      const ids=new Set<string>([row.creator?.agentId,...bindings.filter(b=>b.workspaceId===row.id).map(b=>b.agentId)].filter(Boolean));let belongs=false;
-      for(const id of ids){const agent=agents.get(id);if(!agent||agent.workspaceId!==targetId||agent.archivedAt)continue;const binding=bindings.find(b=>b.workspaceId===row.id&&b.agentId===id);if(binding&&(binding.cwd!==agent.cwd||binding.paseoWorkspaceId!==targetId))continue;belongs=true;agentIds.add(id);}
-      if(belongs&&typeof row.instanceKey==='string')linked.push(row);
-    }
+    for(let page=0;page<20;page++){const result=await api.agents.list({filter:{includeArchived:true},sort:[{key:'created_at',direction:'desc'}],page:{limit:200,...(cursor?{cursor}:{})}});for(const row of result.entries)agents.set(row.agent.id,row.agent);if(!result.pageInfo.hasMore)break;const next=result.pageInfo.nextCursor||undefined;if(!next||next===cursor||page===19)throw Error('organizer_agents_incomplete');cursor=next;}
+    assertCurrent();const rows=eligibleAssociationWorkspaces(roster.workspaces||[]);
     const store=this.deps.store(route);store.update(l=>{
-      for(const row of linked){const key=String(row.instanceKey);if(!l.workspaces[key])l.workspaces[key]={key,title:row.displayName||row.id,brief:'',items:[],material:{workspaceId:row.id,instance:key,name:row.displayName||row.id,createdAt:row.createdAt||'',activityAt:row.createdAt||'',latestCommitAt:row.latestCommitAt||null,taskBrief:row.taskBrief||'',fingerprint:'',evidence:[],repositories:[],state:'unknown',complete:false}};}
       const t=l.targets[targetId]||{id:targetId,agentIds:[],workspaceKeys:[],currentTitle:native.title||null,state:'unknown',policy:'preview',history:[]};
+      const linked=syncSessionAssociations(l,t,rows,agents,bindings);
       t.session||={version:1,enabled:false};
       if(t.pendingWrite){t.session.enabled=false;t.session.paused='此前标题写入结果未确认，请重新核对';if(native.title===t.pendingWrite.to){t.lastWritten=native.title||null;delete t.pendingWrite;}}
       if(t.session.enabled&&t.lastWritten!==undefined&&native.title!==t.lastWritten){t.session.enabled=false;t.session.paused='标题已在外部修改';}
-      t.currentTitle=native.title||null;t.agentIds=[...agentIds];t.workspaceKeys=linked.map(row=>String(row.instanceKey));
-      if(!linked.length){t.session.enabled=false;t.session.paused='当前会话暂无关联工作区';}l.targets[targetId]=t;
-    });return linked;
+      t.currentTitle=native.title||null;
+      if(!linked.length){t.session.enabled=false;t.session.paused='当前会话暂无关联工作区';}else if(t.session.paused==='当前会话暂无关联工作区')delete t.session.paused;l.targets[targetId]=t;
+    });const keys=new Set(store.read().targets[targetId].workspaceKeys);return {linked:rows.filter(row=>keys.has(row.instanceKey)),rows,agents,bindings};
+  }
+  private async associations(route:ProjectRoute,request:Extract<Request,{action:'session.associations'|'session.associations.save'}>){
+    const store=this.deps.store(route),api=await this.deps.api(),context=await this.discover(route,request.targetId,api,()=>{if(this.closed)throw Error('organizer_closed');});
+    let ledger=store.read(),target=ledger.targets[request.targetId],view=sessionAssociations(ledger,target,context.rows);
+    if(request.action==='session.associations')return view;
+    if(request.revision!==view.revision)throw Error('organizer_associations_changed');
+    const selected=new Set(request.workspaceKeys);
+    if(selected.size!==request.workspaceKeys.length||request.workspaceKeys.some(key=>!context.rows.some(row=>row.instanceKey===key)))throw Error('organizer_association_workspace_unavailable');
+    if(selected.size===target.workspaceKeys.length&&target.workspaceKeys.every(key=>selected.has(key)))return view;
+    const timerKey=route.configPath+':'+request.targetId,timer=this.timers.get(timerKey);if(timer)clearTimeout(timer);this.timers.delete(timerKey);
+    for(const active of this.active.values())if(active.project===route.configPath&&active.targetId===request.targetId)active.abort.abort();
+    store.update(l=>{
+      const t=l.targets[request.targetId],links=t.workspaceLinks!;
+      for(const row of context.rows){const old=links[row.instanceKey],included=selected.has(row.instanceKey);if(included!==!!old?.included)links[row.instanceKey]={...old,workspaceId:row.id,source:'manual',included,at:at()};}
+      const wasEnabled=t.session?.enabled;
+      t.session={...t.session,version:1,enabled:false,controlRevision:(t.session?.controlRevision||0)+1,preview:undefined,lastAttemptAt:undefined,error:undefined};
+      if(wasEnabled)t.session.paused='关联已更新，请预览标题后重新开启';else if(t.session.paused==='当前会话暂无关联工作区')delete t.session.paused;
+      syncSessionAssociations(l,t,context.rows,context.agents,context.bindings);
+      t.state=productionState(t.workspaceKeys.map(key=>l.workspaces[key]));
+    });ledger=store.read();target=ledger.targets[request.targetId];return sessionAssociations(ledger,target,context.rows);
   }
   private rows(store:OrganizerStore,targetId:string){const l=store.read();return l.targets[targetId].workspaceKeys.map(k=>l.workspaces[k]).filter(Boolean).sort((a,b)=>{
     const x=Date.parse(a.material.latestCommitAt||''),y=Date.parse(b.material.latestCommitAt||'');if(Number.isFinite(x)&&Number.isFinite(y)&&x!==y)return y-x;if(Number.isFinite(x)!==Number.isFinite(y))return Number.isFinite(x)?-1:1;return a.material.workspaceId.localeCompare(b.material.workspaceId);
@@ -84,7 +101,7 @@ export class SessionOrganizer {
     const store=this.deps.store(route),settings=this.deps.settings,policy=settings.response(route).effective,token=settings.fingerprint(route),configuration=this.config(route),api=await this.deps.api();
     const assertCurrent=()=>{if(signal.aborted||this.closed)throw Error('organizer_cancelled');if(settings.fingerprint(route)!==token)throw Error('organizer_settings_changed');};
     const progress=organizerProgress(store,id);assertCurrent();progress.update(j=>{j.state='running';j.startedAt=at();});progress.stage('discovering');
-    const roster=await this.discover(route,targetId,api,assertCurrent);progress.update(j=>{j.total=roster.length;j.workspaceIds=roster.map(r=>r.id);});
+    const {linked:roster}=await this.discover(route,targetId,api,assertCurrent);progress.update(j=>{j.total=roster.length;j.workspaceIds=roster.map(r=>r.id);});
     for(const row of roster){assertCurrent();progress.stage('materials',{workspaceId:row.id,name:row.displayName||row.id});const load=()=>this.deps.materials(route,row.id,row.instanceKey,policy),initial=await load(),material=await this.production.refresh(route.configPath,initial,policy,id,(method,params)=>this.deps.read(route,method,params),load,signal,repository=>progress.stage('fetching',{workspaceId:row.id,name:row.displayName||row.id,repository}));material.latestCommitAt=row.latestCommitAt||null;assertCurrent();store.update(l=>{l.workspaces[row.instanceKey].material=material;});progress.update(j=>{j.completed++;});}
     store.update(l=>{l.targets[targetId].state=productionState(l.targets[targetId].workspaceKeys.map(k=>l.workspaces[k]));});
     let target=store.read().targets[targetId];if(!roster.length){progress.skip('no-material');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
@@ -131,7 +148,7 @@ export class SessionOrganizer {
     if(preview.configurationFingerprint!==configuration||preview.sourceFingerprint!==this.fingerprint(store,targetId))throw Error('organizer_preview_changed');
     const originalKeys=[...target.workspaceKeys],expected=target.currentTitle,control=target.session!.controlRevision||0;
     const assertCurrent=()=>{if(this.closed||settings.fingerprint(route)!==token)throw Error('organizer_settings_changed');};
-    const roster=await this.discover(route,targetId,api,assertCurrent);if(organizerHash(roster.map(r=>r.instanceKey).sort())!==organizerHash([...originalKeys].sort()))throw Error('organizer_source_changed');
+    const {linked:roster}=await this.discover(route,targetId,api,assertCurrent);if(organizerHash(roster.map(r=>r.instanceKey).sort())!==organizerHash([...originalKeys].sort()))throw Error('organizer_source_changed');
     for(const key of originalKeys){const prior=store.read().workspaces[key],material=this.production.applyCached(route.configPath,await this.deps.materials(route,prior.material.workspaceId,key,policy));assertCurrent();if(material.fingerprint!==prior.material.fingerprint)throw Error('organizer_source_changed');store.update(l=>{material.latestCommitAt=l.workspaces[key].material.latestCommitAt;l.workspaces[key].material=material;});}
     for(const [id,head]of Object.entries(preview.messageHeads||{})){const page=await api.agents.ref(id).timeline.refetch({limit:1,direction:'before'});assertCurrent();if(page.error||page.staleCursor||page.epoch!==head.epoch||(page.entries.at(-1)?.seqEnd||0)!==head.seq)throw Error('organizer_source_changed');}
     target=store.read().targets[targetId];const state=productionState(originalKeys.map(k=>store.read().workspaces[k])),title=formatOrganizerTitle(preview.body,state,policy);

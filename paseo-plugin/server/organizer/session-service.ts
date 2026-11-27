@@ -4,7 +4,7 @@ import {aggregateProduction,formatOrganizerTitle,type ConversationAnalysis,type 
 import {allAgentBindings} from '../agent-store.ts';
 import {withProject,type ProjectRoute} from '../projects.ts';
 import {conversationBatch} from './conversation.ts';
-import {organizerProgress} from './jobs.ts';
+import {organizerProgress,type OrganizerProgress} from './jobs.ts';
 import {callSessionModel,sessionModelPrompt,type SessionMessages} from './session-model.ts';
 import {organizerHash,type OrganizerSettings,type OrganizerStore} from './storage.ts';
 import {SessionProduction} from './session-production.ts';
@@ -39,10 +39,10 @@ export class SessionOrganizer {
     if(this.closed)throw Error('organizer_closed');
     const old=[...this.active].find(([,r])=>r.project===route.configPath&&r.targetId===targetId&&r.preview===preview&&r.force===force&&!r.abort.signal.aborted);if(old)return this.deps.store(route).read().jobs.find(j=>j.id===old[0])!;
     if(this.active.size>=8)throw Error('organizer_queue_full');
-    const job:OrganizerJob={id:randomUUID(),kind:'session',hostWorkspaceId:targetId,state:'queued',stage:'queued',workspaceIds:[],completed:0,total:0,createdAt:at(),updatedAt:at(),model:{state:'not-requested',calls:0,completed:0},result:{analyzed:0,cached:0,skipped:0,failed:0,titleWrites:0,conversations:0}};
+    const job:OrganizerJob={id:randomUUID(),kind:'session',hostWorkspaceId:targetId,intent:{preview},input:{workspaces:[],history:{pages:0,fragments:0,complete:false}},state:'queued',stage:'queued',workspaceIds:[],completed:0,total:0,createdAt:at(),updatedAt:at(),model:{state:'not-requested',calls:0,completed:0},result:{analyzed:0,cached:0,skipped:0,failed:0,titleWrites:0,conversations:0}};
     const store=this.deps.store(route),abort=new AbortController();store.update(l=>l.jobs.push(job));
     const promise=(this.tails.get(route.configPath)||Promise.resolve()).catch(()=>{}).then(()=>this.perform(route,job.id,targetId,preview,force,abort.signal)).catch(error=>{
-      store.update(l=>{const j=l.jobs.find(j=>j.id===job.id)!;j.state=abort.signal.aborted?'cancelled':'failed';j.error=errorText(error);j.updatedAt=at();const t=l.targets[targetId];if(t?.session&&!abort.signal.aborted)t.session.error=errorText(error);});
+      store.update(l=>{const j=l.jobs.find(j=>j.id===job.id)!;j.state=abort.signal.aborted?'cancelled':'failed';j.error=errorText(error);if(j.result&&!abort.signal.aborted)j.result.failed++;j.updatedAt=at();const t=l.targets[targetId];if(t?.session&&!abort.signal.aborted)t.session.error=errorText(error);});
     }).finally(()=>this.active.delete(job.id));
     this.active.set(job.id,{project:route.configPath,targetId,abort,promise,preview,force});this.tails.set(route.configPath,promise);return job;
   }
@@ -85,24 +85,30 @@ export class SessionOrganizer {
     const x=Date.parse(a.material.latestCommitAt||''),y=Date.parse(b.material.latestCommitAt||'');if(Number.isFinite(x)&&Number.isFinite(y)&&x!==y)return y-x;if(Number.isFinite(x)!==Number.isFinite(y))return Number.isFinite(x)?-1:1;return a.material.workspaceId.localeCompare(b.material.workspaceId);
   });}
   private fingerprint(store:OrganizerStore,targetId:string){const l=store.read(),t=l.targets[targetId];return organizerHash([[...t.workspaceKeys].sort().map(key=>[key,l.workspaces[key]?.material.fingerprint,l.workspaces[key]?.material.latestCommitAt]),[...t.agentIds].sort().map(id=>[id,l.conversations[id]?.fingerprint,l.conversations[id]?.cursor,l.conversations[id]?.pendingMessage])]);}
-  private async messages(store:OrganizerStore,target:OrganizerTarget,api:PaseoApi,assertCurrent:()=>void,reusePreview=false){
+  private async messages(store:OrganizerStore,target:OrganizerTarget,api:PaseoApi,assertCurrent:()=>void,reusePreview=false,progress?:OrganizerProgress){
     const rows:Messages[]=[],heads:Record<string,{epoch:string;seq:number}>={};
-    for(const agentId of target.agentIds){assertCurrent();let old=store.read().conversations[agentId];const head=await api.agents.ref(agentId).timeline.refetch({limit:1,direction:'before'});if(head.error||head.staleCursor)throw Error(head.error||'organizer_history_cursor_stale');heads[agentId]={epoch:head.epoch,seq:head.entries.at(-1)?.seqEnd||0};
+    for(const agentId of target.agentIds){assertCurrent();progress?.stage('conversation',{agentId,page:0});let old=store.read().conversations[agentId];const head=await api.agents.ref(agentId).timeline.refetch({limit:1,direction:'before'});if(head.error||head.staleCursor)throw Error(head.error||'organizer_history_cursor_stale');heads[agentId]={epoch:head.epoch,seq:head.entries.at(-1)?.seqEnd||0};
       if(reusePreview&&organizerHash(heads[agentId])===organizerHash(target.session?.preview?.messageHeads?.[agentId])){rows.push({agentId,previous:old,evidence:[],complete:old?.complete||false});continue;}
-      for(let pages=0;pages<8;pages++){const page=await api.agents.ref(agentId).timeline.refetch({limit:100,direction:'after',...(old?.cursor?{cursor:old.cursor}:{})});assertCurrent();if(page.error||page.staleCursor)throw Error(page.error||'organizer_history_cursor_stale');
-        const batch=conversationBatch(agentId,page,old,400);if(batch.evidence.length){rows.push({agentId,previous:old,evidence:batch.evidence,complete:batch.startedAtBeginning&&!page.hasNewer&&!batch.limited,batch});break;}
+      for(let pages=0;pages<8;pages++){progress?.stage('conversation',{agentId,page:pages+1});const page=await api.agents.ref(agentId).timeline.refetch({limit:100,direction:'after',...(old?.cursor?{cursor:old.cursor}:{})});assertCurrent();if(page.error||page.staleCursor)throw Error(page.error||'organizer_history_cursor_stale');
+        const batch=conversationBatch(agentId,page,old,400);progress?.update(j=>{if(j.input){j.input.history.pages++;j.input.history.fragments+=batch.evidence.length;}});if(batch.evidence.length){rows.push({agentId,previous:old,evidence:batch.evidence,complete:batch.startedAtBeginning&&!page.hasNewer&&!batch.limited,batch});break;}
         const last=page.entries.at(-1);if(last){const next:ConversationAnalysis={...old,agentId,brief:old?.brief||'',items:old?.items||[],evidence:old?.evidence||[],cursor:{epoch:page.epoch,seq:last.seqEnd},pendingMessage:undefined,startedAtBeginning:batch.startedAtBeginning,complete:batch.startedAtBeginning&&!page.hasNewer,updatedAt:old?.updatedAt||''};store.update(l=>{l.conversations[agentId]=next;});old=next;}
         if(!page.hasNewer||!last){rows.push({agentId,previous:old,evidence:[],complete:old?.complete??!page.hasOlder});break;}
         if(pages===7)rows.push({agentId,previous:old,evidence:[],complete:false});
       }
-    }return {rows,heads};
+    }progress?.update(j=>{if(j.input)j.input.history.complete=rows.every(row=>row.complete);});return {rows,heads};
   }
   private async perform(route:ProjectRoute,id:string,targetId:string,preview:boolean,force:boolean,signal:AbortSignal){
     const store=this.deps.store(route),settings=this.deps.settings,policy=settings.response(route).effective,token=settings.fingerprint(route),configuration=this.config(route),api=await this.deps.api();
     const assertCurrent=()=>{if(signal.aborted||this.closed)throw Error('organizer_cancelled');if(settings.fingerprint(route)!==token)throw Error('organizer_settings_changed');};
     const progress=organizerProgress(store,id);assertCurrent();progress.update(j=>{j.state='running';j.startedAt=at();});progress.stage('discovering');
     const {linked:roster}=await this.discover(route,targetId,api,assertCurrent);progress.update(j=>{j.total=roster.length;j.workspaceIds=roster.map(r=>r.id);});
-    for(const row of roster){assertCurrent();progress.stage('materials',{workspaceId:row.id,name:row.displayName||row.id});const load=()=>this.deps.materials(route,row.id,row.instanceKey,policy),initial=await load(),material=await this.production.refresh(route.configPath,initial,policy,id,(method,params)=>this.deps.read(route,method,params),load,signal,repository=>progress.stage('fetching',{workspaceId:row.id,name:row.displayName||row.id,repository}));material.latestCommitAt=row.latestCommitAt||null;assertCurrent();store.update(l=>{l.workspaces[row.instanceKey].material=material;});progress.update(j=>{j.completed++;});}
+    for(const row of roster){
+      assertCurrent();const previous=store.read().workspaces[row.instanceKey],name=previous.digest?.title||row.displayName||row.id;
+      const load=()=>{progress.stage('materials',{workspaceId:row.id,name,repositoryCount:row.repositoryCount});return this.deps.materials(route,row.id,row.instanceKey,policy);};
+      const initial=await load();progress.update(j=>{j.input!.workspaces.push({id:row.id,name:row.displayName||row.id,repositories:initial.repositories.length,commits:initial.evidence.filter(e=>e.kind==='commit').length,notes:initial.evidence.filter(e=>e.kind==='note').length,diffs:initial.evidence.filter(e=>e.kind==='diff').length,cached:!!previous.manual||previous.digest?.fingerprint===initial.fingerprint});});
+      const material=await this.production.refresh(route.configPath,initial,policy,id,(method,params)=>this.deps.read(route,method,params),load,signal,(repository,ref,fetching)=>progress.stage(fetching?'fetching':'production',{workspaceId:row.id,name,repository,ref}));
+      material.latestCommitAt=row.latestCommitAt||null;assertCurrent();store.update(l=>{l.workspaces[row.instanceKey].material=material;});progress.update(j=>{j.completed++;});
+    }
     store.update(l=>{l.targets[targetId].state=productionState(l.targets[targetId].workspaceKeys.map(k=>l.workspaces[k]));});
     let target=store.read().targets[targetId];if(!roster.length){progress.skip('no-material');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
     if(target.session!.enabled&&target.session!.configurationFingerprint!==configuration){store.update(l=>{l.targets[targetId].session!.enabled=false;l.targets[targetId].session!.paused='命名配置已改变，请先预览确认';});target=store.read().targets[targetId];}
@@ -111,13 +117,14 @@ export class SessionOrganizer {
     if(!own.length){if(preview)throw Error('organizer_session_no_commits');progress.skip('no-material');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
     const attempted=Date.parse(target.session!.lastAttemptAt||'');if(!preview&&!force&&Number.isFinite(attempted)&&Date.now()-attempted<policy.analysisIntervalSeconds*1000){
       const cached=target.session!.preview;if(target.session!.enabled&&cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached.configurationFingerprint===configuration){store.update(l=>{l.targets[targetId].session!.preview!.title=formatOrganizerTitle(cached.body,l.targets[targetId].state,policy);});if(target.currentTitle!==store.read().targets[targetId].session!.preview!.title)await this.write(route,targetId,cached.id,false);}
-      progress.skip('interval');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
+      progress.skip('interval');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result){j.result.cached=own.filter(w=>w.digest?.fingerprint===w.material.fingerprint).length;j.result.previewReady=cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached?.configurationFingerprint===configuration;}});return;}
     const changed=own.filter(w=>!w.manual&&(!w.digest||w.digest.fingerprint!==w.material.fingerprint)).map(w=>w.key);
     const cached=target.session!.preview,reusePreview=preview&&!force&&!changed.length&&cached?.configurationFingerprint===configuration&&cached?.sourceFingerprint===this.fingerprint(store,targetId);
-    const conversation=policy.conversationSummary?await this.messages(store,target,api,assertCurrent,reusePreview):{rows:[] as Messages[],heads:{}};assertCurrent();
-    const fingerprint=this.fingerprint(store,targetId),wantTitle=preview||target.session!.enabled||changed.length>0;
+    const conversation=policy.conversationSummary?await this.messages(store,target,api,assertCurrent,!!reusePreview,progress):{rows:[] as Messages[],heads:{}};assertCurrent();
+    const fingerprint=this.fingerprint(store,targetId),wantTitle=preview||target.session!.enabled||changed.length>0||!cached||conversation.rows.some(r=>r.evidence.length);
     const newMessages=conversation.rows.some(r=>r.evidence.length),cachedTitle=target.session!.preview;
     const needTitle=wantTitle&&(force||newMessages||!cachedTitle||cachedTitle.sourceFingerprint!==fingerprint||cachedTitle.configurationFingerprint!==configuration);
+    progress.update(j=>{j.intent={preview,title:needTitle,summaries:changed.length};if(j.result)j.result.cached=own.length-changed.length;});
     const batches:string[][]=[];for(let i=0;i<changed.length;i+=4)batches.push(changed.slice(i,i+4));if(!batches.length&&(needTitle||newMessages))batches.push([]);
     if(batches.length)store.update(l=>{l.targets[targetId].session!.lastAttemptAt=at();delete l.targets[targetId].session!.error;});
     let generatedTitle:Awaited<ReturnType<typeof callSessionModel>>['value']['title'],runId:string|undefined;
@@ -125,18 +132,18 @@ export class SessionOrganizer {
       assertCurrent();const keys=batches[index],title=needTitle&&index===batches.length-1,profile=settings.profile(policy.profileId),rows=this.rows(store,targetId);
       const messages=index===0?conversation.rows:conversation.rows.map(row=>({...row,evidence:[],previous:store.read().conversations[row.agentId]}));
       progress.queued(profile);const result=await this.deps.model(async()=>{assertCurrent();return callSessionModel(profile,settings.secret(profile.id),policy,rows,keys,messages,title,target.currentTitle,target.session?.acceptedBody,targetId,signal,run=>store.addRun(run),(phase,run)=>{runId=run.id;progress.model(phase,run);});});assertCurrent();
-      for(const key of keys){const before=rows.find(w=>w.key===key)!,checked=await this.deps.materials(route,before.material.workspaceId,key,policy);assertCurrent();if(checked.fingerprint!==before.material.fingerprint)throw Error('organizer_source_changed');}
+      for(const key of keys){const before=rows.find(w=>w.key===key)!;progress.stage('verifying',{workspaceId:before.material.workspaceId,name:before.material.name});const checked=await this.deps.materials(route,before.material.workspaceId,key,policy);assertCurrent();if(checked.fingerprint!==before.material.fingerprint)throw Error('organizer_source_changed');}
       store.update(l=>{
         for(const item of result.value.workspaces){const w=l.workspaces[item.key];if(!w.manual)w.digest={...w.digest,version:1,title:item.title,brief:item.brief,evidenceIds:item.evidenceIds,fingerprint:w.material.fingerprint,at:at(),partial:result.packed.workspaces.find(p=>p.key===item.key)?.coverage!=='complete'};}
         for(const c of result.value.conversations){const packed=result.packed.conversations.find(p=>p.agentId===c.agentId)!,source=messages.find(m=>m.agentId===c.agentId)!,checkpoint=source.batch?.checkpoints.get(packed.evidence.at(-1)!.id),old=l.conversations[c.agentId];
           l.conversations[c.agentId]={...old,agentId:c.agentId,brief:c.brief,items:old?.items||[],evidence:[...(old?.evidence||[]),...packed.evidence].slice(-80),...checkpoint,startedAtBeginning:source.batch?.startedAtBeginning||old?.startedAtBeginning||false,complete:source.complete&&packed.evidence.length===source.evidence.length,updatedAt:at(),fingerprint:organizerHash([old?.fingerprint,packed.evidence])};}
-      });for(const key of keys)progress.count('analyzed');for(const row of result.value.conversations)progress.count('conversations');generatedTitle=result.value.title||generatedTitle;
+      });progress.update(j=>{if(j.input){for(const row of result.value.workspaces){const entry=j.input.workspaces.find(w=>w.id===store.read().workspaces[row.key].material.workspaceId);if(entry)entry.updated=true;}j.input.history.sentFragments=(j.input.history.sentFragments||0)+result.packed.conversations.reduce((n,c)=>n+c.evidence.length,0);j.input.history.complete=store.read().targets[targetId].agentIds.every(id=>store.read().conversations[id]?.complete);}});for(const key of keys)progress.count('analyzed');for(const row of result.value.conversations)progress.count('conversations');generatedTitle=result.value.title||generatedTitle;
     }
     assertCurrent();const finalFingerprint=this.fingerprint(store,targetId);
     store.update(l=>{const t=l.targets[targetId],session=t.session!;if(generatedTitle)session.preview={...session.preview,id:randomUUID(),body:generatedTitle.text,title:formatOrganizerTitle(generatedTitle.text,t.state,policy),sourceFingerprint:finalFingerprint,configurationFingerprint:configuration,at:at(),runId,evidenceIds:generatedTitle.evidenceIds,conversationComplete:t.agentIds.every(id=>l.conversations[id]?.complete),messageHeads:conversation.heads,reviewedWriteId:preview?t.pendingWrite?.id:undefined};else if(session.preview&&session.preview.sourceFingerprint===finalFingerprint){session.preview.title=formatOrganizerTitle(session.preview.body,t.state,policy);if(preview&&session.preview.reviewedWriteId!==t.pendingWrite?.id){session.preview.reviewedWriteId=t.pendingWrite?.id;session.preview.id=randomUUID();}}delete session.error;});
-    if(!batches.length){progress.skip('cached');progress.count('cached',own.length);}
-    target=store.read().targets[targetId];if(target.session!.enabled&&target.session!.preview&&target.session!.configurationFingerprint===configuration){progress.stage('titles');await this.write(route,targetId,target.session!.preview.id,false);progress.count('titleWrites',target.history.length<store.read().targets[targetId].history.length?1:0);}
-    progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});
+    if(!batches.length)progress.skip('cached');
+    target=store.read().targets[targetId];if(!preview&&target.session!.enabled&&target.session!.preview&&target.session!.configurationFingerprint===configuration){progress.stage('titles');await this.write(route,targetId,target.session!.preview.id,false);progress.count('titleWrites',target.history.length<store.read().targets[targetId].history.length?1:0);}
+    progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result)j.result.previewReady=!!target.session!.preview&&target.session!.preview.sourceFingerprint===this.fingerprint(store,targetId)&&target.session!.preview.configurationFingerprint===configuration;});
   }
   private async apply(route:ProjectRoute,targetId:string,previewId:string){await this.write(route,targetId,previewId,true);}
   private write(route:ProjectRoute,targetId:string,previewId:string,explicit:boolean){

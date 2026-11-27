@@ -3,7 +3,7 @@ import type {OrganizerTarget,SessionAssociations} from '../../shared/organizer.t
 import type {AgentBinding} from '../agent-store.ts';
 import {organizerHash,type OrganizerLedger} from './storage.ts';
 
-export type AssociationWorkspace = {id:string;instanceKey:string;managed?:boolean;state?:string;displayName?:string;createdAt?:string;latestCommitAt?:string|null;taskBrief?:string;creator?:{agentId?:string}};
+export type AssociationWorkspace = {id:string;instanceKey:string;managed?:boolean;state?:string;displayName?:string;createdAt?:string;latestCommitAt?:string|null;repositoryCount?:number;taskBrief?:string;creator?:{agentId?:string}};
 export function eligibleAssociationWorkspaces(rows:AssociationWorkspace[]) {
   return rows.filter(row=>row.managed&&row.id!=='main'&&typeof row.instanceKey==='string'&&!['record_invalid','removed','deletion_pending'].includes(row.state||''));
 }

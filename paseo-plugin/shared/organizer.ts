@@ -82,13 +82,15 @@ export type OrganizerModelPhase = 'checking' | 'requesting' | 'validating' | 'co
 export type OrganizerRun = { id: string; kind: 'workspace' | 'conversation' | 'session'; owner: string; at: string; profileId: string; model?:string; endpoint?:string; references?:Record<string,string>; prompt: string; input: string; output?: string; truncated: boolean; elapsedMs?: number; usage?: Record<string, unknown>; error?: string; state?: OrganizerModelPhase; requestedAt?:string; finishedAt?:string };
 export type OrganizerModelTest={id:string;state:'queued'|'running'|'complete'|'failed'|'cancelled'|'interrupted';createdAt:string;run?:OrganizerRun;error?:string};
 export type OrganizerJobOptions = { workspaceIds?:string[]; hostWorkspaceId?:string; analyze:boolean; conversation:boolean; regenerate:boolean; automatic:boolean; fetch:boolean; forceFetch?:boolean; productionOnly?:boolean };
-export type OrganizerStage = 'queued'|'discovering'|'materials'|'fetching'|'model-queued'|OrganizerModelPhase|'conversation'|'titles'|'finished';
+export type OrganizerStage = 'queued'|'discovering'|'materials'|'production'|'fetching'|'model-queued'|OrganizerModelPhase|'conversation'|'verifying'|'titles'|'finished';
 export type OrganizerJob = { id: string; state: 'queued' | 'running' | 'complete' | 'cancelled' | 'interrupted' | 'failed'; workspaceIds: string[]; completed: number; total: number; createdAt: string; updatedAt: string; error?: string;
   kind?:'refresh'|'production'|'analysis'|'regenerate'|'session'; hostWorkspaceId?:string; options?:OrganizerJobOptions; startedAt?:string; stage?:OrganizerStage; stageAt?:string; cancelRequestedAt?:string;
-  current?:{workspaceId?:string;name?:string;repository?:string;agentId?:string};
+  intent?:{preview:boolean;title?:boolean;summaries?:number};
+  input?:{workspaces:Array<{id:string;name:string;repositories:number;commits:number;notes:number;diffs:number;cached:boolean;updated?:boolean}>;history:{pages:number;fragments:number;sentFragments?:number;complete:boolean}};
+  current?:{workspaceId?:string;name?:string;repository?:string;ref?:string;repositoryCount?:number;agentId?:string;page?:number};
   model?:{profileId?:string;name?:string;model?:string;state:'not-requested'|'queued'|OrganizerModelPhase;calls:number;completed:number;reason?:'automatic-off'|'production-only'|'cached'|'no-material'|'no-profile'|'interval'|'scope';runId?:string;requestedAt?:string;timeoutMs?:number};
-  result?:{analyzed:number;cached:number;skipped:number;failed:number;titleWrites:number;conversations:number};
-  events?:Array<{at:string;stage:OrganizerStage;workspaceId?:string;message:string}>;
+  result?:{analyzed:number;cached:number;skipped:number;failed:number;titleWrites:number;conversations:number;previewReady?:boolean};
+  events?:Array<{at:string;stage:OrganizerStage;workspaceId?:string;message:string;current?:OrganizerJob['current']}>;
 };
 export type OrganizerSnapshot = { revision: number; workspaces: WorkspaceAnalysis[]; targets: OrganizerTarget[]; conversations: ConversationAnalysis[]; jobs: OrganizerJob[]; runs: OrganizerRun[]; unlinked: string[]; error?: string };
 

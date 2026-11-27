@@ -6,7 +6,7 @@ import {requestOrganizerJson} from './model.ts';
 export type SessionMessages={agentId:string;evidence:OrganizerEvidence[];previous?:ConversationAnalysis;complete:boolean};
 const citations=z.array(z.string().min(1)).min(1).max(20);
 const resultSchema=z.object({
-  workspaces:z.array(z.object({key:z.string(),title:z.string().trim().min(1).max(80),brief:z.string().trim().min(1).max(160),evidenceIds:citations})).max(4),
+  workspaces:z.array(z.object({key:z.string(),title:z.string().trim().min(1).max(80),brief:z.string().trim().min(1).max(160),evidenceIds:citations})).max(4).default([]),
   conversations:z.array(z.object({agentId:z.string(),brief:z.string().trim().min(1).max(1200),evidenceIds:citations})).max(20).default([]),
   title:z.object({text:z.string().trim().min(1).max(80),evidenceIds:citations}).optional(),
 });
@@ -57,11 +57,11 @@ export function sessionModelPrompt(policy:OrganizerPolicy){return [
   '每项只引用最关键的1条来源，最多2条。evidenceIds 直接复制该对象输入证据的 id；缓存摘要使用其明确的 sourceId（例如 W1S），不得自造编号。title 可引用所有工作区摘要和公开消息。不得捏造或跨工作区引用证据。',
   '工作区证据编号形如 W1E1，会话公开消息编号形如 C1M1。conversations 只能引用它自己提供的 C…M… 消息，不得引用 W…E… 工作区提交。',
   '缓存摘要的 sourceId 和工作区的 summarySourceId 都可供 title 引用。本批已为该工作区生成摘要时可引用其 summarySourceId；既无缓存也未生成摘要的工作区不得充当标题证据。',
-  '格式：{"workspaces":[{"key":"原key","title":"需求短名","brief":"短句","evidenceIds":["来源ID"]}],"conversations":[{"agentId":"原agentId","brief":"增量摘要","evidenceIds":["来源ID"]}],"title":{"text":"会话短标题","evidenceIds":["来源ID"]}}。wantTitle=false 时省略 title。无新会话消息时 conversations=[]。',
+  '严格按本次输出模板返回。changedWorkspaces=[] 时 workspaces 必须为 []，缓存摘要只供参考，不重复输出。wantTitle=false 时省略 title。无新会话消息时 conversations=[]。',
   policy.prompt,
 ].join('\n');}
 export async function callSessionModel(profile:ModelProfile,secret:string,policy:OrganizerPolicy,workspaces:WorkspaceAnalysis[],changedKeys:string[],messages:SessionMessages[],title:boolean,topicHint:string|null,accepted:string|undefined,owner:string,signal:AbortSignal,record:(run:OrganizerRun)=>void,observe?:(phase:OrganizerModelPhase,run:OrganizerRun)=>void) {
-  const packed=sessionModelInput(workspaces,changedKeys,messages,title,topicHint,accepted,profile,policy),prompt=sessionModelPrompt(policy);
+  const packed=sessionModelInput(workspaces,changedKeys,messages,title,topicHint,accepted,profile,policy);
   // Short transport identities reduce local-model output and citation errors. Audit records retain the reversible mapping.
   const transport=JSON.parse(packed.input),references:Record<string,string>={},aliases=new Map<string,string>(),counts=new Map<string,number>();
   const alias=(id:string,prefix:string)=>{let label=aliases.get(prefix+':'+id);if(!label){const n=(counts.get(prefix)||0)+1;counts.set(prefix,n);label=prefix+String(n);aliases.set(prefix+':'+id,label);references[label]=id;}return label;};
@@ -69,9 +69,20 @@ export async function callSessionModel(profile:ModelProfile,secret:string,policy
   if(transport.latestWorkspace)transport.latestWorkspace=aliases.get('W:'+transport.latestWorkspace);
   for(const row of transport.changedWorkspaces){row.key=aliases.get('W:'+row.key);row.evidence.forEach((e:any,i:number)=>{const label=row.key+'E'+(i+1);references[label]=e.id;e.id=label;});}
   for(const row of transport.conversations){row.agentId=alias(row.agentId,'C');row.evidence.forEach((e:any,i:number)=>{const label=row.agentId+'M'+(i+1);references[label]=e.id;e.id=label;});}
+  const titleSource=transport.workspaces.find((w:any)=>w.summary||transport.changedWorkspaces.some((changed:any)=>changed.key===w.key))?.summarySourceId||transport.conversations.find((c:any)=>c.evidence.length)?.evidence[0].id;
+  const template={workspaces:transport.changedWorkspaces.map((w:any)=>({key:w.key,title:'需求短名',brief:'短句',evidenceIds:[w.evidence[0]?.id]})),conversations:transport.conversations.filter((c:any)=>c.evidence.length).map((c:any)=>({agentId:c.agentId,brief:'增量摘要',evidenceIds:[c.evidence[0].id]})),...(title?{title:{text:'会话短标题',evidenceIds:[titleSource]}}:{})};
+  const prompt=sessionModelPrompt(policy)+'\n本次输出模板（数组对象数量和身份必须一致；替换正文及真实引用）：'+JSON.stringify(template);
   const resolve=(id:string)=>references[id]||'invalid:'+id;
   const cleanTitle=(text:string)=>{const clean=stripOrganizerMarker(text.replace(/[\u0000-\u001f\u007f]/g,' ').trim(),policy);if(!clean||[...clean].length>policy.titleLength)throw Error('organizer_model_title_invalid');return clean;};
-  const validate=(raw:unknown)=>{const result=resultSchema.parse(raw);for(const w of result.workspaces){w.key=resolve(w.key);w.evidenceIds=w.evidenceIds.map(resolve);}for(const c of result.conversations){c.agentId=resolve(c.agentId);c.evidenceIds=c.evidenceIds.map(resolve);}if(result.title)result.title.evidenceIds=result.title.evidenceIds.map(resolve);const keys=new Set(result.workspaces.map(w=>w.key));if(keys.size!==changedKeys.length||result.workspaces.length!==changedKeys.length||changedKeys.some(key=>!keys.has(key)))throw Error('organizer_model_workspace_invalid');
+  const validate=(raw:unknown)=>{
+    const known=new Set(workspaces.map(w=>w.key)),object=raw&&typeof raw==='object'?raw as Record<string,unknown>:undefined;
+    const scoped=object?{...object,...(!title?{title:undefined}:{}),...(Array.isArray(object.workspaces)?{workspaces:object.workspaces.filter(w=>!(w&&typeof w.key==='string'&&known.has(resolve(w.key))&&!changedKeys.includes(resolve(w.key))))}:{})}:raw;
+    const result=resultSchema.parse(scoped);for(const w of result.workspaces){w.key=resolve(w.key);w.evidenceIds=w.evidenceIds.map(resolve);}for(const c of result.conversations){c.agentId=resolve(c.agentId);c.evidenceIds=c.evidenceIds.map(resolve);}if(result.title)result.title.evidenceIds=result.title.evidenceIds.map(resolve);
+    // A model may echo a cached summary while answering a title/history request.
+    // Discard known, unchanged context objects; never publish or trust their text
+    // or citations. Unknown identities and missing requested results still fail.
+    if(result.workspaces.some(w=>!known.has(w.key)))throw Error('organizer_model_workspace_invalid');
+    result.workspaces=result.workspaces.filter(w=>changedKeys.includes(w.key));const keys=new Set(result.workspaces.map(w=>w.key));if(keys.size!==changedKeys.length||result.workspaces.length!==changedKeys.length||changedKeys.some(key=>!keys.has(key)))throw Error('organizer_model_workspace_invalid');
     const all=new Set<string>(workspaces.filter(w=>w.digest||w.manual).map(w=>'summary:'+w.key));
     for(const item of packed.workspaces)for(const e of item.evidence)all.add(e.id);for(const row of packed.conversations)for(const e of row.evidence)all.add(e.id);
     for(const w of result.workspaces){const allowed=new Set(packed.workspaces.find(p=>p.key===w.key)!.evidence.map(e=>e.id));if(w.evidenceIds.some(id=>!allowed.has(id)))throw Error('organizer_model_evidence_invalid');w.title=cleanTitle(w.title);if([...w.brief].length>80)throw Error('organizer_model_brief_too_long');all.add('summary:'+w.key);}

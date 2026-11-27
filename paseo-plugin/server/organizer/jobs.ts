@@ -5,11 +5,11 @@ export function organizerProgress(store:OrganizerStore,id:string) {
   const update=(edit:(job:OrganizerJob)=>void)=>store.update(ledger=>{const job=ledger.jobs.find(j=>j.id===id);if(!job)throw Error('organizer_job_missing');edit(job);job.updatedAt=new Date().toISOString();});
   const stage=(value:OrganizerStage,current?:OrganizerJob['current'])=>update(job=>{
     job.stage=value;job.stageAt=new Date().toISOString();if(current)job.current=current;
-    job.events=[...(job.events||[]),{at:job.stageAt,stage:value,workspaceId:job.current?.workspaceId,message:job.current?.repository||job.current?.name||''}].slice(-32);
+    job.events=[...(job.events||[]),{at:job.stageAt,stage:value,workspaceId:job.current?.workspaceId,message:job.current?.repository||job.current?.name||'',current:job.current?{...job.current}:undefined}].slice(-48);
   });
   return {
     update,stage,
-    count(key:keyof NonNullable<OrganizerJob['result']>,amount=1){update(job=>{job.result||={analyzed:0,cached:0,skipped:0,failed:0,titleWrites:0,conversations:0};job.result[key]+=amount;});},
+    count(key:Exclude<keyof NonNullable<OrganizerJob['result']>,'previewReady'>,amount=1){update(job=>{job.result||={analyzed:0,cached:0,skipped:0,failed:0,titleWrites:0,conversations:0};job.result[key]+=amount;});},
     skip(reason:NonNullable<OrganizerJob['model']>['reason']){update(job=>{if(job.model)job.model.reason=reason;});},
     queued(profile:ModelProfile){stage('model-queued');update(job=>{job.model={...job.model,calls:job.model?.calls||0,completed:job.model?.completed||0,state:'queued',profileId:profile.id,name:profile.name,model:profile.model,timeoutMs:profile.timeoutMs,reason:undefined,runId:undefined,requestedAt:undefined};});},
     model(phase:OrganizerModelPhase,run:OrganizerRun){

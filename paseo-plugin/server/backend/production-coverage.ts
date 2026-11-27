@@ -50,7 +50,7 @@ export function textPatchCoverage(patch: string, production: string): 'covered' 
 }
 
 export async function inspectRepository(git: Git, input: { repositoryId: string; repoPath: string; baseSha?: string; productionRef?: string },sharedStatus?:Array<[string,string]>): Promise<{ coverage: RepositoryCoverage; evidence: OrganizerEvidence[]; fingerprint: string; activityAt: string; complete: boolean }> {
-  const coverage: RepositoryCoverage = { repositoryId: input.repositoryId, repoPath: input.repoPath, productionRef: input.productionRef || '', state: 'unknown', covered: 0, pending: 0, uncertain: 0, dirty: false, observedAt: new Date().toISOString() };
+  const coverage: RepositoryCoverage = { repositoryId: input.repositoryId, repoPath: input.repoPath, productionRef: input.productionRef || '', state: 'unknown', committedState:'unknown',covered: 0, pending: 0, uncertain: 0, dirty: false, observedAt: new Date().toISOString() };
   const evidence: OrganizerEvidence[] = [];
   let activityAt = '', complete = true, coverageComplete=true,sourceFingerprint:string|undefined;
   try {
@@ -105,8 +105,9 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
       if(patch.truncated||changes.length>12)complete=false;
       if(patch.stdout)evidence.push({id:`diff:${input.repositoryId}:${hash(patch.stdout)}`,kind:'diff',text:patch.stdout,repository:input.repositoryId});
     }
-    if (!changes.length && !coverage.dirty) {
-      coverage.state = ownPaths.size ? 'unknown' : 'discussion';
+    if (!changes.length) {
+      coverage.committedState=ownPaths.size||!coverageComplete?'unknown':'discussion';
+      coverage.state = coverage.dirty?'pending':coverage.committedState;
       coverage.coverageComplete=!ownPaths.size&&coverageComplete;
       if (ownPaths.size) coverage.reason = '提交已无净改动，不能据此确认已上线';
       return { coverage, evidence, fingerprint: sourceFingerprint, activityAt, complete };
@@ -131,6 +132,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
       if (state === 'covered') coverage.covered++; else if (state === 'pending' || productionIsAncestor) coverage.pending++; else coverage.uncertain++;
     }
     coverage.coverageComplete=coverageComplete&&coverage.uncertain===0;
+    coverage.committedState=coverage.pending-(coverage.dirty?1:0)>0?'pending':coverage.coverageComplete?'deployed':'unknown';
     if (!coverage.coverageComplete) coverage.reason = '部分代码变化尚未核实';
     coverage.state=coverage.pending?coverage.covered?'partial':'pending':!coverageComplete||coverage.uncertain?'unknown':'deployed';
     return { coverage, evidence, fingerprint: sourceFingerprint, activityAt, complete };
@@ -138,6 +140,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
     if (git.signal?.aborted) throw error;
     coverage.reason = error instanceof Error ? error.message : '生产证据不可用';
     coverage.coverageComplete=false;
+    coverage.committedState=coverage.productionSha&&coverage.pending-(coverage.dirty?1:0)>0?'pending':'unknown';
     if(!coverage.productionSha){coverage.referenceUnavailable=true;coverage.state='unknown';}
     else coverage.state=coverage.pending?coverage.covered?'partial':'pending':'unknown';
     return { coverage, evidence, fingerprint: sourceFingerprint||hash(stable([coverage.head, coverage.baseSha, evidence, coverage.reason])), activityAt, complete: false };

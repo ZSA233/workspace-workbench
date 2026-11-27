@@ -2,7 +2,7 @@ import { OrganizerModelQueue } from './model-queue.ts';
 import { randomUUID } from 'node:crypto';
 import type { PaseoApi, PaseoAgent } from '@getpaseo/client';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
-import { organizerRpc, aggregateProduction, aggregateRepositoryCoverage, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, type OrganizerInput, type OrganizerSnapshot, type OrganizerTarget, type WorkspaceMaterial, type WorkspaceAnalysis, type OrganizerEvidence, type ConversationAnalysis, type OrganizerJob, type OrganizerJobOptions, type OrganizerPolicy, type OrganizerRun } from '../../shared/organizer.ts';
+import { organizerRpc, aggregateProduction, aggregateRepositoryCoverage, hasWorkingChanges, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, type OrganizerInput, type OrganizerSnapshot, type OrganizerTarget, type WorkspaceMaterial, type WorkspaceAnalysis, type OrganizerEvidence, type ConversationAnalysis, type OrganizerJob, type OrganizerJobOptions, type OrganizerPolicy, type OrganizerRun } from '../../shared/organizer.ts';
 import { resolveProject, withProject, type ProjectRoute } from '../projects.ts';
 import { queryObserver } from '../observer.ts';
 import { allAgentBindings } from '../agent-store.ts';
@@ -186,11 +186,11 @@ export class OrganizerService {
   private projectTargets(ledger: OrganizerLedger, policy: OrganizerPolicy) {
     for (const target of Object.values(ledger.targets)) {
       const workspaces = target.workspaceKeys.flatMap(key => ledger.workspaces[key] ? [ledger.workspaces[key]] : []);
-      target.state = aggregateProduction(workspaces.map(w => w.material.state));
+      target.state = aggregateProduction(workspaces.map(w => w.material.state));target.hasUncommittedChanges=hasWorkingChanges(workspaces);
       const representative = representativeWorkspace(workspaces);
       target.representative = representative?.key;
       const body = target.policy === 'symbols' && target.body ? target.body : representative?.proposedTitle || representative?.title || representative?.material.taskBrief || representative?.material.name;
-      if (body) target.previewTitle = formatOrganizerTitle(body, target.state, policy,target.policy==='symbols');
+      if (body) target.previewTitle = formatOrganizerTitle(body, target.state, policy,target.policy==='symbols',target.hasUncommittedChanges);
     }
   }
   private async materials(route: ProjectRoute, workspaceId: string, instance: string, policy: OrganizerPolicy): Promise<WorkspaceMaterial> {
@@ -358,7 +358,7 @@ export class OrganizerService {
       const w=ledger.workspaces[key];if(!w)throw Error('organizer_source_changed');
       const material=await this.materials(route,w.material.workspaceId,key,policy);
       for(const repo of material.repositories)if(this.fetches.get(route.configPath+':'+(repo.sourcePath||repo.repositoryId)+':'+repo.productionRef)?.state==='unknown'){repo.state='unknown';repo.reason='生产引用获取未确认';repo.referenceUnavailable=true;}
-      material.state=aggregateProduction(material.repositories.map(r=>r.state));
+      material.state=aggregateRepositoryCoverage(material.repositories);
       changed ||= material.fingerprint!==w.material.fingerprint;verified.push(material);
     }
     if(this.closed||this.settings.fingerprint(route)!==configToken)throw Error('organizer_settings_changed');
@@ -377,7 +377,7 @@ export class OrganizerService {
     const w = target.representative && ledger.workspaces[target.representative];
     if (!explicit && w && !w.fingerprint && !w.material.taskBrief) return;
     const body = target.policy === 'symbols' ? target.body || workspace.title || '' : w ? w.title : target.body || '';
-    const title = formatOrganizerTitle(body, target.state, policy,target.policy==='symbols');
+    const title = formatOrganizerTitle(body, target.state, policy,target.policy==='symbols',target.hasUncommittedChanges);
     if (title === workspace.title) { store.update(l => { const t = l.targets[id]; t.lastWritten = title; t.currentTitle = title; t.body = body; if (explicit) t.policy = maintain ? 'auto' : 'preview'; }); return; }
     if(this.closed||this.settings.fingerprint(route)!==configToken)throw Error('organizer_settings_changed');
     store.update(l => { const t = l.targets[id]; if (t.originalTitle === undefined) t.originalTitle = workspace.title || null; t.pendingWrite = { from: workspace.title || null, to: title, id: randomUUID() }; });

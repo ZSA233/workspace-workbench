@@ -30,7 +30,7 @@ function ModelEditor({projectConfig,onClose}:{projectConfig:string;onClose():voi
       <SessionTitleStyle markers={markers} onChange={value=>{setMarkers(value);setDirty(true);}}/>
       <Field label="命名提示词" value={prompt} multiline minHeight={100} onChange={value=>{setPrompt(value);setDirty(true);}}/>
       <Field label="标题长度" value={length} onChange={value=>{setLength(value);setDirty(true);}}/>
-      <Label muted>正文按提示词生成，状态按 Git 上线依据添加。保存后在会话页预览确认。</Label>
+      <Label muted>全部已提交改动确认上线才标记已上线；✎ 表示未提交改动。保存后在会话页预览确认。</Label>
       <Section title="高级设置" collapsible initiallyOpen={false}>
         <Field label="连接名称" value={profile.name} onChange={name=>change({name})}/>
         <Field label="单次上下文上限（tokens）" value={String(profile.contextTokens)} onChange={value=>change({contextTokens:Number(value)})}/>

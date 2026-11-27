@@ -4,7 +4,7 @@ import { aggregateProduction, aggregateRepositoryProduction,aggregateRepositoryC
 import { OrganizerModelQueue } from '../server/organizer/model-queue.ts';
 import {organizerErrorLabel} from '../client/organizer-errors.ts';
 test('production aggregates uncertainty and new discussion instead of declaring all shipped',()=>{
- assert.equal(aggregateProduction(['deployed','deployed']),'deployed');assert.equal(aggregateProduction(['deployed','pending']),'partial');assert.equal(aggregateProduction(['pending','unknown']),'pending');assert.equal(aggregateProduction(['deployed','discussion']),'partial');assert.equal(aggregateProduction([]),'discussion');
+ assert.equal(aggregateProduction(['deployed','deployed']),'deployed');assert.equal(aggregateProduction(['deployed','pending']),'pending');assert.equal(aggregateProduction(['pending','unknown']),'pending');assert.equal(aggregateProduction(['deployed','discussion']),'pending');assert.equal(aggregateProduction([]),'discussion');
  const row=(key:string,state:string,activityAt:string)=>({key,material:{state,activityAt}} as WorkspaceAnalysis);
  assert.equal(representativeWorkspace([row('recent-shipped','deployed','2026'),row('old-pending','pending','2020')])?.key,'old-pending');assert.equal(representativeWorkspace([row('old','deployed','2020'),row('recent','deployed','2026')])?.key,'recent');
  const policy=organizerPolicySchema.parse({markers:{deployed:'🟢',partial:'半',pending:'待',unknown:'?',discussion:'·'}});assert.equal(stripOrganizerMarker('🟢 保留人工主旨',policy),'保留人工主旨');assert.equal(formatOrganizerTitle('很长的人工标题正文保持内容不被默认长度截断','deployed',policy,true),'🟢 很长的人工标题正文保持内容不被默认长度截断');
@@ -15,8 +15,14 @@ test('translated preview failures keep their actionable message when displayed a
 });
 test('production aggregation preserves confirmed coverage and missing changes without treating unavailable references as fresh evidence',()=>{
  const row=(state:string,covered:number,pending:number,referenceUnavailable=false)=>({state,covered,pending,referenceUnavailable} as RepositoryCoverage);
- assert.equal(aggregateRepositoryCoverage([row('unknown',141,0),row('pending',0,19)]),'partial');assert.equal(aggregateRepositoryCoverage([row('unknown',0,0),row('pending',0,1)]),'pending');assert.equal(aggregateRepositoryCoverage([row('unknown',141,0)]),'unknown');
- assert.equal(aggregateRepositoryCoverage([row('unknown',20,1,true)]),'unknown');assert.equal(aggregateProduction(['partial','unknown']),'partial');assert.equal(aggregateProduction(['deployed','unknown']),'unknown');
+ assert.equal(aggregateRepositoryCoverage([row('unknown',141,0),row('pending',0,19)]),'pending');assert.equal(aggregateRepositoryCoverage([row('unknown',0,0),row('pending',0,1)]),'pending');assert.equal(aggregateRepositoryCoverage([row('unknown',141,0)]),'pending');
+ assert.equal(aggregateRepositoryCoverage([row('unknown',20,1,true)]),'pending');assert.equal(aggregateProduction(['partial','unknown']),'pending');assert.equal(aggregateProduction(['deployed','unknown']),'pending');
+});
+test('requirement titles stay binary and show uncommitted work separately',()=>{
+ const policy=organizerPolicySchema.parse({}),covered={state:'partial',committedState:'deployed',dirty:true,covered:1,pending:1} as RepositoryCoverage;
+ assert.equal(aggregateRepositoryCoverage([covered]),'deployed');assert.equal(aggregateRepositoryCoverage([covered,{state:'pending',committedState:'pending'} as RepositoryCoverage]),'pending');
+ assert.equal(formatOrganizerTitle('需求','deployed',policy,false,true),'✓ ✎ 需求');assert.equal(stripOrganizerMarker('✓ ✎ 需求',policy),'需求');assert.equal(formatOrganizerTitle('需求','partial',policy),'○ 需求');
+ assert.equal(aggregateRepositoryCoverage([{state:'pending',committedState:'discussion',dirty:true} as RepositoryCoverage]),'pending');assert.equal(aggregateRepositoryCoverage([{...covered,referenceUnavailable:true}]),'pending');
 });
 test('host model queue bounds concurrency and drains after individual failures',async()=>{
  const queue=new OrganizerModelQueue(()=>2);let active=0,peak=0;const work=(fail=false)=>queue.run(async()=>{peak=Math.max(peak,++active);try{await new Promise(resolve=>setTimeout(resolve,10));if(fail)throw Error('failure');return true;}finally{active--;}});
@@ -25,8 +31,8 @@ test('host model queue bounds concurrency and drains after individual failures',
 test('unchanged repositories do not prevent shipment while a separate new discussion Workspace remains visible',()=>{
  assert.equal(aggregateRepositoryProduction(['deployed','discussion','discussion']),'deployed');
  assert.equal(aggregateRepositoryProduction(['discussion','discussion']),'discussion');
- assert.equal(aggregateRepositoryProduction(['deployed','unknown','discussion']),'unknown');
- assert.equal(aggregateProduction(['deployed','discussion']),'partial');
+ assert.equal(aggregateRepositoryProduction(['deployed','unknown','discussion']),'pending');
+ assert.equal(aggregateProduction(['deployed','discussion']),'pending');
 });
 test('the workflow never highlights model generation during a Git-only or initial material read',()=>{
  const job={state:'running',stage:'materials',kind:'refresh',model:{state:'not-requested',calls:0,completed:0}} as OrganizerJob;

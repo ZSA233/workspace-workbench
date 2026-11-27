@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Git } from '../server/backend/git.ts';
 import { inspectRepository, textPatchCoverage } from '../server/backend/production-coverage.ts';
+import {aggregateRepositoryCoverage} from '../shared/organizer.ts';
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'wb-production-')));
@@ -27,6 +28,12 @@ test('production coverage follows current content, catches rollback and does not
     f.git('update-ref','refs/remotes/origin/main',f.base);assert.equal((await f.inspect()).coverage.state,'pending');
     writeFileSync(join(f.root,'file'),'uncommitted\n');assert.equal((await f.inspect()).coverage.dirty,true);assert.notEqual((await f.inspect()).coverage.state,'deployed');
   } finally {f.close();}
+});
+test('committed deployment stays confirmed beside local edits, while missing committed work keeps the requirement unshipped',async()=>{
+ const f=fixture();try{
+  f.git('update-ref','refs/remotes/origin/main',f.head);writeFileSync(join(f.root,'file'),'after\nkeep\nlocal edit\n');let result=await f.inspect();assert.equal(result.coverage.committedState,'deployed');assert.equal(result.coverage.dirty,true);assert.equal(aggregateRepositoryCoverage([result.coverage]),'deployed');
+  f.git('add','.');f.git('commit','-qm','Unreleased requirement change');result=await f.inspect();assert.equal(result.coverage.committedState,'pending');assert.equal(aggregateRepositoryCoverage([result.coverage]),'pending');
+ }finally{f.close();}
 });
 test('squash equivalence and later non-overlapping production edits are verified by blobs and text',async()=>{
   const f=fixture();try {

@@ -66,6 +66,13 @@ test('a legacy production refresh retains session ordering metadata and does not
   await f.request({action:'session.apply',targetId:'native',previewId:id});assert.equal((await f.request({action:'snapshot'})).targets[0].session.enabled,true);
  }finally{await f.close();}
 });
+test('the whole requirement stays unshipped until every Workspace committed change is deployed, with a separate working hint',async()=>{
+ const f=await fixture();try{
+  for(const m of f.materials){m.state='deployed';Object.assign(m.repositories[0],{state:'partial',committedState:'deployed',dirty:true,covered:1,pending:1,coverageComplete:true});}
+  let job=await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true})),target=(await f.request({action:'snapshot'})).targets[0];assert.equal(job.state,'complete',job.error);assert.equal(target.state,'deployed');assert.equal(target.hasUncommittedChanges,true);assert.equal(target.session.preview.title,'✓ ✎ 小时统计查询优化');await f.request({action:'session.apply',targetId:'native',previewId:target.session.preview.id});
+  f.materials[0].state='pending';Object.assign(f.materials[0].repositories[0],{committedState:'pending',pending:2});job=await f.done(await f.request({action:'session.refresh',targetId:'native'}));target=(await f.request({action:'snapshot'})).targets[0];assert.equal(job.model.calls,0);assert.equal(target.state,'pending');assert.equal(f.title(),'○ ✎ 小时统计查询优化');
+ }finally{await f.close();}
+});
 test('changing title markers previews the cached body without a model request and still requires confirmation',async()=>{
  const f=await fixture();try{
   f.enableCache();await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));let target=(await f.request({action:'snapshot'})).targets[0];

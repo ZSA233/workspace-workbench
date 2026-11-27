@@ -4,7 +4,7 @@ import { z } from 'zod';
 export const productionState = z.enum(['deployed', 'partial', 'pending', 'unknown', 'discussion']);
 export type ProductionState = z.infer<typeof productionState>;
 export const defaultMarkers: Record<ProductionState, string> = { deployed: '✓', partial: '◐', pending: '○', unknown: '?', discussion: '·' };
-export const productionLabels: Record<ProductionState, string> = { deployed: '已上线', partial: '部分上线', pending: '未上线', unknown: '待核实', discussion: '讨论中' };
+export const productionLabels: Record<ProductionState, string> = { deployed: '已上线', partial: '未上线', pending: '未上线', unknown: '待核实', discussion: '暂无改动' };
 export const defaultOrganizerPrompt = '使用简体中文，提炼具体模块和行为，保留主要需求。名称仅作为弱线索；不要把合入的其他分支功能、版本号、构建产物和发布操作当成主要需求。不因同义表述改变已接受的标题。信息不足时说明缺失，不编造需求。';
 export const modelProfileSchema = z.object({
   id: z.string().trim().min(1).max(80), name: z.string().trim().min(1).max(100),
@@ -68,7 +68,7 @@ export const organizerRpc = defineRpc({
 export type OrganizerInput = z.infer<typeof organizerRpc.input>;
 export type OrganizerEvidence = { id: string; kind: 'goal' | 'commit' | 'note' | 'message' | 'diff' | 'hint'; text: string; repository?: string; sha?: string };
 export type OrganizerItem = { id: string; text: string; state: 'todo' | 'done' | 'cancelled' | 'confirm'; evidenceIds: string[]; manual?: boolean };
-export type RepositoryCoverage = { repositoryId: string; repoPath: string; sourcePath?:string; productionRef: string; baseSha?: string; head?: string; productionSha?: string; referenceUnavailable?:boolean; coverageComplete?:boolean; state: ProductionState; reason?: string; covered: number; pending: number; uncertain: number; dirty: boolean; observedAt: string };
+export type RepositoryCoverage = { repositoryId: string; repoPath: string; sourcePath?:string; productionRef: string; baseSha?: string; head?: string; productionSha?: string; referenceUnavailable?:boolean; coverageComplete?:boolean; committedState?:Exclude<ProductionState,'partial'>; state: ProductionState; reason?: string; covered: number; pending: number; uncertain: number; dirty: boolean; observedAt: string };
 export type WorkspaceMaterial = { workspaceId: string; instance: string; name: string; createdAt: string; activityAt: string; latestCommitAt?:string|null; creatorAgentId?: string; taskBrief: string; taskKind?: string; fingerprint: string; evidence: OrganizerEvidence[]; repositories: RepositoryCoverage[]; state: ProductionState; complete: boolean };
 export type WorkspaceDigest = { version:1; title:string; brief:string; fingerprint:string; at:string; evidenceIds:string[]; partial:boolean };
 export type SessionTitlePreview = { id:string; body:string; title:string; sourceFingerprint:string; configurationFingerprint:string; contentConfigurationFingerprint?:string; at:string; runId?:string; evidenceIds:string[]; conversationComplete:boolean; reviewedWriteId?:string; messageHeads?:Record<string,{epoch:string;seq:number}> };
@@ -76,7 +76,7 @@ export type SessionTitleMaintenance = { version:1; enabled:boolean; controlRevis
 export type WorkspaceAnalysis = { key: string; material: WorkspaceMaterial; materialCache?:{stamp:string;fingerprint:string;at:string}; digest?:WorkspaceDigest; sources?:OrganizerEvidence[]; title: string; proposedTitle?: string; brief: string; items: OrganizerItem[]; fingerprint?: string; analyzedAt?: string; lastAttemptAt?:string; manual?: boolean; error?: string };
 export type SessionWorkspaceAssociation = { workspaceId:string; source:'automatic'|'manual'; included:boolean; at:string };
 export type SessionAssociations = { targetId:string; title?:string|null; revision:string; workspaces:Array<{key:string;id:string;name:string;title?:string;linked:boolean;source?:'automatic'|'manual'}> };
-export type OrganizerTarget = { id: string; agentIds: string[]; workspaceKeys: string[]; workspaceLinks?:Record<string,SessionWorkspaceAssociation>; currentTitle: string | null; session?:SessionTitleMaintenance; previewTitle?: string; body?: string; representative?: string; state: ProductionState; policy: 'preview' | 'auto' | 'symbols' | 'excluded' | 'paused'; originalTitle?: string | null; lastWritten?: string | null; reason?: string; pendingWrite?: { from: string | null; to: string | null; id: string }; uncertainWrites?:Array<{from:string|null;to:string|null;id:string}>; history: Array<{ at: string; from: string | null; to: string; representative?: string }> };
+export type OrganizerTarget = { id: string; agentIds: string[]; workspaceKeys: string[]; workspaceLinks?:Record<string,SessionWorkspaceAssociation>; currentTitle: string | null; session?:SessionTitleMaintenance; previewTitle?: string; body?: string; representative?: string; state: ProductionState; hasUncommittedChanges?:boolean; policy: 'preview' | 'auto' | 'symbols' | 'excluded' | 'paused'; originalTitle?: string | null; lastWritten?: string | null; reason?: string; pendingWrite?: { from: string | null; to: string | null; id: string }; uncertainWrites?:Array<{from:string|null;to:string|null;id:string}>; history: Array<{ at: string; from: string | null; to: string; representative?: string }> };
 export type ConversationAnalysis = { agentId: string; brief: string; items: OrganizerItem[]; cursor?: { epoch: string; seq: number }; fingerprint?: string; complete: boolean; startedAtBeginning?: boolean; pendingMessage?: { seq: number; offset: number }; error?: string; updatedAt: string; lastAttemptAt?:string; evidence: OrganizerEvidence[] };
 export type OrganizerModelPhase = 'checking' | 'requesting' | 'validating' | 'complete' | 'failed';
 export type OrganizerContextBudget={contextTokens:number;outputTokens:number;reservedTokens:number;promptBytes:number;inputBytes:number;selectedSources:number;totalSources:number;selectedFragments:number;totalFragments:number};
@@ -102,17 +102,14 @@ export function organizerStep(job:OrganizerJob|undefined,hasPreview:boolean,appl
 
 export function aggregateProduction(states: ProductionState[]): ProductionState {
   if (!states.length || states.every(s => s === 'discussion')) return 'discussion';
-  if (states.some(s => s === 'partial')||states.includes('deployed')&&states.includes('pending')) return 'partial';
-  if (states.includes('pending')) return 'pending';
-  if (states.includes('unknown')) return 'unknown';
-  if (states.every(s => s === 'deployed')) return 'deployed';
-  if (states.some(s => s === 'deployed' || s === 'partial')) return 'partial';
-  return states.some(s => s === 'pending') ? 'pending' : 'discussion';
+  return states.every(s=>s==='deployed')?'deployed':'pending';
 }
+export const requirementState=(state:ProductionState):'deployed'|'pending'=>state==='deployed'?'deployed':'pending';
+export const hasWorkingChanges=(rows:WorkspaceAnalysis[])=>rows.some(w=>w.material.repositories.some(r=>r.dirty));
 export function aggregateRepositoryProduction(states:ProductionState[]):ProductionState {return aggregateProduction(states.filter(state=>state!=='discussion'));}
 export function aggregateRepositoryCoverage(repositories:RepositoryCoverage[]):ProductionState {
- const covered=repositories.some(r=>!r.referenceUnavailable&&(r.covered>0||r.state==='deployed'||r.state==='partial')),pending=repositories.some(r=>!r.referenceUnavailable&&(r.pending>0||r.state==='pending'||r.state==='partial'));
- return pending?covered?'partial':'pending':aggregateRepositoryProduction(repositories.map(r=>r.state));
+ const states=repositories.map(r=>r.referenceUnavailable&&r.committedState!=='discussion'?'unknown':r.committedState||r.state).filter(s=>s!=='discussion');
+ return states.length?aggregateProduction(states):repositories.some(r=>r.dirty)?'pending':'discussion';
 }
 export function representativeWorkspace(workspaces: WorkspaceAnalysis[]): WorkspaceAnalysis | undefined {
   const rank = (s: ProductionState) => s === 'pending' || s === 'partial' ? 0 : s === 'unknown' || s === 'discussion' ? 1 : 2;
@@ -120,10 +117,10 @@ export function representativeWorkspace(workspaces: WorkspaceAnalysis[]): Worksp
 }
 export function stripOrganizerMarker(title:string,policy:OrganizerPolicy):string {
   const marker=[...new Set([...Object.values(policy.markers),...Object.values(defaultMarkers)])].filter(Boolean).sort((a,b)=>b.length-a.length).find(marker=>title.startsWith(marker+' '));
-  return marker?title.slice(marker.length+1):title;
+  const body=marker?title.slice(marker.length+1):title;return body.startsWith('✎ ')?body.slice(2):body;
 }
-export function formatOrganizerTitle(body: string, state: ProductionState, policy: OrganizerPolicy, preserveBody=false): string {
+export function formatOrganizerTitle(body: string, state: ProductionState, policy: OrganizerPolicy, preserveBody=false,workingChanges=false): string {
   const clean = body.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
-  const marker = policy.markers[state].replace(/[\u0000-\u001f\u007f]/g, '').trim();
-  return [marker, preserveBody?clean:[...clean].slice(0, policy.titleLength).join('')].filter(Boolean).join(' ');
+  const marker = policy.markers[requirementState(state)].replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  return [marker,workingChanges?'✎':'', preserveBody?clean:[...clean].slice(0, policy.titleLength).join('')].filter(Boolean).join(' ');
 }

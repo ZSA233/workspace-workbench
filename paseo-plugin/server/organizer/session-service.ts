@@ -16,6 +16,7 @@ type Request=Extract<OrganizerInput['request'],{action:'session.refresh'|'sessio
 type Dependencies={settings:OrganizerSettings;api():Promise<PaseoApi>;store(route:ProjectRoute):OrganizerStore;read(route:ProjectRoute,method:'workspace.list'|'repository.compare'|'repository.fetch'|'organizer.versions',params?:Record<string,unknown>):Promise<Record<string,any>>;materials(route:ProjectRoute,id:string,key:string,policy:OrganizerPolicy):Promise<WorkspaceMaterial>;model<T>(work:()=>Promise<T>):Promise<T>};
 const at=()=>new Date().toISOString();
 const errorText=(error:unknown)=>error instanceof Error?error.message:String(error);
+const retryable=(error:unknown)=>['organizer_source_changed','organizer_preview_changed'].includes(errorText(error))||['observer_timeout','observation_timeout','observer_busy'].includes((error as {code?:string})?.code||'');
 const managedTitle=(target:OrganizerTarget)=>target.session?.autoStart?target.session.autoStart.expectedTitle:target.lastWritten;
 const productionState=(rows:WorkspaceAnalysis[])=>aggregateProduction(rows.filter(w=>w.material.state!=='discussion'||w.material.taskBrief||w.material.evidence.some(e=>e.kind==='goal')).map(w=>w.material.state));
 type Active={project:string;targetId:string;abort:AbortController;promise:Promise<void>;preview:boolean;force:boolean};
@@ -85,7 +86,17 @@ export class SessionOrganizer {
     if(this.active.size>=8)throw Error('organizer_queue_full');
     const job:OrganizerJob={id:randomUUID(),kind:'session',hostWorkspaceId:targetId,intent:{preview},input:{workspaces:[],history:{pages:0,fragments:0,complete:false}},state:'queued',stage:'queued',workspaceIds:[],completed:0,total:0,createdAt:at(),updatedAt:at(),model:{state:'not-requested',calls:0,completed:0},result:{analyzed:0,cached:0,skipped:0,failed:0,titleWrites:0,conversations:0}};
     const store=this.deps.store(route),abort=new AbortController();store.update(l=>l.jobs.push(job));
-    const promise=(this.tails.get(route.configPath)||Promise.resolve()).catch(()=>{}).then(()=>this.perform(route,job.id,targetId,preview,force,abort.signal)).catch(error=>{
+    const promise=(this.tails.get(route.configPath)||Promise.resolve()).catch(()=>{}).then(async()=>{
+      for(let attempt=0;;attempt++)try{await this.perform(route,job.id,targetId,preview,force,abort.signal,attempt>0);return;}catch(error){
+        // Reconcile a newer public message or Git revision within this job,
+        // reusing unchanged Workspaces. Unknown writes never enter this path.
+        if(preview||attempt>=2||!retryable(error)||abort.signal.aborted||this.closed||!store.read().targets[targetId]?.session?.enabled)throw error;
+        organizerProgress(store,job.id).stage('retrying');
+        await new Promise<void>(resolve=>{const done=()=>{clearTimeout(timer);abort.signal.removeEventListener('abort',done);resolve();};const timer=setTimeout(done,1000);abort.signal.addEventListener('abort',done,{once:true});});
+        if(abort.signal.aborted||this.closed)throw Error('organizer_cancelled');
+        store.update(l=>{const j=l.jobs.find(j=>j.id===job.id)!;j.completed=0;j.input={workspaces:[],history:{pages:0,fragments:0,complete:false}};delete l.targets[targetId].session!.error;});
+      }
+    }).catch(error=>{
       store.update(l=>{const j=l.jobs.find(j=>j.id===job.id)!;j.state=abort.signal.aborted?'cancelled':'failed';j.error=errorText(error);if(j.result&&!abort.signal.aborted)j.result.failed++;j.updatedAt=at();const t=l.targets[targetId];if(t?.session&&!abort.signal.aborted)t.session.error=errorText(error);});
     }).finally(()=>this.active.delete(job.id));
     this.active.set(job.id,{project:route.configPath,targetId,abort,promise,preview,force});this.tails.set(route.configPath,promise);return job;
@@ -129,12 +140,34 @@ export class SessionOrganizer {
     const x=Date.parse(a.material.latestCommitAt||''),y=Date.parse(b.material.latestCommitAt||'');if(Number.isFinite(x)&&Number.isFinite(y)&&x!==y)return y-x;if(Number.isFinite(x)!==Number.isFinite(y))return Number.isFinite(x)?-1:1;return a.material.workspaceId.localeCompare(b.material.workspaceId);
   });}
   private fingerprint(store:OrganizerStore,targetId:string){const l=store.read();return sessionFingerprint(l,l.targets[targetId]);}
+  private async material(route:ProjectRoute,id:string,key:string,policy:OrganizerPolicy,signal?:AbortSignal){
+    if(signal?.aborted||this.closed)throw Error('organizer_cancelled');
+    const read=this.deps.materials(route,id,key,policy);let cancel=()=>{};
+    try{return await Promise.race([read,new Promise<never>((_,reject)=>{cancel=()=>reject(Error('organizer_cancelled'));signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();})]);}
+    finally{signal?.removeEventListener('abort',cancel);}
+  }
   private async versions(route:ProjectRoute,ids:string[],policy:OrganizerPolicy){
     const stamps=new Map<string,string|undefined>(),bindings=withProject({projectConfig:route.configPath},allAgentBindings);
     for(let i=0;i<ids.length;i+=100){const group=ids.slice(i,i+100);let result:Record<string,any>|undefined;
       try{result=await this.deps.read(route,'organizer.versions',{workspaceIds:group});}catch{/* Older or degraded backends retain the full verification path. */}
       for(const id of group)stamps.set(id,materialStamp(result,id,policy,bindings.filter(b=>b.workspaceId===id).map(b=>[b.handoffHash,b.handoff])));
     }return stamps;
+  }
+  /** Revalidate source stamps in a batch. Missing/degraded proofs still take
+   * the full material path; a stable proof never repeats a Git scan. */
+  private async verifyMaterials(route:ProjectRoute,keys:string[],policy:OrganizerPolicy,assertCurrent:()=>void,progress?:OrganizerProgress,expected?:WorkspaceAnalysis[],signal?:AbortSignal){
+    if(!keys.length)return;
+    const store=this.deps.store(route),snapshot=store.read(),rows=keys.map(key=>snapshot.workspaces[key]),ids=rows.map(w=>w.material.workspaceId),before=await this.versions(route,ids,policy);assertCurrent();
+    if(expected&&rows.some(w=>w.material.fingerprint!==expected.find(row=>row.key===w.key)?.material.fingerprint))throw Error('organizer_source_changed');
+    for(const prior of rows){
+      const stamp=before.get(prior.material.workspaceId);if(reuseMaterial(prior,stamp,policy))continue;
+      progress?.stage('verifying',{workspaceId:prior.material.workspaceId,name:prior.material.name});
+      const material=this.production.applyCached(route.configPath,await this.material(route,prior.material.workspaceId,prior.key,policy,signal));assertCurrent();
+      if(material.fingerprint!==prior.material.fingerprint)throw Error('organizer_source_changed');
+      store.update(l=>{const w=l.workspaces[prior.key];if(w.material.fingerprint!==prior.material.fingerprint)throw Error('organizer_source_changed');material.latestCommitAt=w.material.latestCommitAt;w.material=material;w.materialCache=stamp?{stamp,fingerprint:material.fingerprint,at:at()}:undefined;});
+    }
+    const after=await this.versions(route,ids,policy);assertCurrent();
+    for(const id of ids)if(before.get(id)!==after.get(id))throw Error('organizer_source_changed');
   }
   private async messages(store:OrganizerStore,target:OrganizerTarget,api:PaseoApi,assertCurrent:()=>void,reusePreview=false,progress?:OrganizerProgress){
     const rows:Messages[]=[],heads:Record<string,{epoch:string;seq:number}>={};
@@ -148,17 +181,17 @@ export class SessionOrganizer {
       }
     }progress?.update(j=>{if(j.input)j.input.history.complete=rows.every(row=>row.complete);});return {rows,heads};
   }
-  private async perform(route:ProjectRoute,id:string,targetId:string,preview:boolean,force:boolean,signal:AbortSignal){
+  private async perform(route:ProjectRoute,id:string,targetId:string,preview:boolean,force:boolean,signal:AbortSignal,retrying=false){
     const store=this.deps.store(route),settings=this.deps.settings,policy=settings.response(route).effective,token=settings.fingerprint(route),configuration=this.config(route),contentConfiguration=this.config(route,true),api=await this.deps.api();
     const assertCurrent=()=>{if(signal.aborted||this.closed)throw Error('organizer_cancelled');if(settings.fingerprint(route)!==token)throw Error('organizer_settings_changed');};
-    const progress=organizerProgress(store,id);assertCurrent();progress.update(j=>{j.state='running';j.startedAt=at();});progress.stage('discovering');
+    const progress=organizerProgress(store,id);assertCurrent();progress.update(j=>{j.state='running';j.startedAt||=at();});progress.stage('discovering');
     const {linked:roster}=await this.discover(route,targetId,api,assertCurrent);progress.update(j=>{j.total=roster.length;j.workspaceIds=roster.map(r=>r.id);});
     const versions=await this.versions(route,roster.map(row=>row.id),policy);assertCurrent();
     for(const row of roster){
       assertCurrent();const previous=store.read().workspaces[row.instanceKey],name=previous.digest?.title||row.displayName||row.id;
       let proof=previous.materialCache,loads=0;
       const load=async()=>{progress.stage('materials',{workspaceId:row.id,name,repositoryCount:row.repositoryCount});
-        const before=loads++?(await this.versions(route,[row.id],policy)).get(row.id):versions.get(row.id),material=await this.deps.materials(route,row.id,row.instanceKey,policy),after=(await this.versions(route,[row.id],policy)).get(row.id);assertCurrent();
+        const before=loads++?(await this.versions(route,[row.id],policy)).get(row.id):versions.get(row.id),material=await this.material(route,row.id,row.instanceKey,policy,signal),after=(await this.versions(route,[row.id],policy)).get(row.id);assertCurrent();
         proof=before&&before===after?{stamp:before,fingerprint:material.fingerprint,at:at()}:undefined;return material;
       };
       const reused=!force&&reuseMaterial(previous,versions.get(row.id),policy),initial=reused?structuredClone(previous.material):await load();
@@ -171,15 +204,16 @@ export class SessionOrganizer {
     // State symbols describe current Git evidence, not the age of a model result.
     // Preserve the accepted body while a changed summary awaits its cooldown.
     if(!preview&&target.session?.enabled&&!target.session.autoStart&&target.session.acceptedBody&&target.session.preview&&target.session.configurationFingerprint===configuration&&target.currentTitle!==formatOrganizerTitle(target.session.acceptedBody,target.state,policy,false,target.hasUncommittedChanges)){
-      const writes=target.history.length;progress.stage('titles');await this.write(route,targetId,target.session.preview.id,false,true);target=store.read().targets[targetId];if(target.history.length>writes)progress.count('titleWrites');
+      const writes=target.history.length;progress.stage('titles');await this.write(route,targetId,target.session.preview.id,false,true,signal);target=store.read().targets[targetId];if(target.history.length>writes)progress.count('titleWrites');
     }
     if(target.session?.preview?.configurationFingerprint===configuration&&!target.session.preview.contentConfigurationFingerprint)store.update(l=>{l.targets[targetId].session!.preview!.contentConfigurationFingerprint=contentConfiguration;});
     if(target.session!.enabled&&target.session!.configurationFingerprint!==configuration){store.update(l=>{l.targets[targetId].session!.enabled=false;l.targets[targetId].session!.autoStart=undefined;l.targets[targetId].session!.paused='命名配置已改变，请重新开启自动更新';});target=store.read().targets[targetId];}
     if(!policy.profileId){if(preview)throw Error('organizer_model_required');progress.skip('no-profile');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
     const own=this.rows(store,targetId).filter(w=>w.material.evidence.some(e=>e.kind==='commit'));
     if(!own.length){if(preview)throw Error('organizer_session_no_commits');progress.skip('no-material');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
-    const attempted=Date.parse(target.session!.lastAttemptAt||''),savedPreview=target.session?.preview,initial=target.session?.autoStart&&(!(attempted>=Date.parse(target.session.autoStart.requestedAt))||!target.session.error&&(!savedPreview||savedPreview.sourceFingerprint!==this.fingerprint(store,targetId)||savedPreview.configurationFingerprint!==configuration));if(!preview&&!force&&!initial&&Number.isFinite(attempted)&&Date.now()-attempted<policy.analysisIntervalSeconds*1000){
-      const cached=target.session!.preview;if(target.session!.enabled&&cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached.configurationFingerprint===configuration){store.update(l=>{l.targets[targetId].session!.preview!.title=formatOrganizerTitle(cached.body,l.targets[targetId].state,policy,false,l.targets[targetId].hasUncommittedChanges);});if(target.session!.autoStart||target.currentTitle!==store.read().targets[targetId].session!.preview!.title)await this.write(route,targetId,cached.id,false);}
+    const attempted=Date.parse(target.session!.lastAttemptAt||''),savedPreview=target.session?.preview,initial=target.session?.autoStart&&(!(attempted>=Date.parse(target.session.autoStart.requestedAt))||(!target.session.error||target.session.error==='organizer_source_changed')&&(!savedPreview||savedPreview.sourceFingerprint!==this.fingerprint(store,targetId)||savedPreview.configurationFingerprint!==configuration));if(!preview&&!force&&!retrying&&!initial&&Number.isFinite(attempted)&&Date.now()-attempted<policy.analysisIntervalSeconds*1000){
+      const cached=target.session!.preview;if(target.session!.enabled&&cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached.configurationFingerprint===configuration){store.update(l=>{l.targets[targetId].session!.preview!.title=formatOrganizerTitle(cached.body,l.targets[targetId].state,policy,false,l.targets[targetId].hasUncommittedChanges);});if(target.session!.autoStart||target.currentTitle!==store.read().targets[targetId].session!.preview!.title)await this.write(route,targetId,cached.id,false,false,signal);}
+      if(target.session?.enabled&&cached?.sourceFingerprint!==this.fingerprint(store,targetId))this.schedule(route,targetId,Math.max(100,attempted+policy.analysisIntervalSeconds*1000-Date.now()));
       progress.skip('interval');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result){j.result.cached=own.filter(w=>w.digest?.fingerprint===w.material.fingerprint).length;j.result.previewReady=cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached?.configurationFingerprint===configuration;j.result.previewId=j.result.previewReady?cached?.id:undefined;}});return;}
     const changed=own.filter(w=>!w.manual&&(!w.digest||w.digest.fingerprint!==w.material.fingerprint)).map(w=>w.key);
     const cached=target.session!.preview,sameContent=!!cached&&(cached.configurationFingerprint===configuration||cached.contentConfigurationFingerprint===contentConfiguration),reusePreview=!force&&!changed.length&&sameContent&&cached?.sourceFingerprint===this.fingerprint(store,targetId);
@@ -195,8 +229,9 @@ export class SessionOrganizer {
       assertCurrent();const keys=batches[index],title=needTitle&&index===batches.length-1,profile=settings.profile(policy.profileId),rows=this.rows(store,targetId);
       const messages=index===0?conversation.rows:conversation.rows.map(row=>({...row,evidence:[],previous:store.read().conversations[row.agentId]}));
       progress.queued(profile);const result=await this.deps.model(async()=>{assertCurrent();return callSessionModel(profile,settings.secret(profile.id),policy,rows,keys,messages,title,target.currentTitle,target.session?.acceptedBody,targetId,signal,run=>store.addRun(run),(phase,run)=>{runId=run.id;if(phase==='requesting')store.update(l=>{l.targets[targetId].session!.lastAttemptAt=at();});progress.model(phase,run);});});assertCurrent();
-      for(const key of keys){const before=rows.find(w=>w.key===key)!;progress.stage('verifying',{workspaceId:before.material.workspaceId,name:before.material.name});const checked=await this.deps.materials(route,before.material.workspaceId,key,policy);assertCurrent();if(checked.fingerprint!==before.material.fingerprint)throw Error('organizer_source_changed');}
+      await this.verifyMaterials(route,keys,policy,assertCurrent,progress,rows,signal);
       store.update(l=>{
+        if(keys.some(key=>l.workspaces[key].material.fingerprint!==rows.find(row=>row.key===key)?.material.fingerprint))throw Error('organizer_source_changed');
         for(const item of result.value.workspaces){const w=l.workspaces[item.key];if(!w.manual)w.digest={...w.digest,version:1,title:item.title,brief:item.brief,evidenceIds:item.evidenceIds,fingerprint:w.material.fingerprint,at:at(),partial:result.packed.workspaces.find(p=>p.key===item.key)?.coverage!=='complete'};}
         for(const c of result.value.conversations){const packed=result.packed.conversations.find(p=>p.agentId===c.agentId)!,source=messages.find(m=>m.agentId===c.agentId)!,checkpoint=source.batch?.checkpoints.get(packed.evidence.at(-1)!.id),old=l.conversations[c.agentId];
           l.conversations[c.agentId]={...old,agentId:c.agentId,brief:c.brief,items:old?.items||[],evidence:[...(old?.evidence||[]),...packed.evidence].slice(-80),...checkpoint,startedAtBeginning:source.batch?.startedAtBeginning||old?.startedAtBeginning||false,complete:source.complete&&packed.evidence.length===source.evidence.length,updatedAt:at(),fingerprint:organizerHash([old?.fingerprint,packed.evidence])};}
@@ -205,22 +240,22 @@ export class SessionOrganizer {
     assertCurrent();const finalFingerprint=this.fingerprint(store,targetId);
     store.update(l=>{const t=l.targets[targetId],session=t.session!;if(generatedTitle)session.preview={...session.preview,id:randomUUID(),body:generatedTitle.text,title:formatOrganizerTitle(generatedTitle.text,t.state,policy,false,t.hasUncommittedChanges),sourceFingerprint:finalFingerprint,configurationFingerprint:configuration,contentConfigurationFingerprint:contentConfiguration,at:at(),runId,evidenceIds:generatedTitle.evidenceIds,conversationComplete:t.agentIds.every(id=>l.conversations[id]?.complete),messageHeads:conversation.heads,reviewedWriteId:preview?t.pendingWrite?.id:undefined};else if(session.preview&&session.preview.sourceFingerprint===finalFingerprint){if(policy.conversationSummary)session.preview.messageHeads=conversation.heads;session.preview.title=formatOrganizerTitle(session.preview.body,t.state,policy,false,t.hasUncommittedChanges);if(sameContent){if(session.preview.configurationFingerprint!==configuration)session.preview.id=randomUUID();session.preview.configurationFingerprint=configuration;session.preview.contentConfigurationFingerprint=contentConfiguration;}if(preview&&session.preview.reviewedWriteId!==t.pendingWrite?.id){session.preview.reviewedWriteId=t.pendingWrite?.id;session.preview.id=randomUUID();}}delete session.error;});
     if(!batches.length)progress.skip('cached');
-    target=store.read().targets[targetId];if(!preview&&target.session!.enabled&&target.session!.preview&&(target.session!.autoStart||target.currentTitle!==target.session!.preview.title)&&target.session!.configurationFingerprint===configuration){progress.stage('titles');await this.write(route,targetId,target.session!.preview.id,false);progress.count('titleWrites',target.history.length<store.read().targets[targetId].history.length?1:0);}
+    target=store.read().targets[targetId];if(!preview&&target.session!.enabled&&target.session!.preview&&(target.session!.autoStart||target.currentTitle!==target.session!.preview.title)&&target.session!.configurationFingerprint===configuration){progress.stage('titles');await this.write(route,targetId,target.session!.preview.id,false,false,signal);progress.count('titleWrites',target.history.length<store.read().targets[targetId].history.length?1:0);}
     progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result){j.result.previewReady=!!target.session!.preview&&target.session!.preview.sourceFingerprint===this.fingerprint(store,targetId)&&target.session!.preview.configurationFingerprint===configuration;j.result.previewId=j.result.previewReady?target.session!.preview?.id:undefined;}});
   }
   private async apply(route:ProjectRoute,targetId:string,previewId:string){await this.write(route,targetId,previewId,true);}
-  private write(route:ProjectRoute,targetId:string,previewId:string,explicit:boolean,statusOnly=false){
-    const key=route.configPath+':'+targetId;if(this.writing.has(key))throw Error('organizer_title_write_busy');const promise=this.writeProtected(route,targetId,previewId,explicit,statusOnly).finally(()=>this.writing.delete(key));this.writing.set(key,promise);return promise;
+  private write(route:ProjectRoute,targetId:string,previewId:string,explicit:boolean,statusOnly=false,signal?:AbortSignal){
+    const key=route.configPath+':'+targetId;if(this.writing.has(key))throw Error('organizer_title_write_busy');const promise=this.writeProtected(route,targetId,previewId,explicit,statusOnly,signal).finally(()=>this.writing.delete(key));this.writing.set(key,promise);return promise;
   }
-  private async writeProtected(route:ProjectRoute,targetId:string,previewId:string,explicit:boolean,statusOnly=false){
+  private async writeProtected(route:ProjectRoute,targetId:string,previewId:string,explicit:boolean,statusOnly=false,signal?:AbortSignal){
     const store=this.deps.store(route),settings=this.deps.settings,policy=settings.response(route).effective,token=settings.fingerprint(route),configuration=this.config(route),api=await this.deps.api();let target=store.read().targets[targetId];const saved=target?.session?.preview;
     const preview=statusOnly&&saved&&target.session?.acceptedBody?{...saved,body:target.session.acceptedBody,title:formatOrganizerTitle(target.session.acceptedBody,target.state,policy,false,target.hasUncommittedChanges),sourceFingerprint:this.fingerprint(store,targetId),messageHeads:{}}:saved;
     if(!preview||preview.id!==previewId||target.pendingWrite&&(!explicit||preview.reviewedWriteId!==target.pendingWrite.id))throw Error('organizer_preview_changed');if(!explicit&&(!target.session!.enabled||target.session!.configurationFingerprint!==configuration))return;
     if(preview.configurationFingerprint!==configuration||preview.sourceFingerprint!==this.fingerprint(store,targetId))throw Error('organizer_preview_changed');
     const originalKeys=[...target.workspaceKeys],expected=target.currentTitle,control=target.session!.controlRevision||0;
-    const assertCurrent=()=>{if(this.closed||settings.fingerprint(route)!==token)throw Error('organizer_settings_changed');};
+    const assertCurrent=()=>{if(signal?.aborted)throw Error('organizer_cancelled');if(this.closed||settings.fingerprint(route)!==token)throw Error('organizer_settings_changed');};
     const {linked:roster}=await this.discover(route,targetId,api,assertCurrent);if(organizerHash(roster.map(r=>r.instanceKey).sort())!==organizerHash([...originalKeys].sort()))throw Error('organizer_source_changed');
-    for(const key of originalKeys){const prior=store.read().workspaces[key],material=this.production.applyCached(route.configPath,await this.deps.materials(route,prior.material.workspaceId,key,policy));assertCurrent();if(material.fingerprint!==prior.material.fingerprint)throw Error('organizer_source_changed');store.update(l=>{material.latestCommitAt=l.workspaces[key].material.latestCommitAt;l.workspaces[key].material=material;});}
+    await this.verifyMaterials(route,originalKeys,policy,assertCurrent,undefined,undefined,signal);
     for(const [id,head]of Object.entries(preview.messageHeads||{})){const page=await api.agents.ref(id).timeline.refetch({limit:1,direction:'before'});assertCurrent();if(page.error||page.staleCursor||!(await samePublicConversation(api,id,head,{epoch:page.epoch,seq:page.entries.at(-1)?.seqEnd||0},assertCurrent)).same)throw Error('organizer_source_changed');}
     target=store.read().targets[targetId];const rows=originalKeys.map(k=>store.read().workspaces[k]),state=productionState(rows),workingChanges=hasWorkingChanges(rows),title=formatOrganizerTitle(preview.body,state,policy,false,workingChanges);
     if(title!==preview.title||target.session?.preview?.id!==previewId||statusOnly&&target.session.acceptedBody!==preview.body||preview.sourceFingerprint!==this.fingerprint(store,targetId))throw Error('organizer_preview_changed');

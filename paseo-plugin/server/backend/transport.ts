@@ -21,6 +21,7 @@ import {
   type Json,
 } from "./storage.ts";
 const cancellableMethods = new Set([
+  'organizer.materials',
   'cache.list', 'cache.task',
   "workspace.environment", "observer.versions", "organizer.versions", "workspace.list", "workspace.detail", "workspace.identify",
   "workspace.orphan.preview", "repository.summary", "repository.compare", "repository.graph", "repository.changes", "repository.diff",

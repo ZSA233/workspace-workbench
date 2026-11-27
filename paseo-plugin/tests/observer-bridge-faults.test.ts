@@ -29,6 +29,14 @@ test('bridge shutdown aborts outstanding reads and releases sockets',async()=>{
   try {const request=f.bridge.call({method:'workspace.list',params:{}});await new Promise(r=>setTimeout(r,10));f.bridge.close();await assert.rejects(request,/bridge closed/);await new Promise(r=>setTimeout(r,10));assert.equal(f.sockets.size,0);}
   finally{await f.close();}
 });
+test('background material reads admit the bounded producer budget independently of the panel foreground budget',async()=>{
+ const f=await fixture(()=>{});const seen:Array<{method:string;timeout:number;deadline:number}>=[];
+ try{
+  (f.bridge as any).request=async(request:any,timeout:number)=>{seen.push({method:request.method,timeout,deadline:request.deadline});return{ok:true,result:{}};};
+  for(const method of ['organizer.materials','workspace.detail'] as const)await f.bridge.call({method,params:{workspaceId:'task'}});
+  assert.equal(seen[0].timeout,32_000);assert.ok(seen[0].deadline>Date.now()+30_000);assert.ok(seen[1].timeout<=7_000);
+ }finally{await f.close();}
+});
 
 test('a version change cannot be hidden by the bridge response TTL',async()=>{
   let generation=0;

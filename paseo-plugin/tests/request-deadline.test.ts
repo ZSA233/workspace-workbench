@@ -16,6 +16,8 @@ test('backend refuses expired reads and passes only remaining read time to obser
   const expired = await response(service,JSON.stringify({id:'expired',method:'workspace.detail',deadline:Date.now()-1}));
   assert.equal(expired.ok,false); assert.equal(calls.length,0);
   assert.equal(expired.error.code,'observation_timeout');
+  const expiredMaterial=await response(service,JSON.stringify({id:'expired-material',method:'organizer.materials',deadline:Date.now()-1}));
+  assert.equal(expiredMaterial.ok,false);assert.equal(calls.length,0);assert.equal(expiredMaterial.error.code,'observation_timeout');
   await response(service,JSON.stringify({id:'valid',method:'workspace.detail',deadline:Date.now()+1000,params:{observationBudgetMs:5000}}));
   assert.ok(calls[0][1].observationBudgetMs<=1000);
   await response(service,JSON.stringify({id:'legacy',method:'workspace.detail',params:{observationBudgetMs:5000}}));

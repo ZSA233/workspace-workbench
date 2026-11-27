@@ -43,7 +43,7 @@ export class OrganizerService {
   resumeObservers(){for(const route of registeredProjects())try{this.store(route);}catch{/* A broken project ledger must not prevent the plugin from starting. Its requests still report the error. */}}
   private async read(route: ProjectRoute, method: Parameters<typeof queryObserver>[0]['method'], params: Record<string, unknown> = {}) {
     const result = await withProject({ projectConfig: route.configPath }, () => this.query({ method, params }));
-    if (!result.ok) throw Error(result.error?.message || 'organizer_backend_unavailable');
+    if (!result.ok) throw Object.assign(Error(result.error?.message || 'organizer_backend_unavailable'), {code:result.error?.code});
     return result.result as Record<string, any>;
   }
   snapshot(route: ProjectRoute, hostWorkspaceId?: string): OrganizerSnapshot {

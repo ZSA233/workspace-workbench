@@ -79,6 +79,10 @@ replayableMethods.add('cache.list'); replayableMethods.add('cache.task');
 replayableMethods.add('organizer.versions'); replayableMethods.add('organizer.materials');
 
 function configuredBridgeTimeoutMs(method?: string): number {
+  // Organizer jobs run after their control RPC has returned. Their shared
+  // production producers have a 30s bound; the panel's 7s foreground budget
+  // must not abandon every cold read before that producer can finish.
+  if (method === 'organizer.materials') return 32_000;
   if (method?.startsWith('cache.')) return 2_000;
   if (method === "workspace.activity" || method === "workspace.environment") return 2_000;
   if (method === "workspace.prepare.task" || method === "workspace.prepare" || method === "repository.diff.read" || method === "observer.refresh") return 2_000;

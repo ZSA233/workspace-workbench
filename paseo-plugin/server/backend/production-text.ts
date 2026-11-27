@@ -67,3 +67,22 @@ export function retainedRequirementEdits(requirementPatch:string,laterPatch:stri
   }
   return true;
 }
+
+/** Positive evidence of a reverse edit at its original location. Mere changes
+ * to an integrated line (refactoring, version bumps) are not a rollback. */
+export function requirementReversal(requirementPatch:string,laterPatch:string,committed:string,production:string):{complete:boolean;conflicting:boolean} {
+ const own=edits(requirementPatch),later=edits(laterPatch);if(!own||!later||own.length>256||later.length>256)return{complete:false,conflicting:false};
+ const source=lines(committed),contains=(a:string[],b:string[])=>b.length>0&&a.some((_,i)=>b.every((line,n)=>a[i+n]===line));
+ const target=lines(production);let reversed=0,conflicting=false;
+ const meaningful=own.filter(c=>[...c.removed,...c.added].some(line=>/[\p{L}\p{N}]/u.test(line)));
+ for(const change of meaningful){const start=change.next,end=start+change.added.length;let reverse=false;
+  for(const follow of later){const a=follow.start,b=a+follow.removed.length,touches=change.added.length?a<=end&&b>=start:a<=start&&b>=start;if(!touches)continue;
+   if(change.removed.some(line=>/[\p{L}\p{N}]/u.test(line))&&!contains(source,change.removed)&&contains(follow.added,change.removed)){
+    if(change.added.some(line=>/[\p{L}\p{N}]/u.test(line))&&unique(source,change.added)&&unique(target,change.added))conflicting=true;
+    if(!contains(target,change.added))reverse=true;
+   }
+   if(!change.removed.length&&change.added.some(line=>/[\p{L}\p{N}]/u.test(line))&&a<=start&&b>=end&&!follow.added.length)reverse=true;
+  }
+  if(reverse)reversed++;
+ }return{complete:meaningful.length>0&&reversed===meaningful.length,conflicting};
+}

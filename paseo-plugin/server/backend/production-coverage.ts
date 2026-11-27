@@ -5,6 +5,7 @@ import { hash, stable, type Json } from './storage.ts';
 import type { Observation } from './observation.ts';
 import {materialFile} from './material-files.ts';
 import {retainedRequirementEdits} from './production-text.ts';
+import {publishedRequirement} from './production-publication.ts';
 
 type Change = { path: string; oldMode: string; mode: string; before: string; after: string };
 const missing = (oid: string) => /^0+$/.test(oid);
@@ -115,6 +116,15 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
     }
     if (!coverage.productionRef) throw Error('请配置生产分支');
     coverage.productionSha = await git.commit(coverage.productionRef);
+    const publication=await publishedRequirement(git,{base,head,production:coverage.productionSha,paths:[...ownPaths],changes});
+    if(publication&&!publication.review){
+      const rollback=publication.rollbackPaths;
+      coverage.publication={basis:rollback.length?'rollback':publication.basis,rollbackPaths:rollback};
+      coverage.covered=Math.max(0,changes.length-rollback.length);coverage.pending=rollback.length+(coverage.dirty?1:0);coverage.uncertain=0;coverage.coverageComplete=true;
+      coverage.committedState=rollback.length?'pending':'deployed';coverage.state=coverage.pending?coverage.covered?'partial':'pending':'deployed';
+      coverage.reason=rollback.length?'生产中存在回退证据：'+rollback.slice(0,3).join('、'):publication.basis==='source-integrated'?'需求源码已合入，生产使用更新的构建产物':publication.basis==='identical-tree'?'生产树与工作区提交一致':'工作区提交已合入生产分支';
+      return{coverage,evidence,fingerprint:sourceFingerprint,activityAt,complete};
+    }
     const productionIsAncestor = (await git.run(['merge-base', '--is-ancestor', coverage.productionSha, head], false)).code === 0;
     if (changes.length > 160) coverageComplete = false;
     for (const change of changes.slice(0, 160)) {
@@ -145,6 +155,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
     coverage.committedState=coverage.pending-(coverage.dirty?1:0)>0?'pending':coverage.coverageComplete?'deployed':'unknown';
     if (!coverage.coverageComplete) coverage.reason = '部分代码变化尚未核实';
     coverage.state=coverage.pending?coverage.covered?'partial':'pending':!coverageComplete||coverage.uncertain?'unknown':'deployed';
+    if(coverage.committedState==='deployed')coverage.publication={basis:'equivalent-patch'};
     return { coverage, evidence, fingerprint: sourceFingerprint, activityAt, complete };
   } catch (error) {
     if (git.signal?.aborted) throw error;

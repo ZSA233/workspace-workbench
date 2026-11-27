@@ -59,6 +59,12 @@ test('explicit fetch only updates selected tracking ref and deduplicates request
  assert.equal((await fetchComparisonRef(service.observation,input)).state,'ready');
  }finally{service.observation.close();rmSync(f.root,{recursive:true,force:true});}
 });
+test('journaled network fetch uses its own bound instead of the foreground Git timeout',async()=>{
+ const f=fixture(),remote=join(f.root,'remote');command(f.root,'clone','-q','--bare',f.repo,remote);command(f.repo,'remote','add','origin',remote);command(f.repo,'fetch','-q','origin');const service=new Service(loadConfig(f.config)),original=Git.prototype.run;let networkBudget=0;
+ Git.prototype.run=async function(...args){if(args[0].includes('fetch')){networkBudget=this.timeout;assert.ok(this.deadline!>Date.now());assert.ok(this.deadline!<=Date.now()+30_000);}return original.apply(this,args);};
+ try{await fetchComparisonRef(service.observation,{workspaceId:'main',repoPath:'repo',ref:'origin/main',requestId:'network-budget'});await service.workspaces.mutations.run(async()=>{});assert.equal(remoteFetchState(service.observation,f.repo).state,'ready');assert.ok(networkBudget>=30_000);}
+ finally{Git.prototype.run=original;await service.close();rmSync(f.root,{recursive:true,force:true});}
+});
 test('comparison rename, literal path, binary and deletion preserve normal diff semantics',async()=>{
  const f=fixture();try{
  const base=command(f.repo,'rev-parse','HEAD');command(f.repo,'mv','file','renamed');writeFileSync(join(f.repo,':(glob)*'),'literal\n');writeFileSync(join(f.repo,'binary'),Buffer.from([0,1,2,3]));command(f.repo,'add','.');command(f.repo,'commit','-qm','rename and binary');const head=command(f.repo,'rev-parse','HEAD');

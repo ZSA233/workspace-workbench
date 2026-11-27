@@ -12,8 +12,9 @@ export function SessionProductionDialog({workspaces,onClose}:{workspaces:Workspa
    {w.material.repositories.map(repo=>{const state=repo.referenceUnavailable?'unknown':repo.committedState||repo.state;return <View key={repo.repositoryId} style={{gap:5,paddingVertical:8,borderBottomWidth:1,borderBottomColor:c.border}}>
     <Row><Label strong>{repo.repositoryId}</Label><Text style={{fontSize:12,color:state==='deployed'?c.statusSuccess:state==='unknown'?c.statusWarning:c.foregroundMuted}}>{productionLabels[state]}</Text></Row>
     <Label muted lines={2}>{repo.productionRef||'未配置生产分支'}</Label>
-    <Label muted>已覆盖 {repo.covered} · 未覆盖 {Math.max(0,repo.pending-(repo.dirty?1:0))} · 待核实 {repo.uncertain}{repo.dirty?' · 有未提交改动':''}</Label>
-    {repo.reason?<Label warning>{reason(repo.reason)}</Label>:null}
+    {repo.publication&&repo.publication.basis!=='rollback'?<Label muted>{repo.publication.basis==='identical-tree'?'生产与工作区提交的内容一致':repo.publication.basis==='source-integrated'?'源码已合入 · 构建产物已替换':repo.publication.basis==='integrated'?'提交已合入生产分支':'等价改动已核对'}{repo.dirty?' · 有未提交改动':''}</Label>:<Label muted>已覆盖 {repo.covered} · 未覆盖 {Math.max(0,repo.pending-(repo.dirty?1:0))} · 待核实 {repo.uncertain}{repo.dirty?' · 有未提交改动':''}</Label>}
+    {repo.reason&&(!repo.publication||repo.publication.basis==='rollback')?<Label warning>{reason(repo.reason)}</Label>:null}
+    {repo.refreshError?<Label warning>{repo.refreshError}</Label>:null}
     <Label muted>{new Date(repo.observedAt).toLocaleString()}</Label>
    </View>;})}
   </View>)}</ScrollView>

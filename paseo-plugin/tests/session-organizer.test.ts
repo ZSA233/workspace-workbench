@@ -293,7 +293,7 @@ test('an uncertain write can only be attempted again after a fresh explicit prev
  }finally{await f.close();}
 });
 test('an empty baseline does not keep fully deployed work in a partially deployed state',async()=>{
- const f=await fixture();try{for(const m of f.materials){m.state='deployed';Object.assign(m.repositories[0],{state:'deployed',covered:1,pending:0,uncertain:0});}const baseline=structuredClone(f.materials[0]);baseline.workspaceId='baseline';baseline.instance='baseline:instance';baseline.taskBrief='';baseline.evidence=[];baseline.state=baseline.repositories[0].state='discussion';f.materials.push(baseline);
+ const f=await fixture();try{for(const m of f.materials){m.state='deployed';Object.assign(m.repositories[0],{state:'deployed',covered:1,pending:0,uncertain:0});}const baseline=structuredClone(f.materials[0]);baseline.workspaceId='baseline';baseline.instance='baseline:instance';baseline.taskBrief='同步生产基线';baseline.evidence=[{id:'goal:baseline',kind:'goal',text:'同步生产基线'}];baseline.state=baseline.repositories[0].state='discussion';f.materials.push(baseline);
  const job=await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));assert.equal(job.state,'complete',job.error);assert.equal((await f.request({action:'snapshot'})).targets[0].session.preview.title,'✓ 小时统计查询优化');
  }finally{await f.close();}
 });

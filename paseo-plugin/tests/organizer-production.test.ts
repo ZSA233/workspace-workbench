@@ -29,6 +29,58 @@ test('production coverage follows current content, catches rollback and does not
     writeFileSync(join(f.root,'file'),'uncommitted\n');assert.equal((await f.inspect()).coverage.dirty,true);assert.notEqual((await f.inspect()).coverage.state,'deployed');
   } finally {f.close();}
 });
+test('integrated requirements stay deployed after later refactoring and retirement of old paths',async()=>{
+ const f=fixture();try{
+  const base=f.head;writeFileSync(join(f.root,'original.ts'),'export const feature = true;\n');f.git('add','.');f.git('commit','-qm','Implement feature');const head=f.git('rev-parse','HEAD');
+  f.git('checkout','-qb','release',head);f.git('rm','original.ts');writeFileSync(join(f.root,'feature-a.ts'),'export const firstHalf = true;\n');writeFileSync(join(f.root,'feature-b.ts'),'export const secondHalf = true;\n');f.git('add','.');f.git('commit','-qm','Split implementation into dedicated modules');f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');
+  const result=await inspectRepository(new Git(f.root,10000),{repositoryId:'repo',repoPath:'repo',baseSha:base});assert.equal(result.coverage.committedState,'deployed');assert.equal(result.coverage.publication?.basis,'integrated');
+ }finally{f.close();}
+});
+test('identical production trees prove deployment beyond the detailed file scan limit',async()=>{
+ const f=fixture();try{
+  for(let i=0;i<205;i++)writeFileSync(join(f.root,'feature-'+i),'new requirement\n');f.git('add','.');f.git('commit','-qm','Large requirement');f.git('update-ref','refs/remotes/origin/main','HEAD');
+  const result=await f.inspect();assert.equal(result.coverage.committedState,'deployed');assert.equal(result.coverage.coverageComplete,true);assert.equal(result.coverage.publication?.basis,'identical-tree');
+ }finally{f.close();}
+});
+test('an ours-only merge never proves a requirement whose original implementation was restored',async()=>{
+ const f=fixture();try{
+  f.git('checkout','-qb','release',f.base);f.git('merge','--no-ff','-s','ours','-qm','Resolve without feature','main');f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');const result=await f.inspect();assert.equal(result.coverage.committedState,'pending');assert.equal(result.coverage.publication?.basis,'rollback');
+ }finally{f.close();}
+});
+test('published edits may evolve but a restored old value is still rollback evidence',async()=>{
+ const f=fixture();try{
+  f.git('checkout','-qb','release',f.head);f.commit('refined implementation\nkeep\n','Refine the published behavior');f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');assert.equal((await f.inspect()).coverage.committedState,'deployed');
+  f.git('checkout','-q','release');f.commit('before\nkeep\nother production work\n','Restore old behavior');f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');assert.equal((await f.inspect()).coverage.committedState,'pending');
+ }finally{f.close();}
+});
+test('an explicit revert followed by reapplication uses the current content proof',async()=>{
+ const f=fixture();try{
+  f.git('checkout','-qb','release',f.head);f.git('revert','--no-edit',f.head);const rollback=f.git('rev-parse','HEAD');f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');assert.equal((await f.inspect()).coverage.committedState,'pending');
+  f.git('checkout','-q','release');f.git('revert','--no-edit',rollback);writeFileSync(join(f.root,'other'),'other production work\n');f.git('add','.');f.git('commit','-qm','Production follow-up');f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');assert.equal((await f.inspect()).coverage.committedState,'deployed');
+ }finally{f.close();}
+});
+test('reverting an incoming mainline commit does not invalidate this Workspace own integrated work',async()=>{
+ const f=fixture();try{
+  f.git('checkout','-qb','incoming',f.base);writeFileSync(join(f.root,'upstream'),'upstream\n');f.git('add','.');f.git('commit','-qm','Unrelated upstream change');const incoming=f.git('rev-parse','HEAD');f.git('checkout','-q','main');f.git('merge','--no-ff','-qm','Incoming mainline','incoming');const head=f.git('rev-parse','HEAD');
+  f.git('checkout','-qb','release',head);f.git('revert','--no-edit',incoming);f.commit('refined implementation\nkeep\n','Refine published feature');f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');
+  const result=await f.inspect();assert.equal(result.coverage.committedState,'deployed');assert.equal(result.coverage.publication?.basis,'integrated');assert.ok(!result.evidence.some(e=>e.text==='Unrelated upstream change'));
+ }finally{f.close();}
+});
+test('an unmerged generated bundle is superseded only when its source commits are integrated and production has a valid replacement',async()=>{
+ for(const [sourceIncluded,invalidAsset] of [[true,''],[false,''],[true,'missing'],[true,'symlink']] as const){const f=fixture();try{
+  const {mkdirSync}=await import('node:fs'),dir=join(f.root,'dist');mkdirSync(join(dir,'assets'),{recursive:true});
+  const bundle=(name:string)=>{writeFileSync(join(dir,'assets',name+'.js'),'compiled '+name+'\n');writeFileSync(join(dir,'index.html'),'<script type="module" crossorigin src="./assets/'+name+'.js"></script>');};
+  bundle('index-baseAAAA');writeFileSync(join(f.root,'feature.ts'),'export const feature = false;\n');f.git('add','.');f.git('commit','-qm','Application baseline');const base=f.git('rev-parse','HEAD');
+  writeFileSync(join(f.root,'feature.ts'),'export const feature = true;\n');f.git('add','.');f.git('commit','-qm','Implement requirement');const code=f.git('rev-parse','HEAD');bundle('index-workBBBB');f.git('add','.');f.git('commit','-qm','Refresh generated bundle');const head=f.git('rev-parse','HEAD');
+  f.git('checkout','-qb','release',sourceIncluded?code:base);bundle('index-prodCCCC');if(invalidAsset){const fs=await import('node:fs');fs.unlinkSync(join(dir,'assets','index-prodCCCC.js'));if(invalidAsset==='symlink')fs.symlinkSync('../../feature.ts',join(dir,'assets','index-prodCCCC.js'));}f.git('add','.');f.git('commit','-qm','New production bundle');f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');assert.notEqual(f.git('merge-base','main','origin/main'),head);
+  const result=await inspectRepository(new Git(f.root,10000),{repositoryId:'repo',repoPath:'repo',baseSha:base});assert.equal(result.coverage.committedState,sourceIncluded&&!invalidAsset?'deployed':'pending');if(sourceIncluded&&!invalidAsset)assert.equal(result.coverage.publication?.basis,'source-integrated');
+ }finally{f.close();}}
+});
+test('missing replacement bundles and hash-looking handwritten files cannot be silently ignored',async()=>{
+ const f=fixture();try{
+  const {mkdirSync}=await import('node:fs');mkdirSync(join(f.root,'assets'));writeFileSync(join(f.root,'assets','manual-abcdef.js'),'feature\n');f.git('add','.');f.git('commit','-qm','Add source file');f.git('checkout','-qb','release',f.base);f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');assert.equal((await f.inspect()).coverage.committedState,'pending');
+ }finally{f.close();}
+});
 test('committed deployment stays confirmed beside local edits, while missing committed work keeps the requirement unshipped',async()=>{
  const f=fixture();try{
   f.git('update-ref','refs/remotes/origin/main',f.head);writeFileSync(join(f.root,'file'),'after\nkeep\nlocal edit\n');let result=await f.inspect();assert.equal(result.coverage.committedState,'deployed');assert.equal(result.coverage.dirty,true);assert.equal(aggregateRepositoryCoverage([result.coverage]),'deployed');
@@ -72,10 +124,10 @@ test('cherry-picked changes are checked against current production blobs and inc
 });
 test('long summary history does not hide complete production coverage or surviving older changes',async()=>{
  const f=fixture();try{
-  writeFileSync(join(f.root,'older-requirement'),'still required\n');f.git('add','.');f.git('commit','-qm','older requirement');
+  writeFileSync(join(f.root,'older-requirement'),'still required\n');f.git('add','.');f.git('commit','-qm','older requirement');const older=f.git('rev-parse','HEAD');
   for(let i=0;i<45;i++)f.commit('after\nkeep\n'+i+'\n','iteration '+i);
   f.git('update-ref','refs/remotes/origin/main','HEAD');let result=await f.inspect();assert.equal(result.complete,false);assert.equal(result.coverage.state,'deployed');assert.equal(result.coverage.covered,2);
-  f.git('checkout','-qb','release');f.git('rm','older-requirement');f.git('commit','-qm','Older requirement absent in production');f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');result=await f.inspect();assert.equal(result.coverage.state,'partial');assert.equal(result.coverage.pending,1);assert.equal(result.coverage.covered,1);
+  f.git('checkout','-qb','release');f.git('revert','--no-edit',older);f.git('update-ref','refs/remotes/origin/main','HEAD');f.git('checkout','-q','main');result=await f.inspect();assert.equal(result.coverage.state,'partial');assert.equal(result.coverage.pending,1);assert.equal(result.coverage.covered,1);
  }finally{f.close();}
 });
 test('working content fingerprints survive timestamp-only changes and detect same-size untracked edits',async()=>{

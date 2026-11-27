@@ -1,3 +1,4 @@
+import {referenceRefreshFailed} from './reference-state.ts';
 import { OrganizerModelQueue } from './model-queue.ts';
 import { randomUUID } from 'node:crypto';
 import type { PaseoApi, PaseoAgent } from '@getpaseo/client';
@@ -283,11 +284,11 @@ export class OrganizerService {
               previous={at:Date.now(),state:state==='ready'?'ready':'unknown'};this.fetches.set(fetchKey,previous);fetched ||= state==='ready';
             }
           }
-          if(previous?.state==='unknown'){repo.state='unknown';repo.reason='生产引用获取未确认，请在生产设置中重试';}
+          if(previous?.state==='unknown')referenceRefreshFailed(repo);
         }
         if(fetched) {
           material=await this.materials(route,row.id,key,policy);
-          for(const repo of material.repositories)if(this.fetches.get(route.configPath+':'+(repo.sourcePath||repo.repositoryId)+':'+repo.productionRef)?.state==='unknown'){repo.state='unknown';repo.reason='生产引用获取未确认';repo.referenceUnavailable=true;}
+          for(const repo of material.repositories)if(this.fetches.get(route.configPath+':'+(repo.sourcePath||repo.repositoryId)+':'+repo.productionRef)?.state==='unknown')referenceRefreshFailed(repo);
         }
         material.state = aggregateRepositoryCoverage(material.repositories);
         store.update(l => { material.latestCommitAt=l.workspaces[key].material.latestCommitAt;l.workspaces[key].material = material; this.projectTargets(l, policy); });
@@ -358,7 +359,7 @@ export class OrganizerService {
     for(const key of target.workspaceKeys) {
       const w=ledger.workspaces[key];if(!w)throw Error('organizer_source_changed');
       const material=await this.materials(route,w.material.workspaceId,key,policy);
-      for(const repo of material.repositories)if(this.fetches.get(route.configPath+':'+(repo.sourcePath||repo.repositoryId)+':'+repo.productionRef)?.state==='unknown'){repo.state='unknown';repo.reason='生产引用获取未确认';repo.referenceUnavailable=true;}
+      for(const repo of material.repositories)if(this.fetches.get(route.configPath+':'+(repo.sourcePath||repo.repositoryId)+':'+repo.productionRef)?.state==='unknown')referenceRefreshFailed(repo);
       material.state=aggregateRepositoryCoverage(material.repositories);
       changed ||= material.fingerprint!==w.material.fingerprint;verified.push(material);
     }

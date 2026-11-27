@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { aggregateProduction, aggregateRepositoryProduction,aggregateRepositoryCoverage, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, organizerPolicySchema, organizerStep, type OrganizerJob, type WorkspaceAnalysis,type RepositoryCoverage } from '../shared/organizer.ts';
 import { OrganizerModelQueue } from '../server/organizer/model-queue.ts';
 import {organizerErrorLabel} from '../client/organizer-errors.ts';
-test('production aggregates uncertainty and new discussion instead of declaring all shipped',()=>{
- assert.equal(aggregateProduction(['deployed','deployed']),'deployed');assert.equal(aggregateProduction(['deployed','pending']),'pending');assert.equal(aggregateProduction(['pending','unknown']),'pending');assert.equal(aggregateProduction(['deployed','discussion']),'pending');assert.equal(aggregateProduction([]),'discussion');
+test('production keeps unshipped changes pending while excluding no-commit discussion from the shipped code aggregate',()=>{
+ assert.equal(aggregateProduction(['deployed','deployed']),'deployed');assert.equal(aggregateProduction(['deployed','pending']),'pending');assert.equal(aggregateProduction(['pending','unknown']),'pending');assert.equal(aggregateProduction(['deployed','discussion']),'deployed');assert.equal(aggregateProduction([]),'discussion');assert.equal(aggregateProduction(['discussion','discussion']),'discussion');assert.equal(aggregateProduction(['pending','discussion']),'pending');
  const row=(key:string,state:string,activityAt:string)=>({key,material:{state,activityAt}} as WorkspaceAnalysis);
  assert.equal(representativeWorkspace([row('recent-shipped','deployed','2026'),row('old-pending','pending','2020')])?.key,'old-pending');assert.equal(representativeWorkspace([row('old','deployed','2020'),row('recent','deployed','2026')])?.key,'recent');
  const policy=organizerPolicySchema.parse({markers:{deployed:'🟢',partial:'半',pending:'待',unknown:'?',discussion:'·'}});assert.equal(stripOrganizerMarker('🟢 保留人工主旨',policy),'保留人工主旨');assert.equal(formatOrganizerTitle('很长的人工标题正文保持内容不被默认长度截断','deployed',policy,true),'🟢 很长的人工标题正文保持内容不被默认长度截断');
@@ -32,7 +32,7 @@ test('unchanged repositories do not prevent shipment while a separate new discus
  assert.equal(aggregateRepositoryProduction(['deployed','discussion','discussion']),'deployed');
  assert.equal(aggregateRepositoryProduction(['discussion','discussion']),'discussion');
  assert.equal(aggregateRepositoryProduction(['deployed','unknown','discussion']),'pending');
- assert.equal(aggregateProduction(['deployed','discussion']),'pending');
+ assert.equal(aggregateProduction(['deployed','discussion']),'deployed');
 });
 test('the workflow never highlights model generation during a Git-only or initial material read',()=>{
  const job={state:'running',stage:'materials',kind:'refresh',model:{state:'not-requested',calls:0,completed:0}} as OrganizerJob;

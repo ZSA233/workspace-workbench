@@ -189,14 +189,16 @@ export class SessionOrganizer {
     const versions=await this.versions(route,roster.map(row=>row.id),policy);assertCurrent();
     for(const row of roster){
       assertCurrent();const previous=store.read().workspaces[row.instanceKey],name=previous.digest?.title||row.displayName||row.id;
-      let proof=previous.materialCache,loads=0;
+      let proof=previous.materialCache;
       const load=async()=>{progress.stage('materials',{workspaceId:row.id,name,repositoryCount:row.repositoryCount});
-        const before=loads++?(await this.versions(route,[row.id],policy)).get(row.id):versions.get(row.id),material=await this.material(route,row.id,row.instanceKey,policy,signal),after=(await this.versions(route,[row.id],policy)).get(row.id);assertCurrent();
+        // A preceding fetch can update the shared refs of every linked
+        // worktree. Capture this read's stamp, not the old roster-wide stamp.
+        const before=(await this.versions(route,[row.id],policy)).get(row.id),material=await this.material(route,row.id,row.instanceKey,policy,signal),after=(await this.versions(route,[row.id],policy)).get(row.id);assertCurrent();
         proof=before&&before===after?{stamp:before,fingerprint:material.fingerprint,at:at()}:undefined;return material;
       };
       const reused=!force&&reuseMaterial(previous,versions.get(row.id),policy),initial=reused?structuredClone(previous.material):await load();
       progress.update(j=>{j.input!.workspaces.push({id:row.id,name:row.displayName||row.id,repositories:initial.repositories.length,commits:initial.evidence.filter(e=>e.kind==='commit').length,notes:initial.evidence.filter(e=>e.kind==='note').length,diffs:initial.evidence.filter(e=>e.kind==='diff').length,materialCached:reused,cached:!!previous.manual||previous.digest?.fingerprint===initial.fingerprint});});
-      const material=reused?initial:await this.production.refresh(route.configPath,initial,policy,id,(method,params)=>this.deps.read(route,method,params),load,signal,(repository,ref,fetching)=>progress.stage(fetching?'fetching':'production',{workspaceId:row.id,name,repository,ref}));
+      const material=reused&&!initial.repositories.some(r=>r.referenceUnavailable||r.refreshError)?initial:await this.production.refresh(route.configPath,initial,policy,id,(method,params)=>this.deps.read(route,method,params),load,signal,(repository,ref,fetching)=>progress.stage(fetching?'fetching':'production',{workspaceId:row.id,name,repository,ref}));
       material.latestCommitAt=row.latestCommitAt||null;assertCurrent();store.update(l=>{const w=l.workspaces[row.instanceKey];w.material=material;w.materialCache=proof;});progress.update(j=>{j.completed++;});
     }
     store.update(l=>{const t=l.targets[targetId];t.state=productionState(t.workspaceKeys.map(k=>l.workspaces[k]));t.hasUncommittedChanges=hasWorkingChanges(t.workspaceKeys.map(k=>l.workspaces[k]));});

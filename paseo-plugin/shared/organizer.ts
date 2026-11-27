@@ -68,7 +68,7 @@ export const organizerRpc = defineRpc({
 export type OrganizerInput = z.infer<typeof organizerRpc.input>;
 export type OrganizerEvidence = { id: string; kind: 'goal' | 'commit' | 'note' | 'message' | 'diff' | 'hint'; text: string; repository?: string; sha?: string };
 export type OrganizerItem = { id: string; text: string; state: 'todo' | 'done' | 'cancelled' | 'confirm'; evidenceIds: string[]; manual?: boolean };
-export type RepositoryCoverage = { repositoryId: string; repoPath: string; sourcePath?:string; productionRef: string; baseSha?: string; head?: string; productionSha?: string; referenceUnavailable?:boolean; coverageComplete?:boolean; committedState?:Exclude<ProductionState,'partial'>; state: ProductionState; reason?: string; covered: number; pending: number; uncertain: number; dirty: boolean; observedAt: string };
+export type RepositoryCoverage = { repositoryId: string; repoPath: string; sourcePath?:string; productionRef: string; baseSha?: string; head?: string; productionSha?: string; referenceUnavailable?:boolean; refreshError?:string; publication?:{basis:'identical-tree'|'integrated'|'source-integrated'|'equivalent-patch'|'rollback';rollbackPaths?:string[]}; coverageComplete?:boolean; committedState?:Exclude<ProductionState,'partial'>; state: ProductionState; reason?: string; covered: number; pending: number; uncertain: number; dirty: boolean; observedAt: string };
 export type WorkspaceMaterial = { workspaceId: string; instance: string; name: string; createdAt: string; activityAt: string; latestCommitAt?:string|null; creatorAgentId?: string; taskBrief: string; taskKind?: string; fingerprint: string; evidence: OrganizerEvidence[]; repositories: RepositoryCoverage[]; state: ProductionState; complete: boolean };
 export type WorkspaceDigest = { version:1; title:string; brief:string; fingerprint:string; at:string; evidenceIds:string[]; partial:boolean };
 export type SessionTitlePreview = { id:string; body:string; title:string; sourceFingerprint:string; configurationFingerprint:string; contentConfigurationFingerprint?:string; at:string; runId?:string; evidenceIds:string[]; conversationComplete:boolean; reviewedWriteId?:string; messageHeads?:Record<string,{epoch:string;seq:number}> };
@@ -101,8 +101,9 @@ export function organizerStep(job:OrganizerJob|undefined,hasPreview:boolean,appl
 }
 
 export function aggregateProduction(states: ProductionState[]): ProductionState {
-  if (!states.length || states.every(s => s === 'discussion')) return 'discussion';
-  return states.every(s=>s==='deployed')?'deployed':'pending';
+  const changes=states.filter(state=>state!=='discussion');
+  if (!changes.length) return 'discussion';
+  return changes.every(s=>s==='deployed')?'deployed':'pending';
 }
 export const requirementState=(state:ProductionState):'deployed'|'pending'=>state==='deployed'?'deployed':'pending';
 export const hasWorkingChanges=(rows:WorkspaceAnalysis[])=>rows.some(w=>w.material.repositories.some(r=>r.dirty));

@@ -74,7 +74,9 @@ export async function fetchComparisonRef(observation: Observation, params: Json)
   const state:Json={state:'running',deadline:Date.now()+30_000,requestId:params.requestId,ref,lastFetchedAt:previous?.state.lastFetchedAt||saved?.lastFetchedAt||null};
   atomicJson(requestJournal,state);atomicJson(journal,state);
   const promise=observation.workspaces.mutations.run(async()=>{
-    const git=new Git(path,observation.workspaces.config.gitTimeout,state.deadline,undefined,true);
+    // Network fetch has its own journaled 30s deadline. The ordinary 3s Git
+    // observation timeout must not truncate SSH setup and poison all sessions.
+    const git=new Git(path,Math.max(30_000,observation.workspaces.config.gitTimeout),state.deadline,undefined,true);
     if(await git.root()!==path) throw new WorkbenchError('repository_root_mismatch','Expected repository root');
     const refs=await git.refs();
     const selected=refs.find(item=>item.kind==='remote'&&(item.name===ref||item.shortName===ref));

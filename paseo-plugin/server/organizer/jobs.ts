@@ -9,7 +9,7 @@ export function organizerProgress(store:OrganizerStore,id:string) {
   });
   return {
     update,stage,
-    count(key:Exclude<keyof NonNullable<OrganizerJob['result']>,'previewReady'>,amount=1){update(job=>{job.result||={analyzed:0,cached:0,skipped:0,failed:0,titleWrites:0,conversations:0};job.result[key]+=amount;});},
+    count(key:'analyzed'|'cached'|'skipped'|'failed'|'titleWrites'|'conversations',amount=1){update(job=>{job.result||={analyzed:0,cached:0,skipped:0,failed:0,titleWrites:0,conversations:0};job.result[key]+=amount;});},
     skip(reason:NonNullable<OrganizerJob['model']>['reason']){update(job=>{if(job.model)job.model.reason=reason;});},
     queued(profile:ModelProfile){stage('model-queued');update(job=>{job.model={...job.model,calls:job.model?.calls||0,completed:job.model?.completed||0,state:'queued',profileId:profile.id,name:profile.name,model:profile.model,timeoutMs:profile.timeoutMs,reason:undefined,runId:undefined,requestedAt:undefined};});},
     model(phase:OrganizerModelPhase,run:OrganizerRun){

@@ -16,7 +16,7 @@ export class ProductionReads{
   if(this.closed||signal?.aborted)throw new WorkbenchError('observer_cancelled','Production observation cancelled');
   const {workspace,repo,path}=context,o=this.observation,instance=workspaceInstanceKey(workspace as Json&{id:string}),state=o.scheduler.versions([workspace.id]).repositories.find(r=>r.path===path);
   const version=state?.sourceReady&&!state.sourcePending?o.scheduler.statusToken(path)+':'+Math.floor(Date.now()/900_000):randomUUID();
-  const key='production:v1:'+hash(stable([instance,path,repo.id,repo.baseSha,productionRef,version,o.cache.workspaceEpoch(workspace.id)]));
+  const key='production:v2:'+hash(stable([instance,path,repo.id,repo.baseSha,productionRef,version,o.cache.workspaceEpoch(workspace.id)]));
   const read=o.cache.read(key,version,async()=>{
    if(this.closed)throw new WorkbenchError('observer_closed','Production reader closed');
    const abort=new AbortController();this.producers.add(abort);const timer=setTimeout(()=>abort.abort(),30_000);timer.unref();

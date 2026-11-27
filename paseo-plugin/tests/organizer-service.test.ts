@@ -127,13 +127,13 @@ test('legacy project enablement no longer enrolls historical or newly created se
 });
 test('pending representative wins over newer shipped work; production changes update only markers and preserve manual body',async()=>{
   const f=await fixture();try {
-    const later=structuredClone(f.material);later.workspaceId='two';later.instance='two:instance';later.name='New feature';later.createdAt=later.activityAt='2025-01-01T00:00:00Z';later.state=later.repositories[0].state='deployed';f.extra.push(later);
+    const later=structuredClone(f.material);later.workspaceId='two';later.instance='two:instance';later.name='New feature';later.createdAt=later.activityAt='2025-01-01T00:00:00Z';later.state='deployed';Object.assign(later.repositories[0],{state:'deployed',covered:1,pending:0,uncertain:0});f.extra.push(later);
     await f.analyze();let snapshot=await f.request({action:'snapshot'});assert.equal(snapshot.targets[0].representative,f.material.instance);assert.equal(snapshot.targets[0].state,'partial');
     await f.request({action:'apply',targetIds:['native'],revision:snapshot.revision,maintain:true});
     const text='🟢 人工保留的很长标题正文超过默认十六个字符长度也不会被裁切';f.title(text);
     let settings=f.settings.response(f.route);f.settings.save('project',settings.revision,{enabled:true,markers:{deployed:'🟢',partial:'🟡',pending:'🔵',unknown:'?',discussion:'·'}},[],f.route);
     await f.request({action:'target.policy',targetId:'native',policy:'symbols'});
-    f.material.state=f.material.repositories[0].state='deployed';await done(f,await f.request({action:'refresh',forceFetch:false}));
+    f.material.state='deployed';Object.assign(f.material.repositories[0],{state:'deployed',covered:1,pending:0,uncertain:0});await done(f,await f.request({action:'refresh',forceFetch:false}));
     snapshot=await f.request({action:'snapshot'});assert.equal(snapshot.targets[0].representative,later.instance);assert.equal(f.title(),text);
     assert.equal(f.counts().modelCalls,2,'production reference changes do not regenerate semantic titles');
   }finally{await f.close();}

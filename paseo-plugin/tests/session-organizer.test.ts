@@ -49,6 +49,23 @@ test('source changes reload only the affected Workspace and degraded versions fa
   f.enableCache(false);f.reads.length=0;const degraded=await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(degraded.state,'complete',degraded.error);assert.deepEqual(f.reads,['w0','w1','w2']);assert.equal(degraded.model.calls,0);
  }finally{await f.close();}
 });
+test('a finished preview is marked stale when a later interval check discovers new source material',async()=>{
+ const f=await fixture();try{
+  f.enableCache();let settings=await f.request({action:'settings.get'});await f.request({action:'settings.save',scope:'project',revision:settings.revision,patch:{analysisIntervalSeconds:300},reset:[]});
+  const initial=await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));let snapshot=await f.request({action:'snapshot'});const oldId=snapshot.targets[0].session.preview.id;assert.equal(initial.result.previewId,oldId);assert.equal(snapshot.previewStates.native,'ready');
+  f.materials[0].fingerprint='actual-edit';const checked=await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(checked.state,'complete',checked.error);assert.equal(checked.model.calls,0);assert.equal(checked.result.previewReady,false);assert.equal(checked.result.previewId,undefined);
+  snapshot=await f.request({action:'snapshot'});assert.equal(snapshot.previewStates.native,'source');assert.equal(snapshot.targets[0].session.preview.id,oldId);await assert.rejects(f.request({action:'session.apply',targetId:'native',previewId:oldId}),/organizer_preview_changed/);assert.equal(f.counts().writes,0);
+  const refreshed=await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));snapshot=await f.request({action:'snapshot'});assert.equal(snapshot.previewStates.native,'ready');assert.equal(refreshed.result.previewId,snapshot.targets[0].session.preview.id);assert.notEqual(refreshed.result.previewId,oldId);await f.request({action:'session.apply',targetId:'native',previewId:refreshed.result.previewId});assert.equal((await f.request({action:'snapshot'})).targets[0].session.enabled,true);
+  settings=await f.request({action:'settings.get'});await f.request({action:'settings.save',scope:'project',revision:settings.revision,patch:{prompt:'新的命名指令'},reset:[]});assert.equal((await f.request({action:'snapshot'})).previewStates.native,'configuration');
+ }finally{await f.close();}
+});
+test('a legacy production refresh retains session ordering metadata and does not expire its preview',async()=>{
+ const f=await fixture();try{
+  await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));const before=await f.request({action:'snapshot'}),id=before.targets[0].session.preview.id;
+  assert.equal((await f.done(await f.request({action:'refresh'}))).state,'complete');const after=await f.request({action:'snapshot'});assert.equal(after.previewStates.native,'ready');assert.deepEqual(after.workspaces.map((w:any)=>w.material.latestCommitAt),before.workspaces.map((w:any)=>w.material.latestCommitAt));assert.equal(f.counts().calls,1);
+  await f.request({action:'session.apply',targetId:'native',previewId:id});assert.equal((await f.request({action:'snapshot'})).targets[0].session.enabled,true);
+ }finally{await f.close();}
+});
 test('changing title markers previews the cached body without a model request and still requires confirmation',async()=>{
  const f=await fixture();try{
   f.enableCache();await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));let target=(await f.request({action:'snapshot'})).targets[0];
@@ -123,7 +140,7 @@ test('switching maintenance off while confirmation checks are in flight prevents
  }finally{await f.close();}
 });
 test('production-only state changes update the marker within the analysis interval without another model request',async()=>{
- const f=await fixture();try{await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));let t=(await f.request({action:'snapshot'})).targets[0];await f.request({action:'session.apply',targetId:'native',previewId:t.session.preview.id});const settings=f.settings.response(f.route);f.settings.save('project',settings.revision,{analysisIntervalSeconds:300},[],f.route);for(const material of f.materials){material.state=material.repositories[0].state='deployed';}
+ const f=await fixture();try{await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));let t=(await f.request({action:'snapshot'})).targets[0];await f.request({action:'session.apply',targetId:'native',previewId:t.session.preview.id});const settings=f.settings.response(f.route);f.settings.save('project',settings.revision,{analysisIntervalSeconds:300},[],f.route);for(const material of f.materials){material.state='deployed';Object.assign(material.repositories[0],{state:'deployed',covered:1,pending:0,uncertain:0});}
  const job=await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(job.state,'complete',job.error);assert.equal(f.title(),'✓ 小时统计查询优化');assert.equal(f.counts().calls,1);assert.equal(f.counts().writes,2);
  }finally{await f.close();}
 });
@@ -154,7 +171,7 @@ test('an uncertain write can only be attempted again after a fresh explicit prev
  }finally{await f.close();}
 });
 test('an empty baseline does not keep fully deployed work in a partially deployed state',async()=>{
- const f=await fixture();try{for(const m of f.materials)m.state=m.repositories[0].state='deployed';const baseline=structuredClone(f.materials[0]);baseline.workspaceId='baseline';baseline.instance='baseline:instance';baseline.taskBrief='';baseline.evidence=[];baseline.state=baseline.repositories[0].state='discussion';f.materials.push(baseline);
+ const f=await fixture();try{for(const m of f.materials){m.state='deployed';Object.assign(m.repositories[0],{state:'deployed',covered:1,pending:0,uncertain:0});}const baseline=structuredClone(f.materials[0]);baseline.workspaceId='baseline';baseline.instance='baseline:instance';baseline.taskBrief='';baseline.evidence=[];baseline.state=baseline.repositories[0].state='discussion';f.materials.push(baseline);
  const job=await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));assert.equal(job.state,'complete',job.error);assert.equal((await f.request({action:'snapshot'})).targets[0].session.preview.title,'✓ 小时统计查询优化');
  }finally{await f.close();}
 });

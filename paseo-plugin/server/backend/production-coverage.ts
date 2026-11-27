@@ -1,16 +1,16 @@
-import { lstat } from 'node:fs/promises';
-import { resolve, sep } from 'node:path';
 import { workspaceInstanceKey } from '../../shared/workspace-lineage.ts';
-import { aggregateRepositoryProduction, type OrganizerEvidence, type RepositoryCoverage, type WorkspaceMaterial } from '../../shared/organizer.ts';
+import { aggregateRepositoryCoverage, type OrganizerEvidence, type RepositoryCoverage, type WorkspaceMaterial } from '../../shared/organizer.ts';
 import type { Git } from './git.ts';
 import { hash, stable, type Json } from './storage.ts';
 import type { Observation } from './observation.ts';
+import {materialFile} from './material-files.ts';
 
 type Change = { path: string; oldMode: string; mode: string; before: string; after: string };
 const missing = (oid: string) => /^0+$/.test(oid);
-function rawChanges(text: string): Change[] {
+function rawChanges(text: string,truncated=false): Change[] {
   const values = text.split('\0'), changes: Change[] = [];
-  for (let i = 0; i < values.length - 1; i += 2) {
+  if(!truncated&&(values.length-1)%2)throw Error('coverage_changes_invalid');
+  for (let i = 0; i+1 < values.length - 1; i += 2) {
     const match = values[i].match(/^:(\d+) (\d+) ([a-f0-9]+) ([a-f0-9]+) [A-Z]\d*$/);
     if (!match) throw Error('coverage_changes_invalid');
     changes.push({ path: values[i + 1], oldMode: match[1], mode: match[2], before: match[3], after: match[4] });
@@ -52,7 +52,7 @@ export function textPatchCoverage(patch: string, production: string): 'covered' 
 export async function inspectRepository(git: Git, input: { repositoryId: string; repoPath: string; baseSha?: string; productionRef?: string },sharedStatus?:Array<[string,string]>): Promise<{ coverage: RepositoryCoverage; evidence: OrganizerEvidence[]; fingerprint: string; activityAt: string; complete: boolean }> {
   const coverage: RepositoryCoverage = { repositoryId: input.repositoryId, repoPath: input.repoPath, productionRef: input.productionRef || '', state: 'unknown', covered: 0, pending: 0, uncertain: 0, dirty: false, observedAt: new Date().toISOString() };
   const evidence: OrganizerEvidence[] = [];
-  let activityAt = '', complete = true;
+  let activityAt = '', complete = true, coverageComplete=true,sourceFingerprint:string|undefined;
   try {
     const head = coverage.head = await git.commit('HEAD');
     if (!input.baseSha) throw Error('创建基线缺失');
@@ -64,6 +64,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
     }
     const status = sharedStatus||await git.status(false, false, true);
     coverage.dirty = status.length > 0;
+    if(coverage.dirty)coverage.pending++;
     const own = await git.run(['log', '--first-parent', '--no-merges', '--format=%H%x00%cI%x00%s', '--max-count=41', `${base}..${head}`, '--'], true, { maxBytes: 32768 });
     const commits = own.stdout.trim().split('\n').filter(Boolean);
     if (commits.length > 40) complete = false;
@@ -74,38 +75,46 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
     }
     const ownPaths = new Set<string>();
     if(commits.length) {
-      const paths=await git.run(['diff-tree','--no-commit-id','--name-only','--no-renames','-r','-z','--stdin'],true,{maxBytes:128*1024,input:commits.slice(0,40).map(row=>row.split('\0')[0]).join('\n')+'\n'});
-      for(const path of paths.stdout.split('\0').filter(Boolean))ownPaths.add(path);
+      let shas=commits.slice(0,40).map(row=>row.split('\0')[0]);
+      if(commits.length>40){const history=await git.run(['rev-list','--first-parent','--no-merges','--max-count=2001',`${base}..${head}`],true,{maxBytes:128*1024});shas=history.stdout.trim().split('\n').filter(Boolean);if(shas.length>2000){coverageComplete=false;shas=shas.slice(0,2000);}}
+      const paths=await git.run(['diff-tree','--no-commit-id','--name-only','--no-renames','-r','-z','--stdin'],true,{maxBytes:512*1024,truncate:true,input:shas.join('\n')+'\n'});
+      if(paths.truncated)coverageComplete=false;
+      for(const path of paths.stdout.split('\0').slice(0,-1).filter(Boolean))ownPaths.add(path);
     }
     const working = coverage.dirty ? await git.run(['diff', '--no-ext-diff', '--no-textconv', '--unified=2', 'HEAD', '--'], true, { maxBytes: 16384, truncate: true }) : null;
     if (working?.stdout) evidence.push({ id: `diff:${input.repositoryId}:${hash(working.stdout)}`, kind: 'diff', text: working.stdout, repository: input.repositoryId });
     if (working?.truncated) complete = false;
-    const dirtyStats = [];
-    for (const [, name] of status.slice(0, 80)) {
-      const path = resolve(git.path, name.split('\0')[0]);
-      if (!path.startsWith(git.path + sep)) { complete = false; continue; }
-      const stat = await lstat(path).catch(() => null);
-      dirtyStats.push([name, stat?.size, stat?.mtimeMs]);
-      if (stat && new Date(stat.mtimeMs).toISOString() > activityAt) activityAt = new Date(stat.mtimeMs).toISOString();
+    const dirtyRevisions = [];
+    for (const [code, name] of status.slice(0, 80)) {
+      const file=await materialFile(git.path,name.split('\0')[0],git.signal,git.deadline);
+      dirtyRevisions.push([code,name,file.revision]);complete&&=file.complete;
+      if (file.mtime!==undefined && new Date(file.mtime).toISOString() > activityAt) activityAt = new Date(file.mtime).toISOString();
     }
     if (status.length > 80) complete = false;
-    const sourceFingerprint = hash(stable([base, head, working?.stdout, dirtyStats]));
-    const raw = await git.run(['diff', '--raw', '-z', '--no-abbrev', '--no-renames', base, head, '--'], true, { maxBytes: 96 * 1024 });
+    sourceFingerprint = hash(stable([base, head, working?.stdout, dirtyRevisions]));
     // Incoming mainline merges are not this Workspace's requirement changes.
-    const changes = rawChanges(raw.stdout).filter(change=>ownPaths.has(change.path));
+    const changes:Change[]=[],names=[...ownPaths];
+    if(names.length>2000)coverageComplete=false;
+    for(let i=0;i<Math.min(names.length,2000);i+=100){
+      const raw=await git.run(['diff','--raw','-z','--no-abbrev','--no-renames',base,head,'--',...names.slice(i,Math.min(i+100,2000))],true,{maxBytes:128*1024,truncate:true});
+      if(raw.truncated)coverageComplete=false;changes.push(...rawChanges(raw.stdout,raw.truncated));
+      if(changes.length>160){coverageComplete=false;break;}
+    }
     if(changes.length) {
       const patch=await git.run(['diff','--no-ext-diff','--no-textconv','--unified=2',base,head,'--',...changes.slice(0,12).map(c=>c.path)],true,{maxBytes:12000,truncate:true});
+      if(patch.truncated||changes.length>12)complete=false;
       if(patch.stdout)evidence.push({id:`diff:${input.repositoryId}:${hash(patch.stdout)}`,kind:'diff',text:patch.stdout,repository:input.repositoryId});
     }
     if (!changes.length && !coverage.dirty) {
       coverage.state = ownPaths.size ? 'unknown' : 'discussion';
+      coverage.coverageComplete=!ownPaths.size&&coverageComplete;
       if (ownPaths.size) coverage.reason = '提交已无净改动，不能据此确认已上线';
       return { coverage, evidence, fingerprint: sourceFingerprint, activityAt, complete };
     }
     if (!coverage.productionRef) throw Error('请配置生产分支');
     coverage.productionSha = await git.commit(coverage.productionRef);
     const productionIsAncestor = (await git.run(['merge-base', '--is-ancestor', coverage.productionSha, head], false)).code === 0;
-    if (changes.length > 160) complete = false;
+    if (changes.length > 160) coverageComplete = false;
     for (const change of changes.slice(0, 160)) {
       const tree = await git.text(['ls-tree', '-z', coverage.productionSha, '--', change.path]);
       const entry = tree.match(/^(\d+) \w+ ([a-f0-9]+)\t/), productionOid = entry?.[2];
@@ -121,15 +130,17 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
       const state = textPatchCoverage(patch.stdout, content);
       if (state === 'covered') coverage.covered++; else if (state === 'pending' || productionIsAncestor) coverage.pending++; else coverage.uncertain++;
     }
-    if (coverage.dirty) coverage.pending++;
-    if (!complete || coverage.uncertain) { coverage.state = 'unknown'; coverage.reason = '存在未完整读取或无法确认的代码变化'; }
-    else if (coverage.covered && coverage.pending) coverage.state = 'partial';
-    else coverage.state = coverage.pending ? 'pending' : 'deployed';
+    coverage.coverageComplete=coverageComplete&&coverage.uncertain===0;
+    if (!coverage.coverageComplete) coverage.reason = '部分代码变化尚未核实';
+    coverage.state=coverage.pending?coverage.covered?'partial':'pending':!coverageComplete||coverage.uncertain?'unknown':'deployed';
     return { coverage, evidence, fingerprint: sourceFingerprint, activityAt, complete };
   } catch (error) {
     if (git.signal?.aborted) throw error;
     coverage.reason = error instanceof Error ? error.message : '生产证据不可用';
-    return { coverage, evidence, fingerprint: hash(stable([coverage.head, coverage.baseSha, evidence, coverage.reason])), activityAt, complete: false };
+    coverage.coverageComplete=false;
+    if(!coverage.productionSha){coverage.referenceUnavailable=true;coverage.state='unknown';}
+    else coverage.state=coverage.pending?coverage.covered?'partial':'pending':'unknown';
+    return { coverage, evidence, fingerprint: sourceFingerprint||hash(stable([coverage.head, coverage.baseSha, evidence, coverage.reason])), activityAt, complete: false };
   }
 }
 
@@ -160,5 +171,5 @@ export async function workspaceMaterials(observation: Observation, params: Json,
   evidence.push({id:'hint:'+instance,kind:'hint',text:'工作区名称（仅作为弱线索）：'+(workspace.displayName||workspace.id)});
   return { workspaceId: workspace.id, instance, name: workspace.displayName || workspace.id, createdAt: workspace.createdAt || '', activityAt,
     ...(workspace.creator?.agentId ? { creatorAgentId: workspace.creator.agentId } : {}), taskBrief: brief, taskKind: workspace.taskKind,
-    evidence, repositories, fingerprint: hash(stable([brief, workspace.taskKind, fingerprints])), state: aggregateRepositoryProduction(repositories.map(r => r.state)), complete };
+    evidence, repositories, fingerprint: hash(stable([brief, workspace.taskKind, fingerprints])), state: aggregateRepositoryCoverage(repositories), complete };
 }

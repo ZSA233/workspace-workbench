@@ -11,7 +11,7 @@ export function sessionJobProgress(job:OrganizerJob,now=Date.now()){
   if(job.stage==='verifying')detail=job.current?.name||'';
   if(job.stage==='requesting')label=job.intent?.title?job.intent.summaries?'生成标题和摘要':'生成会话标题':job.intent?.summaries?'生成工作区摘要':'归纳会话片段';
   if(!running){
-    label=job.state==='failed'?'本次处理未完成':job.state==='cancelled'?'已取消':job.state==='interrupted'?'上次处理已中断':job.result?.previewReady?'标题建议已就绪':job.model?.reason==='no-profile'?'等待配置模型':job.model?.reason==='no-material'?'暂无可生成的提交资料':job.model?.reason==='interval'?'已核对，沿用已有结果':'资料核对完成';
+    label=job.state==='failed'?'本次处理未完成':job.state==='cancelled'?'已取消':job.state==='interrupted'?'上次处理已中断':job.result?.previewStale?'资料已更新，请重新预览':job.result?.previewReady?'标题建议已就绪':job.model?.reason==='no-profile'?'等待配置模型':job.model?.reason==='no-material'?'暂无可生成的提交资料':job.model?.reason==='interval'?'已核对，沿用已有结果':'资料核对完成';
     detail=[job.result?.analyzed?job.result.analyzed+' 份摘要已更新':null,job.result?.cached?job.result.cached+' 份摘要沿用缓存':null,job.model?.calls?'本地模型 '+job.model.calls+' 次':'模型未调用'].filter(Boolean).join(' · ');
   }
   return{running,label,detail,seconds};

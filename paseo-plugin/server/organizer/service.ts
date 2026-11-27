@@ -2,7 +2,7 @@ import { OrganizerModelQueue } from './model-queue.ts';
 import { randomUUID } from 'node:crypto';
 import type { PaseoApi, PaseoAgent } from '@getpaseo/client';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
-import { organizerRpc, aggregateProduction, aggregateRepositoryProduction, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, type OrganizerInput, type OrganizerSnapshot, type OrganizerTarget, type WorkspaceMaterial, type WorkspaceAnalysis, type OrganizerEvidence, type ConversationAnalysis, type OrganizerJob, type OrganizerJobOptions, type OrganizerPolicy, type OrganizerRun } from '../../shared/organizer.ts';
+import { organizerRpc, aggregateProduction, aggregateRepositoryCoverage, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, type OrganizerInput, type OrganizerSnapshot, type OrganizerTarget, type WorkspaceMaterial, type WorkspaceAnalysis, type OrganizerEvidence, type ConversationAnalysis, type OrganizerJob, type OrganizerJobOptions, type OrganizerPolicy, type OrganizerRun } from '../../shared/organizer.ts';
 import { resolveProject, withProject, type ProjectRoute } from '../projects.ts';
 import { queryObserver } from '../observer.ts';
 import { allAgentBindings } from '../agent-store.ts';
@@ -48,7 +48,7 @@ export class OrganizerService {
   snapshot(route: ProjectRoute, hostWorkspaceId?: string): OrganizerSnapshot {
     const l = this.store(route).read(), targets = Object.values(l.targets).filter(t => !hostWorkspaceId || t.id === hostWorkspaceId);
     const keys = new Set(targets.flatMap(t => t.workspaceKeys)), agents = new Set(targets.filter(t=>t.workspaceKeys.length).flatMap(t => t.agentIds));
-    return { revision: l.revision, workspaces: Object.values(l.workspaces).filter(w => keys.has(w.key)||!hostWorkspaceId&&l.unlinked.includes(w.material.workspaceId)), targets,
+    return { revision: l.revision, workspaces: Object.values(l.workspaces).filter(w => keys.has(w.key)||!hostWorkspaceId&&l.unlinked.includes(w.material.workspaceId)), targets,previewStates:this.sessions.previewStates(route,l,targets),
       conversations: Object.values(l.conversations).filter(c => agents.has(c.agentId)), jobs: l.jobs.slice(-15).reverse(), runs: l.runs.slice(-20).reverse(), unlinked: l.unlinked, error: l.error };
   }
   private async syncLegacy(route:ProjectRoute,values?:Record<string,string>){if(values||this.deps.legacyBranches)this.settings.importLegacyBranches(route,values||await this.deps.legacyBranches!());}
@@ -286,10 +286,10 @@ export class OrganizerService {
         }
         if(fetched) {
           material=await this.materials(route,row.id,key,policy);
-          for(const repo of material.repositories)if(this.fetches.get(route.configPath+':'+(repo.sourcePath||repo.repositoryId)+':'+repo.productionRef)?.state==='unknown'){repo.state='unknown';repo.reason='生产引用获取未确认';}
+          for(const repo of material.repositories)if(this.fetches.get(route.configPath+':'+(repo.sourcePath||repo.repositoryId)+':'+repo.productionRef)?.state==='unknown'){repo.state='unknown';repo.reason='生产引用获取未确认';repo.referenceUnavailable=true;}
         }
-        material.state = aggregateRepositoryProduction(material.repositories.map(r => r.state));
-        store.update(l => { l.workspaces[key].material = material; this.projectTargets(l, policy); });
+        material.state = aggregateRepositoryCoverage(material.repositories);
+        store.update(l => { material.latestCommitAt=l.workspaces[key].material.latestCommitAt;l.workspaces[key].material = material; this.projectTargets(l, policy); });
         materialUpdated = true;
         const previous = store.read().workspaces[key];
         const attempted=previous.lastAttemptAt||previous.analyzedAt,due = !attempted || Date.now() - Date.parse(attempted) >= policy.analysisIntervalSeconds * 1000;
@@ -357,12 +357,12 @@ export class OrganizerService {
     for(const key of target.workspaceKeys) {
       const w=ledger.workspaces[key];if(!w)throw Error('organizer_source_changed');
       const material=await this.materials(route,w.material.workspaceId,key,policy);
-      for(const repo of material.repositories)if(this.fetches.get(route.configPath+':'+(repo.sourcePath||repo.repositoryId)+':'+repo.productionRef)?.state==='unknown'){repo.state='unknown';repo.reason='生产引用获取未确认';}
+      for(const repo of material.repositories)if(this.fetches.get(route.configPath+':'+(repo.sourcePath||repo.repositoryId)+':'+repo.productionRef)?.state==='unknown'){repo.state='unknown';repo.reason='生产引用获取未确认';repo.referenceUnavailable=true;}
       material.state=aggregateProduction(material.repositories.map(r=>r.state));
       changed ||= material.fingerprint!==w.material.fingerprint;verified.push(material);
     }
     if(this.closed||this.settings.fingerprint(route)!==configToken)throw Error('organizer_settings_changed');
-    store.update(l=>{for(const material of verified)if(l.workspaces[material.instance])l.workspaces[material.instance].material=material;this.projectTargets(l,policy);});
+    store.update(l=>{for(const material of verified)if(l.workspaces[material.instance]){material.latestCommitAt=l.workspaces[material.instance].material.latestCommitAt;l.workspaces[material.instance].material=material;}this.projectTargets(l,policy);});
     ledger=store.read();target=ledger.targets[id];
     if(changed)throw Error('organizer_source_changed');
     if(target.policy!==priorPolicy||explicit&&(target.previewTitle!==preview||target.representative!==representative))throw Error('organizer_preview_changed');

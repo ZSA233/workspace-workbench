@@ -6,7 +6,7 @@ import {withProject,type ProjectRoute} from '../projects.ts';
 import {conversationBatch} from './conversation.ts';
 import {organizerProgress,type OrganizerProgress} from './jobs.ts';
 import {callSessionModel,sessionModelPrompt,type SessionMessages} from './session-model.ts';
-import {organizerHash,type OrganizerSettings,type OrganizerStore} from './storage.ts';
+import {organizerHash,type OrganizerSettings,type OrganizerStore,type OrganizerLedger} from './storage.ts';
 import {SessionProduction} from './session-production.ts';
 import {eligibleAssociationWorkspaces,sessionAssociations,syncSessionAssociations} from './session-associations.ts';
 import {materialStamp,reuseMaterial} from './material-cache.ts';
@@ -19,6 +19,7 @@ const errorText=(error:unknown)=>error instanceof Error?error.message:String(err
 const productionState=(rows:WorkspaceAnalysis[])=>aggregateProduction(rows.filter(w=>w.material.state!=='discussion'||w.material.taskBrief||w.material.evidence.some(e=>e.kind==='goal')).map(w=>w.material.state));
 type Active={project:string;targetId:string;abort:AbortController;promise:Promise<void>;preview:boolean;force:boolean};
 type Messages=SessionMessages&{batch?:ReturnType<typeof conversationBatch>};
+const sessionFingerprint=(l:OrganizerLedger,t:OrganizerTarget)=>organizerHash([[...t.workspaceKeys].sort().map(key=>[key,l.workspaces[key]?.material.fingerprint,l.workspaces[key]?.material.latestCommitAt]),[...t.agentIds].sort().map(id=>[id,l.conversations[id]?.fingerprint,l.conversations[id]?.cursor,l.conversations[id]?.pendingMessage])]);
 export class SessionOrganizer {
   private active=new Map<string,Active>();private tails=new Map<string,Promise<void>>();private timers=new Map<string,ReturnType<typeof setTimeout>>();private closed=false;
   private writing=new Map<string,Promise<void>>();
@@ -26,6 +27,10 @@ export class SessionOrganizer {
   private deps:Dependencies;
   constructor(deps:Dependencies){this.deps=deps;}
   private config(route:ProjectRoute,contentOnly=false){const settings=this.deps.settings.response(route),profile=settings.profiles.find(p=>p.id===settings.effective.profileId);return organizerHash(contentOnly?[profile,sessionModelPrompt(settings.effective)]:[profile,sessionModelPrompt(settings.effective),settings.effective.markers]);}
+  previewStates(route:ProjectRoute,ledger:OrganizerLedger,targets:OrganizerTarget[]){
+    const configuration=this.config(route);
+    return Object.fromEntries(targets.map(t=>{const p=t.session?.preview;return[t.id,!p?'missing':p.configurationFingerprint!==configuration?'configuration':p.sourceFingerprint!==sessionFingerprint(ledger,t)?'source':t.pendingWrite&&p.reviewedWriteId!==t.pendingWrite.id?'write':'ready'];})) as Record<string,'ready'|'configuration'|'source'|'missing'|'write'>;
+  }
   async request(route:ProjectRoute,request:Request){
     if(request.action==='session.associations'||request.action==='session.associations.save')return this.associations(route,request);
     if(request.action==='session.apply'){await this.apply(route,request.targetId,request.previewId);return this.deps.store(route).read().targets[request.targetId];}
@@ -86,7 +91,7 @@ export class SessionOrganizer {
   private rows(store:OrganizerStore,targetId:string){const l=store.read();return l.targets[targetId].workspaceKeys.map(k=>l.workspaces[k]).filter(Boolean).sort((a,b)=>{
     const x=Date.parse(a.material.latestCommitAt||''),y=Date.parse(b.material.latestCommitAt||'');if(Number.isFinite(x)&&Number.isFinite(y)&&x!==y)return y-x;if(Number.isFinite(x)!==Number.isFinite(y))return Number.isFinite(x)?-1:1;return a.material.workspaceId.localeCompare(b.material.workspaceId);
   });}
-  private fingerprint(store:OrganizerStore,targetId:string){const l=store.read(),t=l.targets[targetId];return organizerHash([[...t.workspaceKeys].sort().map(key=>[key,l.workspaces[key]?.material.fingerprint,l.workspaces[key]?.material.latestCommitAt]),[...t.agentIds].sort().map(id=>[id,l.conversations[id]?.fingerprint,l.conversations[id]?.cursor,l.conversations[id]?.pendingMessage])]);}
+  private fingerprint(store:OrganizerStore,targetId:string){const l=store.read();return sessionFingerprint(l,l.targets[targetId]);}
   private async versions(route:ProjectRoute,ids:string[],policy:OrganizerPolicy){
     const stamps=new Map<string,string|undefined>(),bindings=withProject({projectConfig:route.configPath},allAgentBindings);
     for(let i=0;i<ids.length;i+=100){const group=ids.slice(i,i+100);let result:Record<string,any>|undefined;
@@ -133,7 +138,7 @@ export class SessionOrganizer {
     if(!own.length){if(preview)throw Error('organizer_session_no_commits');progress.skip('no-material');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
     const attempted=Date.parse(target.session!.lastAttemptAt||'');if(!preview&&!force&&Number.isFinite(attempted)&&Date.now()-attempted<policy.analysisIntervalSeconds*1000){
       const cached=target.session!.preview;if(target.session!.enabled&&cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached.configurationFingerprint===configuration){store.update(l=>{l.targets[targetId].session!.preview!.title=formatOrganizerTitle(cached.body,l.targets[targetId].state,policy);});if(target.currentTitle!==store.read().targets[targetId].session!.preview!.title)await this.write(route,targetId,cached.id,false);}
-      progress.skip('interval');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result){j.result.cached=own.filter(w=>w.digest?.fingerprint===w.material.fingerprint).length;j.result.previewReady=cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached?.configurationFingerprint===configuration;}});return;}
+      progress.skip('interval');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result){j.result.cached=own.filter(w=>w.digest?.fingerprint===w.material.fingerprint).length;j.result.previewReady=cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached?.configurationFingerprint===configuration;j.result.previewId=j.result.previewReady?cached?.id:undefined;}});return;}
     const changed=own.filter(w=>!w.manual&&(!w.digest||w.digest.fingerprint!==w.material.fingerprint)).map(w=>w.key);
     const cached=target.session!.preview,sameContent=!!cached&&(cached.configurationFingerprint===configuration||cached.contentConfigurationFingerprint===contentConfiguration),reusePreview=!force&&!changed.length&&sameContent&&cached?.sourceFingerprint===this.fingerprint(store,targetId);
     const conversation=policy.conversationSummary?await this.messages(store,target,api,assertCurrent,!!reusePreview,progress):{rows:[] as Messages[],heads:{}};assertCurrent();
@@ -159,7 +164,7 @@ export class SessionOrganizer {
     store.update(l=>{const t=l.targets[targetId],session=t.session!;if(generatedTitle)session.preview={...session.preview,id:randomUUID(),body:generatedTitle.text,title:formatOrganizerTitle(generatedTitle.text,t.state,policy),sourceFingerprint:finalFingerprint,configurationFingerprint:configuration,contentConfigurationFingerprint:contentConfiguration,at:at(),runId,evidenceIds:generatedTitle.evidenceIds,conversationComplete:t.agentIds.every(id=>l.conversations[id]?.complete),messageHeads:conversation.heads,reviewedWriteId:preview?t.pendingWrite?.id:undefined};else if(session.preview&&session.preview.sourceFingerprint===finalFingerprint){if(policy.conversationSummary)session.preview.messageHeads=conversation.heads;session.preview.title=formatOrganizerTitle(session.preview.body,t.state,policy);if(sameContent){if(session.preview.configurationFingerprint!==configuration)session.preview.id=randomUUID();session.preview.configurationFingerprint=configuration;session.preview.contentConfigurationFingerprint=contentConfiguration;}if(preview&&session.preview.reviewedWriteId!==t.pendingWrite?.id){session.preview.reviewedWriteId=t.pendingWrite?.id;session.preview.id=randomUUID();}}delete session.error;});
     if(!batches.length)progress.skip('cached');
     target=store.read().targets[targetId];if(!preview&&target.session!.enabled&&target.session!.preview&&target.currentTitle!==target.session!.preview.title&&target.session!.configurationFingerprint===configuration){progress.stage('titles');await this.write(route,targetId,target.session!.preview.id,false);progress.count('titleWrites',target.history.length<store.read().targets[targetId].history.length?1:0);}
-    progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result)j.result.previewReady=!!target.session!.preview&&target.session!.preview.sourceFingerprint===this.fingerprint(store,targetId)&&target.session!.preview.configurationFingerprint===configuration;});
+    progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result){j.result.previewReady=!!target.session!.preview&&target.session!.preview.sourceFingerprint===this.fingerprint(store,targetId)&&target.session!.preview.configurationFingerprint===configuration;j.result.previewId=j.result.previewReady?target.session!.preview?.id:undefined;}});
   }
   private async apply(route:ProjectRoute,targetId:string,previewId:string){await this.write(route,targetId,previewId,true);}
   private write(route:ProjectRoute,targetId:string,previewId:string,explicit:boolean){

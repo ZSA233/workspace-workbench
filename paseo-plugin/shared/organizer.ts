@@ -68,7 +68,7 @@ export const organizerRpc = defineRpc({
 export type OrganizerInput = z.infer<typeof organizerRpc.input>;
 export type OrganizerEvidence = { id: string; kind: 'goal' | 'commit' | 'note' | 'message' | 'diff' | 'hint'; text: string; repository?: string; sha?: string };
 export type OrganizerItem = { id: string; text: string; state: 'todo' | 'done' | 'cancelled' | 'confirm'; evidenceIds: string[]; manual?: boolean };
-export type RepositoryCoverage = { repositoryId: string; repoPath: string; sourcePath?:string; productionRef: string; baseSha?: string; head?: string; productionSha?: string; state: ProductionState; reason?: string; covered: number; pending: number; uncertain: number; dirty: boolean; observedAt: string };
+export type RepositoryCoverage = { repositoryId: string; repoPath: string; sourcePath?:string; productionRef: string; baseSha?: string; head?: string; productionSha?: string; referenceUnavailable?:boolean; coverageComplete?:boolean; state: ProductionState; reason?: string; covered: number; pending: number; uncertain: number; dirty: boolean; observedAt: string };
 export type WorkspaceMaterial = { workspaceId: string; instance: string; name: string; createdAt: string; activityAt: string; latestCommitAt?:string|null; creatorAgentId?: string; taskBrief: string; taskKind?: string; fingerprint: string; evidence: OrganizerEvidence[]; repositories: RepositoryCoverage[]; state: ProductionState; complete: boolean };
 export type WorkspaceDigest = { version:1; title:string; brief:string; fingerprint:string; at:string; evidenceIds:string[]; partial:boolean };
 export type SessionTitlePreview = { id:string; body:string; title:string; sourceFingerprint:string; configurationFingerprint:string; contentConfigurationFingerprint?:string; at:string; runId?:string; evidenceIds:string[]; conversationComplete:boolean; reviewedWriteId?:string; messageHeads?:Record<string,{epoch:string;seq:number}> };
@@ -90,10 +90,10 @@ export type OrganizerJob = { id: string; state: 'queued' | 'running' | 'complete
   input?:{workspaces:Array<{id:string;name:string;repositories:number;commits:number;notes:number;diffs:number;cached:boolean;materialCached?:boolean;updated?:boolean}>;history:{pages:number;fragments:number;sentFragments?:number;complete:boolean}};
   current?:{workspaceId?:string;name?:string;repository?:string;ref?:string;repositoryCount?:number;agentId?:string;page?:number};
   model?:{profileId?:string;name?:string;model?:string;state:'not-requested'|'queued'|OrganizerModelPhase;calls:number;completed:number;reason?:'automatic-off'|'production-only'|'cached'|'no-material'|'no-profile'|'interval'|'scope';runId?:string;requestedAt?:string;timeoutMs?:number};
-  result?:{analyzed:number;cached:number;skipped:number;failed:number;titleWrites:number;conversations:number;previewReady?:boolean};
+  result?:{analyzed:number;cached:number;skipped:number;failed:number;titleWrites:number;conversations:number;previewReady?:boolean;previewId?:string;previewStale?:boolean};
   events?:Array<{at:string;stage:OrganizerStage;workspaceId?:string;message:string;current?:OrganizerJob['current']}>;
 };
-export type OrganizerSnapshot = { revision: number; workspaces: WorkspaceAnalysis[]; targets: OrganizerTarget[]; conversations: ConversationAnalysis[]; jobs: OrganizerJob[]; runs: OrganizerRun[]; unlinked: string[]; error?: string };
+export type OrganizerSnapshot = { revision: number; workspaces: WorkspaceAnalysis[]; targets: OrganizerTarget[]; conversations: ConversationAnalysis[]; jobs: OrganizerJob[]; runs: OrganizerRun[]; unlinked: string[]; previewStates?:Record<string,'ready'|'configuration'|'source'|'missing'|'write'>; error?: string };
 
 export function organizerStep(job:OrganizerJob|undefined,hasPreview:boolean,applied:boolean):number {
   if(job&&(job.state==='running'||job.state==='queued')){if(job.stage==='titles')return 3;return job.model&&job.model.state!=='not-requested'?1:0;}
@@ -102,12 +102,18 @@ export function organizerStep(job:OrganizerJob|undefined,hasPreview:boolean,appl
 
 export function aggregateProduction(states: ProductionState[]): ProductionState {
   if (!states.length || states.every(s => s === 'discussion')) return 'discussion';
-  if (states.some(s => s === 'unknown')) return 'unknown';
+  if (states.some(s => s === 'partial')||states.includes('deployed')&&states.includes('pending')) return 'partial';
+  if (states.includes('pending')) return 'pending';
+  if (states.includes('unknown')) return 'unknown';
   if (states.every(s => s === 'deployed')) return 'deployed';
   if (states.some(s => s === 'deployed' || s === 'partial')) return 'partial';
   return states.some(s => s === 'pending') ? 'pending' : 'discussion';
 }
 export function aggregateRepositoryProduction(states:ProductionState[]):ProductionState {return aggregateProduction(states.filter(state=>state!=='discussion'));}
+export function aggregateRepositoryCoverage(repositories:RepositoryCoverage[]):ProductionState {
+ const covered=repositories.some(r=>!r.referenceUnavailable&&(r.covered>0||r.state==='deployed'||r.state==='partial')),pending=repositories.some(r=>!r.referenceUnavailable&&(r.pending>0||r.state==='pending'||r.state==='partial'));
+ return pending?covered?'partial':'pending':aggregateRepositoryProduction(repositories.map(r=>r.state));
+}
 export function representativeWorkspace(workspaces: WorkspaceAnalysis[]): WorkspaceAnalysis | undefined {
   const rank = (s: ProductionState) => s === 'pending' || s === 'partial' ? 0 : s === 'unknown' || s === 'discussion' ? 1 : 2;
   return [...workspaces].sort((a, b) => rank(a.material.state) - rank(b.material.state) || (Date.parse(b.material.activityAt)||0)-(Date.parse(a.material.activityAt)||0) || a.key.localeCompare(b.key))[0];

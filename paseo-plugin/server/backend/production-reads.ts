@@ -5,6 +5,7 @@ import {withBackgroundGit} from './git.ts';
 import {hash,stable,WorkbenchError,type Json} from './storage.ts';
 import {workspaceInstanceKey} from '../../shared/workspace-lineage.ts';
 import type {RawStatus} from './repository-status.ts';
+import {readActivityHead,readActivityReference} from './activity-head.ts';
 
 /** Production coverage is derived Git data in the existing shared observation
  * cache. Producers own cancellation; a departing panel cannot cancel a peer. */
@@ -12,11 +13,12 @@ export class ProductionReads{
  private closed=false;private producers=new Set<AbortController>();
  private observation:Observation;
  constructor(observation:Observation){this.observation=observation;}
- async read(context:{workspace:Json;repo:Json;path:string},productionRef:string|undefined,signal?:AbortSignal){
+ async read(context:{workspace:Json;repo:Json;path:string},productionRef:string|undefined,signal?:AbortSignal,committedOnly=false){
   if(this.closed||signal?.aborted)throw new WorkbenchError('observer_cancelled','Production observation cancelled');
   const {workspace,repo,path}=context,o=this.observation,instance=workspaceInstanceKey(workspace as Json&{id:string}),state=o.scheduler.versions([workspace.id]).repositories.find(r=>r.path===path);
-  const version=state?.sourceReady&&!state.sourcePending?o.scheduler.statusToken(path)+':'+Math.floor(Date.now()/900_000):randomUUID();
-  const key='production:v6:'+hash(stable([instance,path,repo.id,repo.baseSha,productionRef,version,o.cache.workspaceEpoch(workspace.id)]));
+  const head=await readActivityHead(path),refs=await Promise.all((productionRef?[productionRef]:['origin/main','origin/master']).map(ref=>readActivityReference(head.commonDir,ref)));
+  const version=(state?.sourceReady&&!state.sourcePending?o.scheduler.statusToken(path)+':'+Math.floor(Date.now()/900_000):randomUUID())+':'+head.token+':'+(refs.some(Boolean)?hash(stable(refs)):randomUUID());
+  const key='production:v7:'+hash(stable([instance,path,repo.id,repo.baseSha,productionRef,version,committedOnly,o.cache.workspaceEpoch(workspace.id)]));
   const read=o.cache.read(key,version,async()=>{
    if(this.closed)throw new WorkbenchError('observer_closed','Production reader closed');
    const abort=new AbortController();this.producers.add(abort);const timer=setTimeout(()=>abort.abort(),30_000);timer.unref();
@@ -25,7 +27,7 @@ export class ProductionReads{
     if(await git.root()!==path)throw new WorkbenchError('repository_root_mismatch','Expected recorded repository root');
     let status:RawStatus|undefined;
     try{status=await o.status.read(workspace.id,path,repo.role==='gitlink-root',instance);}catch{if(abort.signal.aborted)throw new WorkbenchError('observer_cancelled','Production observation cancelled');}
-    const result=await withBackgroundGit(()=>inspectRepository(git,{repositoryId:repo.id,repoPath:repo.repoPath||repo.id,baseSha:repo.baseSha,productionRef},status?.rows));
+    const result=await withBackgroundGit(()=>inspectRepository(git,{repositoryId:repo.id,repoPath:repo.repoPath||repo.id,baseSha:repo.baseSha,productionRef,committedOnly},status?.rows));
     return{...result,observation:{state:'ready',observedAt:new Date().toISOString()},sourceVersion:version};
    }finally{clearTimeout(timer);this.producers.delete(abort);}
   },true,true,{workspaceId:workspace.id,repoPath:path});

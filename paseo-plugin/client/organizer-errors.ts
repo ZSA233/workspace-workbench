@@ -1,4 +1,5 @@
 const messages:Record<string,string>={
+ organizer_model_backoff:'本次生成失败，稍后重试',organizer_model_cooling:'模型连接冷却中',organizer_model_retry_paused:'连续失败，已暂停自动重试',
  organizer_title_write_uncertain:'上次标题写入结果待核对，请先预览确认',
  organizer_context_allocation_invalid:'上下文上限不足以容纳输出预留和提示词，请检查模型高级设置',
  organizer_associations_changed:'关联或工作区已变化，请重新读取后选择',organizer_association_workspace_unavailable:'所选工作区已不可用，请重新读取',organizer_host_workspace_unavailable:'当前会话不可用，请切回会话重试',

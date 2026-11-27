@@ -1,12 +1,14 @@
 import type {Observation} from './observation.ts';
 import {canonicalAsync,hash,stable,type Json} from './storage.ts';
 import {workspaceInstanceKey} from '../../shared/workspace-lineage.ts';
+import {organizerFacts} from './organizer-facts.ts';
 
 /** Register only the explicitly requested Workspace roots. Hot reads use the
  * existing source watches; they never enumerate commits or compare production. */
 export async function organizerVersions(observation:Observation,params:Json){
  const ids=[...new Set((Array.isArray(params.workspaceIds)?params.workspaceIds:[]).filter((id:unknown)=>typeof id==='string'))].slice(0,100) as string[];
  const rows=await Promise.all(ids.map(workspaceId=>observation.workspaces.observationRecords.request('get',{workspaceId})));
+ if(params.factsOnly===true)return{facts:await organizerFacts(observation,rows,params.productionBranches||{}),notesRevision:undefined};
  const roots=new Map<string,string[]>();await Promise.all(rows.map(async w=>{roots.set(w.id,await Promise.all(w.repositories.map((r:Json)=>canonicalAsync(r.worktreePath||r.sourcePath))));}));
  await Promise.all(rows.flatMap(w=>roots.get(w.id)!.map(path=>observation.scheduler.register(w.id,path))));
  const versions=observation.scheduler.versions(ids),materialTokens:Record<string,string>={};

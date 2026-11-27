@@ -39,3 +39,17 @@ test('cancelling one material consumer leaves the shared Git producer available 
   const abort=new AbortController(),first=f.read(abort.signal);await running;const second=f.read();await pause(40);abort.abort();await assert.rejects(first,/cancelled/);release();assert.equal((await second).repositories.length,1);assert.equal(logs,1);
  }finally{release();Git.prototype.run=original;await f.close();}
 });
+
+test('confirmed Git facts share status and committed materials ignore edits and incoming merges',async()=>{
+ const f=await fixture(),original=Git.prototype.run,calls:string[][]=[];Git.prototype.run=async function(...args){calls.push(args[0]);return original.apply(this,args);};
+ try{
+  const facts=()=>f.service.handle('organizer.versions',{workspaceIds:['task'],factsOnly:true}),read=()=>f.service.handle('organizer.materials',{workspaceId:'task',committedOnly:true});
+  const first=await facts();assert.equal(first.facts.task.ready,true);const initial=await read();assert.ok(initial.committedFingerprint);const count=calls.length;
+  for(let i=0;i<4;i++)assert.equal((await facts()).facts.task.commitKey,first.facts.task.commitKey);assert.equal(calls.length,count,'fact reads must reuse the original status and resolve loose refs without new Git commands');
+  writeFileSync(join(f.path,'file'),'uncommitted\n');await f.until(async()=>{const v=await f.versions();return !!v.materialTokens.task&&v.materialTokens.task!==initial.sourceVersion;});const edited=await read();assert.equal(edited.committedFingerprint,initial.committedFingerprint);assert.ok(!edited.evidence.some((e:any)=>e.text.includes('uncommitted')));
+  f.git(f.path,'add','.');f.git(f.path,'commit','-qm','fix: commit actual requirement');const committed=await read();assert.notEqual(committed.committedFingerprint,initial.committedFingerprint);
+  const source=join(f.root,'repo');writeFileSync(join(source,'upstream'),'incoming unrelated code\n');f.git(source,'add','.');f.git(source,'commit','-qm','upstream change');f.git(f.path,'merge','--no-ff','main','-m','Merge main');
+  // Force only the existing observation validation, as normal Git events do.
+  f.service.observation.scheduler.force('task');const merged=await read();assert.equal(merged.committedFingerprint,committed.committedFingerprint);assert.ok(!merged.evidence.some((e:any)=>e.text==='upstream change'));
+ }finally{Git.prototype.run=original;await f.close();}
+});

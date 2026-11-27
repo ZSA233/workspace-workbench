@@ -40,7 +40,7 @@ export function sessionModelInput(workspaces:WorkspaceAnalysis[],changedKeys:str
   const changed=new Set(changedKeys),sourceRows=workspaces.filter(w=>changed.has(w.key));
   // A stale digest must not become the source for its own regeneration.
   // Only unchanged workspaces contribute cached summaries to this request.
-  const input:SessionInput={task:'session-workbench',wantTitle:title,namingMode:policy.namingMode,latestWorkspace:workspaces.find(w=>w.material.evidence.some(e=>e.kind==='commit'))?.key||null,topicHint:excerpt(topicHint||'',600),acceptedTitle:accepted||null,
+  const input:SessionInput={task:'session-workbench',wantTitle:title,namingMode:policy.namingMode,latestWorkspace:workspaces.find(w=>w.material.evidence.some(e=>e.kind==='commit'))?.key||null,topicHint:excerpt(stripOrganizerMarker(topicHint||'',policy),600),acceptedTitle:accepted||null,
     workspaces:workspaces.map(w=>({key:w.key,name:excerpt(w.material.name,180),latestCommitAt:w.material.latestCommitAt||null,hasOwnCommits:w.material.evidence.some(e=>e.kind==='commit'),...(w.manual?{summary:{sourceId:'summary:'+w.key,title:w.title,brief:excerpt(w.brief,500)}}:w.digest&&!changed.has(w.key)?{summary:{sourceId:'summary:'+w.key,title:w.digest.title,brief:w.digest.brief}}:{})})),
     changedWorkspaces:sourceRows.map(w=>({key:w.key,evidence:[],coverage:'partial'})),
     conversations:messages.map(c=>({agentId:c.agentId,previous:excerpt(c.previous?.brief||'',Math.min(900,Math.floor(profile.contextTokens*.1/Math.max(messages.length,1)))),evidence:[],coverage:'partial'}))};
@@ -96,7 +96,7 @@ export function sessionModelTransport(input:string,policy:OrganizerPolicy){
   // Short transport identities reduce local-model output and citation errors. Audit records retain the reversible mapping.
   const transport=JSON.parse(input),references:Record<string,string>={},aliases=new Map<string,string>(),counts=new Map<string,number>();
   const alias=(id:string,prefix:string)=>{let label=aliases.get(prefix+':'+id);if(!label){const n=(counts.get(prefix)||0)+1;counts.set(prefix,n);label=prefix+String(n);aliases.set(prefix+':'+id,label);references[label]=id;}return label;};
-  for(const row of transport.workspaces){const key=row.key;row.key=alias(key,'W');references['summary:'+row.key]='summary:'+key;row.summarySourceId=row.key+'S';references[row.summarySourceId]='summary:'+key;if(row.summary)row.summary.sourceId=row.summarySourceId;}
+  for(const row of transport.workspaces){delete row.latestCommitAt;delete row.hasOwnCommits;const key=row.key;row.key=alias(key,'W');references['summary:'+row.key]='summary:'+key;row.summarySourceId=row.key+'S';references[row.summarySourceId]='summary:'+key;if(row.summary)row.summary.sourceId=row.summarySourceId;}
   if(transport.latestWorkspace)transport.latestWorkspace=aliases.get('W:'+transport.latestWorkspace);
   for(const row of transport.changedWorkspaces){row.key=aliases.get('W:'+row.key);row.evidence.forEach((e:any,i:number)=>{const label=row.key+'E'+(i+1);references[label]=e.id;e.id=label;});}
   for(const row of transport.conversations){row.agentId=alias(row.agentId,'C');row.evidence.forEach((e:any,i:number)=>{const label=row.agentId+'M'+(i+1);references[label]=e.id;e.id=label;});}
@@ -106,7 +106,7 @@ export function sessionModelTransport(input:string,policy:OrganizerPolicy){
   return {input:JSON.stringify(transport),prompt,references};
 }
 export async function callSessionModel(profile:ModelProfile,secret:string,policy:OrganizerPolicy,workspaces:WorkspaceAnalysis[],changedKeys:string[],messages:SessionMessages[],title:boolean,topicHint:string|null,accepted:string|undefined,owner:string,signal:AbortSignal,record:(run:OrganizerRun)=>void,observe?:(phase:OrganizerModelPhase,run:OrganizerRun)=>void) {
-  const packed=sessionModelInput(workspaces,changedKeys,messages,title,topicHint,accepted,profile,policy);
+  const packed=sessionModelInput(title?workspaces:workspaces.filter(w=>changedKeys.includes(w.key)),changedKeys,messages,title,topicHint,accepted,profile,policy);
   const {input,prompt,references}=packed.transport;
   const resolve=(id:string)=>references[id]||'invalid:'+id;
   const cleanTitle=(text:string)=>{const clean=stripOrganizerMarker(text.replace(/[\u0000-\u001f\u007f]/g,' ').trim(),policy);if(!clean||[...clean].length>policy.titleLength)throw Error('organizer_model_title_invalid');return clean;};

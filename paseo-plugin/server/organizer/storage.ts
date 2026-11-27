@@ -96,7 +96,7 @@ export class OrganizerSettings {
     s.profiles = s.profiles.filter(p => p.id !== id); s.revision++; writeOrganizerJson(this.file(), s);
     const secret = this.secretFile(id); if (existsSync(secret)) unlinkSync(secret);
   }
-  fingerprint(project: ProjectRoute) { const s = this.response(project); return organizerHash([s.revision, s.effective]); }
+  fingerprint(project: ProjectRoute) { const s = this.response(project),p=s.profiles.find(p=>p.id===s.effective.profileId),e=s.effective;return organizerHash([p,p?organizerHash(this.secret(p.id)):null,e.prompt,e.namingMode,e.titleLength,e.markers,e.productionBranches]); }
 }
 
 export class OrganizerTestStore {

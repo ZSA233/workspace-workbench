@@ -22,18 +22,18 @@ async function optionalStat(path: string) {
   try { return await stat(path); }
   catch (error) { if (missing(error)) return null; throw error; }
 }
-async function smallFile(path: string, signal?: AbortSignal) {
+async function smallFile(path: string, signal?: AbortSignal,limit=metadataLimit) {
   if (signal?.aborted) throw new Error('Git HEAD check cancelled');
   let file;
   try { file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK); }
   catch (error) { if (missing(error)) return null; throw error; }
   try {
     const info = await file.stat();
-    if (!info.isFile() || info.size > metadataLimit) throw new Error('Invalid Git metadata file');
-    const bytes = Buffer.allocUnsafe(metadataLimit + 1);
+    if (!info.isFile() || info.size > limit) throw new Error('Invalid Git metadata file');
+    const bytes = Buffer.allocUnsafe(limit + 1);
     const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
     if (signal?.aborted) throw new Error('Git HEAD check cancelled');
-    if (bytesRead > metadataLimit) throw new Error('Git metadata file is too large');
+    if (bytesRead > limit) throw new Error('Git metadata file is too large');
     return bytes.toString('utf8', 0, bytesRead).trim();
   } finally { await file.close(); }
 }
@@ -91,4 +91,20 @@ export async function readActivityHead(root: string, signal?: AbortSignal): Prom
 
 export async function activityHeadToken(root: string): Promise<string> {
   return (await readActivityHead(root)).token;
+}
+
+/** Read conventional refs using the same bounded metadata reader. Ambiguous,
+ * symbolic and reftable cases keep the existing Git resolver. */
+export async function readActivityReference(commonDir:string,ref:string):Promise<string|undefined>{
+ try{
+ if(!ref||ref.includes('\\')||ref.split('/').some(p=>!p||p==='.'||p==='..')||!/^[-\w./]+$/.test(ref))return;
+ if(await optionalStat(join(commonDir,'reftable','tables.list')))return;
+ if(['GIT_DIR','GIT_COMMON_DIR','GIT_NAMESPACE','GIT_REPLACE_REF_BASE'].some(k=>process.env[k]))return;
+ const names=ref.startsWith('refs/')?[ref]:['refs/tags/'+ref,'refs/heads/'+ref,'refs/remotes/'+ref];
+ const loose=await Promise.all(names.map(name=>smallFile(join(commonDir,name))));
+ const packed=loose.every(Boolean)?null:await smallFile(join(commonDir,'packed-refs'),undefined,1024*1024),entries=new Map<string,string>();
+ for(const line of packed?.split('\n')||[]){const match=line.match(/^([a-f0-9]{40,64}) (refs\/[^ ]+)$/);if(match)entries.set(match[2],match[1]);}
+ const found=names.map((name,i)=>({name,value:loose[i]||entries.get(name)})).filter((r):r is {name:string;value:string}=>!!r.value);
+ return found.length===1&&!found[0].name.startsWith('refs/tags/')&&activityObjectId.test(found[0].value)?found[0].value:undefined;
+ }catch{return undefined;}
 }

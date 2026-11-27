@@ -51,7 +51,7 @@ export function textPatchCoverage(patch: string, production: string): 'covered' 
   return pending ? 'pending' : 'covered';
 }
 
-export async function inspectRepository(git: Git, input: { repositoryId: string; repoPath: string; baseSha?: string; productionRef?: string },sharedStatus?:Array<[string,string]>): Promise<{ coverage: RepositoryCoverage; evidence: OrganizerEvidence[]; fingerprint: string; activityAt: string; complete: boolean }> {
+export async function inspectRepository(git: Git, input: { repositoryId: string; repoPath: string; baseSha?: string; productionRef?: string;committedOnly?:boolean },sharedStatus?:Array<[string,string]>): Promise<{ coverage: RepositoryCoverage; evidence: OrganizerEvidence[]; fingerprint: string; committedFingerprint?:string; activityAt: string; complete: boolean }> {
   const coverage: RepositoryCoverage = { repositoryId: input.repositoryId, repoPath: input.repoPath, productionRef: input.productionRef || '', state: 'unknown', committedState:'unknown',covered: 0, pending: 0, uncertain: 0, dirty: false, observedAt: new Date().toISOString() };
   const evidence: OrganizerEvidence[] = [];
   let activityAt = '', complete = true, coverageComplete=true,sourceFingerprint:string|undefined;
@@ -64,7 +64,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
         try { await git.commit(ref); coverage.productionRef = ref; break; } catch {}
       }
     }
-    const status = sharedStatus||await git.status(false, false, true);
+    const status = input.committedOnly?[]:sharedStatus||await git.status(false, false, true);
     coverage.dirty = status.length > 0;
     if(coverage.dirty)coverage.pending++;
     const own = await git.run(['log', '--first-parent', '--no-merges', '--format=%H%x00%cI%x00%s', '--max-count=41', `${base}..${head}`, '--'], true, { maxBytes: 32768 });
@@ -84,7 +84,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
       for(const path of paths.stdout.split('\0').slice(0,-1).filter(Boolean))ownPaths.add(path);
     }
     const working = coverage.dirty ? await git.run(['diff', '--no-ext-diff', '--no-textconv', '--unified=2', 'HEAD', '--'], true, { maxBytes: 16384, truncate: true }) : null;
-    if (working?.stdout) evidence.push({ id: `diff:${input.repositoryId}:${hash(working.stdout)}`, kind: 'diff', text: working.stdout, repository: input.repositoryId });
+    if (working?.stdout) evidence.push({ id: `diff:${input.repositoryId}:${hash(working.stdout)}`, kind: 'diff', text: working.stdout, repository: input.repositoryId,working:true });
     if (working?.truncated) complete = false;
     const dirtyRevisions = [];
     for (const [code, name] of status.slice(0, 80)) {
@@ -93,7 +93,8 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
       if (file.mtime!==undefined && new Date(file.mtime).toISOString() > activityAt) activityAt = new Date(file.mtime).toISOString();
     }
     if (status.length > 80) complete = false;
-    sourceFingerprint = hash(stable([base, head, working?.stdout, dirtyRevisions]));
+    const committedFingerprint=hash(stable([base,commits.map(row=>row.split('\0')[0]),[...ownPaths].sort()]));
+    sourceFingerprint = input.committedOnly?committedFingerprint:hash(stable([base, head, working?.stdout, dirtyRevisions]));
     // Incoming mainline merges are not this Workspace's requirement changes.
     const changes:Change[]=[],names=[...ownPaths];
     if(names.length>2000)coverageComplete=false;
@@ -112,7 +113,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
       coverage.state = coverage.dirty?'pending':coverage.committedState;
       coverage.coverageComplete=!ownPaths.size&&coverageComplete;
       if (ownPaths.size) coverage.reason = '提交已无净改动，不能据此确认已上线';
-      return { coverage, evidence, fingerprint: sourceFingerprint, activityAt, complete };
+      return { coverage, evidence, fingerprint: sourceFingerprint,committedFingerprint, activityAt, complete };
     }
     if (!coverage.productionRef) throw Error('请配置生产分支');
     coverage.productionSha = await git.commit(coverage.productionRef);
@@ -123,7 +124,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
       coverage.covered=Math.max(0,changes.length-rollback.length);coverage.pending=rollback.length+(coverage.dirty?1:0);coverage.uncertain=0;coverage.coverageComplete=true;
       coverage.committedState=rollback.length?'pending':'deployed';coverage.state=coverage.pending?coverage.covered?'partial':'pending':'deployed';
       coverage.reason=rollback.length?'生产中存在回退证据：'+rollback.slice(0,3).join('、'):publication.basis==='source-integrated'?'需求源码已合入，生产使用更新的构建产物':publication.basis==='identical-tree'?'生产树与工作区提交一致':'工作区提交已合入生产分支';
-      return{coverage,evidence,fingerprint:sourceFingerprint,activityAt,complete};
+      return{coverage,evidence,fingerprint:sourceFingerprint,committedFingerprint,activityAt,complete};
     }
     const productionIsAncestor = (await git.run(['merge-base', '--is-ancestor', coverage.productionSha, head], false)).code === 0;
     if (changes.length > 160) coverageComplete = false;
@@ -156,7 +157,7 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
     if (!coverage.coverageComplete) coverage.reason = '部分代码变化尚未核实';
     coverage.state=coverage.pending?coverage.covered?'partial':'pending':!coverageComplete||coverage.uncertain?'unknown':'deployed';
     if(coverage.committedState==='deployed')coverage.publication={basis:'equivalent-patch'};
-    return { coverage, evidence, fingerprint: sourceFingerprint, activityAt, complete };
+    return { coverage, evidence, fingerprint: sourceFingerprint,committedFingerprint, activityAt, complete };
   } catch (error) {
     if (git.signal?.aborted) throw error;
     coverage.reason = error instanceof Error ? error.message : '生产证据不可用';
@@ -183,7 +184,7 @@ export async function workspaceMaterials(observation: Observation, params: Json,
     const index=next++,repo=workspace.repositories[index],context=contexts[index];
     if (signal?.aborted) throw Error('organizer_cancelled');
     const configured=observation.workspaces.config.repositories.find(r=>r.id===repo.id||r.path===repo.sourcePath);
-    results[index]=await observation.production.read({...context,repo},params.productionBranches?.[repo.sourcePath] || params.productionBranches?.[configured?.path||''] || params.productionBranches?.[repo.id] || params.productionBranches?.[repo.repoPath],signal);
+    results[index]=await observation.production.read({...context,repo},params.productionBranches?.[repo.sourcePath] || params.productionBranches?.[configured?.path||''] || params.productionBranches?.[repo.id] || params.productionBranches?.[repo.repoPath],signal,params.committedOnly===true);
   }}));
   for(const [index,repo] of workspace.repositories.entries()){
     const result=results[index];
@@ -195,5 +196,5 @@ export async function workspaceMaterials(observation: Observation, params: Json,
   evidence.push({id:'hint:'+instance,kind:'hint',text:'工作区名称（仅作为弱线索）：'+(workspace.displayName||workspace.id)});
   return { workspaceId: workspace.id, instance, name: workspace.displayName || workspace.id, createdAt: workspace.createdAt || '', activityAt,
     ...(workspace.creator?.agentId ? { creatorAgentId: workspace.creator.agentId } : {}), taskBrief: brief, taskKind: workspace.taskKind,
-    evidence, repositories, fingerprint: hash(stable([brief, workspace.taskKind, fingerprints])), state: aggregateRepositoryCoverage(repositories), complete };
+    evidence, repositories, fingerprint: hash(stable([brief, workspace.taskKind, fingerprints])),...(results.every(r=>r.committedFingerprint)?{committedFingerprint:hash(stable(results.map(r=>r.committedFingerprint)))}:{}), state: aggregateRepositoryCoverage(repositories), complete };
 }

@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { ModelProfile, OrganizerEvidence, OrganizerItem, OrganizerPolicy, OrganizerRun, OrganizerModelPhase } from '../../shared/organizer.ts';
 import {stripOrganizerMarker} from '../../shared/organizer.ts';
+import {modelContext} from './model-gateway.ts';
+import {organizerHash} from './storage.ts';
 
 const aborts = AbortSignal as unknown as { any(signals: AbortSignal[]): AbortSignal; timeout(ms: number): AbortSignal };
 const responseSchema = z.object({ title: z.string().trim().min(1).max(160), brief: z.string().max(4000), items: z.array(z.object({ id: z.string().max(512).optional(), text: z.string().min(1).max(2000), evidenceIds: z.array(z.string()).max(20), completed: z.boolean().optional() })).max(40) });
@@ -45,6 +47,7 @@ async function boundedJson(response: Response, limit: number) {
   return JSON.parse(Buffer.concat(parts).toString('utf8'));
 }
 export async function checkOrganizerModel(profile: ModelProfile, secret: string, signal?: AbortSignal) {
+  const context=modelContext(),perform=async()=>{
   const url = new URL(profile.baseUrl); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw Error('organizer_model_url_invalid');
   const response = await fetch(profile.baseUrl.replace(/\/$/, '') + '/models', { headers: secret ? { Authorization: 'Bearer ' + secret } : {}, redirect: 'error', signal: aborts.any([aborts.timeout(Math.min(profile.timeoutMs, 20000)), ...(signal ? [signal] : [])]) });
   if (!response.ok) throw Error(`organizer_model_http_${response.status}`);
@@ -52,13 +55,15 @@ export async function checkOrganizerModel(profile: ModelProfile, secret: string,
   const sushi=Array.isArray(value.data)&&value.data.some((m:{owned_by?:string})=>m.owned_by==='sushi');
   const models: Array<{ id: string; loaded?: boolean; state?: string }> = (value.data || []).filter((m: { id?: unknown }) => typeof m.id === 'string').map((m: { id: string; loaded?: boolean; state?: string }) => ({ id: m.id, ...(m.loaded === undefined ? {} : { loaded: m.loaded }), ...(m.state ? { state: m.state } : {}) }));
   return { models, sushi, selectedAvailable: models.some(m => m.id === profile.model&&(!sushi||m.loaded===true&&m.state==='ready')) };
+  };return context?.gateway?context.gateway.probe(organizerHash([profile.baseUrl,profile.model,secret]),perform,context.force):perform();
 }
 export async function requestOrganizerJson<T>(profile:ModelProfile,secret:string,request:{kind:OrganizerRun['kind'];owner:string;prompt:string;input:string;truncated:boolean;references?:Record<string,string>;contextBudget?:OrganizerRun['contextBudget']},signal:AbortSignal,validate:(value:unknown)=>T,record:(run:OrganizerRun)=>void,observe?:(phase:OrganizerModelPhase,run:OrganizerRun)=>void):Promise<T> {
   const {kind,owner,prompt,input,truncated}=request;
   if(Buffer.byteLength(prompt)+Buffer.byteLength(input)>profile.contextTokens-profile.outputTokens)throw Error('organizer_context_budget_too_small');
+  const execute=async(signal:AbortSignal,audit:(run:OrganizerRun)=>void,queueMs=0)=>{
   const run: OrganizerRun = { id: randomUUID(), kind, owner, at: new Date().toISOString(), profileId: profile.id,model:profile.model,endpoint:profile.baseUrl,references:request.references,contextBudget:request.contextBudget, prompt, input, truncated };
-  const started = Date.now();
-  const phase=(state:OrganizerModelPhase)=>{run.state=state;run.elapsedMs=Date.now()-started;observe?.(state,{...run});};
+  const started = Date.now();let phaseStarted=started;run.timings={queueMs,connectionMs:0,requestMs:0,validationMs:0};
+  const phase=(state:OrganizerModelPhase)=>{const now=Date.now(),key=run.state==='checking'?'connectionMs':run.state==='requesting'?'requestMs':run.state==='validating'?'validationMs':undefined;if(key)run.timings![key]+=now-phaseStarted;phaseStarted=now;run.state=state;run.elapsedMs=Date.now()-started;audit({...run});observe?.(state,{...run});};
   try {
     const requestSignal=aborts.any([signal,aborts.timeout(profile.timeoutMs)]);
     phase('checking');
@@ -67,7 +72,7 @@ export async function requestOrganizerJson<T>(profile:ModelProfile,secret:string
     const url = new URL(profile.baseUrl); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw Error('organizer_model_url_invalid');
     if(requestSignal.aborted)throw Error('organizer_cancelled');run.requestedAt=new Date().toISOString();phase('requesting');
     const response = await fetch(profile.baseUrl.replace(/\/$/, '') + '/chat/completions', { method: 'POST', redirect: 'error', signal: requestSignal, headers: { 'Content-Type': 'application/json', ...(secret ? { Authorization: 'Bearer ' + secret } : {}) }, body: JSON.stringify({ model: profile.model, messages: [{ role: 'system', content: prompt }, { role: 'user', content: input }], temperature: 0.1, max_tokens: profile.outputTokens, enable_thinking: false, response_format: { type: 'json_object' }, stream: false }) });
-    if (!response.ok) throw Error(`organizer_model_http_${response.status}`);
+    if (!response.ok) {const after=response.headers.get('retry-after'),seconds=Number(after),until=after?(Number.isFinite(seconds)?Date.now()+Math.max(0,seconds)*1000:Date.parse(after)):NaN;throw Object.assign(Error(`organizer_model_http_${response.status}`),{retryAt:Number.isFinite(until)?Math.min(Date.now()+86400_000,until):undefined});}
     const result = await boundedJson(response, 256 * 1024);
     run.output = String(result.choices?.[0]?.message?.content || ''); run.usage = result.usage;
     phase('validating');
@@ -75,7 +80,10 @@ export async function requestOrganizerJson<T>(profile:ModelProfile,secret:string
     const clean = run.output.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
     return validate(JSON.parse(clean));
   } catch (error) { run.error = error instanceof Error ? error.message.slice(0, 500) : 'organizer_model_failed'; throw error; }
-  finally { run.elapsedMs = Date.now() - started;run.finishedAt=new Date().toISOString();run.state=run.error?'failed':'complete';record(run);observe?.(run.state,{...run}); }
+  finally { run.elapsedMs = Date.now() - started;run.finishedAt=new Date().toISOString();phase(run.error?'failed':'complete');record(run); }
+  };
+  const gateway=modelContext()?.gateway;
+  return gateway?gateway.run(profile,secret,request,signal,execute):execute(signal,()=>{});
 }
 export async function callOrganizerModel(profile: ModelProfile, secret: string, policy: OrganizerPolicy, evidence: OrganizerEvidence[], previous: Parameters<typeof organizerInput>[1], kind: 'workspace' | 'conversation', owner: string, signal: AbortSignal, record: (run: OrganizerRun) => void, observe?:(phase:OrganizerModelPhase,run:OrganizerRun)=>void): Promise<{ value: ModelResult; truncated: boolean; consumedIds: string[] }> {
   const material=organizerInput(evidence,previous,profile),prompt=organizerSystem(policy,kind);

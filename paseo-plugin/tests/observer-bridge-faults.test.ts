@@ -34,11 +34,12 @@ test('a version change cannot be hidden by the bridge response TTL',async()=>{
   let generation=0;
   const f=await fixture(socket=>socket.write(JSON.stringify({ok:true,result:{generation:++generation}})+'\n'));
   try {
-    const first=await f.bridge.call({method:'repository.diff',params:{workspaceId:'w',path:'file'}});
-    const second=await f.bridge.call({method:'repository.diff',params:{workspaceId:'w',path:'file'}});
-    assert.equal((first.result as {generation:number}).generation,1);
-    assert.equal((second.result as {generation:number}).generation,2);
-    assert.equal(f.calls(),2);
+    for(const method of ['repository.diff','organizer.versions'] as const){
+      const first=await f.bridge.call({method,params:{workspaceId:'w',path:'file'}});
+      const second=await f.bridge.call({method,params:{workspaceId:'w',path:'file'}});
+      assert.equal((second.result as {generation:number}).generation,(first.result as {generation:number}).generation+1);
+    }
+    assert.equal(f.calls(),4);
   } finally {await f.close();}
 });
 
@@ -87,6 +88,8 @@ test('read admission rejects excess distinct queries while versions remain avail
     assert.equal(busy.error?.code,'observer_busy');
     const versions=await f.bridge.call({method:'observer.versions',params:{workspaceIds:['w']}});
     assert.equal(versions.ok,true);
+    const organizer=await f.bridge.call({method:'organizer.versions',params:{workspaceIds:['w']}});
+    assert.equal(organizer.ok,true);
     // The fixture owns unresolved fake requests; do not await them.
     assert.equal(pending.length,16);
   } finally {await f.close();}

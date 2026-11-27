@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Git } from '../server/backend/git.ts';
-import { inspectRepository, textPatchCoverage,retainedCommittedText } from '../server/backend/production-coverage.ts';
+import { inspectRepository, textPatchCoverage } from '../server/backend/production-coverage.ts';
 import {aggregateRepositoryCoverage} from '../shared/organizer.ts';
 
 function fixture() {
@@ -109,7 +109,26 @@ test('a published commit remains covered when later production inserts split its
   f.git('checkout','-q','release');const revert=f.commit('jobs:\n  existing: true\n  refund_review: true\nprofiles:\n  common: true\n','Remove merchant profile');f.git('update-ref','refs/remotes/origin/main',revert);f.git('checkout','-q','main');result=await check();assert.notEqual(result.coverage.committedState,'deployed');
  }finally{f.close();}
 });
-test('retained content verification rejects removal, changed values, reordering, invalid text and binary content',()=>{
- assert.equal(retainedCommittedText('a\nfeature: on\nz\n','new\na\nfeature: on\nextra\nz\n'),true);
- for(const production of ['a\nz\n','a\nfeature: off\nz\n','z\nfeature: on\na\n','a\nfeature: on\nz\n\0','a\nfeature: on\nz\n\ufffd'])assert.equal(retainedCommittedText('a\nfeature: on\nz\n',production),false);
+test('a descendant that restores removed values beside surviving new lines is not proof of coverage',async()=>{
+ const f=fixture();try{
+  f.git('checkout','-qb','release',f.head);const production=f.commit('after\nbefore\nother production setting\nkeep\n','Restore old value beside the new value');f.git('update-ref','refs/remotes/origin/main',production);f.git('checkout','-q','main');
+  const result=await f.inspect();assert.notEqual(result.coverage.committedState,'deployed');
+ }finally{f.close();}
+});
+
+for(const delivery of ['merge','squash','cherry-pick'])test(`${delivery}: independent production edits beside a requirement do not erase its coverage`,async()=>{
+ const f=fixture();try{
+  const base=f.commit('header: original\njobs:\n  existing: true\nprofiles:\n  login: legacy\n  common: true\nfooter: original\n','Shared baseline');
+  const head=f.commit('header: original\njobs:\n  existing: true\nprofiles:\n  login: merchant\n  common: true\nfooter: original\n','Merchant requirement');
+  f.git('checkout','-qb','release',base);
+  if(delivery==='merge')f.git('merge','--no-ff','-qm','Publish requirement',head);
+  else if(delivery==='squash'){f.git('merge','--squash',head);f.git('commit','-qm','Squash requirement');}
+  else{writeFileSync(join(f.root,'release-only'),'setup');f.git('add','.');f.git('commit','-qm','Release setup');f.git('cherry-pick',head);}
+  const production=f.commit('header: refreshed\njobs:\n  refund_review: true\n  existing: true\nprofiles:\n  login: merchant\n  common: true\nfooter: refreshed\n','Independent production follow-up');
+  f.git('update-ref','refs/remotes/origin/main',production);f.git('checkout','-q','main');
+  const inspect=()=>inspectRepository(new Git(f.root,10000),{repositoryId:'repo',repoPath:'repo',baseSha:base});
+  let result=await inspect();assert.equal(result.coverage.committedState,'deployed',result.coverage.reason);
+  f.git('checkout','-q','release');const reverted=f.commit('header: refreshed\njobs:\n  refund_review: true\n  existing: true\nprofiles:\n  login: legacy\n  common: true\nfooter: refreshed\n','Revert the requirement only');f.git('update-ref','refs/remotes/origin/main',reverted);f.git('checkout','-q','main');
+  result=await inspect();assert.notEqual(result.coverage.committedState,'deployed');
+ }finally{f.close();}
 });

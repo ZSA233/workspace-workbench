@@ -23,9 +23,33 @@ const sessionFingerprint=(l:OrganizerLedger,t:OrganizerTarget)=>organizerHash([[
 export class SessionOrganizer {
   private active=new Map<string,Active>();private tails=new Map<string,Promise<void>>();private timers=new Map<string,ReturnType<typeof setTimeout>>();private closed=false;
   private writing=new Map<string,Promise<void>>();
+  private sourceWatches=new Map<string,{timer:ReturnType<typeof setTimeout>;seen:Map<string,string>;flight?:Promise<void>}>();
   private production=new SessionProduction();
   private deps:Dependencies;
   constructor(deps:Dependencies){this.deps=deps;}
+  /** Only opted-in sessions subscribe to existing backend source versions.
+   * Polling these stamps does not enumerate commits or call a model. */
+  watch(route:ProjectRoute){
+    if(this.closed||this.sourceWatches.has(route.configPath))return;
+    const watch={seen:new Map<string,string>(),timer:undefined as unknown as ReturnType<typeof setTimeout>,flight:undefined as Promise<void>|undefined};
+    const tick=()=>{if(this.closed)return;watch.flight=this.checkSources(route,watch.seen).catch(()=>{}).finally(()=>{watch.flight=undefined;if(!this.closed){watch.timer=setTimeout(tick,5000);watch.timer.unref();}});};
+    watch.timer=setTimeout(tick,5000);watch.timer.unref();this.sourceWatches.set(route.configPath,watch);
+  }
+  async checkSources(route:ProjectRoute,seen=this.sourceWatches.get(route.configPath)?.seen||new Map<string,string>()){
+    if(this.closed)return;
+    const ledger=this.deps.store(route).read(),targets=Object.values(ledger.targets).filter(t=>t.session?.enabled&&t.workspaceKeys.length);
+    const ids=[...new Set(targets.flatMap(t=>t.workspaceKeys.map(k=>ledger.workspaces[k]?.material.workspaceId).filter(Boolean)))];
+    if(!ids.length){seen.clear();return;}
+    const policy=this.deps.settings.response(route).effective,versions=await this.versions(route,ids,policy);if(this.closed)return;
+    for(const target of targets){
+      const rows=target.workspaceKeys.map(k=>ledger.workspaces[k]);if(rows.some(w=>!w))continue;
+      const stamps=rows.map(w=>versions.get(w.material.workspaceId));if(stamps.some(s=>!s))continue;
+      const stamp=organizerHash(stamps),prior=seen.get(target.id);seen.set(target.id,stamp);
+      if(stamp===prior||stamps.every((s,i)=>s===rows[i].materialCache?.stamp))continue;
+      this.schedule(route,target.id);
+    }
+    for(const id of seen.keys())if(!targets.some(t=>t.id===id))seen.delete(id);
+  }
   private config(route:ProjectRoute,contentOnly=false){const settings=this.deps.settings.response(route),profile=settings.profiles.find(p=>p.id===settings.effective.profileId);return organizerHash(contentOnly?[profile,sessionModelPrompt(settings.effective)]:[profile,sessionModelPrompt(settings.effective),settings.effective.markers]);}
   previewStates(route:ProjectRoute,ledger:OrganizerLedger,targets:OrganizerTarget[]){
     const configuration=this.config(route);
@@ -131,6 +155,11 @@ export class SessionOrganizer {
     }
     store.update(l=>{const t=l.targets[targetId];t.state=productionState(t.workspaceKeys.map(k=>l.workspaces[k]));t.hasUncommittedChanges=hasWorkingChanges(t.workspaceKeys.map(k=>l.workspaces[k]));});
     let target=store.read().targets[targetId];if(!roster.length){progress.skip('no-material');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
+    // State symbols describe current Git evidence, not the age of a model result.
+    // Preserve the accepted body while a changed summary awaits its cooldown.
+    if(!preview&&target.session?.enabled&&target.session.acceptedBody&&target.session.preview&&target.session.configurationFingerprint===configuration&&target.currentTitle!==formatOrganizerTitle(target.session.acceptedBody,target.state,policy,false,target.hasUncommittedChanges)){
+      const writes=target.history.length;progress.stage('titles');await this.write(route,targetId,target.session.preview.id,false,true);target=store.read().targets[targetId];if(target.history.length>writes)progress.count('titleWrites');
+    }
     if(target.session?.preview?.configurationFingerprint===configuration&&!target.session.preview.contentConfigurationFingerprint)store.update(l=>{l.targets[targetId].session!.preview!.contentConfigurationFingerprint=contentConfiguration;});
     if(target.session!.enabled&&target.session!.configurationFingerprint!==configuration){store.update(l=>{l.targets[targetId].session!.enabled=false;l.targets[targetId].session!.paused='命名配置已改变，请先预览确认';});target=store.read().targets[targetId];}
     if(!policy.profileId){if(preview)throw Error('organizer_model_required');progress.skip('no-profile');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
@@ -167,11 +196,12 @@ export class SessionOrganizer {
     progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result){j.result.previewReady=!!target.session!.preview&&target.session!.preview.sourceFingerprint===this.fingerprint(store,targetId)&&target.session!.preview.configurationFingerprint===configuration;j.result.previewId=j.result.previewReady?target.session!.preview?.id:undefined;}});
   }
   private async apply(route:ProjectRoute,targetId:string,previewId:string){await this.write(route,targetId,previewId,true);}
-  private write(route:ProjectRoute,targetId:string,previewId:string,explicit:boolean){
-    const key=route.configPath+':'+targetId;if(this.writing.has(key))throw Error('organizer_title_write_busy');const promise=this.writeProtected(route,targetId,previewId,explicit).finally(()=>this.writing.delete(key));this.writing.set(key,promise);return promise;
+  private write(route:ProjectRoute,targetId:string,previewId:string,explicit:boolean,statusOnly=false){
+    const key=route.configPath+':'+targetId;if(this.writing.has(key))throw Error('organizer_title_write_busy');const promise=this.writeProtected(route,targetId,previewId,explicit,statusOnly).finally(()=>this.writing.delete(key));this.writing.set(key,promise);return promise;
   }
-  private async writeProtected(route:ProjectRoute,targetId:string,previewId:string,explicit:boolean){
-    const store=this.deps.store(route),settings=this.deps.settings,policy=settings.response(route).effective,token=settings.fingerprint(route),configuration=this.config(route),api=await this.deps.api();let target=store.read().targets[targetId];const preview=target?.session?.preview;
+  private async writeProtected(route:ProjectRoute,targetId:string,previewId:string,explicit:boolean,statusOnly=false){
+    const store=this.deps.store(route),settings=this.deps.settings,policy=settings.response(route).effective,token=settings.fingerprint(route),configuration=this.config(route),api=await this.deps.api();let target=store.read().targets[targetId];const saved=target?.session?.preview;
+    const preview=statusOnly&&saved&&target.session?.acceptedBody?{...saved,body:target.session.acceptedBody,title:formatOrganizerTitle(target.session.acceptedBody,target.state,policy,false,target.hasUncommittedChanges),sourceFingerprint:this.fingerprint(store,targetId),messageHeads:{}}:saved;
     if(!preview||preview.id!==previewId||target.pendingWrite&&(!explicit||preview.reviewedWriteId!==target.pendingWrite.id))throw Error('organizer_preview_changed');if(!explicit&&(!target.session!.enabled||target.session!.configurationFingerprint!==configuration))return;
     if(preview.configurationFingerprint!==configuration||preview.sourceFingerprint!==this.fingerprint(store,targetId))throw Error('organizer_preview_changed');
     const originalKeys=[...target.workspaceKeys],expected=target.currentTitle,control=target.session!.controlRevision||0;
@@ -180,17 +210,25 @@ export class SessionOrganizer {
     for(const key of originalKeys){const prior=store.read().workspaces[key],material=this.production.applyCached(route.configPath,await this.deps.materials(route,prior.material.workspaceId,key,policy));assertCurrent();if(material.fingerprint!==prior.material.fingerprint)throw Error('organizer_source_changed');store.update(l=>{material.latestCommitAt=l.workspaces[key].material.latestCommitAt;l.workspaces[key].material=material;});}
     for(const [id,head]of Object.entries(preview.messageHeads||{})){const page=await api.agents.ref(id).timeline.refetch({limit:1,direction:'before'});assertCurrent();if(page.error||page.staleCursor||!(await samePublicConversation(api,id,head,{epoch:page.epoch,seq:page.entries.at(-1)?.seqEnd||0},assertCurrent)).same)throw Error('organizer_source_changed');}
     target=store.read().targets[targetId];const rows=originalKeys.map(k=>store.read().workspaces[k]),state=productionState(rows),workingChanges=hasWorkingChanges(rows),title=formatOrganizerTitle(preview.body,state,policy,false,workingChanges);
-    if(title!==preview.title||target.session?.preview?.id!==previewId||preview.sourceFingerprint!==this.fingerprint(store,targetId))throw Error('organizer_preview_changed');
+    if(title!==preview.title||target.session?.preview?.id!==previewId||statusOnly&&target.session.acceptedBody!==preview.body||preview.sourceFingerprint!==this.fingerprint(store,targetId))throw Error('organizer_preview_changed');
     const native=await api.workspaces.ref(targetId).refresh();assertCurrent();if(!native||(native as {archivedAt?:string}).archivedAt)throw Error('organizer_host_workspace_unavailable');
     const live=store.read().targets[targetId];if((live.session?.controlRevision||0)!==control)throw Error('organizer_cancelled');if(live.session?.preview?.id!==previewId)throw Error('organizer_preview_changed');if(!explicit&&!live.session?.enabled)return;
     if(native.title!==expected||!explicit&&(!target.session!.enabled||native.title!==target.lastWritten)){store.update(l=>{const t=l.targets[targetId];t.currentTitle=native?.title||null;t.session!.enabled=false;t.session!.paused='标题已在外部修改';});throw Error('organizer_external_title_change');}
-    const finish=()=>store.update(l=>{const t=l.targets[targetId];t.currentTitle=title;t.lastWritten=title;t.state=state;t.hasUncommittedChanges=workingChanges;t.session={...t.session,version:1,enabled:(t.session?.controlRevision||0)===control,acceptedBody:preview.body,materialFingerprint:preview.sourceFingerprint,configurationFingerprint:configuration,paused:undefined,error:undefined};t.policy='preview';delete t.pendingWrite;});
+    const finish=()=>store.update(l=>{const t=l.targets[targetId];t.currentTitle=title;t.lastWritten=title;t.state=state;t.hasUncommittedChanges=workingChanges;t.session={...t.session,version:1,enabled:(t.session?.controlRevision||0)===control,acceptedBody:preview.body,...(!statusOnly?{materialFingerprint:preview.sourceFingerprint}:{}),configurationFingerprint:configuration,paused:undefined,error:undefined};if(statusOnly&&t.session.preview)t.session.preview.title=formatOrganizerTitle(t.session.preview.body,state,policy,false,workingChanges);t.policy='preview';delete t.pendingWrite;});
     if(title===native.title){finish();return;}
     store.update(l=>{const t=l.targets[targetId];if(t.originalTitle===undefined)t.originalTitle=native.title||null;if(t.pendingWrite)t.uncertainWrites=[...(t.uncertainWrites||[]),t.pendingWrite].slice(-100);t.pendingWrite={id:randomUUID(),from:native.title||null,to:title};});
     try{await api.workspaces.ref(targetId).setTitle(title);store.update(l=>{const t=l.targets[targetId];t.history=[...t.history,{at:at(),from:native.title||null,to:title}].slice(-100);});finish();}
     catch(error){store.update(l=>{const s=l.targets[targetId].session!;s.enabled=false;s.paused='标题写入结果未确认，请重新核对';});throw error;}
   }
-  changed(route:ProjectRoute,agentId?:string){if(this.closed)return;for(const target of Object.values(this.deps.store(route).read().targets)){if(!target.session?.enabled||agentId&&!target.agentIds.includes(agentId))continue;const key=route.configPath+':'+target.id;const old=this.timers.get(key);if(old)clearTimeout(old);const timer=setTimeout(()=>{this.timers.delete(key);try{this.enqueue(route,target.id);}catch{}},this.deps.settings.response(route).effective.debounceSeconds*1000);timer.unref();this.timers.set(key,timer);}}
+  private schedule(route:ProjectRoute,targetId:string){
+    if(this.closed)return;const key=route.configPath+':'+targetId,old=this.timers.get(key);if(old)clearTimeout(old);
+    const timer=setTimeout(()=>{this.timers.delete(key);if(this.closed||!this.deps.store(route).read().targets[targetId]?.session?.enabled)return;
+      const active=[...this.active.values()].find(r=>r.project===route.configPath&&r.targetId===targetId);
+      if(active){void active.promise.finally(()=>{if(!this.closed)this.schedule(route,targetId);});return;}
+      try{this.enqueue(route,targetId);}catch{this.sourceWatches.get(route.configPath)?.seen.delete(targetId);}
+    },this.deps.settings.response(route).effective.debounceSeconds*1000);timer.unref();this.timers.set(key,timer);
+  }
+  changed(route:ProjectRoute,agentId?:string){if(this.closed)return;for(const target of Object.values(this.deps.store(route).read().targets)){if(target.session?.enabled&&(!agentId||target.agentIds.includes(agentId)))this.schedule(route,target.id);}}
   abort(project?:string){for(const active of this.active.values())if(!project||active.project===project)active.abort.abort();}
-  async close(){this.closed=true;for(const timer of this.timers.values())clearTimeout(timer);this.timers.clear();this.abort();await Promise.allSettled([...this.active.values()].map(r=>r.promise));await Promise.allSettled([...this.writing.values()]);}
+  async close(){this.closed=true;for(const watch of this.sourceWatches.values())clearTimeout(watch.timer);for(const timer of this.timers.values())clearTimeout(timer);this.timers.clear();this.abort();await Promise.allSettled([...this.active.values()].map(r=>r.promise));await Promise.allSettled([...this.sourceWatches.values()].flatMap(w=>w.flight?[w.flight]:[]));this.sourceWatches.clear();await Promise.allSettled([...this.writing.values()]);}
 }

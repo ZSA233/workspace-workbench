@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { PaseoApi, PaseoAgent } from '@getpaseo/client';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 import { organizerRpc, aggregateProduction, aggregateRepositoryCoverage, hasWorkingChanges, representativeWorkspace, formatOrganizerTitle, stripOrganizerMarker, type OrganizerInput, type OrganizerSnapshot, type OrganizerTarget, type WorkspaceMaterial, type WorkspaceAnalysis, type OrganizerEvidence, type ConversationAnalysis, type OrganizerJob, type OrganizerJobOptions, type OrganizerPolicy, type OrganizerRun } from '../../shared/organizer.ts';
-import { resolveProject, withProject, type ProjectRoute } from '../projects.ts';
+import { resolveProject, registeredProjects, withProject, type ProjectRoute } from '../projects.ts';
 import { queryObserver } from '../observer.ts';
 import { allAgentBindings } from '../agent-store.ts';
 import { OrganizerSettings, OrganizerStore, OrganizerTestStore, organizerHash, type OrganizerLedger } from './storage.ts';
@@ -37,9 +37,10 @@ export class OrganizerService {
   constructor(deps: Dependencies) { this.deps = deps; this.query = deps.query || queryObserver; this.settings = deps.settings || new OrganizerSettings();this.modelQueue=new OrganizerModelQueue(()=>this.settings.response().effective.modelConcurrency);this.testStore=new OrganizerTestStore(this.settings.root);this.testStore.recover();this.sessions=new SessionOrganizer({settings:this.settings,api:deps.api,store:route=>this.store(route),read:(route,method,params)=>this.read(route,method,params),materials:(route,id,key,policy)=>this.materials(route,id,key,policy),model:work=>this.model(work)}); }
   store(route: ProjectRoute) {
     let value = this.stores.get(route.configPath);
-    if (!value) { value = new OrganizerStore(route, this.settings.root); value.recover(); this.stores.set(route.configPath, value); }
+    if (!value) { value = new OrganizerStore(route, this.settings.root); value.recover(); this.stores.set(route.configPath, value);this.sessions.watch(route); }
     return value;
   }
+  resumeObservers(){for(const route of registeredProjects())try{this.store(route);}catch{/* A broken project ledger must not prevent the plugin from starting. Its requests still report the error. */}}
   private async read(route: ProjectRoute, method: Parameters<typeof queryObserver>[0]['method'], params: Record<string, unknown> = {}) {
     const result = await withProject({ projectConfig: route.configPath }, () => this.query({ method, params }));
     if (!result.ok) throw Error(result.error?.message || 'organizer_backend_unavailable');
@@ -401,6 +402,7 @@ export class OrganizerService {
 
 export function registerOrganizer(server: PluginServerContext, service: OrganizerService) {
   server.handle(organizerRpc, input => service.request(input));
+  service.resumeObservers();
   const cleanup = server.on('agent.turn_ended', ({ agent }) => {
     try { service.changed(resolveProject({ directory: agent.cwd }),agent.id); } catch {}
   });

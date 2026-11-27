@@ -4,6 +4,7 @@ import type { Git } from './git.ts';
 import { hash, stable, type Json } from './storage.ts';
 import type { Observation } from './observation.ts';
 import {materialFile} from './material-files.ts';
+import {retainedRequirementEdits} from './production-text.ts';
 
 type Change = { path: string; oldMode: string; mode: string; before: string; after: string };
 const missing = (oid: string) => /^0+$/.test(oid);
@@ -47,16 +48,6 @@ export function textPatchCoverage(patch: string, production: string): 'covered' 
     return 'unknown';
   }
   return pending ? 'pending' : 'covered';
-}
-
-/** A later insertion may split a patch's context without removing deployed
- * content. Require the entire committed file in order, including blank lines;
- * deletions, replacements, invalid text and binary content cannot pass. */
-export function retainedCommittedText(committed:string,production:string){
-  if(!committed||[committed,production].some(t=>t.includes('\0')||t.includes('\ufffd')))return false;
-  const expected=committed.split('\n');let next=0;
-  for(const line of production.split('\n'))if(line===expected[next]&&++next===expected.length)return true;
-  return false;
 }
 
 export async function inspectRepository(git: Git, input: { repositoryId: string; repoPath: string; baseSha?: string; productionRef?: string },sharedStatus?:Array<[string,string]>): Promise<{ coverage: RepositoryCoverage; evidence: OrganizerEvidence[]; fingerprint: string; activityAt: string; complete: boolean }> {
@@ -125,7 +116,6 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
     if (!coverage.productionRef) throw Error('请配置生产分支');
     coverage.productionSha = await git.commit(coverage.productionRef);
     const productionIsAncestor = (await git.run(['merge-base', '--is-ancestor', coverage.productionSha, head], false)).code === 0;
-    let committedInProduction:boolean|undefined;
     if (changes.length > 160) coverageComplete = false;
     for (const change of changes.slice(0, 160)) {
       const tree = await git.text(['ls-tree', '-z', coverage.productionSha, '--', change.path]);
@@ -141,12 +131,12 @@ export async function inspectRepository(git: Git, input: { repositoryId: string;
       const content = (await git.run(['cat-file', 'blob', productionOid], true, { maxBytes: 128 * 1024 })).stdout;
       let state = textPatchCoverage(patch.stdout, content);
       if(state==='unknown'){
-        // Reachability alone cannot prove current coverage after a rollback.
-        // Also verify that production retained this complete committed file.
-        committedInProduction??=(await git.run(['merge-base','--is-ancestor',head,coverage.productionSha],false)).code===0;
-        if(committedInProduction&&Number(await git.text(['cat-file','-s',change.after]))<=128*1024){
+        // Verify actual edit positions rather than requiring all old context to
+        // survive or trusting commit reachability after a rollback.
+        if(Number(await git.text(['cat-file','-s',change.after]))<=128*1024){
           const committed=await git.run(['cat-file','blob',change.after],true,{maxBytes:128*1024});
-          if(retainedCommittedText(committed.stdout,content))state='covered';
+          const later=await git.run(['diff','--no-ext-diff','--no-textconv','--no-renames','--diff-algorithm=myers','--unified=0',change.after,productionOid],true,{maxBytes:32768,truncate:true});
+          if(!later.truncated&&retainedRequirementEdits(patch.stdout,later.stdout,committed.stdout,content))state='covered';
         }
       }
       if (state === 'covered') coverage.covered++; else if (state === 'pending' || productionIsAncestor) coverage.pending++; else coverage.uncertain++;

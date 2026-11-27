@@ -46,6 +46,7 @@ const versionedMethods = new Set<string>(["notes.read", "notes.write", "notes.fe
 for (const method of ['cache.list', 'cache.scan', 'cache.task', 'cache.cleanup']) versionedMethods.add(method);
 versionedMethods.add('files.request');
 versionedMethods.add('organizer.materials');
+versionedMethods.add('organizer.versions');
 const mutationMethods = new Set<string>([
   'cache.cleanup',
   "observer.reload", "workspace.create", "workspace.orphan.adopt", "workspace.addRepositories",
@@ -58,6 +59,7 @@ const BRIDGE_IN_FLIGHT = 16;
 const READ_METHODS = new Set<string>([
   'cache.list', 'cache.task',
   "notes.read",
+  "organizer.versions", "organizer.materials",
   "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify",
   "workspace.operation.status",
   "workspace.orphan.preview", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary",
@@ -74,6 +76,7 @@ const SERVER_BUILD_ID = "observer-bridge-v2";
 // Environment preparation uses a durable, declaration-scoped request identity.
 const replayableMethods = new Set<string>(["workspace.environment", "observer.health", "observer.versions", "workspace.list", "workspace.activity", "workspace.detail", "workspace.identify", "workspace.operation.status", "workspace.orphan.preview", "repository.compare", "repository.graph", "repository.changes", "repository.diff", "repository.diff.read", "observer.refresh", "repository.summary", "review-set.compare", "review-set.brief"]);
 replayableMethods.add('cache.list'); replayableMethods.add('cache.task');
+replayableMethods.add('organizer.versions'); replayableMethods.add('organizer.materials');
 
 function configuredBridgeTimeoutMs(method?: string): number {
   if (method?.startsWith('cache.')) return 2_000;
@@ -282,7 +285,7 @@ export class ObserverBridge {
     this.cache.delete(key);
     const active = this.inFlight.get(key);
     if (active) return active;
-    const control = ["observer.health", "observer.versions", 'cache.task'].includes(input.method) || ["observer.refresh", "repository.diff.read", "workspace.prepare.task"].includes(input.method) && ["status", "release"].includes(String(input.params.action))
+    const control = ["observer.health", "observer.versions", 'organizer.versions', 'cache.task'].includes(input.method) || ["observer.refresh", "repository.diff.read", "workspace.prepare.task"].includes(input.method) && ["status", "release"].includes(String(input.params.action))
       || input.method === "workspace.activity" && ["view", "status", "cancel"].includes(String(input.params.action));
     if (this.inFlight.size >= (control ? 64 : BRIDGE_IN_FLIGHT))
       return { ok: false, error: { code: "observer_busy", message: "observer request limit reached; retry" } };

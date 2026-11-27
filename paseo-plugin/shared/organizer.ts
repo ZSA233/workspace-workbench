@@ -48,7 +48,7 @@ export const organizerRpc = defineRpc({
     z.object({ action: action('snapshot'), hostWorkspaceId: z.string().optional() }),
     z.object({ action: action('session.refresh'), targetId:z.string().min(1), preview:z.boolean().default(false), force:z.boolean().default(false) }),
     z.object({ action: action('session.apply'), targetId:z.string().min(1), previewId:z.string().min(1) }),
-    z.object({ action: action('session.automatic'), targetId:z.string().min(1), enabled:z.literal(false) }),
+    z.object({ action: action('session.automatic'), targetId:z.string().min(1), enabled:z.boolean() }),
     z.object({ action: action('session.associations'), targetId:z.string().min(1) }),
     z.object({ action: action('session.associations.save'), targetId:z.string().min(1), revision:z.string().min(1), workspaceKeys:z.array(z.string().min(1)).max(1000) }),
     z.object({ action: action('status') }),
@@ -72,7 +72,7 @@ export type RepositoryCoverage = { repositoryId: string; repoPath: string; sourc
 export type WorkspaceMaterial = { workspaceId: string; instance: string; name: string; createdAt: string; activityAt: string; latestCommitAt?:string|null; creatorAgentId?: string; taskBrief: string; taskKind?: string; fingerprint: string; evidence: OrganizerEvidence[]; repositories: RepositoryCoverage[]; state: ProductionState; complete: boolean };
 export type WorkspaceDigest = { version:1; title:string; brief:string; fingerprint:string; at:string; evidenceIds:string[]; partial:boolean };
 export type SessionTitlePreview = { id:string; body:string; title:string; sourceFingerprint:string; configurationFingerprint:string; contentConfigurationFingerprint?:string; at:string; runId?:string; evidenceIds:string[]; conversationComplete:boolean; reviewedWriteId?:string; messageHeads?:Record<string,{epoch:string;seq:number}> };
-export type SessionTitleMaintenance = { version:1; enabled:boolean; controlRevision?:number; acceptedBody?:string; preview?:SessionTitlePreview; materialFingerprint?:string; configurationFingerprint?:string; paused?:string; error?:string; lastAttemptAt?:string };
+export type SessionTitleMaintenance = { version:1; enabled:boolean; controlRevision?:number; autoStart?:{expectedTitle:string|null;requestedAt:string}; acceptedBody?:string; preview?:SessionTitlePreview; materialFingerprint?:string; configurationFingerprint?:string; paused?:string; error?:string; lastAttemptAt?:string };
 export type WorkspaceAnalysis = { key: string; material: WorkspaceMaterial; materialCache?:{stamp:string;fingerprint:string;at:string}; digest?:WorkspaceDigest; sources?:OrganizerEvidence[]; title: string; proposedTitle?: string; brief: string; items: OrganizerItem[]; fingerprint?: string; analyzedAt?: string; lastAttemptAt?:string; manual?: boolean; error?: string };
 export type SessionWorkspaceAssociation = { workspaceId:string; source:'automatic'|'manual'; included:boolean; at:string };
 export type SessionAssociations = { targetId:string; title?:string|null; revision:string; workspaces:Array<{key:string;id:string;name:string;title?:string;linked:boolean;source?:'automatic'|'manual'}> };

@@ -16,6 +16,7 @@ type Request=Extract<OrganizerInput['request'],{action:'session.refresh'|'sessio
 type Dependencies={settings:OrganizerSettings;api():Promise<PaseoApi>;store(route:ProjectRoute):OrganizerStore;read(route:ProjectRoute,method:'workspace.list'|'repository.compare'|'repository.fetch'|'organizer.versions',params?:Record<string,unknown>):Promise<Record<string,any>>;materials(route:ProjectRoute,id:string,key:string,policy:OrganizerPolicy):Promise<WorkspaceMaterial>;model<T>(work:()=>Promise<T>):Promise<T>};
 const at=()=>new Date().toISOString();
 const errorText=(error:unknown)=>error instanceof Error?error.message:String(error);
+const managedTitle=(target:OrganizerTarget)=>target.session?.autoStart?target.session.autoStart.expectedTitle:target.lastWritten;
 const productionState=(rows:WorkspaceAnalysis[])=>aggregateProduction(rows.filter(w=>w.material.state!=='discussion'||w.material.taskBrief||w.material.evidence.some(e=>e.kind==='goal')).map(w=>w.material.state));
 type Active={project:string;targetId:string;abort:AbortController;promise:Promise<void>;preview:boolean;force:boolean};
 type Messages=SessionMessages&{batch?:ReturnType<typeof conversationBatch>};
@@ -45,7 +46,8 @@ export class SessionOrganizer {
       const rows=target.workspaceKeys.map(k=>ledger.workspaces[k]);if(rows.some(w=>!w))continue;
       const stamps=rows.map(w=>versions.get(w.material.workspaceId));if(stamps.some(s=>!s))continue;
       const stamp=organizerHash(stamps),prior=seen.get(target.id);seen.set(target.id,stamp);
-      if(stamp===prior||stamps.every((s,i)=>s===rows[i].materialCache?.stamp))continue;
+      const pending=target.session?.autoStart&&!target.session.error&&![...this.active.values()].some(r=>r.project===route.configPath&&r.targetId===target.id);
+      if(stamp===prior||!pending&&stamps.every((s,i)=>s===rows[i].materialCache?.stamp))continue;
       this.schedule(route,target.id);
     }
     for(const id of seen.keys())if(!targets.some(t=>t.id===id))seen.delete(id);
@@ -59,9 +61,20 @@ export class SessionOrganizer {
     if(request.action==='session.associations'||request.action==='session.associations.save')return this.associations(route,request);
     if(request.action==='session.apply'){await this.apply(route,request.targetId,request.previewId);return this.deps.store(route).read().targets[request.targetId];}
     if(request.action==='session.automatic'){
-      const timerKey=route.configPath+':'+request.targetId,timer=this.timers.get(timerKey);if(timer)clearTimeout(timer);this.timers.delete(timerKey);
+      const timerKey=route.configPath+':'+request.targetId;
+      if(request.enabled){
+        const store=this.deps.store(route),target=store.read().targets[request.targetId];
+        if(!target?.workspaceKeys.length)throw Error('organizer_target_missing');
+        if(target.pendingWrite)throw Error('organizer_title_write_uncertain');
+        if(!this.deps.settings.response(route).effective.profileId)throw Error('organizer_model_required');
+        if(target.session?.enabled)return target;
+        clearTimeout(this.timers.get(timerKey));this.timers.delete(timerKey);
+        store.update(l=>{const t=l.targets[request.targetId];t.session={...t.session,version:1,enabled:true,controlRevision:(t.session?.controlRevision||0)+1,configurationFingerprint:this.config(route),autoStart:{expectedTitle:t.currentTitle,requestedAt:at()},paused:undefined,error:undefined};});
+        this.startAutomatic(route,request.targetId);return store.read().targets[request.targetId];
+      }
+      clearTimeout(this.timers.get(timerKey));this.timers.delete(timerKey);
       for(const run of this.active.values())if(run.project===route.configPath&&run.targetId===request.targetId)run.abort.abort();
-      this.deps.store(route).update(l=>{const t=l.targets[request.targetId];if(!t)throw Error('organizer_target_missing');t.session={...t.session,version:1,enabled:false,controlRevision:(t.session?.controlRevision||0)+1};});return this.deps.store(route).read().targets[request.targetId];
+      this.deps.store(route).update(l=>{const t=l.targets[request.targetId];if(!t)throw Error('organizer_target_missing');t.session={...t.session,version:1,enabled:false,autoStart:undefined,controlRevision:(t.session?.controlRevision||0)+1};});return this.deps.store(route).read().targets[request.targetId];
     }
     return this.enqueue(route,request.targetId,request.preview,request.force);
   }
@@ -87,7 +100,7 @@ export class SessionOrganizer {
       const linked=syncSessionAssociations(l,t,rows,agents,bindings);
       t.session||={version:1,enabled:false};
       if(t.pendingWrite){t.session.enabled=false;t.session.paused='此前标题写入结果未确认，请重新核对';if(native.title===t.pendingWrite.to){t.lastWritten=native.title||null;delete t.pendingWrite;}}
-      if(t.session.enabled&&t.lastWritten!==undefined&&native.title!==t.lastWritten){t.session.enabled=false;t.session.paused='标题已在外部修改';}
+      if(t.session.enabled&&managedTitle(t)!==undefined&&native.title!==managedTitle(t)){t.session.enabled=false;t.session.autoStart=undefined;t.session.paused='标题已在外部修改';}
       t.currentTitle=native.title||null;
       if(!linked.length){t.session.enabled=false;t.session.paused='当前会话暂无关联工作区';}else if(t.session.paused==='当前会话暂无关联工作区')delete t.session.paused;l.targets[targetId]=t;
     });const keys=new Set(store.read().targets[targetId].workspaceKeys);return {linked:rows.filter(row=>keys.has(row.instanceKey)),rows,agents,bindings};
@@ -106,8 +119,8 @@ export class SessionOrganizer {
       const t=l.targets[request.targetId],links=t.workspaceLinks!;
       for(const row of context.rows){const old=links[row.instanceKey],included=selected.has(row.instanceKey);if(included!==!!old?.included)links[row.instanceKey]={...old,workspaceId:row.id,source:'manual',included,at:at()};}
       const wasEnabled=t.session?.enabled;
-      t.session={...t.session,version:1,enabled:false,controlRevision:(t.session?.controlRevision||0)+1,preview:undefined,lastAttemptAt:undefined,error:undefined};
-      if(wasEnabled)t.session.paused='关联已更新，请预览标题后重新开启';else if(t.session.paused==='当前会话暂无关联工作区')delete t.session.paused;
+      t.session={...t.session,version:1,enabled:false,autoStart:undefined,controlRevision:(t.session?.controlRevision||0)+1,preview:undefined,lastAttemptAt:undefined,error:undefined};
+      if(wasEnabled)t.session.paused='关联已更新，自动更新标题已关闭';else if(t.session.paused==='当前会话暂无关联工作区')delete t.session.paused;
       syncSessionAssociations(l,t,context.rows,context.agents,context.bindings);
       t.state=productionState(t.workspaceKeys.map(key=>l.workspaces[key]));t.hasUncommittedChanges=hasWorkingChanges(t.workspaceKeys.map(key=>l.workspaces[key]));
     });ledger=store.read();target=ledger.targets[request.targetId];return sessionAssociations(ledger,target,context.rows);
@@ -157,16 +170,16 @@ export class SessionOrganizer {
     let target=store.read().targets[targetId];if(!roster.length){progress.skip('no-material');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
     // State symbols describe current Git evidence, not the age of a model result.
     // Preserve the accepted body while a changed summary awaits its cooldown.
-    if(!preview&&target.session?.enabled&&target.session.acceptedBody&&target.session.preview&&target.session.configurationFingerprint===configuration&&target.currentTitle!==formatOrganizerTitle(target.session.acceptedBody,target.state,policy,false,target.hasUncommittedChanges)){
+    if(!preview&&target.session?.enabled&&!target.session.autoStart&&target.session.acceptedBody&&target.session.preview&&target.session.configurationFingerprint===configuration&&target.currentTitle!==formatOrganizerTitle(target.session.acceptedBody,target.state,policy,false,target.hasUncommittedChanges)){
       const writes=target.history.length;progress.stage('titles');await this.write(route,targetId,target.session.preview.id,false,true);target=store.read().targets[targetId];if(target.history.length>writes)progress.count('titleWrites');
     }
     if(target.session?.preview?.configurationFingerprint===configuration&&!target.session.preview.contentConfigurationFingerprint)store.update(l=>{l.targets[targetId].session!.preview!.contentConfigurationFingerprint=contentConfiguration;});
-    if(target.session!.enabled&&target.session!.configurationFingerprint!==configuration){store.update(l=>{l.targets[targetId].session!.enabled=false;l.targets[targetId].session!.paused='命名配置已改变，请先预览确认';});target=store.read().targets[targetId];}
+    if(target.session!.enabled&&target.session!.configurationFingerprint!==configuration){store.update(l=>{l.targets[targetId].session!.enabled=false;l.targets[targetId].session!.autoStart=undefined;l.targets[targetId].session!.paused='命名配置已改变，请重新开启自动更新';});target=store.read().targets[targetId];}
     if(!policy.profileId){if(preview)throw Error('organizer_model_required');progress.skip('no-profile');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
     const own=this.rows(store,targetId).filter(w=>w.material.evidence.some(e=>e.kind==='commit'));
     if(!own.length){if(preview)throw Error('organizer_session_no_commits');progress.skip('no-material');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;});return;}
-    const attempted=Date.parse(target.session!.lastAttemptAt||'');if(!preview&&!force&&Number.isFinite(attempted)&&Date.now()-attempted<policy.analysisIntervalSeconds*1000){
-      const cached=target.session!.preview;if(target.session!.enabled&&cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached.configurationFingerprint===configuration){store.update(l=>{l.targets[targetId].session!.preview!.title=formatOrganizerTitle(cached.body,l.targets[targetId].state,policy,false,l.targets[targetId].hasUncommittedChanges);});if(target.currentTitle!==store.read().targets[targetId].session!.preview!.title)await this.write(route,targetId,cached.id,false);}
+    const attempted=Date.parse(target.session!.lastAttemptAt||''),savedPreview=target.session?.preview,initial=target.session?.autoStart&&(!(attempted>=Date.parse(target.session.autoStart.requestedAt))||!target.session.error&&(!savedPreview||savedPreview.sourceFingerprint!==this.fingerprint(store,targetId)||savedPreview.configurationFingerprint!==configuration));if(!preview&&!force&&!initial&&Number.isFinite(attempted)&&Date.now()-attempted<policy.analysisIntervalSeconds*1000){
+      const cached=target.session!.preview;if(target.session!.enabled&&cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached.configurationFingerprint===configuration){store.update(l=>{l.targets[targetId].session!.preview!.title=formatOrganizerTitle(cached.body,l.targets[targetId].state,policy,false,l.targets[targetId].hasUncommittedChanges);});if(target.session!.autoStart||target.currentTitle!==store.read().targets[targetId].session!.preview!.title)await this.write(route,targetId,cached.id,false);}
       progress.skip('interval');progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result){j.result.cached=own.filter(w=>w.digest?.fingerprint===w.material.fingerprint).length;j.result.previewReady=cached?.sourceFingerprint===this.fingerprint(store,targetId)&&cached?.configurationFingerprint===configuration;j.result.previewId=j.result.previewReady?cached?.id:undefined;}});return;}
     const changed=own.filter(w=>!w.manual&&(!w.digest||w.digest.fingerprint!==w.material.fingerprint)).map(w=>w.key);
     const cached=target.session!.preview,sameContent=!!cached&&(cached.configurationFingerprint===configuration||cached.contentConfigurationFingerprint===contentConfiguration),reusePreview=!force&&!changed.length&&sameContent&&cached?.sourceFingerprint===this.fingerprint(store,targetId);
@@ -192,7 +205,7 @@ export class SessionOrganizer {
     assertCurrent();const finalFingerprint=this.fingerprint(store,targetId);
     store.update(l=>{const t=l.targets[targetId],session=t.session!;if(generatedTitle)session.preview={...session.preview,id:randomUUID(),body:generatedTitle.text,title:formatOrganizerTitle(generatedTitle.text,t.state,policy,false,t.hasUncommittedChanges),sourceFingerprint:finalFingerprint,configurationFingerprint:configuration,contentConfigurationFingerprint:contentConfiguration,at:at(),runId,evidenceIds:generatedTitle.evidenceIds,conversationComplete:t.agentIds.every(id=>l.conversations[id]?.complete),messageHeads:conversation.heads,reviewedWriteId:preview?t.pendingWrite?.id:undefined};else if(session.preview&&session.preview.sourceFingerprint===finalFingerprint){if(policy.conversationSummary)session.preview.messageHeads=conversation.heads;session.preview.title=formatOrganizerTitle(session.preview.body,t.state,policy,false,t.hasUncommittedChanges);if(sameContent){if(session.preview.configurationFingerprint!==configuration)session.preview.id=randomUUID();session.preview.configurationFingerprint=configuration;session.preview.contentConfigurationFingerprint=contentConfiguration;}if(preview&&session.preview.reviewedWriteId!==t.pendingWrite?.id){session.preview.reviewedWriteId=t.pendingWrite?.id;session.preview.id=randomUUID();}}delete session.error;});
     if(!batches.length)progress.skip('cached');
-    target=store.read().targets[targetId];if(!preview&&target.session!.enabled&&target.session!.preview&&target.currentTitle!==target.session!.preview.title&&target.session!.configurationFingerprint===configuration){progress.stage('titles');await this.write(route,targetId,target.session!.preview.id,false);progress.count('titleWrites',target.history.length<store.read().targets[targetId].history.length?1:0);}
+    target=store.read().targets[targetId];if(!preview&&target.session!.enabled&&target.session!.preview&&(target.session!.autoStart||target.currentTitle!==target.session!.preview.title)&&target.session!.configurationFingerprint===configuration){progress.stage('titles');await this.write(route,targetId,target.session!.preview.id,false);progress.count('titleWrites',target.history.length<store.read().targets[targetId].history.length?1:0);}
     progress.stage('finished');progress.update(j=>{j.state='complete';j.current=undefined;if(j.result){j.result.previewReady=!!target.session!.preview&&target.session!.preview.sourceFingerprint===this.fingerprint(store,targetId)&&target.session!.preview.configurationFingerprint===configuration;j.result.previewId=j.result.previewReady?target.session!.preview?.id:undefined;}});
   }
   private async apply(route:ProjectRoute,targetId:string,previewId:string){await this.write(route,targetId,previewId,true);}
@@ -213,20 +226,23 @@ export class SessionOrganizer {
     if(title!==preview.title||target.session?.preview?.id!==previewId||statusOnly&&target.session.acceptedBody!==preview.body||preview.sourceFingerprint!==this.fingerprint(store,targetId))throw Error('organizer_preview_changed');
     const native=await api.workspaces.ref(targetId).refresh();assertCurrent();if(!native||(native as {archivedAt?:string}).archivedAt)throw Error('organizer_host_workspace_unavailable');
     const live=store.read().targets[targetId];if((live.session?.controlRevision||0)!==control)throw Error('organizer_cancelled');if(live.session?.preview?.id!==previewId)throw Error('organizer_preview_changed');if(!explicit&&!live.session?.enabled)return;
-    if(native.title!==expected||!explicit&&(!target.session!.enabled||native.title!==target.lastWritten)){store.update(l=>{const t=l.targets[targetId];t.currentTitle=native?.title||null;t.session!.enabled=false;t.session!.paused='标题已在外部修改';});throw Error('organizer_external_title_change');}
-    const finish=()=>store.update(l=>{const t=l.targets[targetId];t.currentTitle=title;t.lastWritten=title;t.state=state;t.hasUncommittedChanges=workingChanges;t.session={...t.session,version:1,enabled:(t.session?.controlRevision||0)===control,acceptedBody:preview.body,...(!statusOnly?{materialFingerprint:preview.sourceFingerprint}:{}),configurationFingerprint:configuration,paused:undefined,error:undefined};if(statusOnly&&t.session.preview)t.session.preview.title=formatOrganizerTitle(t.session.preview.body,state,policy,false,workingChanges);t.policy='preview';delete t.pendingWrite;});
+    if(native.title!==expected||!explicit&&(!target.session!.enabled||native.title!==managedTitle(target))){store.update(l=>{const t=l.targets[targetId];t.currentTitle=native?.title||null;t.session!.enabled=false;t.session!.autoStart=undefined;t.session!.paused='标题已在外部修改';});throw Error('organizer_external_title_change');}
+    const finish=()=>store.update(l=>{const t=l.targets[targetId];t.currentTitle=title;t.lastWritten=title;t.state=state;t.hasUncommittedChanges=workingChanges;t.session={...t.session,version:1,enabled:(t.session?.controlRevision||0)===control,autoStart:undefined,acceptedBody:preview.body,...(!statusOnly?{materialFingerprint:preview.sourceFingerprint}:{}),configurationFingerprint:configuration,paused:undefined,error:undefined};if(statusOnly&&t.session.preview)t.session.preview.title=formatOrganizerTitle(t.session.preview.body,state,policy,false,workingChanges);t.policy='preview';delete t.pendingWrite;});
     if(title===native.title){finish();return;}
     store.update(l=>{const t=l.targets[targetId];if(t.originalTitle===undefined)t.originalTitle=native.title||null;if(t.pendingWrite)t.uncertainWrites=[...(t.uncertainWrites||[]),t.pendingWrite].slice(-100);t.pendingWrite={id:randomUUID(),from:native.title||null,to:title};});
     try{await api.workspaces.ref(targetId).setTitle(title);store.update(l=>{const t=l.targets[targetId];t.history=[...t.history,{at:at(),from:native.title||null,to:title}].slice(-100);});finish();}
     catch(error){store.update(l=>{const s=l.targets[targetId].session!;s.enabled=false;s.paused='标题写入结果未确认，请重新核对';});throw error;}
   }
-  private schedule(route:ProjectRoute,targetId:string){
+  private startAutomatic(route:ProjectRoute,targetId:string){
+    try{this.enqueue(route,targetId);}catch(error){if(errorText(error)!=='organizer_queue_full')throw error;this.schedule(route,targetId,1000);}
+  }
+  private schedule(route:ProjectRoute,targetId:string,delayMs=this.deps.settings.response(route).effective.debounceSeconds*1000){
     if(this.closed)return;const key=route.configPath+':'+targetId,old=this.timers.get(key);if(old)clearTimeout(old);
     const timer=setTimeout(()=>{this.timers.delete(key);if(this.closed||!this.deps.store(route).read().targets[targetId]?.session?.enabled)return;
       const active=[...this.active.values()].find(r=>r.project===route.configPath&&r.targetId===targetId);
       if(active){void active.promise.finally(()=>{if(!this.closed)this.schedule(route,targetId);});return;}
-      try{this.enqueue(route,targetId);}catch{this.sourceWatches.get(route.configPath)?.seen.delete(targetId);}
-    },this.deps.settings.response(route).effective.debounceSeconds*1000);timer.unref();this.timers.set(key,timer);
+      try{this.startAutomatic(route,targetId);}catch{this.sourceWatches.get(route.configPath)?.seen.delete(targetId);}
+    },delayMs);timer.unref();this.timers.set(key,timer);
   }
   changed(route:ProjectRoute,agentId?:string){if(this.closed)return;for(const target of Object.values(this.deps.store(route).read().targets)){if(target.session?.enabled&&(!agentId||target.agentIds.includes(agentId)))this.schedule(route,target.id);}}
   abort(project?:string){for(const active of this.active.values())if(!project||active.project===project)active.abort.abort();}

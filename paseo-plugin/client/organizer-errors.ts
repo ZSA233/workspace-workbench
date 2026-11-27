@@ -1,4 +1,5 @@
 const messages:Record<string,string>={
+ organizer_title_write_uncertain:'上次标题写入结果待核对，请先预览确认',
  organizer_context_allocation_invalid:'上下文上限不足以容纳输出预留和提示词，请检查模型高级设置',
  organizer_associations_changed:'关联或工作区已变化，请重新读取后选择',organizer_association_workspace_unavailable:'所选工作区已不可用，请重新读取',organizer_host_workspace_unavailable:'当前会话不可用，请切回会话重试',
  organizer_session_no_commits:'尚无独立提交材料，暂不生成标题',organizer_session_context_too_large:'关联材料超出当前模型预算，请调整上下文预算',organizer_model_workspace_invalid:'模型摘要结果不完整，请重试',organizer_model_conversation_missing:'模型未返回会话增量摘要',organizer_model_brief_too_long:'模型摘要过长，请重试',organizer_model_title_invalid:'模型标题格式不符合要求',

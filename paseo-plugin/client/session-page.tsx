@@ -1,10 +1,11 @@
 import {useEffect,useRef,useState} from 'react';
 import {ActivityIndicator,Pressable,Text,View} from 'react-native';
 import type {PluginWorkspacePanelProps} from '@getpaseo/plugin/client';
+import {useQueryClient} from '@tanstack/react-query';
 import {ScrollView,Icon} from './native-components';
 import {Button,CommunicationsTheme,Dialog,Label,Row,Toggle,useColors} from './extensions/project-communications/ui';
 import {useOrganizer} from './use-organizer';
-import {productionLabels,requirementState,type OrganizerJob,type OrganizerRun} from '../shared/organizer';
+import {productionLabels,requirementState,type OrganizerJob,type OrganizerRun,type OrganizerSnapshot,type OrganizerTarget} from '../shared/organizer';
 import {sortWorkspacesByLatestCommit,type WorkspaceSummary} from './model';
 import {organizerErrorLabel} from './organizer-errors';
 import {SessionAssociationsDialog} from './session-associations-dialog';
@@ -22,6 +23,8 @@ function SessionContent({projectConfig,hostWorkspaceId,selectedWorkspaceId,foreg
   const [error,setError]=useState(''),[modal,setModal]=useState(false),[previewJob,setPreviewJob]=useState(''),[busy,setBusy]=useState(false),[evidence,setEvidence]=useState(false),[run,setRun]=useState<OrganizerRun|null>(),[runError,setRunError]=useState('');
   const [associationWorkspace,setAssociationWorkspace]=useState<{id:string;instanceKey?:string}|null>(null);
   const [productionOpen,setProductionOpen]=useState(false);
+  const cache=useQueryClient(),[automaticChoice,setAutomaticChoice]=useState<boolean|undefined>();
+  const automaticSequence=useRef(0),automaticRequests=useRef(Promise.resolve());
   const generation=useRef(0),pendingJob=useRef('');
   const start=async(preview=false,force=false)=>{setError('');try{const job=await organizer.mutate<OrganizerJob>({action:'session.refresh',targetId:hostWorkspaceId,preview,force});return job.id;}catch(e){setError(e instanceof Error?e.message:String(e));}};
   useEffect(()=>{if(foreground&&hostWorkspaceId&&organizer.settings.isSuccess)void start();},[projectConfig,hostWorkspaceId,foreground,refreshNonce,profile,organizer.settings.isSuccess]);
@@ -32,13 +35,26 @@ function SessionContent({projectConfig,hostWorkspaceId,selectedWorkspaceId,foreg
   const ready=modal&&!!session?.preview&&!!job&&job.state==='complete'&&!previewExpired&&!busy;
   const close=()=>{if(busy)return;generation.current++;setModal(false);setEvidence(false);if(pendingJob.current)void organizer.mutate({action:'cancel',jobId:pendingJob.current}).catch(()=>{});pendingJob.current='';};
   const preview=async()=>{if(!profile){onModelSettings();return;}const token=++generation.current;setModal(true);setPreviewJob('');setEvidence(false);setRun(undefined);setRunError('');const id=await start(true);if(token!==generation.current){if(id)void organizer.mutate({action:'cancel',jobId:id}).catch(()=>{});return;}if(id){pendingJob.current=id;setPreviewJob(id);}};
-  const toggle=(value:boolean)=>{if(value){void preview();return;}setBusy(true);setError('');void organizer.mutate({action:'session.automatic',targetId:hostWorkspaceId,enabled:false}).catch(e=>setError(e.message)).finally(()=>setBusy(false));};
+  const toggle=(enabled:boolean)=>{
+    if(enabled&&!profile){onModelSettings();return;}
+    const sequence=++automaticSequence.current;setAutomaticChoice(enabled);setError('');
+    // Serialize only the tiny control RPCs. Neither model work nor snapshot
+    // revalidation blocks a later Off, and a superseded click cannot win.
+    automaticRequests.current=automaticRequests.current.catch(()=>{}).then(async()=>{
+      if(sequence!==automaticSequence.current)return;
+      try{
+        const updated=await organizer.call<OrganizerTarget>({action:'session.automatic',targetId:hostWorkspaceId,enabled});
+        if(sequence===automaticSequence.current){cache.setQueryData<OrganizerSnapshot>(['workbench-organizer',projectConfig,hostWorkspaceId],old=>old?{...old,targets:old.targets.map(t=>t.id===hostWorkspaceId?updated:t)}:old);setAutomaticChoice(undefined);}
+      }catch(e){if(sequence===automaticSequence.current){setError(e instanceof Error?e.message:String(e));setAutomaticChoice(undefined);}}
+      finally{if(sequence===automaticSequence.current)void Promise.allSettled([cache.invalidateQueries({queryKey:['workbench-organizer',projectConfig,hostWorkspaceId]}),cache.invalidateQueries({queryKey:['workbench-organizer-status',projectConfig]})]);}
+    });
+  };
   const linked=new Map((data?.workspaces||[]).map(w=>[w.material.workspaceId,w]));
   const rows=sortWorkspacesByLatestCommit((target?.workspaceKeys||[]).flatMap(key=>{const w=data?.workspaces.find(w=>w.key===key);if(!w)return [];const roster=workspaces.find(r=>r.id===w.material.workspaceId);return [{...roster,id:w.material.workspaceId,displayName:w.material.name,latestCommitAt:roster?.latestCommitAt||w.material.latestCommitAt||null} as WorkspaceSummary];}));
-  const failure=error||(!active?session?.error||jobs[0]?.error:'')||organizer.snapshot.error?.message;
+  const failure=error||(!active?session?.error||(jobs[0]?.state!=='cancelled'?jobs[0]?.error:''):'')||organizer.snapshot.error?.message;
   // Keep the saved result visible during cheap source/head probes. A real
   // material read or generation still exposes its own progress immediately.
-  const checkingCached=!!session?.preview&&active&&(['queued','discovering'].includes(active.stage||'')||active.stage==='conversation'&&!active.current?.page);
+  const checkingCached=!session?.autoStart&&!!session?.preview&&active&&(['queued','discovering'].includes(active.stage||'')||active.stage==='conversation'&&!active.current?.page);
   let activity=checkingCached?jobs.find(j=>j.state==='complete'&&j.result?.previewReady):active||(failure?jobs.find(j=>j.state==='failed'):undefined)||jobs[0];
   if(activity?.state==='complete'&&session?.preview&&previewState&&previewState!=='ready')activity={...activity,result:{...activity.result!,previewReady:false,previewStale:true}};
   const readRun=()=>{setEvidence(v=>!v);const runId=session?.preview?.runId||jobs[0]?.model?.runId;if(runId){setRunError('');void organizer.call<OrganizerRun|null>({action:'run',runId}).then(setRun).catch(e=>setRunError(e.message));}};
@@ -48,7 +64,8 @@ function SessionContent({projectConfig,hostWorkspaceId,selectedWorkspaceId,foreg
     <ScrollView contentContainerStyle={{paddingBottom:16}}>
       <View style={{paddingHorizontal:12,paddingVertical:10,gap:7,...divider}}>
         <View style={{flexDirection:'row',alignItems:'flex-start',gap:8}}><Text numberOfLines={2} style={{flex:1,minWidth:0,color:c.foreground,fontSize:13,lineHeight:21}}>{target?.currentTitle||'当前会话'}</Text><Button variant="link" disabled={!target?.workspaceKeys.length||busy} onPress={()=>{void preview();}}>预览标题</Button></View>
-        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:8}}><Label>自动更新标题</Label><Toggle label="自动更新标题" hideLabel checked={session?.enabled===true} disabled={!target?.workspaceKeys.length||busy} onChange={toggle}/></View>
+        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:8}}><Label>自动更新标题</Label><Toggle label="自动更新标题" hideLabel checked={automaticChoice??session?.enabled===true} disabled={!target?.workspaceKeys.length} onChange={toggle}/></View>
+        {session?.enabled&&session.autoStart&&!active&&!failure?<Row><Icon name="Clock" size={13} color={c.foregroundMuted}/><Label muted>等待后台更新</Label></Row>:null}
         {session?.paused&&session.paused!=='当前会话暂无关联工作区'?<Row><Icon name="CircleAlert" size={13} color={c.statusWarning}/><Label warning>{session.paused}</Label></Row>:null}
         {session?.preview?<View style={{gap:2}}><Label muted>{activity?.result?.previewReady?'建议标题':'上次建议'}</Label><Text numberOfLines={2} style={{color:c.accent,fontSize:13,lineHeight:20}}>{session.preview.title}</Text></View>:null}
         <SessionProgress job={activity} foreground={foreground} error={failure||undefined} call={organizer.call} onRetry={()=>{void start(false,true);}} onCancel={()=>{if(active)void organizer.mutate({action:'cancel',jobId:active.id});}}/>

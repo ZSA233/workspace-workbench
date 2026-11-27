@@ -32,6 +32,38 @@ test('session view batches its own workspaces, leaves native titles alone, and c
  const snapshot=await f.request({action:'snapshot',hostWorkspaceId:'native'});assert.equal(snapshot.workspaces.filter((w:any)=>w.digest).length,3);assert.equal(snapshot.targets[0].session.enabled,false);await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(f.counts().calls,1);
  }finally{await f.close();}
 });
+test('turning automatic on during an existing model request returns immediately and reuses that exact job',async()=>{
+ const f=await fixture();try{
+  f.enableCache();f.delay(1000);const job=await f.request({action:'session.refresh',targetId:'native'});for(let i=0;i<200&&!f.counts().calls;i++)await pause();
+  const start=Date.now(),target=await f.request({action:'session.automatic',targetId:'native',enabled:true});assert.equal(target.session.enabled,true);assert.ok(Date.now()-start<500);assert.equal(f.counts().writes,0);
+  let view=await f.request({action:'snapshot'});assert.equal(view.jobs.filter((j:any)=>['queued','running'].includes(j.state)).length,1);await f.request({action:'session.automatic',targetId:'native',enabled:true});assert.equal((await f.request({action:'snapshot'})).jobs.length,view.jobs.length);
+  const finished=await f.done(job);assert.equal(finished.state,'complete',finished.error);assert.equal(f.counts().calls,1);assert.equal(f.counts().writes,1);assert.equal(f.title(),'○ 小时统计查询优化');view=await f.request({action:'snapshot'});assert.equal(view.targets[0].session.autoStart,undefined);
+ }finally{await f.close();}
+});
+test('automatic can be enabled before materials finish, disabled immediately, and cannot write after shutdown of its control',async()=>{
+ const f=await fixture();try{
+  await f.request({action:'session.associations',targetId:'native'});f.delayRead(100);const enabled=await f.request({action:'session.automatic',targetId:'native',enabled:true});assert.equal(enabled.session.enabled,true);assert.equal(f.counts().calls,0);
+  const view=await f.request({action:'snapshot'}),job=view.jobs[0],disabled=await f.request({action:'session.automatic',targetId:'native',enabled:false});assert.equal(disabled.session.enabled,false);assert.equal(disabled.session.autoStart,undefined);assert.equal((await f.done(job)).state,'cancelled');assert.equal(f.counts().writes,0);
+ }finally{await f.close();}
+});
+test('one-click automatic consumes a valid cached suggestion and adopts an unchanged native title without regeneration',async()=>{
+ const f=await fixture();try{
+  f.enableCache();await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));let settings=f.settings.response(f.route);f.settings.save('project',settings.revision,{analysisIntervalSeconds:300},[],f.route);
+  for(let n=0;n<2;n++){const target=await f.request({action:'session.automatic',targetId:'native',enabled:true});assert.equal(target.session.enabled,true);const view=await f.request({action:'snapshot'}),job=await f.done(view.jobs[0]);assert.equal(job.state,'complete',job.error);assert.equal(f.counts().calls,1);assert.equal(f.counts().writes,1);assert.equal((await f.request({action:'snapshot'})).targets[0].session.autoStart,undefined);await f.request({action:'session.automatic',targetId:'native',enabled:false});}
+  settings=f.settings.response(f.route);f.settings.save('project',settings.revision,{markers:{...settings.effective.markers,pending:'🔴'}},[],f.route);await f.request({action:'session.automatic',targetId:'native',enabled:true});const job=await f.done((await f.request({action:'snapshot'})).jobs[0]);assert.equal(job.state,'complete',job.error);assert.equal(f.title(),'🔴 小时统计查询优化');assert.equal(f.counts().calls,1);
+ }finally{await f.close();}
+});
+test('one-click authorization preserves a title changed after the click and may explicitly resume a visible manual title',async()=>{
+ const f=await fixture();try{
+  await f.request({action:'session.associations',targetId:'native'});f.title('外部新标题');await f.request({action:'session.automatic',targetId:'native',enabled:true});let job=await f.done((await f.request({action:'snapshot'})).jobs[0]);assert.equal(job.state,'complete',job.error);let target=(await f.request({action:'snapshot'})).targets[0];assert.equal(target.session.enabled,false);assert.equal(f.title(),'外部新标题');assert.equal(f.counts().writes,0);
+  await f.request({action:'session.automatic',targetId:'native',enabled:true});job=await f.done((await f.request({action:'snapshot'})).jobs[0]);assert.equal(job.state,'complete',job.error);target=(await f.request({action:'snapshot'})).targets[0];assert.equal(target.session.enabled,true);assert.equal(f.title(),'○ 小时统计查询优化');
+ }finally{await f.close();}
+});
+test('model failure leaves automatic enabled with a visible error but does not retry unchanged material every observation',async()=>{
+ const f=await fixture();try{
+  f.enableCache();await f.request({action:'session.associations',targetId:'native'});f.bad();await f.request({action:'session.automatic',targetId:'native',enabled:true});const job=await f.done((await f.request({action:'snapshot'})).jobs[0]);assert.equal(job.state,'failed');const target=(await f.request({action:'snapshot'})).targets[0];assert.equal(target.session.enabled,true);assert.ok(target.session.error);const calls=f.counts().calls;await f.checkSources();await f.checkSources();await pause();assert.equal(f.counts().calls,calls);assert.equal(f.counts().writes,0);
+ }finally{await f.close();}
+});
 test('reentering an enabled session and opening previews reuse verified Git materials and unfinished summaries across reloads',async()=>{
  const f=await fixture();try{
   f.enableCache();f.longHistory();let job=await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(job.state,'complete',job.error);
@@ -120,6 +152,14 @@ test('changed material, incoming messages and external names invalidate a frozen
 });
 test('uncertain title writes pause maintenance and are never automatically replayed',async()=>{
  const f=await fixture();try{await f.done(await f.request({action:'session.refresh',targetId:'native',preview:true}));const t=(await f.request({action:'snapshot'})).targets[0];f.failWrite();await assert.rejects(f.request({action:'session.apply',targetId:'native',previewId:t.session.preview.id}),/closed/);assert.equal(f.counts().writes,1);await f.done(await f.request({action:'session.refresh',targetId:'native'}));assert.equal(f.counts().writes,1);assert.equal((await f.request({action:'snapshot'})).targets[0].session.enabled,false);
+ await assert.rejects(f.request({action:'session.automatic',targetId:'native',enabled:true}),/write_uncertain/);assert.equal(f.counts().writes,1);
+ }finally{await f.close();}
+});
+test('rapid on-off-on preserves the final intent and a pending first update resumes after restart',async()=>{
+ const f=await fixture();try{
+  f.enableCache();await f.request({action:'session.associations',targetId:'native'});f.delayRead(40);await f.request({action:'session.automatic',targetId:'native',enabled:true});await f.request({action:'session.automatic',targetId:'native',enabled:false});await f.request({action:'session.automatic',targetId:'native',enabled:true});
+  let view=await f.request({action:'snapshot'});await f.done(view.jobs[0]);assert.equal(f.counts().writes,1);assert.equal(view.targets[0].session.enabled,true);
+  await f.request({action:'session.automatic',targetId:'native',enabled:false});f.materials[0].fingerprint+='-new';await f.request({action:'session.automatic',targetId:'native',enabled:true});await f.restart();await f.request({action:'snapshot'});await f.checkSources();for(let i=0;i<500;i++){view=await f.request({action:'snapshot'});if(!view.targets[0].session.autoStart)break;await pause();}assert.equal(view.targets[0].session.autoStart,undefined);assert.equal(view.targets[0].session.enabled,true);
  }finally{await f.close();}
 });
 test('session cancellation and invalid model citations cannot publish a digest or a native title',async()=>{

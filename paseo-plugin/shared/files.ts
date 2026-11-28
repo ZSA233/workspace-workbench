@@ -36,8 +36,8 @@ export const fileRequest = z.discriminatedUnion('action', [
   z.object({ action: z.literal('tasks'), activeOnly: z.boolean().default(false), before: z.number().optional(), limit: z.number().int().min(1).max(200).default(100) }),
 ]);
 export type FileRequest = z.infer<typeof fileRequest>;
-export type FileEntry = { name: string; path: string; kind: 'directory' | 'file' | 'link' | 'other'; size: number; modifiedAt: number; version: string; protected: boolean; repository: boolean };
-export type DirectoryPage = { workspaceId: string; instance: string; path: string; version: string; entries: FileEntry[]; cursor?: string; refreshing?: boolean; order?:'native'|'sorted'; sortState?:'preparing'|'ready'; snapshotId?:string };
+export type FileEntry = { name: string; path: string; kind: 'directory' | 'file' | 'link' | 'other'; size: number; modifiedAt: number; version: string; protected: boolean; repository: boolean; readOnly?: boolean };
+export type DirectoryPage = { workspaceId: string; instance: string; path: string; version: string; entries: FileEntry[]; cursor?: string; refreshing?: boolean; order?:'native'|'sorted'; sortState?:'preparing'|'ready'; snapshotId?:string; readOnly?: boolean };
 export type FileTaskState = 'queued' | 'preparing' | 'active' | 'paused' | 'interrupted' | 'conflict' | 'ready_to_save' | 'complete' | 'cancelled' | 'failed' | 'delegated';
 export type FileChange = { workspaceId: string; instance: string; paths: string[]; removed?: string[] };
 export type FileTask = { id: string; batchId?: string; cleanupPending?: boolean; canReplace?: boolean; conflict?: 'exists' | 'changed'; direction: 'upload' | 'download' | 'operation'; operation?: string; workspaceId: string; instance: string; workspaceName: string; path: string; name: string; size: number | null; offset: number; state: FileTaskState; createdAt: number; updatedAt: number; error?: string; sha256?: string; files?: number; processed?: number; excluded?: number; modifiedAt?: number; sourceName?: string; nextOffset?: number; changes?: FileChange[]; selectionPending?: boolean; selectionCount?: number };

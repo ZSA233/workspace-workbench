@@ -114,13 +114,13 @@ export class WorkspaceFiles {
     if (input.action === 'versions') {
       const versions: Record<string, string> = Object.create(null), orders:Record<string,string>=Object.create(null);
       for (const path of input.paths) {
-        try { const full = await this.roots.path(context, path); const s = await lstat(full); const w = this.touch(full, input.workspaceId); const content=`${this.generation}:${fileVersion(s)}:${w.revision}`;versions[path] = `${content}:${Math.floor(Date.now()/30_000)}`;if(input.listingProtocol===2)orders[path]=this.order.state(this.order.key(context.instance,path),content)?'ready':'preparing'; }
+        try { const full = await this.roots.path(context, path, { inspect: true }); const s = await lstat(full); const w = this.touch(full, input.workspaceId); const content=`${this.generation}:${fileVersion(s)}:${w.revision}`;versions[path] = `${content}:${Math.floor(Date.now()/30_000)}`;if(input.listingProtocol===2)orders[path]=this.order.state(this.order.key(context.instance,path),content)?'ready':'preparing'; }
         catch { versions[path] = 'missing'; }
       }
       return { versions, instance: context.instance, ...(input.listingProtocol===2?{orders}:{}) };
     }
     if (input.action === 'preview') {
-      const handle = await this.roots.read(context, input.path);
+      const handle = await this.roots.read(context, input.path, { inspect: true });
       try { const before = await handle.stat(), data = Buffer.alloc(Math.max(0, Math.min(64 * 1024, before.size - input.offset))); await handle.read(data, 0, data.length, input.offset); if (fileVersion(before) !== fileVersion(await handle.stat())) throw new WorkbenchError('file_source_changed', 'File changed while previewing'); return { data: data.toString('base64'), offset: input.offset, size: before.size, sha256: hash(data), version: fileVersion(before) }; }
       finally { await handle.close(); }
     }
@@ -138,7 +138,7 @@ export class WorkspaceFiles {
         this.tasks.journal.save(task); return this.tasks.journal.view(task);
       });
     }
-    const full = await this.roots.path(context, input.path), stat = await lstat(full);
+    const full = await this.roots.path(context, input.path, { inspect: true }), stat = await lstat(full);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new WorkbenchError('file_not_directory', 'Expected a real directory');
     const observed = this.touch(full, input.workspaceId);
     const contentVersion = `${this.generation}:${fileVersion(stat)}:${observed.revision}`;
@@ -158,9 +158,9 @@ export class WorkspaceFiles {
       const key=`files:sorted:${hash(context.instance)}:${input.path}:${offset}:${input.limit}`;
       const page=await this.cache.read(key,version,async()=>{
         const names=await this.order.page(orderKey,contentVersion,full,input.limit,after),more=names.length>input.limit,entries:FileEntry[]=[];
-        for(const item of names.slice(0,input.limit)){const info=await fileStat(join(full,item.name));if(!info)throw new WorkbenchError('file_listing_changed','Directory changed during listing');const path=input.path?input.path+'/'+item.name:item.name;entries.push({name:item.name,path,kind:info.isDirectory()?'directory':info.isFile()?'file':info.isSymbolicLink()?'link':'other',size:info.size,modifiedAt:info.mtimeMs,version:fileVersion(info),protected:this.roots.protected(context,path),repository:context.repositories.has(join(full,item.name))});}
+        for(const item of names.slice(0,input.limit)){const info=await fileStat(join(full,item.name));if(!info)throw new WorkbenchError('file_listing_changed','Directory changed during listing');const path=input.path?input.path+'/'+item.name:item.name;entries.push({name:item.name,path,kind:info.isDirectory()?'directory':info.isFile()?'file':info.isSymbolicLink()?'link':'other',size:info.size,modifiedAt:info.mtimeMs,version:fileVersion(info),protected:this.roots.protected(context,path),repository:context.repositories.has(join(full,item.name)),...(this.roots.metadata(context,path)?{readOnly:true}:{})});}
         if(fileVersion(await lstat(full))!==fileVersion(stat))throw new WorkbenchError('file_listing_changed','Directory changed during listing');
-        return {workspaceId:input.workspaceId,instance:context.instance,path:input.path,version,entries,order:ordering,sortState:'ready',snapshotId,...(more?{cursor:cursorFor(offset+entries.length,names[input.limit-1])}:{})};
+        return {workspaceId:input.workspaceId,instance:context.instance,path:input.path,version,entries,...(this.roots.metadata(context,input.path)?{readOnly:true}:{}),order:ordering,sortState:'ready',snapshotId,...(more?{cursor:cursorFor(offset+entries.length,names[input.limit-1])}:{})};
       },true,input.fresh,{workspaceId:input.workspaceId,repoPath:context.root});this.order.prepare(orderKey,full,contentVersion,input.workspaceId);return page;
     }
     const key = `files:v1:${hash(context.instance)}:${input.path}:${offset}:${input.limit}`;
@@ -173,11 +173,11 @@ export class WorkspaceFiles {
         if (entries.length >= input.limit) { more = true; break; }
         const path = input.path ? input.path + '/' + item.name : item.name;
         const info = await fileStat(join(full, item.name)); if (!info) continue;
-        entries.push({ name: item.name, path, kind: info.isDirectory() ? 'directory' : info.isFile() ? 'file' : info.isSymbolicLink() ? 'link' : 'other', size: info.size, modifiedAt: info.mtimeMs, version: fileVersion(info), protected: this.roots.protected(context, path), repository: context.repositories.has(join(full, item.name)) });
+        entries.push({ name: item.name, path, kind: info.isDirectory() ? 'directory' : info.isFile() ? 'file' : info.isSymbolicLink() ? 'link' : 'other', size: info.size, modifiedAt: info.mtimeMs, version: fileVersion(info), protected: this.roots.protected(context, path), repository: context.repositories.has(join(full, item.name)), ...(this.roots.metadata(context, path) ? { readOnly: true } : {}) });
       }
       if (fileVersion(await lstat(full)) !== fileVersion(stat)) throw new WorkbenchError('file_listing_changed', 'Directory changed during listing');
       entries.sort((a,b) => Number(b.kind === 'directory')-Number(a.kind === 'directory') || a.name.localeCompare(b.name));
-      const page: DirectoryPage = { workspaceId: input.workspaceId, instance: context.instance, path: input.path, version, entries, ...(more ? { cursor: cursorFor(index-1) } : {}) };
+      const page: DirectoryPage = { workspaceId: input.workspaceId, instance: context.instance, path: input.path, version, entries, ...(this.roots.metadata(context, input.path) ? { readOnly: true } : {}), ...(more ? { cursor: cursorFor(index-1) } : {}) };
       return page;
     }, true, input.fresh, { workspaceId: input.workspaceId, repoPath: context.root });
     if(input.listingProtocol===2){this.order.prepare(orderKey,full,contentVersion,input.workspaceId);return {...result,order:'native',sortState:this.order.state(orderKey,contentVersion)?'ready':'preparing',snapshotId};}

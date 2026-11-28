@@ -43,7 +43,9 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   const selected = [...tree.selected].map(p => entries.get(p)).filter(Boolean) as FileEntry[];
   const topLevel = (values: FileEntry[]) => { const paths = new Set(values.map(entry => entry.path)); return values.filter(entry => { for (let value = parent(entry.path); value; value = parent(value)) if (paths.has(value)) return false; return true; }); };
   const targetPath = menu !== null ? menu !== tree.root && entries.get(menu)?.kind !== 'directory' ? parent(menu) : menu : selected.length === 1 && selected[0].kind === 'directory' ? selected[0].path : selected.length ? parent(selected[0].path) : tree.root;
-  const readOnly = workspace.kind === 'linked-live';
+  const readOnly = workspace.kind === 'linked-live' || tree.pages.get(tree.root)?.readOnly === true;
+  const directoryReadOnly = (path: string) => readOnly || tree.pages.get(path)?.readOnly === true || entries.get(path)?.readOnly === true;
+  const targetReadOnly = directoryReadOnly(targetPath);
   const call = (input: Record<string, any>) => store.call(input);
   const run = (work: () => Promise<unknown>) => { setError(''); void work().catch(e => setError(String(e.message || e))); };
   const refresh = () => run(async () => { for (const path of tree.expanded) await tree.load(path, call, false, true); if (decorationsEnabled) await tree.decorations.refresh(decorationPathsRef.current, call, true); });
@@ -94,17 +96,17 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     tree.save(); tree.emit('view');
   };
   const copy = (operation: 'copy' | 'move') => {
-    if (!selected.length || selected.some(e => e.protected && !(operation === 'copy' && e.repository))) return;
+    if (!selected.length || selected.some(e => e.readOnly || e.protected && !(operation === 'copy' && e.repository))) return;
     setFileClipboard({ operation, scope, entries: topLevel(selected).map(e => ({ workspaceId: workspace.id, instance: tree.instance, path: e.path, version: e.version })) }); setMenu(null);
   };
   const destination = (path: string) => ({ workspaceId: workspace.id, instance: tree.instance, path });
   const paste = (path: string) => {
-    if (!clipboard || clipboard.scope !== scope || readOnly || !tree.instance) return;
+    if (!clipboard || clipboard.scope !== scope || directoryReadOnly(path) || !tree.instance) return;
     const captured = clipboard;
     run(async () => { await store.operation({ operation: captured.operation, entries: captured.entries, destination: destination(path), policy: 'ask', confirm: false }); if (captured.operation === 'move' && getFileClipboard() === captured) setFileClipboard(undefined); }); setMenu(null);
   };
   const upload = async (files: Iterable<LocalFile> | AsyncIterable<{ file?: LocalFile; path: string; directory?: boolean }>, directory: string, dropInput = false) => {
-    if (readOnly) return;
+    if (directoryReadOnly(directory)) return;
     const id = workspace.id, batchId = newFileId();
     if (!tree.instance) await tree.load('', call);
     const instance = tree.instance; if (!instance) throw new Error(tree.error || (zh ? '文件目录尚未就绪，请稍后重试' : 'Directory is not ready; retry after reconnecting'));
@@ -140,6 +142,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     });
   };
   const download = () => {
+    if (!selected.length || selected.some(e => e.readOnly || e.protected && !e.repository)) return;
     const values = topLevel(selected), entry = values[0];
     const suggestedName = values.length === 1 ? entry.kind === 'file' ? entry.name : entry.name.replace(/\.zip$/i, '') + '.zip' : 'files.zip';
     run(() => store.download(workspace.id, tree.instance, values.map(e => e.path), suggestedName)); setMenu(null);
@@ -150,20 +153,20 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     anchor.current = [...tree.selected].at(-1) || tree.root;
   };
   const open = (row: TreeRow) => {
-    if (!row.entry || row.entry.kind === 'directory') { if (!row.entry?.protected || row.entry.repository || !row.path) tree.toggle(row.path, call, row.expanded); }
+    if (!row.entry || row.entry.kind === 'directory') { if (!row.entry?.protected || row.entry.repository || row.entry.readOnly || !row.path) tree.toggle(row.path, call, row.expanded); }
     else if(onOpenDocument){setMenu(null);onOpenDocument(row.path,tree.instance);}
-    else run(async () => { const data = await call({ action: 'preview', ...destination(row.path), offset: 0 }); const bytes = decode(data.data); const text = bytes.includes(0) ? (zh ? '二进制文件，请使用下载。' : 'Binary file. Use Download.') : new TextDecoder().decode(bytes); setPreview({ name: row.path, text, size: data.size }); });
+    else run(async () => { const data = await call({ action: 'preview', ...destination(row.path), offset: 0 }); const bytes = decode(data.data); const text = bytes.includes(0) ? (row.entry?.readOnly ? (zh ? '内部二进制文件，不提供文本预览。' : 'Internal binary file; text preview is unavailable.') : (zh ? '二进制文件，请使用下载。' : 'Binary file. Use Download.')) : new TextDecoder().decode(bytes); setPreview({ name: row.path, text, size: data.size }); });
   };
   const button = (label: string, press: () => void, disabled = false, toolbar = false, accessibilityLabel = label) => <Pressable key={label} accessibilityRole="button" accessibilityLabel={accessibilityLabel} disabled={disabled} onPress={press} style={{ paddingVertical: toolbar && dense ? 4 : 7, paddingHorizontal: toolbar && dense ? 7 : 9, opacity: disabled ? 0.4 : 1 }}><Text style={{ color: c.foreground, fontSize: 12 }}>{label}</Text></Pressable>;
   const menuItems = <>
     {onOpenDocument&&selected.length===1&&selected[0].kind==='file'?button(zh?'打开':'Open',()=>{setMenu(null);onOpenDocument(selected[0].path,tree.instance);}):null}
-    {selected.length===1&&selected[0].kind==='directory'&&(!selected[0].protected||selected[0].repository)?button(zh?'进入目录浏览':'Browse this folder',()=>navigate(selected[0].path)):null}
-    {button(zh ? '上传文件到此目录' : 'Upload here', () => { const path = targetPath; pickFiles(false, files => run(() => upload(files, path))); setMenu(null); }, readOnly)}
-    {button(zh ? '新建文件夹' : 'New folder', () => showDialog('mkdir'), readOnly)}
-    {button(zh ? '下载 / ZIP' : 'Download / ZIP', download, !selected.length || selected.some(e => e.protected && !e.repository))}
-    {button(zh ? '复制' : 'Copy', () => copy('copy'), !selected.length || selected.some(e => e.protected && !e.repository))}
+    {selected.length===1&&selected[0].kind==='directory'&&(!selected[0].protected||selected[0].repository||selected[0].readOnly)?button(zh?'进入目录浏览':'Browse this folder',()=>navigate(selected[0].path)):null}
+    {button(zh ? '上传文件到此目录' : 'Upload here', () => { const path = targetPath; pickFiles(false, files => run(() => upload(files, path))); setMenu(null); }, targetReadOnly)}
+    {button(zh ? '新建文件夹' : 'New folder', () => showDialog('mkdir'), targetReadOnly)}
+    {button(zh ? '下载 / ZIP' : 'Download / ZIP', download, !selected.length || selected.some(e => e.readOnly || e.protected && !e.repository))}
+    {button(zh ? '复制' : 'Copy', () => copy('copy'), !selected.length || selected.some(e => e.readOnly || e.protected && !e.repository))}
     {button(zh ? '剪切' : 'Cut', () => copy('move'), readOnly || !selected.length || selected.some(e => e.protected))}
-    {button(zh ? '粘贴到此目录' : 'Paste here', () => paste(targetPath), readOnly || !clipboard || clipboard.scope !== scope)}
+    {button(zh ? '粘贴到此目录' : 'Paste here', () => paste(targetPath), targetReadOnly || !clipboard || clipboard.scope !== scope)}
     {button(zh ? '重命名' : 'Rename', () => showDialog('rename'), readOnly || selected.length !== 1 || selected.some(e => e.protected))}
     {button(zh ? '永久删除…' : 'Delete permanently…', () => showDialog('delete'), readOnly || !selected.length || selected.some(e => e.protected))}
   </>;
@@ -172,7 +175,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     if (/input|textarea/i.test(event.target?.tagName || '')) return;
     if ((event.ctrlKey || event.metaKey) && ['c','x','v','a'].includes(event.key.toLowerCase())) {
       event.preventDefault(); const key = event.key.toLowerCase();
-      if (key === 'c') copy('copy'); else if (key === 'x' && !readOnly) copy('move'); else if (key === 'v') paste(targetPath); else if (key === 'a') { tree.selected = new Set(rows.filter(r => r.entry && (!r.entry.protected || r.entry.repository)).map(r => r.path)); tree.emit('view'); }
+      if (key === 'c') copy('copy'); else if (key === 'x' && !readOnly) copy('move'); else if (key === 'v') paste(targetPath); else if (key === 'a') { tree.selected = new Set(rows.filter(r => r.entry && !r.entry.readOnly && (!r.entry.protected || r.entry.repository)).map(r => r.path)); tree.emit('view'); }
     } else if (['ArrowDown','ArrowUp','Home','End'].includes(event.key)) {
       event.preventDefault(); const visible = rows.filter(row => !row.more), current = visible.findIndex(row => row.path === anchor.current);
       const index = event.key === 'Home' ? 0 : event.key === 'End' ? visible.length-1 : Math.min(visible.length-1, Math.max(0, current + (event.key === 'ArrowDown' ? 1 : -1)));
@@ -189,7 +192,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   const dragOver = (event: any, row: TreeRow) => {
     event.preventDefault(); event.stopPropagation(); if (readOnly) return;
     const path = !row.entry || row.entry.kind === 'directory' ? row.path : parent(row.path);
-    if (row.entry?.protected && !row.entry.repository) return;
+    if (row.entry?.readOnly || row.entry?.protected && !row.entry.repository) return;
     const target = destination(path);
     if (dragged.current.length && (dragged.current.some(source => destinationInsideSource(source, target)) || !event.ctrlKey && dragged.current.every(source => unchangedFileMove(source, target)))) {
       event.dataTransfer.dropEffect = 'none'; setDrop(null); clearTimeout(hover.current); return;
@@ -199,7 +202,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   };
   const onDrop = (event: any, row: TreeRow) => {
     event.preventDefault(); event.stopPropagation(); clearTimeout(hover.current); setDrop(null);
-    if (readOnly || row.entry?.protected && !row.entry.repository) return;
+    if (readOnly || row.entry?.readOnly || row.entry?.protected && !row.entry.repository) return;
     const path = !row.entry || row.entry.kind === 'directory' ? row.path : parent(row.path), data = event.dataTransfer.getData('application/x-workbench-files');
     if (data) run(async () => { const parsed = JSON.parse(data); if (parsed.scope !== scope) throw new Error('Use Copy and Paste within this project'); const target = destination(path); if (parsed.entries.some((source: FileLocation) => destinationInsideSource(source, target))) return; await store.operation({ operation: event.ctrlKey ? 'copy' : 'move', entries: parsed.entries, destination: target, policy: 'ask', confirm: false }); });
     else { const items = droppedFiles(event.dataTransfer); run(() => upload(items, path, true)); }
@@ -208,13 +211,15 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     if (row.more) return <Pressable onPress={() => run(() => tree.load(row.path, call, true))} style={{ height: rowHeight, justifyContent: 'center', paddingHorizontal: 8, paddingLeft: 8+row.depth*indent }}><Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{zh ? '加载更多…' : 'Load more…'}</Text></Pressable>;
     const entry = row.entry, directory = !entry || entry.kind === 'directory', selectedRow = tree.selected.has(row.path), landing = drop !== null && drop === (directory ? row.path : null);
     const record = decorationsEnabled ? tree.decorations.entries.get(row.path) : undefined, decoration = record?.entry;
-    const details = [decorationsEnabled ? fileGitDescription(decoration, zh, record?.freshness !== 'fresh') : '', directory && entry && filter ? zh ? '原地展开或收起目录，保留筛选' : 'Expand or collapse in place; keep the filter' : ''].filter(Boolean).join('\n');
+    const rowReadOnly = entry?.readOnly || !entry && tree.pages.get(row.path)?.readOnly;
+    const details = [rowReadOnly ? (zh ? '内部数据，只读查看' : 'Internal data · read only') : '', decorationsEnabled ? fileGitDescription(decoration, zh, record?.freshness !== 'fresh') : '', directory && entry && filter ? zh ? '原地展开或收起目录，保留筛选' : 'Expand or collapse in place; keep the filter' : ''].filter(Boolean).join('\n');
     const label = entry?.name || (tree.root ? tree.root.slice(tree.root.lastIndexOf('/')+1) : workspace.displayName || workspace.id);
     const color = fileGitColor(decoration, palette, c.foreground), iconColor = decoration?.ignored ? palette.ignored : c.foregroundMuted;
     const content = <Pressable accessibilityRole="button" accessibilityLabel={row.path || workspace.displayName || workspace.id} accessibilityHint={details} accessibilityState={{ selected: selectedRow, ...(directory ? { expanded: !!row.expanded } : {}) }} onPress={Platform.OS === "web" ? undefined : e => { selection(row.path, e); open(row); }} onLongPress={() => { if (Platform.OS === 'web' && !touching.current) return; if (Platform.OS === 'web') longPressClick.current = { ...pointer.current, until: Infinity }; if (!tree.selected.has(row.path)) selection(row.path); setMenu(row.path); }} style={{ height: rowHeight, width: '100%', paddingRight: 8, paddingLeft: 8+row.depth*indent, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: landing ? '#3269a655' : selectedRow ? c.surface2 || '#ffffff14' : 'transparent' }}>
       <View style={{ width: 11 }}>{directory ? <GeometricIcon name={row.expanded ? 'ChevronDown' : 'ChevronRight'} size={11} color={iconColor}/> : null}</View>
       <GeometricIcon name={fileTreeIcon(entry?.name || '', directory ? 'directory' : entry!.kind, !!row.expanded)} size={14} color={iconColor}/>
       <Text style={{ color, fontSize: 12, flex: 1 }} numberOfLines={1}>{label}</Text>
+      {rowReadOnly ? <Text style={{ color: c.foregroundMuted, fontSize: 10 }}>{zh ? '只读' : 'Read only'}</Text> : null}
       <View style={{ width: 14, alignItems: 'center', justifyContent: 'center' }}>{decoration?.mark ? directory ? <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: color }}/> : <Text style={{ color, fontSize: 10, fontWeight: '600', lineHeight: 14 }}>{decoration.mark}</Text> : null}</View>
       <View style={{ width: 53, alignItems: 'flex-end' }}>{tree.refreshing.has(row.path) ? <GeometricIcon name="RefreshCw" size={10} color={c.foregroundMuted}/> : entry && !directory ? <Text style={{ color: c.foregroundMuted, fontSize: 10 }}>{fileBytes(entry.size)}</Text> : null}</View>
       {landing ? <View pointerEvents="none" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderWidth: 1, borderColor: '#78a9ff' }}/> : null}
@@ -224,9 +229,9 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
   const body = <View style={{ flex: 1, minHeight: 0 }}>
     <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', paddingHorizontal: 3, borderBottomWidth: 1, borderBottomColor: c.border || '#ffffff18' }}>
       {toolbarStart}
-      {button(zh ? '↑ 上传' : '↑ Upload', () => pickFiles(false, files => run(() => upload(files, targetPath))), readOnly || !tree.instance, true)}
-      {Platform.OS === 'web' ? button(zh ? '上传目录' : 'Upload folder', () => pickFiles(true, files => run(() => upload(files, targetPath))), readOnly || !tree.instance, true) : null}
-      {button(zh ? '+ 文件夹' : '+ Folder', () => showDialog('mkdir'), readOnly || !tree.instance, true)}
+      {button(zh ? '↑ 上传' : '↑ Upload', () => pickFiles(false, files => run(() => upload(files, targetPath))), targetReadOnly || !tree.instance, true)}
+      {Platform.OS === 'web' ? button(zh ? '上传目录' : 'Upload folder', () => pickFiles(true, files => run(() => upload(files, targetPath))), targetReadOnly || !tree.instance, true) : null}
+      {button(zh ? '+ 文件夹' : '+ Folder', () => showDialog('mkdir'), targetReadOnly || !tree.instance, true)}
       {button(zh ? '↻ 刷新' : '↻ Refresh', refresh, false, true)}
       {button('⋯', () => setMenu(targetPath), false, true, zh ? '更多文件操作' : 'More file actions')}
       <TextInput value={filter} onChangeText={value => tree.setFilter(value)} placeholder={zh ? '筛选文件或目录' : 'Filter files or folders'} accessibilityLabel={zh ? '筛选已加载的文件或目录' : 'Filter loaded files or folders'} style={{ flex: 1, minWidth: 130, height: Math.max(dense ? 23 : 29, Math.ceil(16 * fontScale) + 6), marginHorizontal: 4, marginVertical: 3, paddingHorizontal: 6, paddingVertical: 2, fontSize: 12, color: c.foreground, borderWidth: 1, borderColor: c.border || '#ffffff22', borderRadius: 3 }} />
@@ -239,7 +244,7 @@ export default function FilesManager({ scope, workspace, store, theme, decoratio
     </View> : null}
     <FlatList ref={listRef} style={{ flex: 1, minHeight: 160 }} data={rows} renderItem={renderRow} keyExtractor={row => row.key} getItemLayout={(_, i) => ({ length: rowHeight, offset: rowHeight*i, index: i })} initialNumToRender={45} maxToRenderPerBatch={30} windowSize={7} onLayout={event => setListHeight(event.nativeEvent.layout.height)} onScroll={event => { tree.scroll = event.nativeEvent.contentOffset.y; setVisibleStart(Math.floor(tree.scroll / rowHeight)); }} scrollEventThrottle={100} ListEmptyComponent={<Text style={{ color: c.foregroundMuted, padding: 10 }}>{zh ? '目录为空' : 'Empty directory'}</Text>} ListFooterComponent={!rows.some(row => row.entry) && (filter || tree.expanded.has(tree.root) && tree.pages.has(tree.root) && !tree.pages.get(tree.root)?.entries.length) ? <Text style={{ color: c.foregroundMuted, padding: 10, fontSize: 12 }}>{filter ? zh ? '未找到匹配的文件或目录（仅筛选已加载内容）' : 'No matching files or folders (loaded entries only)' : zh ? '目录为空' : 'Empty directory'}</Text> : null} />
     <FilesStatusBar key={tree.key} messages={[dialog ? '' : error, tree.error]} onRefresh={refresh} zh={zh} theme={theme} dense={dense}>
-      {drop !== null ? `${zh ? '放到' : 'Drop into'} ${workspace.displayName || workspace.id}:/${drop}` : <>{readOnly ? zh ? '聚合工作区只读' : 'Aggregate workspace · read only' : zh ? `${entries.size} 项 · 拖入上传 · 右键操作` : `${entries.size} loaded · Drop to upload · Right click for actions`}{gitPending ? zh ? ' · Git 状态待更新' : ' · Git status pending update' : ''}{selected.length ? ` · ${selected.length} ${zh ? '项已选' : 'selected'}` : ''}{clipboard?.scope === scope ? ` · ${clipboard.entries.length} ${clipboard.operation === 'copy' ? zh ? '项已复制' : 'copied' : zh ? '项已剪切' : 'cut'}` : ''}</>}
+      {drop !== null ? `${zh ? '放到' : 'Drop into'} ${workspace.displayName || workspace.id}:/${drop}` : <>{readOnly ? workspace.kind === 'linked-live' ? (zh ? '聚合工作区只读' : 'Aggregate workspace · read only') : (zh ? '内部数据 · 只读查看' : 'Internal data · read only') : targetReadOnly ? (zh ? '所选目录只读' : 'Selected folder · read only') : zh ? `${entries.size} 项 · 拖入上传 · 右键操作` : `${entries.size} loaded · Drop to upload · Right click for actions`}{gitPending ? zh ? ' · Git 状态待更新' : ' · Git status pending update' : ''}{selected.length ? ` · ${selected.length} ${zh ? '项已选' : 'selected'}` : ''}{clipboard?.scope === scope ? ` · ${clipboard.entries.length} ${clipboard.operation === 'copy' ? zh ? '项已复制' : 'copied' : zh ? '项已剪切' : 'cut'}` : ''}</>}
     </FilesStatusBar>
     <Modal open={menu !== null && dialog === null} title={zh ? '文件操作' : 'File actions'} onOpenChange={open => { if (!open) setMenu(null); }}><Modal.Content contentContainerStyle={{ padding: 10 }}>
       <View testID="files-menu-selection" style={{ padding: 9, gap: 5 }}>

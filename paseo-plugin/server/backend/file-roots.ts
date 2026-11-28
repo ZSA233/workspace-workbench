@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { lstat, realpath, mkdir, open } from 'node:fs/promises';
-import { dirname, join, relative, resolve, isAbsolute } from 'node:path';
+import { dirname, join, relative, resolve, isAbsolute, sep } from 'node:path';
 import { workspaceInstanceKey } from '../../shared/workspace-lineage.ts';
 import { hash, WorkbenchError, type Json } from './storage.ts';
 import type { Workspaces } from './workspaces.ts';
@@ -9,6 +9,7 @@ export const fileVersion = (s: { dev: number; ino: number; size: number; mtimeMs
 export const fileStat = async (path: string) => lstat(path).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e; });
 export type FileRoot = { workspace: Json; root: string; instance: string; repositories: Set<string> };
 const reserved = new Set(['.git', '.workspace', '.workspace-workbench']);
+const transferEntry = (part: string) => part.toLowerCase().startsWith('.workbench-transfer-');
 const within = (path: string, root: string) => { const p = relative(root, path); return !isAbsolute(p) && p !== '..' && !p.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')); };
 export class FileRoots {
   readonly workspaces: Workspaces;
@@ -31,15 +32,23 @@ export class FileRoots {
   name(value: string) { if (this.parts(value).length !== 1 || reserved.has(value.toLowerCase()) || value.toLowerCase().startsWith('.workbench-transfer-')) throw new WorkbenchError('path_protected', 'Invalid or protected name'); return value; }
   metadata(context: FileRoot, value: string): boolean {
     const parts = this.parts(value), full = join(context.root, ...parts), config = this.workspaces.config;
-    return parts.some(p => reserved.has(p.toLowerCase()) || p.toLowerCase().startsWith('.workbench-transfer-'))
+    const internalRoots = [config.stateRoot, config.recordsRoot, config.treesRoot, config.workspaceRoot].map(p => resolve(p));
+    // Choosing an internal folder as the main file root must not make it writable.
+    // Managed Workspaces still own their normal worktree contents independently.
+    const rootParts = (within(context.root, config.sourceRoot) ? relative(config.sourceRoot, context.root) : context.root).split(sep);
+    const internalMainRoot = context.workspace.id === 'main' && context.root !== config.sourceRoot &&
+      (rootParts.some(p => reserved.has(p.toLowerCase()) || transferEntry(p)) ||
+        internalRoots.some(internal => !within(config.sourceRoot, internal) && within(context.root, internal)));
+    return internalMainRoot || parts.some(p => reserved.has(p.toLowerCase()) || transferEntry(p))
       || [config.configPath, config.socketPath, config.socketPath + '.owner.json'].map(p => resolve(p)).includes(full)
-      || [config.stateRoot, config.recordsRoot, config.treesRoot, config.workspaceRoot].some(p => { const internal = resolve(p); return internal !== context.root && within(internal, context.root) && within(full, internal); });
+      || internalRoots.some(internal => internal !== context.root && within(internal, context.root) && within(full, internal));
   }
+  privateTransfer(context: FileRoot, value: string): boolean { return [...context.root.split(sep), ...this.parts(value)].some(transferEntry); }
   protected(context: FileRoot, value: string): boolean { return !value || context.repositories.has(join(context.root, ...this.parts(value))) || this.metadata(context, value); }
-  async path(context: FileRoot, value: string, options: { mutate?: boolean; parents?: boolean } = {}): Promise<string> {
+  async path(context: FileRoot, value: string, options: { mutate?: boolean; parents?: boolean; inspect?: boolean } = {}): Promise<string> {
     const parts = this.parts(value);
     if (options.mutate && this.protected(context, value)) throw new WorkbenchError('path_protected', 'Workspace roots, repositories and internal metadata are protected');
-    if (this.metadata(context, value)) throw new WorkbenchError('path_protected', 'Internal metadata is protected');
+    if (this.metadata(context, value) && (!options.inspect || this.privateTransfer(context, value))) throw new WorkbenchError('path_protected', 'Internal metadata is protected');
     let current = context.root;
     for (let i = 0; i < parts.length; i++) {
       current = join(current, parts[i]);
@@ -58,8 +67,8 @@ export class FileRoots {
     if (!within(parent, context.root) || await realpath(context.root) !== context.root) throw new WorkbenchError('path_outside_root', 'Path is outside the Workspace');
     return current;
   }
-  async read(context: FileRoot, value: string) {
-    const path = await this.path(context, value);
+  async read(context: FileRoot, value: string, options: { inspect?: boolean } = {}) {
+    const path = await this.path(context, value, options);
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     if (!(await handle.stat()).isFile()) { await handle.close(); throw new WorkbenchError('file_not_regular', 'Expected a regular file'); }
     return handle;

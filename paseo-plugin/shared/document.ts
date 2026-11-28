@@ -1,6 +1,6 @@
 import type { SyntaxLine } from './code-syntax.ts';
 export type MarkdownNode = { type:string; tag:string; content:string; attrs?:Record<string,string>; level?:number; children?:MarkdownNode[]; lines?:SyntaxLine[] };
-export type DocumentPage = { protocol:number; workspaceId:string; instance:string; path:string; version:string; size:number; offset:number; nextOffset:number; text:string; encoding:string; binary:boolean; eof:boolean };
+export type DocumentPage = { protocol:number; workspaceId:string; instance:string; path:string; version:string; size:number; offset:number; nextOffset:number; text:string; encoding:string; binary:boolean; eof:boolean; readOnly?:boolean };
 export type DocumentSyntax = { version:string; state:'ready'|'plain'; reason?:string; language:string; lines:Record<string,SyntaxLine>; markdown?:MarkdownNode[] };
 export type DocumentAsset = { version:string; mime:string; size:number; data:string; offset:number; nextOffset:number; eof:boolean };
 export type DocumentStat = {version:string;size:number};

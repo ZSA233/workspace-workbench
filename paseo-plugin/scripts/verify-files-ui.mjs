@@ -11,6 +11,7 @@ import WebSocket from 'ws';
 import { openGlobalWorkbench } from './ui-project-selection.mjs';
 import { verifyFileNoticesUi } from './verify-files-notices-ui.mjs';
 import { verifyFileWorkspacesUi } from './verify-file-workspaces-ui.mjs';
+import { verifyFilesMetadataUi } from './verify-files-metadata-ui.mjs';
 const plugin = resolve(import.meta.dirname, '..'), output = resolve(process.env.WORKBENCH_VERIFY_OUTPUT || join(plugin, '../.local/verification/files'));
 await mkdir(output, { recursive: true });
 let child, client, browser, ui, logs = '';
@@ -251,6 +252,7 @@ try {
   await page.evaluate(()=>{window.showSaveFilePicker=window.__proofPicker;});
   }
 
+  if (process.env.WORKBENCH_FILES_NOTICES_ONLY !== '1') await verifyFilesMetadataUi({ page, ui, rpc, output, report, check });
   await page.screenshot({ path: join(output, 'files-tree-and-transfers.png') }); report.screenshots.push('files-tree-and-transfers.png');
   report.page = { url: page.url(), title: await page.title(), nonBlank: (await page.locator('body').innerText()).includes('Workspace Workbench'), frameworkOverlay: await page.locator('vite-error-overlay,nextjs-portal').count() };
   assert.ok(report.page.nonBlank); assert.equal(report.page.frameworkOverlay, 0); assert.equal(report.console.some(message => message.type === 'error'), false);

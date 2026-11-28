@@ -21,11 +21,11 @@ export class Documents {
   constructor(roots:FileRoots,syntax:SyntaxService){this.roots=roots;this.syntax=syntax;}
   cancel(context:FileRoot,requestId:string){const key=context.instance+':'+requestId;this.cancelled.add(key);if(this.cancelled.size>256)this.cancelled.delete(this.cancelled.values().next().value!);this.reads.get(key)?.abort();return {cancelled:true};}
   private async opened<T>(context:FileRoot,path:string,version:string|undefined,read:(handle:FileHandle,size:number,version:string)=>Promise<T>):Promise<T>{
-    const handle=await this.roots.read(context,path);
+    const handle=await this.roots.read(context,path,{inspect:true});
     try{const before=await handle.stat(),identity=fileVersion(before);if(version&&version!==identity)throw new WorkbenchError('file_source_changed','File changed; refresh to read the new version');
       const result=await read(handle,before.size,identity);
       if(fileVersion(await handle.stat())!==identity)throw new WorkbenchError('file_source_changed','File changed while reading');
-      const current=await this.roots.context(context.workspace.id,context.instance);const actual=await this.roots.read(current,path);try{if(fileVersion(await actual.stat())!==identity)throw new WorkbenchError('file_source_changed','File changed while reading');}finally{await actual.close();}
+      const current=await this.roots.context(context.workspace.id,context.instance);const actual=await this.roots.read(current,path,{inspect:true});try{if(fileVersion(await actual.stat())!==identity)throw new WorkbenchError('file_source_changed','File changed while reading');}finally{await actual.close();}
       return result;
     }finally{await handle.close();}
   }
@@ -43,7 +43,7 @@ export class Documents {
       const step=format.name.startsWith('utf-16')?2:1;
       for(let i=0;i+step<=data.length;i+=step){const unit=step===1?data[i]:format.name==='utf-16le'?data.readUInt16LE(i):data.readUInt16BE(i);if((unit===13||unit===10&&previous!==13)&&++lines===4000){end=i+step;if(unit===13&&i+2*step<=data.length){const next=step===1?data[i+step]:format.name==='utf-16le'?data.readUInt16LE(i+step):data.readUInt16BE(i+step);if(next===10)end+=step;}break;}previous=unit;}
       const part=decode(data.subarray(0,end),format.name,start+end>=size);
-      return {protocol:SYNTAX_PROTOCOL,workspaceId:context.workspace.id,instance:context.instance,path,version:identity,size,offset,nextOffset:binary?size:start+part.length,text:part.text,encoding:format.name,binary,eof:binary||start+part.length>=size};
+      return {protocol:SYNTAX_PROTOCOL,workspaceId:context.workspace.id,instance:context.instance,path,version:identity,size,offset,nextOffset:binary?size:start+part.length,text:part.text,encoding:format.name,binary,eof:binary||start+part.length>=size,...(this.roots.metadata(context,path)?{readOnly:true}:{})};
     });
   }
   async highlight(context:FileRoot,path:string,version:string,lineStart:number,count:number,markdown:boolean,signal?:AbortSignal,requestId?:string):Promise<DocumentSyntax>{

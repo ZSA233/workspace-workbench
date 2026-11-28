@@ -2,6 +2,15 @@
 
 日期：2026-10-22。使用说明见 [FILES.md](../paseo-plugin/FILES.md)。
 
+## 2026-11-28：内部目录只读浏览
+
+`.git`、`.workspace-workbench` 等内部目录可以展开、进入和预览文件，目录与子项显示「只读」。上传、新建、粘贴、改名、剪切和删除继续由后端拒绝，界面同时禁用入口。内部元数据的复制和 ZIP 规则保持不变，传输临时项继续隐藏。把主文件目录设置为内部目录或其符号链接，也不会绕过写保护；独立选中的开发 Workspace 保持正常写入。
+
+- TypeScript 检查通过，相关 **80 项 Node 回归通过**。其中新增 6 项使用真实临时 Git 仓库，覆盖两种目录分页协议、版本核验、文档预览与语法、写入与导出保护、符号链接、主目录设置和独立 Workspace；worktree 的 `.git` 指针文件可阅读，但不会跟随其中的路径。
+- `verify-files-ui.mjs` 在隔离 Paseo home、项目注册表和临时项目中加载实际插件，**19 项宿主检查和 30 项 Chromium 交互检查通过**，页面和控制台错误均为 0。新增检查验证两个内部目录展开、只读标记、文件预览、写入入口禁用及回到普通目录后恢复上传，原有传输检查同时通过。
+- 产物位于 `.local/verification/files-metadata/`：`files-ui-report.json`、`files-ui-host.log`、`metadata-readonly-tree.png`、`metadata-readonly-document.png`。本轮验证没有更新或重载用户正常使用的插件；Chromium 结果不代表 Pocket 或 Windows 实机验收。
+- `0.14.1` 发布检查另通过 **1,100 项完整 Node 回归**，0 失败、0 跳过；版本一致性、TypeScript、npm 包清单和插件归档检查通过。发布前完整检查日志位于 `.local/release-0.14.1/check.log`。
+
 ## 2026-11-28：主目录自动识别与独立文件视图
 
 文件工具栏增加「当前 Workspace／主工作区」位置入口，文件浏览可以单独切到主目录，上方 Workspace、Git 与执行目标保持独立。右上角菜单及文件位置菜单均提供「文件目录设置」，支持自动识别、当前宿主目录和主机目录选择器。覆盖值保存在项目状态中，保留原多仓库 `sourceRoot` 和 schema-v1 记录。
